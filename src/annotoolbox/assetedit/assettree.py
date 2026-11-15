@@ -38,7 +38,7 @@ KEY_ROLE = Qt.ItemDataRole.UserRole + 3  # the group's path (a tuple of names)
 
 
 class AssetTree(QWidget):
-    picked = Signal(int)
+    picked = Signal(object)  # a GUID (may exceed a Qt int)
 
     def __init__(self) -> None:
         super().__init__()

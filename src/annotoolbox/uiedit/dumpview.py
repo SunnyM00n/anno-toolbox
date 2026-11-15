@@ -46,7 +46,7 @@ def _shown(v: bool | None) -> str:
 
 
 class DumpPanel(QWidget):
-    picked = Signal(int)
+    picked = Signal(object)  # a node id (Python id: 64 bits, beyond a Qt int)
     changed = Signal()
     cleared = Signal()
 

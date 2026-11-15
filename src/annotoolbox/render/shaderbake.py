@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from ..infra import buildcache
+from ..infra.tools import NO_WINDOW
 from .glslport import Ported
 
 ENV_QSB = "ANNO_QSB"  # the baker's path, when it is not beside PySide6
@@ -119,7 +120,13 @@ def find_qsb() -> Path | None:
 
 def _run(qsb: Path, args: list[str]) -> str:
     done = subprocess.run(
-        [str(qsb), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120, check=False
+        [str(qsb), *args],
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120,
+        check=False,
+        **NO_WINDOW,  # a console tool: the windowed program would flash a console for every shader
     )
     if done.returncode != 0:
         raise BakeError((done.stdout + done.stderr).strip())

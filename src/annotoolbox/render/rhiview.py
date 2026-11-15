@@ -16,7 +16,7 @@ import sys
 import traceback
 
 import shiboken6
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QOpenGLContext, QRhi, QRhiGles2InitParams, QSurfaceFormat
 from PySide6.QtWidgets import QRhiWidget
 
@@ -136,10 +136,16 @@ class RhiView(QRhiWidget):
         """One frame into ``screen`` (``size`` pixels)."""
 
     def picture(self, width: int, height: int):
-        """One frame at ``width`` x ``height`` as a ``QImage``, the widget shown or not."""
-        if not self.isVisible():  # a widget never shown would make a new device for every grab
-            self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        """One frame at ``width`` x ``height`` as a ``QImage``: a standalone view is drawn off screen; a view hidden
+        inside a window (another app's page in front) gives None and keeps its place and size."""
+        if not self.isVisible():
+            if self.parentWidget() is not None:
+                return None
+            self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)  # never shown: one device for every grab
             self.resize(width, height)
             self.show()
         self.setFixedColorBufferSize(width, height)
-        return self.grabFramebuffer()
+        try:
+            return self.grabFramebuffer()
+        finally:
+            self.setFixedColorBufferSize(QSize())  # the widget's own size again for the frames on screen

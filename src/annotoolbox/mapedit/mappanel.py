@@ -128,8 +128,9 @@ class MapPanel(QWidget):
         lay.addWidget(QLabel(tr("Checks (double-click selects)")))
         lay.addWidget(self.findings, 1)
 
-    def show_element(self, e) -> None:
-        """Fill the fields from the picked element (None: none picked) and enable those its kind and game have."""
+    def show_element(self, e, size: int | None = None) -> None:
+        """Fill the fields from the picked element (None: none picked) and enable those its kind and game have;
+        ``size``: the size class to show (``MapDoc.size_index``; a fixed island stores none)."""
         widgets = (
             self.x,
             self.z,
@@ -155,7 +156,7 @@ class MapPanel(QWidget):
         self.kind.setText(tr(KIND_NAMES[e.kind]))
         self.x.setValue(e.x)
         self.z.setValue(e.z)
-        self.size.setCurrentIndex(min(e.size, self.size.count() - 1))
+        self.size.setCurrentIndex(min(e.size if size is None else size, self.size.count() - 1))
         self.clime.setValue(e.clime)
         for name, box in self.bits.items():
             box.setValue(getattr(e, name))

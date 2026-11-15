@@ -134,6 +134,12 @@ Note: none of this has been tried in a game yet.
 into the suite and section 9 for the transport. The debug-command palette (`suite/debugcommands`, `suite/linkpalette`)
 is described in `debug-palette.md`.
 
+## Updates
+
+The installed program looks for a newer release once a day at the start and tells you in the status bar; Help >
+*Check for updates...* asks at once. Nothing is downloaded until you press *Download and install*. How it works and how
+to switch it off: [`installer.md`](installer.md), "Updates".
+
 ## What has been checked
 
 The apps, the project and the packing are tested on synthetic data, and the windows were looked at offscreen on the

@@ -532,6 +532,69 @@ def test_growing_an_enlarged_template_moves_the_enlarged_maps_horizons():
     assert any(r.status == KEPT and r.where.endswith("HorizonIslands") for r in report.references)
 
 
+def _quest(guid: int, named: int, items: str) -> str:
+    return (
+        f"<Asset><Template>Quest</Template><Values><Standard><GUID>{guid}</GUID><Name>q</Name></Standard>"
+        f"<Quest><Map>{named}</Map><Targets>{items}</Targets></Quest></Values></Asset>"
+    )
+
+
+def _assets_with_positions() -> str:
+    two = "<Item><Position><X>100</X><Z>200</Z></Position></Item><Item><Position><Z>50</Z></Position></Item>"
+    return (
+        "<Assets>"
+        + _quest(9001, 3377, two)  # names the grown map's template
+        + _quest(9002, 3378, "<Item><Position><X>5</X><Z>6</Z></Position></Item>")  # another map's
+        + _quest(9003, 3377, "<Item><Position><X>7</X><Z>8</Z></Position></Item>").replace(
+            "</Map>", "</Map><Other>3378</Other>"
+        )  # names both
+        + _quest(9004, 7, "<Item><Position><X>9</X><Z>9</Z></Position></Item>")  # names no map
+        + "<Asset><Template>SessionModerate</Template><Values><Standard><GUID>8001</GUID></Standard>"
+        "<Session><MapTemplate>3378</MapTemplate></Session></Values></Asset>"
+        + _quest(9005, 8001, "<Item><Position><X>1</X><Z>2</Z></Position></Item>")  # a session of the other map
+        + _asset()  # the map's own asset: its horizons are moved by their own step
+        + "</Assets>"
+    )
+
+
+def test_assets_that_hold_the_grown_maps_positions_are_moved_and_the_others_listed():
+    found = grow.scan_assets([_assets_with_positions()])
+    assert sorted(a.guid for a in found.assets) == [9001, 9002, 9003, 9004, 9005] and found.sessions == {8001: 3378}
+    report = Report((64, 32, 0, 0))
+    ops, moved = grow.grow_assets(found, 3377, frozenset({3377, 3378}), 64, 32, report)
+    assert len(ops) == 2 and "Asset[Values/Standard/GUID='9001']/Values/Quest/Targets/Item[1]/Position" in ops[0]
+    assert (
+        "<X>164</X>" in ops[0] and "<Z>232</Z>" in ops[0] and "<X>64</X><Z>82</Z>" in ops[1]
+    )  # a left-out X is written
+    assert "<X>164</X>" in moved[9001] and 9002 not in moved
+    kept = {r.where: r.detail for r in report.kept()}
+    assert kept["Quest 9002"] == "belongs to another map" and kept["Quest 9005"] == "belongs to another map"
+    assert "other maps too" in kept["Quest 9003"] and "no map" in kept["Quest 9004"]
+    assert [r.detail for r in report.moved()][0] == "X 100, Z 200 -> X 164, Z 232"
+
+
+def test_an_asset_in_two_lists_is_moved_once():
+    one = _quest(9001, 3377, "<Item><Position><X>100</X><Z>200</Z></Position></Item>")
+    found = grow.scan_assets([one, one])
+    ops, moved = grow.grow_assets(found, 3377, frozenset({3377}), 64, 0, Report((64, 0, 0, 0)))
+    assert len(ops) == 1 and "<X>164</X>" in ops[0] and "<X>164</X>" in moved[9001]
+
+
+def test_a_growth_moves_the_assets_once_and_the_moves_add_up_over_growths(tmp_path):
+    tree = _game(tmp_path)
+    doc = mapdoc.open_map(tree, "anno117", STEM + ".a7tinfo", pool.GameMaps.read(tree, "anno117"))
+    doc.maps.positions = grow.scan_assets([_assets_with_positions()])
+    doc.grow((64, 0, 0, 0))
+    doc.grow((0, 64, 0, 0))
+    ops = "".join(doc.grown.asset_ops)
+    assert "<X>164</X>" in ops and "<Z>264</Z>" in ops and "<X>3664</X>" in ops  # both moves, horizons too
+    doc.grow((0, 0, 64, 0))  # east: the earlier moves still hold
+    assert "<Z>264</Z>" in "".join(doc.grown.asset_ops)
+    assert any(r.file == "assets" and r.status == MOVED for r in doc.grown.report.references) is False
+    new = mapmod.map_files(doc, mapmod.Choice(True, "grown", 2_100_000_000, "m"))
+    assert "<Z>264</Z>" not in new[pool.ASSET_FILES["anno117"]].decode()  # a new map takes none of the old map's quests
+
+
 def test_a_second_growth_keeps_the_first_ones_horizon_move(tmp_path):
     tree = _game(tmp_path)
     doc = mapdoc.open_map(tree, "anno117", STEM + ".a7tinfo", pool.GameMaps.read(tree, "anno117"))
@@ -611,3 +674,27 @@ def test_a_new_maps_guid_must_lie_in_the_range_and_be_free(tmp_path):
     assert mapmod.guid_problem(190, (100, 200), taken, {"other": 190}, "a")
     assert not mapmod.guid_problem(190, (100, 200), taken, {"a": 190}, "a")
     assert mapmod.suggest_guid((100, 200), taken | {200}, "b", {}) == 199
+
+
+def test_a_fixed_island_shows_its_own_size_class_not_the_stored_small():
+    cinis = "data/dlc01/provinces/roman/islands/pool/roman_dlc01_island_continental_01/roman_dlc01_island_continental_01.a7m"
+    pooled = "data/base/provinces/roman/islands/pool/m_01/m_01.a7m"
+    maps = pool.GameMaps(game="anno117", classes=dict(pool.DEFAULT_CLASSES["anno117"]))
+    maps.pool = [pool.PoolIsland(1, "m", pooled, "Roman", "Normal", 1)]
+    maps.islands = {ISLAND: pool.IslandInfo(size=432)}
+    doc = mapdoc.MapDoc("anno117", "t.a7tinfo", template.read(template_bytes()), b"", maps, tree=None)
+    sizes = [doc.size_index(template.new_element(KIND_FIXED, 0, 0, map_file_path=p)) for p in (cinis, pooled, ISLAND)]
+    assert sizes == [template.SIZE_CONTINENTAL, 1, template.SIZE_LARGE]  # the file's name, the pool, the grid
+    assert doc.size_index(template.new_element(KIND_SLOT, 0, 0, size=2)) == 2  # a slot keeps its stored size
+
+
+def test_an_island_picture_loses_the_black_around_the_land_and_the_stripes_below_it():
+    import numpy as np
+
+    picture = np.zeros((40, 8, 4), np.uint8)
+    picture[..., 3] = 255
+    picture[5:20, 2:6, :3] = np.arange(15 * 4 * 3, dtype=np.uint8).reshape(15, 4, 3) + 40  # land, every row differs
+    picture[20:, 2:6, :3] = picture[19, 2:6, :3]  # the game's clamp: the last row repeated down to the edge
+    clean = pool.clean_picture(picture)
+    assert (clean[5:20, 2:6, 3] == 255).all()  # the land stays
+    assert (clean[20:, :, 3] == 0).all() and (clean[:5, :, 3] == 0).all()  # stripes and black go

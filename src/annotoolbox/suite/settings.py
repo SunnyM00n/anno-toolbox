@@ -136,6 +136,8 @@ class Settings:
     rendering: dict = field(default_factory=dict)  # per game: its look, backend and frame switches (render.nativelook)
     quality: dict = field(default_factory=dict)  # per game (render.quality.GAMES): its preset, or a Custom record
     hardware: bool = True  # hardware acceleration; off: a software adapter from the next start (render.nativelook)
+    check_updates: bool = True  # look for a newer release at the start, once a day (``suite.updates``)
+    last_update_check: str = ""  # the ISO date of the last check that got an answer
     workspace: str = field(default_factory=lambda: str(appdata() / "workspace"))
     project: str = ""  # the open project's folder (``suite.project``); empty: the workspace is the project
     own_reserve: list = field(default_factory=list)  # the user's own GUID reserve (``suite.guidranges``), made once

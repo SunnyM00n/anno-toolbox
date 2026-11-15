@@ -96,8 +96,11 @@ class MaterialGallery(QWidget):
         groups: dict[str, list] = {}
         for m in own:
             groups.setdefault(material_game(m, self.doc.session.island), []).append(("own", m))
-        for m in vanilla:  # another game's materials (``othermaterials``) are listed under that game
-            groups.setdefault(VANILLA_GAMES.get(m.get("game", "anno117"), "Anno 117"), []).append(("117", m))
+        home = material_game({}, self.doc.session.island)
+        for m in vanilla:  # only the island's own game: another game's ground does not mix with it
+            game = VANILLA_GAMES.get(m.get("game", "anno117"), "Anno 117")
+            if game == home:
+                groups.setdefault(game, []).append(("117", m))
         order = self.doc.session.paint_materials
         for game in sorted(groups, key=game_rank):
             items = groups[game]

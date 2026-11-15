@@ -77,6 +77,7 @@ class GameMaps:
     fertility_sets: dict[int, str] = field(default_factory=dict)  # GUID -> name of the ``FertilitySet`` assets
     fertilities: dict[int, str] = field(default_factory=dict)  # GUID -> name of the ``Fertility`` assets
     island_files: list[str] = field(default_factory=list)  # every island file of the game
+    positions: object = None  # the asset lists' position blocks (``grow.AssetPositions``), read on the first growth
 
     @classmethod
     def read(cls, tree, game: str) -> GameMaps:
@@ -233,3 +234,25 @@ def picture_path(tree, island: str) -> str:
     else:
         candidates = [f"{folder}/{stem}{p}" for p in OLD_PICTURES]
     return next((c for c in candidates if tree.exists(c)), "")
+
+
+CLAMP_ROWS = 4  # a run this long of rows that repeat the one before, down to the picture's edge, is the clamp
+DARK = 12  # a pixel whose red, green and blue add up to no more than this is the black around the land
+
+
+def clean_picture(rgba):
+    """An island picture (rows x columns x RGBA, uint8) as the map draws it: the black around the land and the
+    stripes below it transparent. The game renders some pictures past the island's last row (Cinis), which repeats
+    that row down to the edge."""
+    import numpy as np
+
+    out = np.array(rgba, dtype=np.uint8, copy=True)
+    rgb = out[..., :3].astype(np.int16)
+    out[rgb.sum(axis=-1) <= DARK, 3] = 0
+    repeats = np.all(np.abs(rgb[1:] - rgb[:-1]) <= 2, axis=(1, 2))  # row i + 1 repeats row i
+    run = 0
+    while run < len(repeats) and repeats[len(repeats) - 1 - run]:
+        run += 1
+    if run >= CLAMP_ROWS:
+        out[len(out) - run :, :, 3] = 0
+    return out

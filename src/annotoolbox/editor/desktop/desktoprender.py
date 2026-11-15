@@ -601,7 +601,9 @@ class Renderer(GroundDraw, FramePasses, Picking):
         if not drew:
             self._draw_ground(frame, opts)
         # the view keeps drawing while the game's look makes parts ahead of their first draw
-        self.animated = bool(opts.underwater and opts.caustics) or bool(drew and self.game.objects.ahead_left)
+        # and while its water and clouds move with the clock or it settles (bake, pages, cascades: ``GameIsland``)
+        game_moves = drew and (self.game.objects.ahead_left or self.game.animated)
+        self.animated = bool(opts.underwater and opts.caustics) or bool(game_moves)
         frame.now = time.monotonic() - self._start
         streets, models, translucent = self._visible_parts(frame, opts)
         self.drawn_opaque = streets + models  # the game's sea mirrors them (``desktopsea``)

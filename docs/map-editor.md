@@ -338,6 +338,16 @@ What it changes, by file:
 - **`.a7t`**: the session's size, every grid moved and padded (below), every object, camera and camera sequence moved.
 - **`.a7te`**: the new dimensions and chunk list.
 - **`MapTemplate` asset** (117): each horizon island's `Position` X and Z moved (a ModOps file); 1800 has none.
+- **Other assets that hold the map's positions**: every asset of the asset lists with a position block, including the
+  scenario lists of 1800. A position block has an `X` and a `Z` child. A `...Position` block with only a `Z` counts
+  too, because its X is a value of 0 that was left out. A block without a `Z` is a screen position, such as the tech
+  tree's, and is not touched.
+  An asset is tied to a map by the `MapTemplate` GUID it holds, or by a session asset that names that template
+  (`Session` > `MapTemplate`). An asset that is tied to the grown map and to no other has each block moved by the same
+  amounts. This is one `replace` ModOp per block, in the same ModOps file, and the report line gives the old and new X
+  and Z. The moves add up over several growths. An asset that names another map, several maps or none is kept and
+  listed with that reason. A map written as a *new* map (own GUID) takes none of the old map's assets. The game's own
+  lists hold no such asset today (see the section below).
 - **Not changed, listed**: the island files (their coordinates are their own), Lua files that hold numbers in the
   map's range near the template's name (literal positions a script may use), values only the program holds (the
   camera's start, the generator's own spacing), the enlarged map's `EnlargementOffset` and `IslandShift` (kept; their
@@ -372,8 +382,39 @@ tile.
 | `WeatherManager`, `SeasonManager`, `VolcanoEruptionManager`, `SessionUnitManager`, `ItemSessionManager` | times, wind, states | yes | yes | nothing to move |
 | `MinimapManager`, `IslandManager`, `SessionParticipantManager`, `DiscoveryManager`, `PathManager` and the rest | empty in every template | | | listed when not empty |
 | `MapTemplate` asset `HorizonIslands/Item/Position`, `EnlargedHorizonIslands/...` | horizon models, world X, Y, Z; a value of 0 may be left out (one vanilla `Position` holds only `Z`) | 32 assets, 448 positions; the enlarged maps' list 16 assets, 272 | none | the list of the grown template moved (ModOps): the enlarged map's for an enlarged template, the base list kept and listed then (the asset serves both) |
-| other assets | the asset lists hold no other X/Z position block (scanned for `<X>`..`<Z>` blocks and position-named values) | none | none | - |
+| other assets | the asset lists hold no other X/Z position block (scanned for `<X>`..`<Z>` blocks and position-named values; the table below the list says what the position-like fields are) | none | none | a mod's assets that hold one and belong to the map: moved (ModOps); others listed |
 | Lua scripts | 117: 2,530 files, 1800: 31; a number in a script is not known to be a position | | | listed: numbers in the map's range in scripts that name the template or session |
+
+### Position-like fields of the asset lists
+
+The installed games' asset lists were searched for anything that could be a position. These are 1 list for 117, and
+for 1800 the main list and the 4 scenario lists of its add-ons (5 in all). Every asset's `Values` was walked for
+blocks with an `X` and a `Z`, for fields whose name says position, area, rectangle, point, camera, target, spawn, centre
+or offset, and for any value of two to four numbers. The result is that **the only absolute session positions in the
+asset lists are the `MapTemplate` horizon islands** (table above). Everything else that looks like a position is one
+of these:
+
+| Field | What it is | Assets (117 / 1800) | Growth |
+|---|---|---|---|
+| `Session/MapTemplate` (117 sessions `SessionModerate`; 1800 `SessionModerate`, `SessionModerateRandom`, `SessionSouthAmerica`, `SessionArctic`), `MapTemplateForMultiplayer`, a scenario's `ScenarioBaseAssetGUID` | the tie of a session or scenario to a map: a `MapTemplate` GUID | 9 / 12 session assets | the tie the growth follows (a session asset names the template; the template names the `.a7t`) |
+| `Session/CameraLoopSequence1`, `...2` | the number of a camera flight of the session file | none / 10 | nothing to move: a number, the flight itself is in the `.a7t` (moved) |
+| `CameraSequence/CameraSequenceID`, `CameraSequenceSession` | a flight number and the session it plays in | 11 / none | nothing to move |
+| `ActionSetCamera/PositionMarker` of a `Sequence` (117), `Trigger`, `TriggerQuest`, `MainQuest` (1800) | the GUID of a session object the camera looks at; the object's position is in the `.a7t` | 1 / 4 | nothing to move: the object is moved with the session |
+| `Radius`, `MinObjectDistance`, `MaxObjectDistance`, `DistanceToContext`, `QuestArea` switches, `ContextGUID`, `SessionOrRegion`, `TargetObjectSession` of the quest, objective and trigger assets | distances in tiles and ties of a quest to a context object, a region or a session: relative, no map coordinate | 148 `Radius` / 216 | nothing to move |
+| `ObjectGUID`, `SpawnObjectGUID`, `ExecutionObject` of quest and objective assets | the asset or the session object to use, by GUID | many / many | nothing to move |
+| `PosX`/`PosY`, `PathPosX`/`PathPosY`, `OptionPosX`/`OptionPosY`, `UIPosition`, `InputGoodPos` | positions on screen: recipes (79), expedition map options (43) and decisions, the residence menu | none / 1800 only | not a session position; never moved |
+| `WorldMapConfig/Camera/CenterX`, `CenterY` | the world map's camera | 1 / 1 | not a session position |
+
+So a quest, trigger or objective of the games reaches the map by a GUID (a template, a session, an object the session
+file holds), never by a coordinate of its own: moving the session file's objects moves what they point at. The growth
+therefore moves the asset blocks only for assets that carry an `X`/`Z` position and belong to the map (a mod's quest,
+or a later game version), by the rule in the list above. A quest that names a *region* or a whole session rather than
+one map is ambiguous when it holds a position, so it is kept.
+
+Only the game can show two things. First, whether a moved block of a custom asset lands where its map's objects do.
+Second, whether the ModOps path with an item index (`Item[2]`) is taken as written.
+
+Note: searched on 2026-11-15.
 
 ## Three difficulties from one map
 

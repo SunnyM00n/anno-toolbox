@@ -101,7 +101,9 @@ def process_names() -> set[str]:
                 ["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15, **NO_WINDOW
             ).stdout
             return {row[0].lower() for row in csv.reader(io.StringIO(out)) if row}
-        out = subprocess.run(["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=15).stdout
+        out = subprocess.run(
+            ["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=15, **NO_WINDOW
+        ).stdout
         return {line.strip().rsplit("/", 1)[-1].lower() for line in out.splitlines() if line.strip()}
     except (OSError, subprocess.SubprocessError):
         return set()

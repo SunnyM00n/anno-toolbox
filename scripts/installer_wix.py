@@ -72,8 +72,9 @@ def _component(edition: Edition, directory: str, files: list[str], program_id: s
 def wxs(edition: Edition, version: str, files: list[str], scope: str = "perUser") -> str:
     """The WiX source for a program folder (``files``: relative paths with "/"); ``$(var.AppDir)`` is the folder.
 
-    A component per folder (stable GUIDs), the Start-menu shortcut, the licence page, a major upgrade through the
-    edition's upgrade code. ``scope`` is "perUser" (no administrator) or "perMachine"."""
+    A component per folder (stable GUIDs), the Start-menu shortcut, the licence page, a ticked "start it" box on the
+    last page, a major upgrade through the edition's upgrade code. ``scope`` is "perUser" (no administrator) or
+    "perMachine"."""
     by_dir: dict[str, list[str]] = {d: [] for d in directories(files)}
     for file in files:
         path = PurePosixPath(file)
@@ -95,7 +96,15 @@ def wxs(edition: Edition, version: str, files: list[str], scope: str = "perUser"
         f'    <Property Id="INSTALLFOLDER"><RegistrySearch Id="FindInstall" Root="{hive}" '
         f'Key={_attr(edition.registry_key)} Name="InstallFolder" Type="directory" /></Property>',
         '    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />',
-        '    <ui:WixUI Id="WixUI_Minimal" />',
+        # Welcome, licence, what to install (the shortcuts are features of their own), progress, finish
+        '    <ui:WixUI Id="WixUI_FeatureTree" />',
+        # the last page's "start it now" box, ticked; it starts the program as the shortcut does
+        f'    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value={_attr("Start " + edition.product)} />',
+        '    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />',
+        f'    <CustomAction Id="StartProgram" FileRef="{program_id}" ExeCommand="{SHORTCUT_ARGUMENTS}" '
+        'Return="asyncNoWait" />',
+        '    <UI><Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="StartProgram" '
+        'Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" /></UI>',
         f'    <StandardDirectory Id="{root}">',
         f"      {programs}",
         f'      <Directory Id="INSTALLFOLDER" Name={_attr(edition.install_folder)} />',
@@ -110,25 +119,58 @@ def wxs(edition: Edition, version: str, files: list[str], scope: str = "perUser"
         lines += _component(edition, directory, names, program_id, hive)
     lines += [
         "    </ComponentGroup>",
-        '    <ComponentGroup Id="Shortcuts" Directory="StartMenuDir">',
-        f'      <Component Id="StartMenu" Guid="{component_guid(edition, "<start menu>")}">',
-        f'        <Shortcut Id="AppShortcut" Name={_attr(edition.product)} Target="[#{program_id}]" '
-        f'Arguments="{SHORTCUT_ARGUMENTS}" WorkingDirectory="INSTALLFOLDER" />',
-        '        <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />',
-        f'        <RegistryValue Root="{hive}" Key={_attr(edition.registry_key + chr(92) + "Components")} '
-        'Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />',
-        f'        <RegistryValue Root="{hive}" Key={_attr(edition.registry_key)} Name="InstallFolder" Type="string" '
-        'Value="[INSTALLFOLDER]" />',
-        "      </Component>",
-        "    </ComponentGroup>",
-        f'    <Feature Id="Main" Title={_attr(edition.product)} Level="1">',
+        *_shortcuts(edition, hive),
+        f'    <Feature Id="Main" Title={_attr(edition.product)} Level="1" AllowAbsent="no" AllowAdvertise="no" '
+        'Display="expand" Description="The program">',
         '      <ComponentGroupRef Id="AppFiles" />',
-        '      <ComponentGroupRef Id="Shortcuts" />',
+        '      <ComponentRef Id="InstallRecord" />',
+        '      <Feature Id="StartMenuEntry" Title="Start menu entry" Level="1" AllowAdvertise="no" '
+        'Description="A shortcut in the Start menu">',
+        '        <ComponentRef Id="StartMenu" />',
+        "      </Feature>",
+        '      <Feature Id="DesktopShortcut" Title="Desktop shortcut" Level="1" AllowAdvertise="no" '
+        'Description="A shortcut on the desktop">',
+        '        <ComponentRef Id="DesktopShortcut" />',
+        "      </Feature>",
         "    </Feature>",
         "  </Package>",
         "</Wix>",
     ]
     return "\n".join(line for line in lines if line.strip()) + "\n"
+
+
+def _shortcuts(edition: Edition, hive: str) -> list[str]:
+    """The Start-menu entry and the desktop shortcut (each its own feature, so the installer asks for it), and the
+    install folder's record, which an upgrade and an uninstall read back."""
+    components = hive, _attr(edition.registry_key + chr(92) + "Components")
+    # by folder, not [#file]: the exe's component is in the parent feature (a file reference across features is ICE69)
+    shortcut = (
+        f'Name={_attr(edition.product)} Target="[INSTALLFOLDER]{bundle.PROGRAM}.exe" Arguments="{SHORTCUT_ARGUMENTS}" '
+        'WorkingDirectory="INSTALLFOLDER"'
+    )
+    return [
+        '    <StandardDirectory Id="DesktopFolder">',
+        f'      <Component Id="DesktopShortcut" Guid="{component_guid(edition, "<desktop>")}">',
+        f'        <Shortcut Id="DesktopAppShortcut" {shortcut} />',
+        f'        <RegistryValue Root="{components[0]}" Key={components[1]} Name="DesktopShortcut" Type="integer" '
+        'Value="1" KeyPath="yes" />',
+        "      </Component>",
+        "    </StandardDirectory>",
+        '    <DirectoryRef Id="StartMenuDir">',
+        f'      <Component Id="StartMenu" Guid="{component_guid(edition, "<start menu>")}">',
+        f'        <Shortcut Id="AppShortcut" {shortcut} />',
+        '        <RemoveFolder Id="RemoveStartMenuDir" On="uninstall" />',
+        f'        <RegistryValue Root="{components[0]}" Key={components[1]} Name="StartMenu" Type="integer" '
+        'Value="1" KeyPath="yes" />',
+        "      </Component>",
+        "    </DirectoryRef>",
+        '    <DirectoryRef Id="INSTALLFOLDER">',
+        f'      <Component Id="InstallRecord" Guid="{component_guid(edition, "<install record>")}">',
+        f'        <RegistryValue Root="{hive}" Key={_attr(edition.registry_key)} Name="InstallFolder" Type="string" '
+        'Value="[INSTALLFOLDER]" KeyPath="yes" />',
+        "      </Component>",
+        "    </DirectoryRef>",
+    ]
 
 
 def rtf(text: str) -> str:

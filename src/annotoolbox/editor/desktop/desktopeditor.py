@@ -541,21 +541,26 @@ class IslandDoc(QObject):
         self._swatches(own + vanilla)
 
     def _swatches(self, materials: list[dict]) -> None:
-        editor = self.editor
+        """The gallery's pictures, handed over in batches as they are read: the first opening of an island converts
+        each texture once, which takes a while for a game's whole set."""
+        editor, batch = self.editor, 12
 
         def load():
             from PIL import Image
 
             out = {}
-            for m in materials:
+            for n, m in enumerate(materials, 1):
                 try:
                     img = Image.open(io.BytesIO(editor.texture_png(m["diffuse"], opaque=True))).convert("RGB")
                     out[m["diffuse"]] = img.resize((44, 44)).tobytes()
-                except Exception:
-                    continue
+                except Exception:  # a texture that does not load keeps the plain entry (the Checks tab says why)
+                    pass
+                if n % batch == 0 and out:
+                    self.background.done.emit(show, out)
+                    out = {}
             return out
 
-        def done(result):
+        def show(result):
             if not self.alive or isinstance(result, Exception):
                 return
             for item in self.gallery.items():
@@ -565,4 +570,4 @@ class IslandDoc(QObject):
                         QIcon(QPixmap.fromImage(QImage(raw, 44, 44, 44 * 3, QImage.Format.Format_RGB888).copy()))
                     )
 
-        self.background.run(load, done)
+        self.background.run(load, show)

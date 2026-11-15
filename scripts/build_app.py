@@ -50,9 +50,13 @@ import sys
 sys.path.insert(0, {src!r})
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+import PySide6
+_qt = os.path.dirname(PySide6.__file__)
+
 a = Analysis(
     [{launcher!r}],
     pathex=[{src!r}],
+    binaries=[(os.path.join(_qt, n), "PySide6") for n in os.listdir(_qt) if n.split(".")[0] in {baker!r}],
     hiddenimports=collect_submodules({package!r}) + collect_submodules("glcontext"),
     datas=collect_data_files({package!r}),
     excludes={excludes!r},
@@ -64,11 +68,15 @@ COLLECT(gui, cli, a.binaries, a.datas, name={program!r})
 """
 
 
+# Qt's shader baker and its library, by file stem: PyInstaller collects PySide6's modules, not its tools
+SHADER_BAKER = ("qsb", "Qt6ShaderTools")
+
+
 def spec_text(launcher: Path, src: Path, edition: bundle.Edition) -> str:
     """The PyInstaller spec: one analysis, two exes (windowed and console) in one folder."""
     return SPEC.format(
         src=str(src), launcher=str(launcher), package=edition.package, excludes=list(TOOLBOX_EXCLUDES),
-        program=bundle.PROGRAM, command=edition.command,
+        program=bundle.PROGRAM, command=edition.command, baker=list(SHADER_BAKER),
     )  # fmt: skip
 
 
@@ -109,7 +117,16 @@ def check_program(app: Path, tree: Path, edition: bundle.Edition, work: Path) ->
     for rel in bundle.RUNTIME_FILES[:1]:
         if not (app / rel).is_file():
             problems.append(f"missing beside the program: {rel}")
-    return problems
+    return problems + baker_problems(app)
+
+
+def baker_problems(app: Path) -> list[str]:
+    """The 3D views bake their shaders with Qt's baker at run time: it must be in the folder and start there."""
+    qsb = app / "_internal" / "PySide6" / "qsb.exe"
+    if not qsb.is_file():
+        return [f"Qt's shader baker missing: {qsb.relative_to(app)} (the 3D views would draw nothing)"]
+    done = subprocess.run([str(qsb), "--version"], capture_output=True, text=True, timeout=60, check=False)
+    return [] if done.returncode == 0 else [f"Qt's shader baker does not start: exit {done.returncode}"]
 
 
 def run_pyinstaller(tree: Path, edition: bundle.Edition, work: Path, dist: Path) -> Path:

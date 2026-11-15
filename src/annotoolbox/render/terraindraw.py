@@ -345,6 +345,8 @@ class Terrain:
         self.edited: np.ndarray | None = None  # per block of the finest nodes: its heights differ from the file's
         self.cache = terrainnodes.SliceCache(SLICES)
         self.models: dict[Node, TerrainModel] = {}
+        self._drawn: set[Node] = set()  # the nodes the last frame drew (``shown``)
+        self._visible = None  # the last ``nodes`` call's test of a node in view
         self.textures: dict = {}
         self.page = None
         self.keep: list = []
@@ -390,7 +392,27 @@ class Terrain:
             if model is not None and all(model is not m for m in out):
                 model.release()
         self.cache.dropped.clear()
+        self._visible = visible
         return out
+
+    def shown(self, models: list[TerrainModel]) -> list[TerrainModel]:
+        """What draws for this frame's ``models`` (``nodes``) once the frame's bake is recorded: a node not baked yet
+        stands in as the nodes drawn before over its square (``terrainnodes.stand_ins``), kept in the slice cache."""
+        pages = self.pages.ready if self.pages is not None else {}
+
+        def ready(node) -> bool:  # baked, and its model's page still on the device
+            model = self.models.get(node)
+            page = model.kind[1] if model is not None else None
+            current = page is None or (page in pages and id(pages[page]) == model.kind[2])
+            return model is not None and current and node in self.cache.slices and node not in self.cache.fresh
+
+        wanted = {m.node: m for m in models}
+        nodes = terrainnodes.stand_ins(list(wanted), ready, self._drawn, self.size, self._visible)
+        for node in nodes:
+            if node not in wanted:  # standing in: not given away before its replacement is baked
+                self.cache.slices.move_to_end(node)
+        self._drawn = set(nodes)
+        return [wanted[n] if n in wanted else self.models[n] for n in nodes]
 
     def casters(self, models: list[TerrainModel]) -> list[TerrainModel]:
         """The nodes drawn into the sun's cascades by the terrain's shadow technique: per node model a caster that
@@ -544,7 +566,7 @@ class Terrain:
             if t is not None:
                 t.destroy()
         self.tints, self._tint_uploads = {}, []
-        self.models, self.keep, self.page, self.stand_ins = {}, [], None, {}
+        self.models, self.keep, self.page, self.stand_ins, self._drawn = {}, [], None, {}, set()
         self.common.release()
         self.slots.release()
         self.cache.clear()

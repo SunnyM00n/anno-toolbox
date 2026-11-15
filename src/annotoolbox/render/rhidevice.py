@@ -484,7 +484,8 @@ class RhiContext(rhipass.Recorder):
         size = color_texture.pixelSize()
         w, h = size.width(), size.height()
         ident = color_texture.globalResourceId()
-        if self.screen is None or self.screen.color_attachments[0].native_id != ident:
+        # a resize keeps the texture object (and its id) but changes its size: either one makes the screen anew
+        if self.screen is None or self.screen.color_attachments[0].native_id != ident or self.screen.size != (w, h):
             if self.screen is not None:
                 self.screen.release()
                 self.screen.depth_attachment.release()

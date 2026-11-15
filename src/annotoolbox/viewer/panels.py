@@ -189,7 +189,7 @@ class UsersPanel(QTreeWidget):
     double-click (``open_file``), an asset asks for the asset editor (``show_asset``)."""
 
     open_file = Signal(str)
-    show_asset = Signal(int)
+    show_asset = Signal(object)  # a GUID (may exceed a Qt int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

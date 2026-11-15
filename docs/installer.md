@@ -9,9 +9,9 @@ says how the Toolbox installs, upgrades and uninstalls, how a download is verifi
 
 | In the program folder | What |
 |---|---|
-| `AnnoToolbox.exe` | The window: every app of the suite, with no console. The Start-menu shortcut starts it (`--app islands`: the suite's window, on the island editor). An error that nothing caught goes to `%LOCALAPPDATA%\anno-toolbox\logs` and into a message box |
+| `AnnoToolbox.exe` | The window: every app of the suite, with no console. The Start-menu shortcut starts it (`--app islands`: the suite's window, on the island editor), and so does the installer's last page while its "Start Anno Toolbox" box is ticked. An error that nothing caught goes to `%LOCALAPPDATA%\anno-toolbox\logs` and into a message box |
 | `anno-toolbox.exe` | The same program as a console program: the light command line (`anno-toolbox rdm ...`, `anno-toolbox export ...`) and, for a check, `anno-toolbox --app islands --smoke` (every app is started once; it gives the exit code and one line per app) |
-| `_internal/` | Python, Qt (PySide6), moderngl, numpy, scipy, Pillow and the package with its data files (the interface languages, the descriptions, the tables) |
+| `_internal/` | Python, Qt (PySide6, with its shader baker `qsb.exe`, which the 3D views need), moderngl, numpy, scipy, Pillow and the package with its data files (the interface languages, the descriptions, the tables) |
 | `docs/formats/` | The three files the program reads next to its exes: the Phoenix schemas of 117 and 1800 and the enum table of 117 |
 | `tools/` | texconv (Microsoft DirectXTex, MIT); the program finds it there |
 | `LICENSE`, `LICENSE-UBISOFT.md`, `THIRD-PARTY.txt` | The licences and the list of the libraries with their versions and licences (written from the build's environment) |
@@ -23,6 +23,10 @@ Nothing the program writes (a mod, an export, an edit file) is part of the insta
 
 ## Install scope, upgrades, uninstall
 
+- **The installer's pages**: welcome, the licence, what to install, progress and finish. The "What to install" page
+  holds the program and two parts of it, a **Start menu entry** and a **desktop shortcut**. Both are ticked unless the
+  user unticks them. An upgrade is meant to keep the choice of the older version (not yet checked in practice). The
+  last page has a ticked "Start Anno Toolbox" box, which starts the program after a fresh install or an upgrade.
 - **Per user, no administrator** (default). The program goes to `%LOCALAPPDATA%\Programs\Anno Toolbox`. The Start-menu shortcut is the user's own,
   and the registrations are under `HKCU`. `--scope perMachine` makes a machine-wide installer from the same source
   (Program Files, `HKLM`; it asks for administrator rights). The shipped installer is per user.
@@ -39,6 +43,41 @@ Nothing the program writes (a mod, an export, an edit file) is part of the insta
   therefore finds the games, the theme and the project list again. To remove them as well, delete that folder after the
   uninstall.
 - No file association is made. The Toolbox has no document type of its own that Windows should open by double click.
+
+## Updates
+
+The public edition looks for a newer release of itself (`suite/updates.py`, `suite/updatenotice.py`). The full source
+never does: `RELEASES`, the release page's `owner/name`, is empty there, and the export sets it to the public
+repository. With it empty there is no Help menu entry and nothing asks the network.
+
+- **What is sent.** One HTTPS request to `https://api.github.com/repos/<RELEASES>/releases/latest` (timeout 10 s) with
+  the header `User-Agent: anno-toolbox/<version>` and nothing else: no identifier, no list of installed games, no
+  settings. After a click on "Download and install", two more requests to the release's file addresses.
+- **When.** At the start, at most once a day (the date of the last answered check is in the settings,
+  `last_update_check`), on a background thread. Help > *Check for updates...* asks every time and says "up to date" or
+  shows the new version. A check can fail when the computer is offline, when GitHub refuses the request (rate limit)
+  or when the answer cannot be read. At the start, a failed check is only one log line. When asked by hand, it shows a
+  short message.
+- **Which version.** The tag `vX.Y.Z` of the latest release is compared with the package's `__version__`, by number.
+  A suffix such as `rc1` counts as older than the plain version. The release must carry `AnnoToolbox-<version>.msi`
+  and `SHA256SUMS`. Without both files, it is not offered as an update.
+- **The notice.** A found update shows "Version X is available" in the status bar. A click opens a dialog with the
+  version, the release's text (as plain text) and the buttons *Download and install* and *Later*. Nothing is
+  downloaded without that click.
+- **Where files go, how they are verified.** Both files go to the `updates` folder of the program's data folder
+  (`%LOCALAPPDATA%\anno-toolbox\updates`). The `.msi`'s SHA256 must equal its line in `SHA256SUMS`. A file that does
+  not match is deleted, and nothing is installed. After a good download, older downloads in that folder are deleted.
+  The checksum shows that the file was not changed on the way. The build attestation (below) shows where it came from.
+- **Install (the installed program only).** The window is closed the usual way, so its Save / Discard / Cancel questions
+  run. If the person cancels one of them, nothing is installed. Otherwise `msiexec /i <msi>` starts apart from the
+  program (with no console window) and the program quits. The `.msi` is a major upgrade: settings and caches in
+  `%LOCALAPPDATA%` stay, and the shortcut choices should carry over.
+- **A Python install (`pip`).** The dialog says the version is out and gives
+  `pip install --upgrade "anno-toolbox[gui] @ git+https://github.com/<RELEASES>@v<version>"`; nothing is downloaded.
+- **Switching it off.** Untick Help > *Check for updates at start* (the `check_updates` setting). The entry for a check
+  by hand stays.
+- **Not verified here.** The download from GitHub and the hand-over to `msiexec` need a real release. The tests stand
+  in for the network. Also unchecked: that an upgrade keeps the shortcut choices of the older version.
 
 ## The unsigned installer and Windows' reputation check
 
@@ -115,7 +154,7 @@ and `SHA256SUMS`. The build runs these steps:
 
 1. The PyInstaller spec is written (one analysis, two exes, one folder).
 2. The schemas, texconv and the licences are put next to the exes.
-3. The folder is checked.
+3. The folder is checked (the package data, the schemas, and that Qt's shader baker is there and starts).
 4. `--smoke` runs the console exe (`--version`, `rdm --help`, and every app of the suite started once, with a settings
    folder of its own).
 5. The `.msi` is written by WiX from the folder (a component per folder, the file list written by

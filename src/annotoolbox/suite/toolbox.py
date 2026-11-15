@@ -140,9 +140,17 @@ def write_error_log(logs: Path | None, kind, value, tb) -> Path | None:
     folder = logs or appdata() / "logs"
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"error-{datetime.now():%Y%m%d-%H%M%S-%f}.log"
-        path.write_text("".join(traceback.format_exception(kind, value, tb)), encoding="utf-8", newline="\n")
-        return path
+        stamp = f"error-{datetime.now():%Y%m%d-%H%M%S-%f}"
+        text = "".join(traceback.format_exception(kind, value, tb))
+        for n in range(1, 100):  # Windows' clock steps coarsely: two errors at once must not share a file
+            path = folder / (f"{stamp}.log" if n == 1 else f"{stamp}-{n}.log")
+            try:
+                with path.open("x", encoding="utf-8", newline="\n") as f:
+                    f.write(text)
+                return path
+            except FileExistsError:
+                continue
+        return None
     except OSError:
         return None
 

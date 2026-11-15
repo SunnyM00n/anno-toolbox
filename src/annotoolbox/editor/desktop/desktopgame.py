@@ -167,6 +167,9 @@ class GameIsland(IslandBake):
         self._pending = Change()
         self._coarse = False  # the coarse heights were handed to the pages
         self._cascades = None  # gameshadow.Cascades read back from the game's analysis (casters culled by them)
+        self._cascades_for = self._asked_for = None  # the camera they were fitted for, the one of the read in flight
+        self._late = False  # this frame's camera is not the one ``_cascades`` were fitted for
+        self.animated = False  # the frame moves with the view's clock or still settles: the view draws on
         self.error = ""
         self.source = None  # models.shaderview.ShaderSource: the install's shaders, once read (the objects compile)
         self.quality = None  # render.quality.Quality the frame was made for (None: the best)
@@ -279,7 +282,7 @@ class GameIsland(IslandBake):
         shadows = getattr(opts, "shadows", True) and (q is None or q.shadows)
         ground = self.ground.ground(self.pages.coarse if self.pages is not None else None)
         self.objects.adapt = ground is not None  # without the session's terrain no model adapts to it
-        objects = self.objects.frame(f, opts, shadows, size, self._seen_cascades() if shadows else None)
+        objects = self.objects.frame(f, opts, shadows, size, self._seen_cascades(f, size) if shadows else None)
         self.r.game_parts = self.objects.drawn
         decals = self.decals.frame(opts, ChainMap(self.objects.neutral or {}, terrain.textures)) if ground else []
         self.r.game_decals = bool(decals)  # the view's own decals while the game's compile (or failed)
@@ -290,6 +293,7 @@ class GameIsland(IslandBake):
             self._bake_game(models)
         else:
             self._bake_own(opts, [m.node for m in models])
+        models = terrain.shown(models)  # a node not baked yet: the nodes drawn before over its square
         lt = f.lt
         sun, sun_color = tuple(lt["sunDir"]), tuple(lt["sunColor"])
         sh = tuple(lt.get("sh", [(0.0, 0.0, 0.0)] * 9))
@@ -318,6 +322,11 @@ class GameIsland(IslandBake):
         self.r.stats["game_decals"] = sum(d.count for d in decals)
         for how in ("detailed", "stored"):
             self.r.stats[f"terrain_{how}"] = sum(m.kind[0] == how for m in models)
+        clock = getattr(opts, "particle_time", None) is None  # the water and the clouds move with the view's clock
+        moving = clock and any(p is not None for p in (passes.sea, passes.inland, passes.clouds))
+        fitted = shadows and self._late and self.frame.cascades is not None and self.frame.cascades.gpu  # read back
+        settling = self._unbaked or (self.pages is not None and self.pages.busy()) or fitted
+        self.animated = bool(moving or settling)
         return True
 
     def finish(self, image, size: tuple[int, int], lut):
@@ -396,18 +405,22 @@ class GameIsland(IslandBake):
         self.r.game_inland = not inland.error
         return inland if not inland.error else None
 
-    def _seen_cascades(self):
+    def _seen_cascades(self, f, size: tuple[int, int]):
         """The sun's cascades as last known on the CPU (the casters are culled by them): fitted there, or read back
-        from the game's analysis a frame or two ago (one read in flight at a time); None before the first."""
+        from the game's analysis a frame or two ago (one read in flight at a time); None before the first.
+        ``_late``: they were fitted for another camera than this frame's (the view draws on until they are not)."""
         fit = self.fit if self.fit is not None and not self.fit.error else None
+        self._late = False
         if fit is None:
             cascades = self.frame.cascades if self.frame is not None else None
             return cascades if cascades is not None and not cascades.gpu else None
+        seen = (np.asarray(f.view_proj).tobytes(), tuple(size))
         if fit.readbacks and fit.readbacks[1].data.size() >= gameshadow.INFO_BYTES * gameshadow.COUNT:
             self._cascades = gameshadow.read_info(bytes(fit.readbacks[1].data), np.zeros(3), 0.0)
-            fit.readbacks = []
+            self._cascades_for, fit.readbacks = self._asked_for, []
         if not fit.readbacks:
-            fit.read_back = True
+            fit.read_back, self._asked_for = True, seen
+        self._late = self._cascades_for != seen
         return self._cascades
 
     def _sync_files(self, f) -> None:

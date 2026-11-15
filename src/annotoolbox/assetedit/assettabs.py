@@ -304,7 +304,7 @@ class TemplatePanel(QTreeWidget):
 class UsagePanel(QWidget):
     """Who names the asset (a double click shows that one), and what the change set changed in it."""
 
-    jump = Signal(int)
+    jump = Signal(object)  # a GUID (may exceed a Qt int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -343,7 +343,7 @@ class UsagePanel(QWidget):
 class FindingsList(QListWidget):
     """The check's findings; a double click shows the asset."""
 
-    jump = Signal(int)
+    jump = Signal(object)  # a GUID (may exceed a Qt int)
 
     def __init__(self) -> None:
         super().__init__()

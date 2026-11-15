@@ -338,7 +338,7 @@ class ViewModelPanel(QWidget):
     """What the file can bind to: the scene's data class (a guess from its name), the field ids the file reads with
     the names given to them, every UI data class, and a script list's readouts."""
 
-    name_id = Signal(int, str)  # a field id named after a class's field
+    name_id = Signal(object, str)  # a field id (32 bits unsigned, beyond a Qt int) named after a class's field
     bind = Signal(object)  # a source path (data object mode, owner id path) to bind to the selected element
     add_readout = Signal(object)  # a readout to add as a custom property
     load_scripts = Signal()

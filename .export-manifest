@@ -686,6 +686,8 @@ src/annotoolbox/suite/shell.py
 src/annotoolbox/suite/theme.py
 src/annotoolbox/suite/toolbox.py
 src/annotoolbox/suite/undo.py
+src/annotoolbox/suite/updatenotice.py
+src/annotoolbox/suite/updates.py
 src/annotoolbox/suite/widgets.py
 src/annotoolbox/textedit/__init__.py
 src/annotoolbox/textedit/checks.py
@@ -954,6 +956,7 @@ tests/test_modmgr_profiles.py
 tests/test_modmgr_window.py
 tests/test_modswap.py
 tests/test_nativelook.py
+tests/test_no_console_windows.py
 tests/test_objbuild.py
 tests/test_objectbrush.py
 tests/test_objects1800.py

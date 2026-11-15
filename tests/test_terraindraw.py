@@ -56,6 +56,58 @@ def test_slices_are_reused_longest_unused_first_and_spoilt_by_a_box():
     assert cache.spoil((0.0, 0.0, 1.0, 1.0)) == [a] and a in cache.fresh
 
 
+def test_a_split_node_draws_until_all_its_quarters_are_baked():
+    """Zooming in: the larger node drawn before stands in for its quarters until every one is baked (an unbaked slice
+    drew black or another node's ground for a few frames)."""
+    parent, other = Node(3, 0.0, 0.0), Node(3, 8.0, 0.0)
+    kids = parent.children(16.0)
+    baked = {parent, other, kids[0]}
+    wanted = [*kids, other]
+    assert terrainnodes.stand_ins(wanted, baked.__contains__, {parent, other}, 16.0) == [parent, other]
+    baked.update(kids)
+    assert terrainnodes.stand_ins(wanted, baked.__contains__, {parent, other}, 16.0) == wanted
+
+
+def test_a_merged_node_draws_as_its_parts_until_it_is_baked():
+    """Zooming out: the smaller nodes drawn before stand in for the larger one where they cover its part in view;
+    where they do not (nothing drawn before, a part in view not covered) it draws itself."""
+    parent = Node(3, 0.0, 0.0)
+    kids = parent.children(16.0)
+    baked = set(kids)
+    assert set(terrainnodes.stand_ins([parent], baked.__contains__, set(kids), 16.0)) == set(kids)
+    assert terrainnodes.stand_ins([parent], baked.__contains__, set(), 16.0) == [parent]
+    assert terrainnodes.stand_ins([parent], baked.__contains__, set(kids[:3]), 16.0) == [parent]
+    hidden = kids[3]  # out of view: not needed
+    shown = terrainnodes.stand_ins([parent], baked.__contains__, set(kids[:3]), 16.0, lambda n: n != hidden)
+    assert set(shown) == set(kids[:3])
+
+
+def test_the_terrain_shows_the_nodes_drawn_before_while_the_new_ones_bake():
+    """``Terrain.shown``: a node is ready once its slice is baked and its page is still the one on the device; the
+    nodes standing in are kept in the slice cache."""
+    from types import SimpleNamespace
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.render.terraindraw import Terrain
+
+    parent = Node(3, 0.0, 0.0)
+    kids = parent.children(16.0)
+    page = object()
+    t = object.__new__(Terrain)
+    t.size, t._visible, t.cache = 16.0, None, SliceCache(8)
+    t.pages = SimpleNamespace(ready={(0, 0, 0): page})
+    t.models = {n: SimpleNamespace(node=n, kind=("grid", None, 0)) for n in (parent, *kids)}
+    t.models[parent].kind = ("detailed", (0, 0, 0), id(page))
+    for n in (parent, *kids):
+        t.cache.get(n)
+    t.cache.baked(parent)
+    t._drawn = {parent}
+    wanted = [t.models[k] for k in kids]
+    assert t.shown(wanted) == [t.models[parent]] and next(reversed(t.cache.slices)) == parent
+    t.pages.ready = {(0, 0, 0): object()}  # its page was made again: it no longer stands in
+    assert t.shown(wanted) == wanted
+
+
 def _unpack(raw: bytes, n: int):
     """The vertices read back as ``vsTerrainInternal`` reads them (terrain-geometry.md 1.1)."""
     v = np.frombuffer(raw, np.uint8).reshape(n, 16)
@@ -359,6 +411,31 @@ def test_the_look_stays_busy_for_the_frame_that_bakes_the_last_nodes():
     assert game._unbaked == 2 and game.bake.run.call_args.args[1] == [(1, 0), (2, 1)]
     game._bake_game(models)  # nothing left: idle from the next frame on
     assert game._unbaked == 0
+
+
+def test_cascades_fitted_for_another_camera_keep_the_view_drawing():
+    """The casters are culled by cascades read back a frame or more late: after a zoom the view stopped on a frame
+    culled by the old camera's (shadows wrong until the next rotation). It is late until a read for this camera."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QByteArray
+
+    from annotoolbox.editor.desktop import desktopgame
+    from annotoolbox.render import gameshadow
+
+    game = object.__new__(desktopgame.GameIsland)
+    game.fit = SimpleNamespace(error="", readbacks=[], read_back=False)
+    game._cascades = game._cascades_for = game._asked_for = None
+    near, far = SimpleNamespace(view_proj=np.eye(4)), SimpleNamespace(view_proj=np.eye(4) * 2)
+    game._seen_cascades(near, (8, 8))
+    assert game._late and game.fit.read_back  # nothing read yet: asked for this camera
+    raw = bytes(gameshadow.INFO_BYTES * gameshadow.COUNT)
+    game.fit.readbacks = [None, SimpleNamespace(data=QByteArray(raw))]  # the read arrives after that frame
+    game._seen_cascades(near, (8, 8))
+    assert not game._late and game._cascades is not None
+    game._seen_cascades(far, (8, 8))  # zoomed: fitted for the camera before
+    assert game._late
 
 
 INSTALL_ISLAND = """

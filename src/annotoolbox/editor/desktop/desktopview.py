@@ -191,6 +191,10 @@ class IslandControls(GizmoControls, OverlayDraw):
         )
 
     def _hud(self) -> None:
+        if failed := getattr(self, "failed", ""):  # a frame that raised draws nothing: say why, not a blank view
+            self.fps_label.setText(tr("The view cannot draw: {error}", error=failed))  # also after a single frame
+            self.fps_label.adjustSize()
+            return
         if self._painted and self._frame_times:
             fps = f"{len(self._frame_times) / max(1e-6, sum(self._frame_times)):.0f}"
             memory = gpuinfo.video_memory()  # the card's own and the system memory it maps for this process

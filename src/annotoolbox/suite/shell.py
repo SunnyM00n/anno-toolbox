@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..infra.i18n import tr
-from . import icons, linkclient, linkhandover, linkroute, links, livelink, theme
+from . import icons, linkclient, linkhandover, linkroute, links, livelink, theme, updatenotice
 from .extspecs import AppSpec
 from .settings import SETTINGS_FILE, Settings, appdata
 
@@ -84,6 +84,7 @@ class SuiteWindow(QMainWindow):
             hints.colorSchemeChanged.connect(lambda _s: self.settings.theme == "system" and self.apply_theme())
         self.provided = self._provide_links()
         self._attach_game_link()
+        self.updates = updatenotice.attach(self)  # None in a build without a release page
 
     def _provide_links(self) -> list[tuple[str, object]]:
         """Every app's links (``AppSpec.links``) answered by this window: for an action the app's page made and brought
@@ -255,6 +256,8 @@ def run(
     first = start or window.settings.apps.get("shell", {}).get("app")
     window.show_app(first if first in window.apps else apps[0].key)
     window.show()
+    if window.updates:
+        window.updates.check_at_start()
     return qt.exec()
 
 

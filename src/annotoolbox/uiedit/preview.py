@@ -25,9 +25,9 @@ class Preview(QWidget):
     """``selected(node id)``: a click; ``moved(node id, dx, dy)``: a drag in the parent's units; ``sized(node id,
     fx, fy)``: the handle dragged, as factors of the element's scale."""
 
-    selected = Signal(int)
-    moved = Signal(int, float, float)
-    sized = Signal(int, float, float)
+    selected = Signal(object)  # node ids are Python ids: 64 bits, beyond a Qt int
+    moved = Signal(object, float, float)
+    sized = Signal(object, float, float)
     dropped = Signal(str, str, float, float)  # a palette entry (what, which) dropped at a point of the reference space
 
     def __init__(self) -> None:

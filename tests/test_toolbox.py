@@ -125,3 +125,20 @@ def test_an_uncaught_error_of_the_windowed_program_is_logged_and_shown(tmp_path,
 def test_an_error_is_one_line_and_exit_one(tmp_path, capsys):
     assert toolbox.main(["rdm", "inspect", str(tmp_path / "missing.rdm")]) == 1
     assert capsys.readouterr().err.startswith("error:")
+
+
+def test_two_errors_in_the_same_clock_step_keep_two_logs(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 15, 20, 0, 0, 0)
+
+    monkeypatch.setattr("datetime.datetime", Frozen)
+    try:
+        raise KeyError("a")
+    except KeyError:
+        first = toolbox.write_error_log(tmp_path, *sys.exc_info())
+        second = toolbox.write_error_log(tmp_path, *sys.exc_info())
+    assert first != second and first.is_file() and second.is_file()

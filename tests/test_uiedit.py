@@ -347,8 +347,8 @@ def test_the_window_opens_a_file_edits_and_keeps_it(ui_tree, tmp_path):
     assert window.frame is not None and any(i.kind == "image" for i in window.frame.items)
     window.open_file(WIDGET)
     picture = next(e for e in window.top.walk() if e.kind == "image")
-    window._picked_in_preview(id(picture.node))
-    window._moved(id(picture.node), 5.0, 5.0)
+    window.preview.selected.emit(id(picture.node))  # through the signal: a 64-bit id
+    window.preview.moved.emit(id(picture.node), 5.0, 5.0)
     assert fields.get(picture.node, "Position") == (15.0, 25.0, 0.0) and window.doc.dirty
     window.save()
     saved = Path(settings.project) / "ui-edits" / "anno117" / GEN / WIDGET

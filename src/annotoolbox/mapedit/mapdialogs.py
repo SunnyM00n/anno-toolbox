@@ -228,6 +228,7 @@ class DetailsDialog(QDialog):
         values = dict(element.mine_slot_activation)
         names = {s.id: s.name for s in slots}
         ids = [s.id for s in slots] + [k for k in values if k not in names]
+        self.slot_ids = ids  # by row: an object id is 64 bits, more than Qt's item data holds
         self.mine_slot_activation = QTableWidget(len(ids), 3)
         self.mine_slot_activation.setHorizontalHeaderLabels(
             [tr("slot object"), tr("on the island"), self._value_title(mine_field)]
@@ -236,7 +237,6 @@ class DetailsDialog(QDialog):
             self.mine_slot_activation.setItem(row, 0, QTableWidgetItem(f"{oid:#x}"))
             self.mine_slot_activation.setItem(row, 1, QTableWidgetItem(names.get(oid, tr("(not on the island)"))))
             self.mine_slot_activation.setCellWidget(row, 2, self._value_box(values.get(oid), slot_assets))
-            self.mine_slot_activation.item(row, 0).setData(Qt.ItemDataRole.UserRole, oid)
         self.areas = QTableWidget(0, 3)
         self.areas.setHorizontalHeaderLabels([tr("area"), tr("fertility set GUID"), tr("fertility GUIDs")])
         sets = dict(element.fertility_set_guids)
@@ -315,7 +315,7 @@ class DetailsDialog(QDialog):
         for row in range(self.mine_slot_activation.rowCount()):
             value = self.mine_slot_activation.cellWidget(row, 2).currentData()
             if value is not None:
-                mines.append((self.mine_slot_activation.item(row, 0).data(Qt.ItemDataRole.UserRole), value))
+                mines.append((self.slot_ids[row], value))
         sets, fertilities = [], []
         for row in range(self.areas.rowCount()):
             cells = [self.areas.item(row, c).text().strip() if self.areas.item(row, c) else "" for c in range(3)]

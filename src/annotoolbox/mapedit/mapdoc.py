@@ -89,6 +89,21 @@ class MapDoc:
             return [tr("{edge} tiles", edge=edge) for edge in self.record.edges]
         return [tr(s) for s in template.SIZES]
 
+    def size_index(self, e: Element) -> int:
+        """The size class shown for an element: a slot's stored one; a fixed island stores none, so its own (a
+        continental by its file, else its pool entry's, else the smallest class its grid fits)."""
+        if e.kind != KIND_FIXED or (not self.is_template and self.record.random):
+            return e.size
+        if rules.is_continental(e):
+            return template.SIZE_CONTINENTAL
+        key = e.map_file_path.replace("\\", "/").lower()
+        pooled = next((p.size_class for p in self.maps.pool if p.path == key), None)
+        if pooled is not None:
+            return pooled
+        edge = self.extent(e)
+        fits = [c for c, most in sorted(self.maps.classes.items()) if edge <= most]
+        return fits[0] if fits else max(self.maps.classes, default=template.SIZE_SMALL)
+
     # the squares, complexes and pictures
     def extent(self, e: Element) -> int:
         """The edge of an element's grid: a fixed island's file, a slot's size class, 0 for a start position."""
@@ -291,10 +306,18 @@ class MapDoc:
             level = self.tree.read(stem + ".a7te")
         asset = self.maps.asset_of(self.path)
         text = (self.grown.asset_text if self.grown and self.grown.asset_text else asset.text) if asset else ""
+        earlier = self.grown.moved_assets if self.grown else {}
         return grow.GrowParts(
             self.record, self.path, session, level, text, asset.guid if asset else 0, scripts, widen,
-            self.is_enlarged(),
+            self.is_enlarged(), self._asset_positions(), frozenset(t.guid for t in self.maps.templates), earlier,
         )  # fmt: skip
+
+    def _asset_positions(self) -> grow.AssetPositions:
+        """The position blocks of the game's asset lists, read on the first growth and kept with the pool."""
+        if self.maps.positions is None:
+            lists = (self.tree.read(p).decode("utf-8", "replace") for p in self.tree.paths if p.endswith("assets.xml"))
+            self.maps.positions = grow.scan_assets(lists)
+        return self.maps.positions
 
     def _grow_world(self, sides: tuple[int, int, int, int]) -> grow.Grown:
         west, south, east, north = sides

@@ -85,6 +85,19 @@ def test_the_orbit_camera_turns_pans_zooms_and_casts_rays():
     assert hit is not None and abs(hit[1]) < 1e-3 and np.linalg.norm(hit[[0, 2]] - [10, 10]) < 0.05
 
 
+def test_a_view_whose_frame_raised_says_so_after_a_single_frame():
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from annotoolbox.editor.desktop.desktopview import IslandControls
+
+    QApplication.instance() or QApplication([])
+    view = SimpleNamespace(fps_label=QLabel(), failed="RuntimeError: no baker", _painted=True, _frame_times=[])
+    IslandControls._hud(view)  # one frame, no frame time yet: a static view that failed paints no second frame
+    assert "no baker" in view.fps_label.text()
+
+
 def test_lakes_are_triangulated_and_rivers_made_ribbons():
     from annotoolbox.editor.desktop import desktopgeometry
 
@@ -804,3 +817,22 @@ def test_a_continental_island_opens_without_blocking_the_window(tmp_path):
     # no freeze while reading (the last gap: the panels); 0.29 s unloaded before the collector and json pieces
     assert len(reading) > 20 and max(reading[:-1]) < 0.5
     main.close_island()
+
+
+def test_the_gallery_offers_only_the_islands_own_games_vanilla_ground():
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.editor.desktop.desktoppanels import MaterialGallery
+
+    QApplication.instance() or QApplication([])
+    vanilla = [
+        {"id": 1, "name": "sand", "set": "s", "game": "anno117", "diffuse": "a"},
+        {"id": 2, "name": "grass", "set": "s", "game": "anno1800", "diffuse": "b"},
+    ]
+    for island, wanted in (({}, "sand"), ({"game_name": "Anno 1800"}, "grass")):
+        doc = SimpleNamespace(session=SimpleNamespace(island=island, paint_materials={}))
+        gallery = MaterialGallery(doc)
+        gallery.fill([], vanilla)
+        assert [item.data(256)[1]["name"] for item in gallery.items()] == [wanted]  # 117 and 1800 never mixed

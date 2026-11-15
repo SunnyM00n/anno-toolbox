@@ -325,3 +325,37 @@ def test_the_island_view_draws_on_qrhi():
     assert not got["failed"] and not got["errors"], got
     assert got["std"] > 2.0  # ground, sea and sky
     assert got["picked"] and got["gpu"] and got["sky"]  # a click finds the object in the id picture, none in the sky
+
+
+HIDDEN_VIEW = """
+import json
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from annotoolbox.editor.desktop.desktoprhiview import RhiIslandView3D
+app = QApplication([])
+window = QWidget()
+QVBoxLayout(window).addWidget(view := RhiIslandView3D(window, "%s"))
+window.resize(900, 600)
+window.show()
+app.processEvents()
+shown = view.picture(64, 64) is not None and view.fixedColorBufferSize().isEmpty()
+window.resize(1300, 500)  # a new size and aspect: the frame's screen follows the widget's buffer
+app.processEvents()
+view.grabFramebuffer()
+dpr = view.devicePixelRatioF()
+resized = view.ctx.screen.size == (round(view.width() * dpr), round(view.height() * dpr))
+before = (view.width(), view.height())
+window.hide()  # another app's page in front: the view is hidden inside its window
+hidden = view.picture(64, 64)
+print(json.dumps({"shown": shown, "resized": resized, "screen": view.ctx.screen.size,
+                  "hidden": hidden is None, "same": (view.width(), view.height()) == before}))
+"""
+
+
+def test_the_view_follows_its_window_and_a_hidden_view_keeps_its_size():
+    backends = _backends()
+    if not backends:
+        pytest.skip("no QRhi device")
+    got = _child(HIDDEN_VIEW % backends[0])
+    assert got["shown"]  # a grab on screen hands the widget its own buffer size back
+    assert got["resized"], got  # a resized window draws its whole new size
+    assert got["hidden"] and got["same"]  # hidden: nothing drawn, the view keeps its place in the window

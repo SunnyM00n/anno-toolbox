@@ -240,7 +240,7 @@ class MapWindow(QMainWindow):
 
     def _selected(self, indexes: list) -> None:
         e = self.doc.elements[indexes[0]] if self.doc is not None and len(indexes) == 1 else None
-        self.panel.show_element(e)
+        self.panel.show_element(e, self.doc.size_index(e) if e is not None else None)
 
     def _show_findings(self, findings) -> None:
         self.panel.findings.clear()
@@ -260,6 +260,8 @@ class MapWindow(QMainWindow):
         if index is None:
             return
         e = self.doc.elements[index]
+        if e.kind != KIND_SLOT:  # the size box shows a fixed island's own class; only a slot stores one
+            values = {k: v for k, v in values.items() if k != "size"}
         if e.kind == KIND_FIXED and values.get("map_file_path", e.map_file_path) != e.map_file_path:
             path = values["map_file_path"]
             self._with_islands([path], lambda: self._set_values(index, values))  # its grid read off the thread

@@ -14,6 +14,7 @@ from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ..infra.i18n import tr
+from . import pool
 from .placing import complex_of
 from .template import KIND_FIXED, KIND_SLOT, KIND_START, SIZES, SNAP
 
@@ -58,7 +59,7 @@ class MapView(QWidget):
     def set_picture(self, path: str, data: bytes) -> None:
         image = QImage.fromData(data)
         if not image.isNull():
-            self.pictures[path] = image
+            self.pictures[path] = _cleaned(image)
             self.update()
 
     def select(self, indexes: list[int]) -> None:
@@ -280,3 +281,14 @@ class MapView(QWidget):
         super().resizeEvent(event)
         if self.doc is not None and not self.selected:
             self.fit()
+
+
+def _cleaned(image: QImage) -> QImage:
+    """``pool.clean_picture`` on a QImage: the black around the land and the game's stripes below it transparent."""
+    import numpy as np
+
+    rgba = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    w, h = rgba.width(), rgba.height()
+    pixels = np.frombuffer(rgba.constBits(), np.uint8, count=rgba.bytesPerLine() * h).reshape(h, rgba.bytesPerLine())
+    clean = np.ascontiguousarray(pool.clean_picture(pixels[:, : w * 4].reshape(h, w, 4)))
+    return QImage(clean.data, w, h, w * 4, QImage.Format.Format_RGBA8888).copy()  # copy: the array goes away

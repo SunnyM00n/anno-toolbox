@@ -97,7 +97,7 @@ class Block(QWidget):
 class AssetForm(QScrollArea):
     """The form of the asset shown; ``jump`` asks the window to show another asset."""
 
-    jump = Signal(int)
+    jump = Signal(object)  # a GUID (may exceed a Qt int)
 
     def __init__(self) -> None:
         super().__init__(widgetResizable=True, objectName="assetForm")
