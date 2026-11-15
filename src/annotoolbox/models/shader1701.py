@@ -1,0 +1,251 @@
+"""Anno 1701's model shaders compiled for the viewer: a material's Direct3D 9 effect (``m_Shader``) read from the
+install, preprocessed with the engine's defines and compiled by ``d3dcompiler_43`` in backwards-compatibility mode as
+shader model 4, one technique's pass at a time, kept in the build cache.
+
+``Source1701(files, compiler)`` is the entry: ``model_pass(values, technique)`` (``values``: the material's pairs,
+``othergames.grannymodels.material_values``). Each pass's pixel shader is our entry ``PS1701`` (``pixel_wrapper``):
+the game's pixel shader, or a stand-in for Direct3D 9's fixed-function stage, and what that stage did after it by the
+pass's state block. docs/rendering/shader-compile.md section 13.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, replace
+
+from ..formats import fx9effect, fxlink
+from ..formats.fxeffect import ShaderCall, split_args
+from ..infra import fxc
+from . import fxstage, shader2070
+from .fxstage import Built, Sampler, State
+from .shader2070 import NoPass
+
+NAMESPACE = "shaders1701"
+FX_DIR = "data/system/fxshaders/"
+STATE_BLOCKS = "data/system/stateblocks/default.stb"
+ENTRY = "PS1701"
+# the engine's defines (shader-compile.md 13): every shader version up to a 3.0 device's, its constants, normal
+# mapping, DDS textures, the shadow of the R32F map (soft, self-shadowing); not the hardware shadow map's (its
+# comparison through tex2Dproj needs Direct3D 9's depth textures, shader model 4 reads the depth as a value)
+GLOBALS_1701 = (
+    *((f"{kind}SHADER{v}", "1") for kind in ("VERTEX", "PIXEL") for k in range(4) for v in (k, f"{k}0")),
+    ("MAXVERTEXSHADERCONST", "256"), ("NORMALMAPPINGENABLED", "1"), ("SHADOWINGENABLED", "1"),
+    ("SELFSHADOWINGENABLED", "1"), ("SOFTSHADOWSENABLED", "1"), ("USEDDSTEXTURES", "1"),
+)  # fmt: skip
+# the effects of mesh/ that are not drawn as models: the falls, the main menu's sea, the water holes, the GUI's
+# portraits (a model's water sheet, ``water.fx``, is: shader-compile.md 13 "Water")
+NOT_MODELS = ("waterfall.fx", "watermainmenu.fx", "water_cutout.fx", "portrait.fx")
+WATER = "water.fx"
+# the effects that write into a float target, which keeps what the pixel shader writes unclamped (the sea's
+# displacement pass: world positions; shader-compile.md 13 "The sea")
+FLOAT_TARGETS = ("various/waterdisp.fx",)
+# the shader's samplers -> the material's texture slot (``Texture.<slot>`` of its values)
+MAPS = {"samplerTexDiffuseColor": "diffuse", "samplerTexBump": "bump", "samplerTexSpecularColor": "specular",
+        "samplerTexOpacity": "opacity", "samplerCubeTexReflection": "reflection"}  # fmt: skip
+FOG_COLOR = "cFixedFogColor"  # ours: the fog colour of Direct3D 9's render state, which no effect declares
+
+_CULL = {"CCW": "back", "CW": "front", "NONE": "none"}
+_DEPTH = {"LESSEQUAL": "less_equal", "LESS": "less", "EQUAL": "equal", "GREATER": "greater",
+          "GREATEREQUAL": "greater_equal", "ALWAYS": "always"}  # fmt: skip
+_BLEND = {"ZERO": "zero", "ONE": "one", "SRCALPHA": "src_alpha", "INVSRCALPHA": "inv_src_alpha", "SRCCOLOR": "src_color",
+          "INVSRCCOLOR": "inv_src_color", "DESTALPHA": "dst_alpha", "INVDESTALPHA": "inv_dst_alpha",
+          "DESTCOLOR": "dst_color", "INVDESTCOLOR": "inv_dst_color"}  # fmt: skip
+_ADDRESS = {"WRAP": "WRAP", "CLAMP": "CLAMP", "MIRROR": "MIRROR", "BORDER": "BORDER"}
+
+
+def model_effect(values: dict) -> str:
+    """The effect file a material names (``m_Shader``); ``NoPass`` for one that is not a model's."""
+    fx = str(values.get("Shader", "")).replace(chr(92), "/").lower()
+    if not fx.startswith(FX_DIR + "mesh/") or fx.rsplit("/", 1)[-1] in NOT_MODELS:
+        raise NoPass(f"{fx or 'no shader'} is not one of the model effects this reader draws")
+    return fx
+
+
+def _on(states: dict, key: str) -> bool:
+    return states.get(key, "FALSE") == "TRUE"
+
+
+def pass_state(states: dict[str, str]) -> State:
+    """The render states of a pass's state block (``fx9effect.block_states``) as a ``State``: Direct3D 9's culling
+    of counter-clockwise faces is Direct3D 11's of back faces."""
+    return State(
+        cull=_CULL.get(states.get("CULLMODE", "CCW"), "back"),
+        depth_test=_on(states, "ZENABLE"),
+        depth_write=_on(states, "ZWRITEENABLE"),
+        depth_func=_DEPTH.get(states.get("ZFUNC", "LESSEQUAL"), "less_equal"),
+        blend=_on(states, "ALPHABLENDENABLE"),
+        source=_BLEND.get(states.get("SRCBLEND", "ONE"), "one"),
+        dest=_BLEND.get(states.get("DESTBLEND", "ZERO"), "zero"),
+    )
+
+
+def sampler_state(sampler: fx9effect.Sampler9, states: dict[str, str]) -> Sampler:
+    """A legacy sampler's state: the block's for its stage (its register, else every stage's), then its own. An
+    engine word the file leaves (``TSM_FILTER``, the shadow map's) reads as point, as its comment says."""
+    stage = sampler.register if sampler.register is not None else -1
+
+    def get(key: str, default: str) -> str:
+        return sampler.states.get(key) or fx9effect.stage_state(states, key, stage, default)
+
+    minify = get("MINFILTER", "LINEAR")
+    filter_ = {"ANISOTROPIC": "ANISOTROPIC", "LINEAR": "MIN_MAG_MIP_LINEAR"}.get(minify, "MIN_MAG_MIP_POINT")
+    u, v, w = (_ADDRESS.get(get(f"ADDRESS{a}", "WRAP"), "WRAP") for a in "UVW")
+    return Sampler(filter_, u, v, w)
+
+
+@dataclass(frozen=True)
+class Param:
+    """One parameter of a shader function: ``in`` / ``out`` / ``inout`` / ``uniform``, type, name and the semantic
+    with its index (``COLOR0``, ``TEXCOORD2``; "" for none)."""
+
+    direction: str
+    type: str
+    name: str
+    semantic: str
+
+
+_PARAM_RE = re.compile(r"^\s*(in|out|inout|uniform)?\s*(\w+)\s+(\w+)\s*(?::\s*(\w+))?\s*$")
+
+
+def _semantic(word: str) -> str:
+    m = re.fullmatch(r"([A-Za-z_]+?)(\d*)", word or "")
+    return f"{m.group(1).upper()}{m.group(2) or 0}" if m and word else ""
+
+
+def params(program: fxlink.Program, function: str) -> list[Param]:
+    """The parameters of a shader function as the effect defines it (its first definition)."""
+    heads = [program.items[i].head for i in program.by_name.get(function, ()) if program.items[i].head]
+    if not heads:
+        raise NoPass(f"no shader function {function}")
+    head = heads[0]
+    out = []
+    for p in split_args(head[head.index("(") + 1 : head.rindex(")")]):
+        m = _PARAM_RE.match(p)
+        if m:
+            out.append(Param(m.group(1) or "in", m.group(2), m.group(3), _semantic(m.group(4) or "")))
+    return out
+
+
+@dataclass(frozen=True)
+class Pixel(ShaderCall):
+    """The pass's pixel stage as ours compiles it: the wrapper text, the game's functions it calls (``roots``) and
+    the samplers with the pass's states."""
+
+    wrapper: str = ""
+    roots: tuple[str, ...] = ()
+    samplers: tuple = ()
+
+
+def _stand_in(states: dict, mirror: dict[str, str], sampler: str) -> list[str]:
+    """Direct3D 9's texture stage 0 where a pass sets no pixel shader: its colour and alpha operations on the
+    stage's texture and the vertex colour, then the specular colour added when the state says so."""
+    uv = mirror.get(f"TEXCOORD{fx9effect.stage_state(states, 'TEXCOORDINDEX', 0, '0')}")
+    diffuse = f"saturate({mirror['COLOR0']})" if "COLOR0" in mirror else "float4(1, 1, 1, 1)"
+    texture = f"tex2D({sampler}, ({uv}).xy)" if sampler and uv else "float4(1, 1, 1, 1)"
+    args = {"TEXTURE": texture, "DIFFUSE": diffuse, "CURRENT": diffuse}
+
+    def stage(kind: str) -> str:
+        op = fx9effect.stage_state(states, f"{kind}OP", 0, "DISABLE")
+        a, b = (args.get(fx9effect.stage_state(states, f"{kind}ARG{k}", 0, ""), "float4(1, 1, 1, 1)") for k in (1, 2))
+        return {"MODULATE": f"{a} * {b}", "MODULATE2X": f"2 * {a} * {b}", "MODULATE4X": f"4 * {a} * {b}",
+                "SELECTARG1": a, "SELECTARG2": b, "ADD": f"{a} + {b}"}.get(op, diffuse)  # fmt: skip
+
+    lines = [f"c.rgb = ({stage('COLOR')}).rgb;", f"c.a = ({stage('ALPHA')}).a;"]
+    if _on(states, "SPECULARENABLE") and "COLOR1" in mirror:
+        lines.append(f"c.rgb += saturate({mirror['COLOR1']}).rgb;")
+    return lines
+
+
+def _inner_call(ps: ShaderCall, inner: list[Param], mirror: dict[str, str]) -> str:
+    """The game's pixel shader called with the vertex outputs of its semantics (colours clamped, as Direct3D 9's
+    colour registers are), the colour and depth it writes into ``c`` and ``d``, the pass's literal arguments."""
+    literal, args = iter(ps.args), []
+    for p in inner:
+        if p.direction == "uniform":
+            args.append(next(literal, "0"))
+        elif p.direction == "out":
+            args.append("d" if p.semantic.startswith("DEPTH") else "c")
+        elif p.semantic in mirror:
+            value = mirror[p.semantic]
+            args.append(f"saturate({value})" if p.semantic.startswith("COLOR") else value)
+        else:
+            args.append(f"({p.type})0")
+    return f"{ps.function}({', '.join(args)});"
+
+
+def pixel_wrapper(outputs: list[Param], ps: ShaderCall | None, inner: list[Param], states: dict, sampler: str,
+                  clamp: bool = True) -> str:  # fmt: skip
+    """``PS1701``: the vertex shader's ``outputs`` as its inputs (a signature that links), the game's pixel shader
+    ``ps`` (its parameters ``inner``) or the fixed-function stand-in (``sampler``: stage 0's), then Direct3D 9's
+    alpha test and fog of the pass's ``states``, the colour clamped as an 8-bit target holds it (``clamp`` False:
+    a float target's, as written)."""
+    decls, mirror = [], {}
+    for k, p in enumerate(o for o in outputs if o.semantic):
+        semantic = "SV_Position" if p.semantic == "POSITION0" else p.semantic
+        decls.append(f"in {p.type} v{k} : {semantic}")
+        mirror[p.semantic] = f"v{k}"
+    depth = any(p.direction == "out" and p.semantic.startswith("DEPTH") for p in inner)
+    decls.append("out float4 oTarget : SV_Target")
+    decls += ["out float oDepth1701 : SV_Depth"] if depth else []
+    body = ["float4 c = float4(1, 1, 1, 1);", "float d = 0;"]
+    body += [_inner_call(ps, inner, mirror)] if ps is not None else _stand_in(states, mirror, sampler)
+    if _on(states, "ALPHATESTENABLE") and states.get("ALPHAFUNC", "GREATER") in ("GREATER", "GREATEREQUAL"):
+        ref = int(states.get("ALPHAREF", "0"), 0) / 255.0
+        body.append(f"if (c.a {'<=' if states.get('ALPHAFUNC', 'GREATER') == 'GREATER' else '<'} {ref:.6f}) discard;")
+    if _on(states, "FOGENABLE") and "FOG0" in mirror:
+        body.append(f"c.rgb = lerp({FOG_COLOR}.rgb, c.rgb, saturate({mirror['FOG0']}));")
+    body.append("oTarget = saturate(c);" if clamp else "oTarget = c;")
+    body += ["oDepth1701 = d;"] if depth else []
+    head = f"float4 {FOG_COLOR};\n" + (f"sampler {sampler};\n" if ps is None and sampler else "")
+    lines = "\n\t".join(body)
+    return f"{head}void {ENTRY}({', '.join(decls)})\n{{\n\t{lines}\n}}\n"
+
+
+def _uses(hlsl: str, name: str) -> bool:
+    return re.search(rf"\b{re.escape(name)}\b", hlsl) is not None
+
+
+GAME = fxstage.FxcGame(NAMESPACE, fxc.BACKWARDS_COMPATIBILITY, lambda call: f"{call.stage}_4_0", _uses, True)
+
+
+class Source1701(shader2070.Source2070):
+    """The install's model effects and state blocks, compiled one pass at a time; thread-safe."""
+
+    def __init__(self, files, compiler) -> None:
+        super().__init__(files, compiler, GLOBALS_1701, GAME)
+        text = files.read(STATE_BLOCKS).decode("latin-1") if files.exists(STATE_BLOCKS) else ""
+        self.blocks = fx9effect.state_blocks(text)
+
+    def _preprocess(self, fx: str, defines: tuple) -> Built:
+        found = fx9effect.split(text := self.preprocessed(fx, defines))
+        return Built(found, text, fxlink.Program(found.hlsl), fx9effect.samplers(found.hlsl))
+
+    def _pick(self, built: Built, technique: str, fx: str) -> fxstage.Picked:
+        tech = built.effect.technique(technique)
+        if tech is None or not tech.passes or tech.passes[0].call("vs") is None:
+            raise NoPass(f"{fx} has no technique {technique} with a vertex shader")
+        p = tech.passes[0]
+        vs, ps = p.call("vs"), p.call("ps")
+        states = fx9effect.block_states(self.blocks, p.state_block)
+        outputs = [q for q in params(built.program, vs.function) if q.direction == "out"]
+        inner = params(built.program, ps.function) if ps is not None else []
+        texture = p.textures.get(0, "")
+        stage0 = next((n for n, s in built.samplers.items() if s.texture == texture and "Cube" not in n), "")
+        samplers = tuple((n, sampler_state(s, states)) for n, s in built.samplers.items())
+        clamp = not fx.endswith(FLOAT_TARGETS)
+        wrapper = pixel_wrapper(outputs, ps, inner, states, "" if ps is not None else stage0, clamp)
+        pixel = Pixel("ps", "4_0", ENTRY, (), wrapper, (ps.function,) if ps is not None else (), samplers)
+        return vs, pixel, pass_state(states)
+
+    def _entry(self, built: Built, call: ShaderCall, fx: str) -> fxstage.Entry:
+        if not isinstance(call, Pixel):
+            return self.prepare(built, call)
+        text = (built.program.source(set(call.roots)) if call.roots else "") + '\n#line 1 "<entry>"\n' + call.wrapper
+        entry = self.prepare(built, call, text=(text, ENTRY), samplers=dict(call.samplers))
+        # a legacy sampler declares no texture type: a cube one's stand-in must be a cube
+        cubes = {n: "TextureCube" for n in entry.samplers if "Cube" in n}
+        return replace(entry, types={**entry.types, **cubes})
+
+    def model_pass(self, values: dict, technique: str = "Object") -> shader2070.PassStages:
+        """The pass of a model material's effect (``values``: the material's pairs as a dict)."""
+        return self.effect_pass(model_effect(values), (), technique)

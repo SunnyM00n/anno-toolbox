@@ -1,0 +1,4875 @@
+{
+ "f3d253c2": {
+  "hash": "f3d253c2",
+  "name": "ImageDescription",
+  "guid": "46108c0f-4a4d-accf-3bf7-682a040ac910",
+  "fields": [
+   {
+    "name": "ImageId",
+    "hash": "df4e3ad1",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "Rotation",
+    "hash": "d00afaa7",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Scale",
+    "hash": "2d870a80",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 28
+   },
+   {
+    "name": "Translation",
+    "hash": "32f5cab8",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 36
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "46eba337": {
+  "hash": "46eba337",
+  "name": "AtlasDescription",
+  "guid": "11c2a5c3-802c-a8d3-e9fb-1eddfdf4f717",
+  "fields": [
+   {
+    "name": "Resolution",
+    "hash": "b28e0c5a",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "ImageContext",
+    "hash": "63ffde51",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "ImageDescriptions",
+    "hash": "6e97bec4",
+    "code": "0x4201",
+    "elem": "f3d253c2",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "0019dd69": {
+  "hash": "0019dd69",
+  "name": "ImageAtlasAsset",
+  "guid": "2f91d695-b653-5d2a-7698-afc7314d76ce",
+  "fields": [
+   {
+    "name": "ImageId",
+    "hash": "df4e3ad1",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "AtlasDescriptions",
+    "hash": "a3f581a7",
+    "code": "0x4201",
+    "elem": "46eba337",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "6660b652": {
+  "hash": "6660b652",
+  "name": "LoggingService",
+  "guid": "fcfa6d55-8128-9840-b9e7-b950112fd824",
+  "fields": [],
+  "parent": "bb96607d"
+ },
+ "da06bd6e": {
+  "hash": "da06bd6e",
+  "name": "ContainerWidgetTemplate",
+  "guid": "6ea980d6-1154-ac9a-94bf-6998003f2e0e",
+  "fields": [
+   {
+    "name": "RuntimeCustomProperties",
+    "hash": "18b0dff0",
+    "code": "0x4201",
+    "elem": "1294a820",
+    "flags": "0x12000",
+    "offset": 72
+   },
+   {
+    "name": "DataBinderInstances",
+    "hash": "a4336119",
+    "code": "0x4201",
+    "elem": "edcf0433",
+    "flags": "0x2001",
+    "offset": 88
+   },
+   {
+    "name": "AnimationInstances",
+    "hash": "96b6fc6f",
+    "code": "0x4201",
+    "elem": "b03e911f",
+    "flags": "0x2001",
+    "offset": 104
+   },
+   {
+    "name": "WidgetType",
+    "hash": "0bf1e17f",
+    "code": "0x4400",
+    "elem": "17afa8e7",
+    "flags": "0x2001",
+    "offset": 120
+   },
+   {
+    "name": "DataSourceObjectTemplate",
+    "hash": "9352ec5e",
+    "code": "0x4300",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 128
+   },
+   {
+    "name": "Components",
+    "hash": "a115f62d",
+    "code": "0x4201",
+    "elem": "51a18126",
+    "flags": "0x2001",
+    "offset": 136
+   },
+   {
+    "name": "DataProviderContainers",
+    "hash": "8fda299c",
+    "code": "0x4201",
+    "elem": "b0dd1389",
+    "flags": "0x12000",
+    "offset": 152
+   },
+   {
+    "name": "PropertyContainers",
+    "hash": "bfc4bc4b",
+    "code": "0x4201",
+    "elem": "1bb72d66",
+    "flags": "0x12000",
+    "offset": 168
+   },
+   {
+    "name": "ConstantPropertyContainers",
+    "hash": "8e4aa971",
+    "code": "0x4201",
+    "elem": "fb2cf8c8",
+    "flags": "0x12000",
+    "offset": 184
+   },
+   {
+    "name": "CustomPropertyContainers",
+    "hash": "7ff8905c",
+    "code": "0x4201",
+    "elem": "9df79719",
+    "flags": "0x12000",
+    "offset": 200
+   },
+   {
+    "name": "DynamicBindingCount",
+    "hash": "7fefac90",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 280
+   },
+   {
+    "name": "ReferenceSize",
+    "hash": "6d2fef5a",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 284
+   },
+   {
+    "name": "ForceReferenceSize",
+    "hash": "072d960f",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 292
+   },
+   {
+    "name": "BackgroundColor",
+    "hash": "8be53459",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 240
+   },
+   {
+    "name": "Enum",
+    "hash": "ae8c016f",
+    "code": "0x4400",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 216
+   },
+   {
+    "name": null,
+    "hash": "c0f5e482",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 293
+   },
+   {
+    "name": "OverriddenDefaultValues",
+    "hash": "59749ece",
+    "code": "0x4201",
+    "elem": "2df5f3e4",
+    "flags": "0x2001",
+    "offset": 224
+   }
+  ],
+  "parent": "2f208351"
+ },
+ "c2c56576": {
+  "hash": "c2c56576",
+  "name": "SceneInstance",
+  "guid": "40c01278-ba69-8574-c17e-e6104b50930e",
+  "fields": [
+   {
+    "name": "ColorPalette",
+    "hash": "cc44bc6b",
+    "code": "0x4100",
+    "elem": "6af47f78",
+    "flags": "0x2000",
+    "offset": 288
+   },
+   {
+    "name": null,
+    "hash": "b1b11020",
+    "code": "0x4100",
+    "elem": "6bf4061d",
+    "flags": "0x2000",
+    "offset": 296
+   },
+   {
+    "name": "ReferenceSize",
+    "hash": "6d2fef5a",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 344
+   },
+   {
+    "name": "ForceReferenceSize",
+    "hash": "072d960f",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 352
+   },
+   {
+    "name": "BackgroundColor",
+    "hash": "8be53459",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 304
+   }
+  ],
+  "parent": "0f561333"
+ },
+ "0f561333": {
+  "hash": "0f561333",
+  "name": "ContainerWidgetInstance",
+  "guid": "41e5418d-0998-560a-a749-f30ba6e0890a",
+  "fields": [
+   {
+    "name": "Template",
+    "hash": "6e167dd5",
+    "code": "0x4400",
+    "elem": "da06bd6e",
+    "flags": "0x2001",
+    "offset": 232
+   },
+   {
+    "name": "CurrentEnumValue",
+    "hash": "0344c77d",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 256
+   },
+   {
+    "name": null,
+    "hash": "c3fa0951",
+    "code": "0x801",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 240
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "1294a820": {
+  "hash": "1294a820",
+  "name": "CustomPropertyInstance",
+  "guid": "89d0d4e6-db86-128f-277e-ed264681eeb9",
+  "fields": [
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "PropertyType",
+    "hash": "bb8a6ec6",
+    "code": "0xb00",
+    "elem": "8e4dd1c2",
+    "flags": "0x2001",
+    "offset": 44
+   },
+   {
+    "name": "DefaultValue",
+    "hash": "dc53e7d5",
+    "code": "0x1f00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "ObjectTemplate",
+    "hash": "d77464d0",
+    "code": "0x4300",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "EnumAsset",
+    "hash": "b81b8122",
+    "code": "0x4300",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "PropertyAccessibility",
+    "hash": "bc702e37",
+    "code": "0xb00",
+    "elem": "b3478c2b",
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "PropertyNameCrc",
+    "hash": "93451706",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 52
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 56
+   },
+   {
+    "name": null,
+    "hash": "53ea90f4",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "IsArrayOfAnyGameObject",
+    "hash": "8c7e7d49",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 65
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "1795cb2b": {
+  "hash": "1795cb2b",
+  "name": "SceneTemplate",
+  "guid": "56300060-ced5-f900-24d5-83462b787e75",
+  "fields": [
+   {
+    "name": "ColorPalette",
+    "hash": "cc44bc6b",
+    "code": "0x4400",
+    "elem": "6af47f78",
+    "flags": "0x2001",
+    "offset": 416
+   },
+   {
+    "name": null,
+    "hash": "b1b11020",
+    "code": "0x4400",
+    "elem": "6bf4061d",
+    "flags": "0x2001",
+    "offset": 424
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 432
+   }
+  ],
+  "parent": "da06bd6e"
+ },
+ "15a03701": {
+  "hash": "15a03701",
+  "name": "EffectInstance",
+  "guid": "c474e3ce-5032-fca2-dbf1-c72de0e065ac",
+  "fields": [
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "EffectTemplate",
+    "hash": "c0f0995c",
+    "code": "0x4300",
+    "elem": "c0f0995c",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 40
+   },
+   {
+    "name": "Images",
+    "hash": "e7b3bb5c",
+    "code": "0x4401",
+    "elem": "232cec0d",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "51a18126": {
+  "hash": "51a18126",
+  "name": "ComponentInstance",
+  "guid": "a0116279-31c5-e2e7-e36b-72234b9c09d0",
+  "fields": [
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "ComponentTemplate",
+    "hash": "84f12f7b",
+    "code": "0x4300",
+    "elem": "84f12f7b",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 24
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "84f12f7b": {
+  "hash": "84f12f7b",
+  "name": "ComponentTemplate",
+  "guid": "a44025f5-f667-6e97-f227-67184903474e",
+  "fields": [
+   {
+    "name": "AllowMultipleInstances",
+    "hash": "1d36b876",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "ParentComponentTemplate",
+    "hash": "9b492464",
+    "code": "0x4400",
+    "elem": "84f12f7b",
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "068cd567"
+ },
+ "5b7a3109": {
+  "hash": "5b7a3109",
+  "name": "AffectedProperty",
+  "guid": "1bfccae7-a1ca-00c8-6137-04ccb88d56f3",
+  "fields": [
+   {
+    "name": "AffectedPropertyId",
+    "hash": "aaa1a3fb",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "PropertyScope",
+    "hash": "302dfe03",
+    "code": "0xb00",
+    "elem": "302dfe03",
+    "flags": "0x2001",
+    "offset": 12
+   },
+   {
+    "name": "Comment",
+    "hash": "5bc96bf0",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "IsReadOnly",
+    "hash": "483362f5",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "c697c96c": {
+  "hash": "c697c96c",
+  "name": "TextStyleBaseAsset",
+  "guid": "4b2107b5-a47e-7e60-c31f-a24c3a9f4cb9",
+  "fields": [],
+  "parent": "c36e7558"
+ },
+ "41a404e5": {
+  "hash": "41a404e5",
+  "name": "LabelWidgetInstance",
+  "guid": "960a9a6c-30e7-1df3-afce-ab4cf76e5ce7",
+  "fields": [
+   {
+    "name": "Text",
+    "hash": "9bb908f9",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 248
+   },
+   {
+    "name": "DisplayedText",
+    "hash": "07a285a0",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 256
+   },
+   {
+    "name": "Html",
+    "hash": "b84b57db",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 364
+   },
+   {
+    "name": null,
+    "hash": "0d2df3ef",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 365
+   },
+   {
+    "name": "LocalizationId",
+    "hash": "3851f4e1",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 264
+   },
+   {
+    "name": "PostProcessText",
+    "hash": "a47a46b0",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 366
+   },
+   {
+    "name": "LoadableAssetGroup",
+    "hash": "e1523167",
+    "code": "0x4400",
+    "elem": "e1523167",
+    "flags": "0x2001",
+    "offset": 232
+   },
+   {
+    "name": "AllowResize",
+    "hash": "ebd91788",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 367
+   },
+   {
+    "name": "TextSizingFactor",
+    "hash": "83e00527",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2080",
+    "offset": 272
+   },
+   {
+    "name": "ResizeAnchor",
+    "hash": "52896a10",
+    "code": "0xb00",
+    "elem": "9ba2ede6",
+    "flags": "0x2001",
+    "offset": 276
+   },
+   {
+    "name": "TextStyle",
+    "hash": "2ad61be3",
+    "code": "0x4400",
+    "elem": "c697c96c",
+    "flags": "0x2001",
+    "offset": 240
+   },
+   {
+    "name": "AlignmentX",
+    "hash": "9a1ee65a",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 280
+   },
+   {
+    "name": "FlipWhenRTL",
+    "hash": "844a6de7",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 368
+   },
+   {
+    "name": "AlignmentY",
+    "hash": "ed19d6cc",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 284
+   },
+   {
+    "name": "LineSpacing",
+    "hash": "6dfd5b11",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 288
+   },
+   {
+    "name": "LetterSpacing",
+    "hash": "2a1a99d9",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 292
+   },
+   {
+    "name": "RelativeOffsetY",
+    "hash": "b259d6a8",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 296
+   },
+   {
+    "name": "AbsoluteOffsetY",
+    "hash": "ff9c45c1",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 300
+   },
+   {
+    "name": "TextPlane",
+    "hash": "d8d88e09",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 304
+   },
+   {
+    "name": "HorizontalOverflow",
+    "hash": "deb1455a",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 312
+   },
+   {
+    "name": "HorizontalSizing",
+    "hash": "6f7445e5",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 316
+   },
+   {
+    "name": "VerticalOverflow",
+    "hash": "5893da63",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 320
+   },
+   {
+    "name": "VerticalSizing",
+    "hash": "f67bd734",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 324
+   },
+   {
+    "name": "MaxCharCountPerLine",
+    "hash": "ebfbaa83",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 328
+   },
+   {
+    "name": "MaxLineCount",
+    "hash": "5755824c",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 332
+   },
+   {
+    "name": "DisplayedOffset",
+    "hash": "a6d64a7d",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 336
+   },
+   {
+    "name": "DisplayedSize",
+    "hash": "cbe9060d",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 348
+   },
+   {
+    "name": "BaselineY",
+    "hash": "dd0d7908",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 356
+   },
+   {
+    "name": "ActiveAreaType",
+    "hash": "30411ebc",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 360
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "0c454dec": {
+  "hash": "0c454dec",
+  "name": "WidgetInstance",
+  "guid": "2d6cc689-3dc1-f69f-9afe-55170d94f9bf",
+  "fields": [
+   {
+    "name": "Position",
+    "hash": "bf5a86a3",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 120
+   },
+   {
+    "name": "PivotPoint",
+    "hash": "9d6a1930",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 132
+   },
+   {
+    "name": "RotationAngle",
+    "hash": "66339f81",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 144
+   },
+   {
+    "name": "Scale",
+    "hash": "2d870a80",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x2009",
+    "offset": 148
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x1c",
+    "offset": 0
+   },
+   {
+    "name": "ConsiderSize",
+    "hash": "e4c4a02a",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 220
+   },
+   {
+    "name": "AnchorPoint",
+    "hash": "5eddfe94",
+    "code": "0xb00",
+    "elem": "11e06e49",
+    "flags": "0x2001",
+    "offset": 160
+   },
+   {
+    "name": "XRepositioning",
+    "hash": "5c63f4bb",
+    "code": "0xb00",
+    "elem": "dc4228cb",
+    "flags": "0x2001",
+    "offset": 164
+   },
+   {
+    "name": "YRepositioning",
+    "hash": "c16c15cd",
+    "code": "0xb00",
+    "elem": "dc4228cb",
+    "flags": "0x2001",
+    "offset": 168
+   },
+   {
+    "name": "WidthResizing",
+    "hash": "8a573df9",
+    "code": "0xb00",
+    "elem": "dc4228cb",
+    "flags": "0x2001",
+    "offset": 172
+   },
+   {
+    "name": "HeightResizing",
+    "hash": "afd9051d",
+    "code": "0xb00",
+    "elem": "dc4228cb",
+    "flags": "0x2001",
+    "offset": 176
+   },
+   {
+    "name": "AspectRatio",
+    "hash": "d8f95d9b",
+    "code": "0xb00",
+    "elem": "d8f95d9b",
+    "flags": "0x2001",
+    "offset": 180
+   },
+   {
+    "name": "ColorTint",
+    "hash": "91042a9c",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 80
+   },
+   {
+    "name": "AlphaTint",
+    "hash": "ab462ea9",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 184
+   },
+   {
+    "name": "BlendingMode",
+    "hash": "1bf32b74",
+    "code": "0xb00",
+    "elem": "1bf32b74",
+    "flags": "0x2001",
+    "offset": 188
+   },
+   {
+    "name": "Visible",
+    "hash": "b50dd1c5",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 221
+   },
+   {
+    "name": "Masked",
+    "hash": "c90bf7fc",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 222
+   },
+   {
+    "name": "BoundingBoxPosition",
+    "hash": "0604d209",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x94",
+    "offset": 0
+   },
+   {
+    "name": "BoundingBoxSize",
+    "hash": "1f0d9d58",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x94",
+    "offset": 0
+   },
+   {
+    "name": "MaskMode",
+    "hash": "8f9341be",
+    "code": "0xb00",
+    "elem": "8f9341be",
+    "flags": "0x2001",
+    "offset": 192
+   },
+   {
+    "name": "ActivateLayer",
+    "hash": "6f743737",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2000",
+    "offset": 223
+   },
+   {
+    "name": "IsHidden",
+    "hash": "b0438131",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 224
+   },
+   {
+    "name": "PropertyValues",
+    "hash": "bc441c99",
+    "code": "0x4201",
+    "elem": "2df5f3e4",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "GameObjectTemplate",
+    "hash": "8f8600a5",
+    "code": "0x4300",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "EnumEntry",
+    "hash": "9195460e",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 196
+   },
+   {
+    "name": "Effects",
+    "hash": "87b60536",
+    "code": "0x4201",
+    "elem": "15a03701",
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "Components",
+    "hash": "a115f62d",
+    "code": "0x4201",
+    "elem": "51a18126",
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "NameCrc",
+    "hash": "9cc4a167",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 200
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 208
+   },
+   {
+    "name": "ZIndex",
+    "hash": "9b47352a",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 216
+   },
+   {
+    "name": "IsStatic",
+    "hash": "b8de40a9",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 225
+   }
+  ],
+  "parent": "bb96607d"
+ },
+ "9f98c15a": {
+  "hash": "9f98c15a",
+  "name": "SlugTextStyleAsset",
+  "guid": "4428fc1e-53b1-f268-187f-2b831c768309",
+  "fields": [
+   {
+    "name": "LocalizedFont",
+    "hash": "dd14730d",
+    "code": "0x4400",
+    "elem": "6dcd0e65",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 160
+   },
+   {
+    "name": "SizingMinimum",
+    "hash": "3a706e56",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 164
+   },
+   {
+    "name": "SizingMaximum",
+    "hash": "39838e19",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 168
+   },
+   {
+    "name": "KerningEnabled",
+    "hash": "6760ff8b",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 204
+   },
+   {
+    "name": "BaseColor",
+    "hash": "ee205ba5",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "OutlineEnabled",
+    "hash": "3fbfcd16",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 205
+   },
+   {
+    "name": "OutlineColor",
+    "hash": "de03c53c",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 80
+   },
+   {
+    "name": "OutlineAlpha",
+    "hash": "68b5b4bf",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 172
+   },
+   {
+    "name": "ShadowEnabled",
+    "hash": "fb5b61a3",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 206
+   },
+   {
+    "name": "ShadowColor",
+    "hash": "5d3ee46e",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 120
+   },
+   {
+    "name": "ShadowAlpha",
+    "hash": "eb8895ed",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 176
+   },
+   {
+    "name": "ShadowDistance",
+    "hash": "b9338d30",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 180
+   },
+   {
+    "name": "ShadowAngle",
+    "hash": "3be9e98e",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 184
+   },
+   {
+    "name": "Leading",
+    "hash": "3946224e",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 188
+   },
+   {
+    "name": "LetterSpacing",
+    "hash": "2a1a99d9",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 192
+   },
+   {
+    "name": "Italic",
+    "hash": "3714fe26",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 207
+   },
+   {
+    "name": "Underline",
+    "hash": "4f2f8c44",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 208
+   },
+   {
+    "name": "Strikethrough",
+    "hash": "76c141dc",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 209
+   },
+   {
+    "name": "Bold",
+    "hash": "d045425d",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 210
+   },
+   {
+    "name": "NumbersStyle",
+    "hash": "216a0a13",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 196
+   },
+   {
+    "name": "Fractions",
+    "hash": "3dd0d65f",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 211
+   },
+   {
+    "name": "StandardLigatures",
+    "hash": "c8b2c2f7",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 212
+   },
+   {
+    "name": "DiscretionaryLigatures",
+    "hash": "a6d87800",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 213
+   },
+   {
+    "name": "StylisticAlternate",
+    "hash": "71af3881",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 200
+   }
+  ],
+  "parent": "c697c96c"
+ },
+ "afad631b": {
+  "hash": "afad631b",
+  "name": "GraffitiTextStyleAsset",
+  "guid": "b69f8604-c388-917b-09e7-c85f3d677185",
+  "fields": [
+   {
+    "name": "LocalizedFont",
+    "hash": "dd14730d",
+    "code": "0x4400",
+    "elem": "6dcd0e65",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 160
+   },
+   {
+    "name": "BaseColor",
+    "hash": "ee205ba5",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "Bold",
+    "hash": "d045425d",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 204
+   },
+   {
+    "name": "Italic",
+    "hash": "3714fe26",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 205
+   },
+   {
+    "name": "Thickness",
+    "hash": "ecee0e0c",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 164
+   },
+   {
+    "name": "Gradient",
+    "hash": "36b39aa3",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 168
+   },
+   {
+    "name": "InnerSize",
+    "hash": "274d5dcd",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 172
+   },
+   {
+    "name": "InnerGradient",
+    "hash": "4ca7be44",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 176
+   },
+   {
+    "name": "InnerOffset",
+    "hash": "9195f9eb",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 180
+   },
+   {
+    "name": "InnerColor",
+    "hash": "2e34f3db",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 80
+   },
+   {
+    "name": "OuterSize",
+    "hash": "b628caba",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 188
+   },
+   {
+    "name": "OuterGradient",
+    "hash": "dd91b424",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 192
+   },
+   {
+    "name": "OuterOffset",
+    "hash": "9f808158",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 196
+   },
+   {
+    "name": "OuterColor",
+    "hash": "e0c472d3",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 120
+   }
+  ],
+  "parent": "c697c96c"
+ },
+ "232cec0d": {
+  "hash": "232cec0d",
+  "name": "ImageAsset",
+  "guid": "18bc839e-3867-a867-a947-937ff6560c05",
+  "fields": [
+   {
+    "name": "ImageId",
+    "hash": "df4e3ad1",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 72
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 80
+   },
+   {
+    "name": "NineSliceScaling",
+    "hash": "65fcc08e",
+    "code": "0x4000",
+    "elem": "c7613662",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "TextureFiltering",
+    "hash": "4ebb2751",
+    "code": "0xb00",
+    "elem": "4ebb2751",
+    "flags": "0x2001",
+    "offset": 88
+   },
+   {
+    "name": "ImageAtlas",
+    "hash": "5389605e",
+    "code": "0x4400",
+    "elem": "0019dd69",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "c7613662": {
+  "hash": "c7613662",
+  "name": "NineSliceScalingParams",
+  "guid": "85f5cd74-9134-5d8a-3faa-6c283e713bcd",
+  "fields": [
+   {
+    "name": "TopLeft",
+    "hash": "b197d8d0",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "BottomRight",
+    "hash": "3aa7ce09",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "2df5f3e4": {
+  "hash": "2df5f3e4",
+  "name": "PropertyValue",
+  "guid": "23838e4c-4322-9b1d-b345-ca689b54edfe",
+  "fields": [
+   {
+    "name": "PropertyIdPath",
+    "hash": "fe4a85ee",
+    "code": "0x801",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1f00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "7e4fae85": {
+  "hash": "7e4fae85",
+  "name": "DataProviderId",
+  "guid": "cbd6fa9b-0372-00aa-6874-31714abe9c3b",
+  "fields": [
+   {
+    "name": "DataMode",
+    "hash": "c769728c",
+    "code": "0xb00",
+    "elem": "37b491fd",
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "DataProviderObject",
+    "hash": "b25f63de",
+    "code": "0x4300",
+    "elem": "bb96607d",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "b0dd1389": {
+  "hash": "b0dd1389",
+  "name": "DataProviderContainer",
+  "guid": "3e7274da-2c80-87ab-d667-62589437acb0",
+  "fields": [
+   {
+    "name": "DataProviderPath",
+    "hash": "15a30137",
+    "code": "0x4201",
+    "elem": "7e4fae85",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "b03e911f": {
+  "hash": "b03e911f",
+  "name": "AnimationInstance",
+  "guid": "f6a3b1dd-9f50-3d9e-398d-b1ae0d48d930",
+  "fields": [
+   {
+    "name": "FrameRate",
+    "hash": "3317143d",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "Duration",
+    "hash": "7f29e296",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 60
+   },
+   {
+    "name": "Tracks",
+    "hash": "23c12f18",
+    "code": "0x4201",
+    "elem": "a5eee11d",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "PropertyValues",
+    "hash": "bc441c99",
+    "code": "0x4201",
+    "elem": "2df5f3e4",
+    "flags": "0x2000",
+    "offset": 40
+   },
+   {
+    "name": "NameCrc",
+    "hash": "9cc4a167",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 64
+   },
+   {
+    "name": null,
+    "hash": "c7501213",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 72
+   }
+  ],
+  "parent": "bb96607d"
+ },
+ "c19f99dd": {
+  "hash": "c19f99dd",
+  "name": "ImageWidgetInstance",
+  "guid": "3ce0c0c8-ca56-f51e-6684-05c4c4305817",
+  "fields": [
+   {
+    "name": "Image",
+    "hash": "04fc2b5b",
+    "code": "0x4400",
+    "elem": "232cec0d",
+    "flags": "0x2001",
+    "offset": 232
+   },
+   {
+    "name": "DynamicImageId",
+    "hash": "2c697b67",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 240
+   },
+   {
+    "name": "TextureFiltering",
+    "hash": "4ebb2751",
+    "code": "0xb00",
+    "elem": "e8b07941",
+    "flags": "0x2001",
+    "offset": 248
+   },
+   {
+    "name": "TextureAddressingMode",
+    "hash": "b01b49aa",
+    "code": "0xb00",
+    "elem": "099bb252",
+    "flags": "0x2001",
+    "offset": 252
+   },
+   {
+    "name": "UVOffset",
+    "hash": "d7859003",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 256
+   },
+   {
+    "name": "UVScale",
+    "hash": "ddf30f19",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 264
+   },
+   {
+    "name": "UVRotation",
+    "hash": "08d73848",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 272
+   },
+   {
+    "name": "UVApplyRotationAfterScale",
+    "hash": "4eb0e599",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 284
+   },
+   {
+    "name": "DynamicImageSizing",
+    "hash": "6807ccd3",
+    "code": "0xb00",
+    "elem": "ac60ddf2",
+    "flags": "0x2001",
+    "offset": 276
+   },
+   {
+    "name": "FillMode",
+    "hash": "a1b67fd1",
+    "code": "0xb00",
+    "elem": "b3c3528d",
+    "flags": "0x2001",
+    "offset": 280
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "edcf0433": {
+  "hash": "edcf0433",
+  "name": "DataBinderInstance",
+  "guid": "7279b9b9-4a93-618f-cefb-972bb4ce68b3",
+  "fields": [
+   {
+    "name": "ConverterInstance",
+    "hash": "6fd1ffc4",
+    "code": "0x4200",
+    "elem": "6fd1ffc4",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "SourcePropertyIndices",
+    "hash": "28c38074",
+    "code": "0x801",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 32
+   },
+   {
+    "name": "DestinationPropertyIndices",
+    "hash": "cec4084b",
+    "code": "0x801",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 48
+   },
+   {
+    "name": "GameObjectTemplate",
+    "hash": "8f8600a5",
+    "code": "0x4300",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "EnumEntry",
+    "hash": "9195460e",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 72
+   },
+   {
+    "name": "IsStatic",
+    "hash": "b8de40a9",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 76
+   },
+   {
+    "name": "IsDynamic",
+    "hash": "af9ddbd7",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 77
+   },
+   {
+    "name": "ProfileID",
+    "hash": "22b936f7",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "2ede86f3": {
+  "hash": "2ede86f3",
+  "name": "PropertyContainerIdentifier",
+  "guid": "b074034e-96e5-4e42-87f3-be758b82f6c6",
+  "fields": [
+   {
+    "name": "PropertyContainerIdentifier",
+    "hash": "2ede86f3",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "PropertyContainerAliasIdentifier",
+    "hash": "39e38f99",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   }
+  ],
+  "parent": "bb96607d"
+ },
+ "c36e7558": {
+  "hash": "c36e7558",
+  "name": "Asset",
+  "guid": "5f600211-4bdf-46c6-7271-ea16b9b73bec",
+  "fields": [
+   {
+    "name": "AssetType",
+    "hash": "897ca0c2",
+    "code": "0xb00",
+    "elem": "897ca0c2",
+    "flags": "0x2001",
+    "offset": 24
+   }
+  ],
+  "parent": "bb96607d"
+ },
+ "6fd1ffc4": {
+  "hash": "6fd1ffc4",
+  "name": "ConverterInstance",
+  "guid": "5d6ffe58-3f0c-4bf4-d200-13f87bff491c",
+  "fields": [
+   {
+    "name": "BindingMode",
+    "hash": "192f31c7",
+    "code": "0xb00",
+    "elem": "192f31c7",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "IsDynamic",
+    "hash": "af9ddbd7",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 20
+   },
+   {
+    "name": null,
+    "hash": "570c3823",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 12
+   },
+   {
+    "name": null,
+    "hash": "3f22df21",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "f1f64b8d": {
+  "hash": "f1f64b8d",
+  "name": "GraffitiFontAsset",
+  "guid": "f66f3ad7-753f-c10d-d2f6-a57c9f2bf97e",
+  "fields": [
+   {
+    "name": "FontRasterizedSize",
+    "hash": "d75bd6b0",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "Padding",
+    "hash": "ca491992",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 68
+   },
+   {
+    "name": "DFEnabled",
+    "hash": "88add0a9",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 84
+   },
+   {
+    "name": "Spread",
+    "hash": "7b19a54e",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 72
+   },
+   {
+    "name": "MultFactor",
+    "hash": "f6cf6ba5",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 76
+   },
+   {
+    "name": "MetricSystem",
+    "hash": "dfb4dc4c",
+    "code": "0xb00",
+    "elem": "4754bb8a",
+    "flags": "0x2001",
+    "offset": 80
+   },
+   {
+    "name": null,
+    "hash": "6d51158d",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 85
+   },
+   {
+    "name": null,
+    "hash": "b72f6622",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 86
+   },
+   {
+    "name": null,
+    "hash": "fe536d30",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 87
+   },
+   {
+    "name": null,
+    "hash": "18c37931",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 88
+   }
+  ],
+  "parent": "d90a3eef"
+ },
+ "38c4d81f": {
+  "hash": "38c4d81f",
+  "name": "DummyManagedObject",
+  "guid": "de5927ab-517d-15eb-45e8-70cbd8cecfc7",
+  "fields": [],
+  "parent": "bb96607d"
+ },
+ "c017efbc": {
+  "hash": "c017efbc",
+  "name": "SlugFontAsset",
+  "guid": "8c2d0108-de8d-3574-c689-dfa36b3af911",
+  "fields": [
+   {
+    "name": "OutlineEnabled",
+    "hash": "3fbfcd16",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 76
+   },
+   {
+    "name": "OutlineSize",
+    "hash": "1fe8fe5d",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "OutlineMiterLimit",
+    "hash": "e015e6f6",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 68
+   },
+   {
+    "name": "OutlineCornerStyle",
+    "hash": "0e48418e",
+    "code": "0xb00",
+    "elem": "0e48418e",
+    "flags": "0x2001",
+    "offset": 72
+   }
+  ],
+  "parent": "d90a3eef"
+ },
+ "17afa8e7": {
+  "hash": "17afa8e7",
+  "name": "WidgetTypeTemplate",
+  "guid": "f42e0db6-2f17-8b08-ceba-48c0d6a91e72",
+  "fields": [
+   {
+    "name": "IsAbstract",
+    "hash": "a16a5992",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 92
+   },
+   {
+    "name": "ParentWidgetTypeCategory",
+    "hash": "0b941b5b",
+    "code": "0xb00",
+    "elem": "0b941b5b",
+    "flags": "0x2001",
+    "offset": 88
+   },
+   {
+    "name": "ParentWidgetType",
+    "hash": "a01914f1",
+    "code": "0x4400",
+    "elem": "17afa8e7",
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "Components",
+    "hash": "a115f62d",
+    "code": "0x4201",
+    "elem": "51a18126",
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "OverriddenComponents",
+    "hash": "d7645aed",
+    "code": "0x4201",
+    "elem": "51a18126",
+    "flags": "0x2001",
+    "offset": 72
+   }
+  ],
+  "parent": "068cd567"
+ },
+ "11fca9d6": {
+  "hash": "11fca9d6",
+  "name": "ValuePicker",
+  "guid": "d7807fa6-d376-8a2f-a6ce-68b8a3533ded",
+  "fields": [
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "PickerName",
+    "hash": "79f545e4",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Description",
+    "hash": "eb78cff1",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "PropertyType",
+    "hash": "bb8a6ec6",
+    "code": "0xb00",
+    "elem": "8e4dd1c2",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "PickerType",
+    "hash": "ab086ccb",
+    "code": "0xb00",
+    "elem": "ab086ccb",
+    "flags": "0x2001",
+    "offset": 44
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "6e5a7f0e": {
+  "hash": "6e5a7f0e",
+  "name": "PropertyId",
+  "guid": "1d714afc-b6dc-e76a-e784-cbdb8753df12",
+  "fields": [
+   {
+    "name": "PropertyField",
+    "hash": "6b77ee88",
+    "code": "0xb00",
+    "elem": "6b77ee88",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 12
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "5bc96bf0": {
+  "hash": "5bc96bf0",
+  "name": "Comment",
+  "guid": "8b5914cc-d350-fe4d-c4b8-474724340f35",
+  "fields": [],
+  "parent": "af01aeda"
+ },
+ "1bb72d66": {
+  "hash": "1bb72d66",
+  "name": "PropertyContainer",
+  "guid": "e7bfa9d9-a38a-28a5-8a45-8ba9c2426c61",
+  "fields": [
+   {
+    "name": "PropertyPath",
+    "hash": "3c00b2e0",
+    "code": "0x4201",
+    "elem": "6e5a7f0e",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "DataProviderIndex",
+    "hash": "a86f2815",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 24
+   },
+   {
+    "name": "UseCount",
+    "hash": "7f67eaef",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 28
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "0da09291": {
+  "hash": "0da09291",
+  "name": "PropertyContainerAlias",
+  "guid": "8b5593dc-4fc0-fcae-c405-484baca49b76",
+  "fields": [
+   {
+    "name": null,
+    "hash": "1c2c57ba",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "PropertyPosition",
+    "hash": "85e056db",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": null,
+    "hash": "ee3f38b4",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "Comment",
+    "hash": "5bc96bf0",
+    "code": "0x4200",
+    "elem": "5bc96bf0",
+    "flags": "0x2001",
+    "offset": 40
+   }
+  ],
+  "parent": "bb96607d"
+ },
+ "fb2cf8c8": {
+  "hash": "fb2cf8c8",
+  "name": "ConstantPropertyContainer",
+  "guid": "d22107e5-e0c1-3a0a-2da1-7e2a51e6dd0c",
+  "fields": [
+   {
+    "name": "PropertyType",
+    "hash": "bb8a6ec6",
+    "code": "0xb00",
+    "elem": "8e4dd1c2",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "EnumAssetId",
+    "hash": "17b00e7f",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "DefaultValue",
+    "hash": "dc53e7d5",
+    "code": "0x1f00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "9df79719": {
+  "hash": "9df79719",
+  "name": "CustomPropertyContainer",
+  "guid": "f3e1b1f0-ad69-7e02-cd17-ca0e60139407",
+  "fields": [
+   {
+    "name": "CustomPropertyIndex",
+    "hash": "b7a9cf77",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "PropertyField",
+    "hash": "6b77ee88",
+    "code": "0xb00",
+    "elem": "6b77ee88",
+    "flags": "0x2001",
+    "offset": 12
+   },
+   {
+    "name": "UseCount",
+    "hash": "7f67eaef",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "a5eee11d": {
+  "hash": "a5eee11d",
+  "name": "TrackInstance",
+  "guid": "9c216cdd-8522-08b6-8aa5-c42b5a35b31f",
+  "fields": [
+   {
+    "name": "AnimatedPropertyIndex",
+    "hash": "1935a21e",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x12000",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "7338766c": {
+  "hash": "7338766c",
+  "name": "TrackKey",
+  "guid": "3c75253a-9904-6a6a-31ef-cf71c4fbb37b",
+  "fields": [
+   {
+    "name": "Time",
+    "hash": "cfa6377b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "InterpolatorType",
+    "hash": "8f7aa617",
+    "code": "0xb00",
+    "elem": "7eead398",
+    "flags": "0x2001",
+    "offset": 12
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "7ab8a12e": {
+  "hash": "7ab8a12e",
+  "name": "BooleanTrackInstance",
+  "guid": "7bf31b34-920b-49b4-33d0-dcf206dd86dd",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "d5cc1167",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "d5cc1167": {
+  "hash": "d5cc1167",
+  "name": "BooleanKey",
+  "guid": "c0ff58a2-ea3a-00d0-2902-4001c1082e7a",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "a79767ed": {
+  "hash": "a79767ed",
+  "name": "Color",
+  "guid": "dbdd2213-f8a4-f5d7-e2fe-1dcac0098293",
+  "fields": [
+   {
+    "name": "R",
+    "hash": "5767df55",
+    "code": "0x400",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "G",
+    "hash": "3aba3bbe",
+    "code": "0x400",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 9
+   },
+   {
+    "name": "B",
+    "hash": "4ad0cf31",
+    "code": "0x400",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 10
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "437ab854": {
+  "hash": "437ab854",
+  "name": "ColorPaletteEntry",
+  "guid": "0314921b-7358-adbd-1512-a2fac99ae660",
+  "fields": [
+   {
+    "name": "ColorName",
+    "hash": "e12ebfee",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Color",
+    "hash": "a79767ed",
+    "code": "0x4000",
+    "elem": "a79767ed",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": null,
+    "hash": "46a17a33",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "d95eca62": {
+  "hash": "d95eca62",
+  "name": "ColorThemeValue",
+  "guid": "5ac4bd1d-ecaa-a2c3-cbe5-f06ebc592ce6",
+  "fields": [
+   {
+    "name": null,
+    "hash": "46a17a33",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Color",
+    "hash": "a79767ed",
+    "code": "0x4000",
+    "elem": "a79767ed",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "391b8083": {
+  "hash": "391b8083",
+  "name": "ColorTheme",
+  "guid": "8cb27642-4dc5-7a64-1bed-1af645ef08ac",
+  "fields": [
+   {
+    "name": "ThemeName",
+    "hash": "29da3605",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "ColorThemeValues",
+    "hash": "b86b91b5",
+    "code": "0x4201",
+    "elem": "d95eca62",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "6af47f78": {
+  "hash": "6af47f78",
+  "name": "ColorPaletteAsset",
+  "guid": "f66ac7da-7d4c-256a-763d-d48cae815e95",
+  "fields": [
+   {
+    "name": "Colors",
+    "hash": "c512c6a9",
+    "code": "0x4201",
+    "elem": "437ab854",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Themes",
+    "hash": "12ee37e8",
+    "code": "0x4201",
+    "elem": "391b8083",
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "33d396c1": {
+  "hash": "33d396c1",
+  "name": "ColorType",
+  "guid": "4e302076-d343-36f2-83b1-0f23492337ab",
+  "fields": [
+   {
+    "name": "ColorPaletteAsset",
+    "hash": "6af47f78",
+    "code": "0x4400",
+    "elem": "6af47f78",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "ReferencedColor",
+    "hash": "974ece0d",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Color",
+    "hash": "a79767ed",
+    "code": "0x4000",
+    "elem": "a79767ed",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "ab390ed2": {
+  "hash": "ab390ed2",
+  "name": "ColorTrackInstance",
+  "guid": "1fb37b47-8c5f-f7e8-60d8-4bca3d39f240",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "5730559a",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "5730559a": {
+  "hash": "5730559a",
+  "name": "ColorKey",
+  "guid": "82f1b45f-87c1-5738-fda5-ec53c0715dc2",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "fc284752": {
+  "hash": "fc284752",
+  "name": "UInt32TrackInstance",
+  "guid": "965c8355-5a1f-fce6-9cc2-23a8d0ad5d51",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "521b7719",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "521b7719": {
+  "hash": "521b7719",
+  "name": "UInt32Key",
+  "guid": "71e75c43-1366-3692-fa0c-df1f7aae3c1f",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "9195460e": {
+  "hash": "9195460e",
+  "name": "EnumEntry",
+  "guid": "5b92b31c-d13b-dad1-3ccd-7c82dd383388",
+  "fields": [
+   {
+    "name": "UniqueId",
+    "hash": "31bd8af6",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "b81b8122": {
+  "hash": "b81b8122",
+  "name": "EnumAsset",
+  "guid": "cbf32efb-41ba-7463-d218-a33a6b07c7af",
+  "fields": [
+   {
+    "name": "EnumEntries",
+    "hash": "8d455655",
+    "code": "0x4201",
+    "elem": "9195460e",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "ConversionRules",
+    "hash": "fdb2e39a",
+    "code": "0x4201",
+    "elem": "df70904f",
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "df70904f": {
+  "hash": "df70904f",
+  "name": "ConversionRule",
+  "guid": "aa3757aa-f689-8e33-d26c-46f19416f616",
+  "fields": [
+   {
+    "name": "RuleId",
+    "hash": "953e779d",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "ConversionValueType",
+    "hash": "0921dbd1",
+    "code": "0xb00",
+    "elem": "8e4dd1c2",
+    "flags": "0x2001",
+    "offset": 36
+   },
+   {
+    "name": "ConversionValues",
+    "hash": "05666241",
+    "code": "0x4201",
+    "elem": "695f2292",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "TargetEnum",
+    "hash": "63aa39b0",
+    "code": "0x4300",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 24
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "695f2292": {
+  "hash": "695f2292",
+  "name": "ConversionValue",
+  "guid": "6c8472c3-0fd0-c6b6-9293-8ba31bd8b9d9",
+  "fields": [
+   {
+    "name": "EnumEntryUniqueId",
+    "hash": "a22151d7",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1f00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "dda23f23": {
+  "hash": "dda23f23",
+  "name": "EnumTrackInstance",
+  "guid": "6d859b8a-9290-237e-aece-4c964326ead5",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "521b7719",
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "TargetEnum",
+    "hash": "63aa39b0",
+    "code": "0x4300",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "217350a0": {
+  "hash": "217350a0",
+  "name": "EventActionTrackInstance",
+  "guid": "d2af0edc-54f4-654e-b259-2a1a8e1996ab",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "6e178e87",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "6e178e87": {
+  "hash": "6e178e87",
+  "name": "EventActionKey",
+  "guid": "74a4c214-6e4b-1c7c-dfb1-cacdf8683839",
+  "fields": [],
+  "parent": "7338766c"
+ },
+ "45432180": {
+  "hash": "45432180",
+  "name": "ActionTrackInstance",
+  "guid": "85c31487-ad2a-8b8a-ce07-e575dc308ff9",
+  "fields": [],
+  "parent": "217350a0"
+ },
+ "4fe03177": {
+  "hash": "4fe03177",
+  "name": "EventTrackInstance",
+  "guid": "c2b330fa-c4ac-b0ca-9ed2-83b25eb79652",
+  "fields": [],
+  "parent": "217350a0"
+ },
+ "38b9cd7c": {
+  "hash": "38b9cd7c",
+  "name": "FCurve",
+  "guid": "cfc226dc-201c-50bc-8064-5062063d5943",
+  "fields": [
+   {
+    "name": "Keys",
+    "hash": "14bcebd2",
+    "code": "0x4201",
+    "elem": "23dfde6e",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "23dfde6e": {
+  "hash": "23dfde6e",
+  "name": "FCurveKey",
+  "guid": "3a351add-88a7-6ee4-4d33-fe573342d880",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "Time",
+    "hash": "cfa6377b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 12
+   },
+   {
+    "name": "InterpolatorType",
+    "hash": "8f7aa617",
+    "code": "0xb00",
+    "elem": "7eead398",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "efa3832c": {
+  "hash": "efa3832c",
+  "name": "FCurveContainer",
+  "guid": "87d971de-a7e8-4f86-c1f7-85501531b354",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x4201",
+    "elem": "38b9cd7c",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "50282ef4": {
+  "hash": "50282ef4",
+  "name": "FCurveBool",
+  "guid": "24672dc8-469a-9e9d-a92d-d912661e7394",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "98698208": {
+  "hash": "98698208",
+  "name": "FCurveByte",
+  "guid": "16d7becc-21d5-8070-a5a9-64c52ff73667",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "e79851ca": {
+  "hash": "e79851ca",
+  "name": "ColorTrackKey",
+  "guid": "bf5d5ea9-58a7-3aad-6e09-a37fd5410371",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x4000",
+    "elem": "33d396c1",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "Time",
+    "hash": "cfa6377b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "InterpolatorType",
+    "hash": "8f7aa617",
+    "code": "0xb00",
+    "elem": "7eead398",
+    "flags": "0x2001",
+    "offset": 52
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "c282259c": {
+  "hash": "c282259c",
+  "name": "FCurveColor",
+  "guid": "c6adc073-0122-d02f-0f0b-afc62a18fd46",
+  "fields": [
+   {
+    "name": "Keys",
+    "hash": "14bcebd2",
+    "code": "0x4201",
+    "elem": "e79851ca",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "6d7133e0": {
+  "hash": "6d7133e0",
+  "name": "FCurveFloat",
+  "guid": "3f42d928-92ab-d5cd-0b74-88dba96c9a50",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "bd1eaf76": {
+  "hash": "bd1eaf76",
+  "name": "FCurveInt",
+  "guid": "2ecca214-32ea-a8bc-7f90-22f523e31617",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "f24247ee": {
+  "hash": "f24247ee",
+  "name": "StringTrackKey",
+  "guid": "24ff51f8-21c7-35ef-530a-dd8f74dec09f",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "Time",
+    "hash": "cfa6377b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "be75e377": {
+  "hash": "be75e377",
+  "name": "FCurveString",
+  "guid": "212bf1a3-b101-ce93-a8cc-3fdc79f9f21b",
+  "fields": [
+   {
+    "name": "Keys",
+    "hash": "14bcebd2",
+    "code": "0x4201",
+    "elem": "f24247ee",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "ab51d297": {
+  "hash": "ab51d297",
+  "name": "FCurveUInt",
+  "guid": "ab43e832-e8e7-301c-e285-f89f13f6f08c",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "a2a25815": {
+  "hash": "a2a25815",
+  "name": "FCurveVec2",
+  "guid": "8513fe20-7c93-0426-1fe3-eff6a3778cd3",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "d5a56883": {
+  "hash": "d5a56883",
+  "name": "FCurveVec3",
+  "guid": "f0a232c7-9a24-9e2c-1a4b-b461ce400c83",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "4bc1fd20": {
+  "hash": "4bc1fd20",
+  "name": "FCurveVec4",
+  "guid": "3ee84702-8777-560d-c7aa-983a65b7df76",
+  "fields": [
+   {
+    "name": "FCurves",
+    "hash": "42854bd1",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "efa3832c"
+ },
+ "32f7d270": {
+  "hash": "32f7d270",
+  "name": "FloatKey",
+  "guid": "f8cff764-83c3-32e2-e036-a0c7d175ad22",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "e613cfd0": {
+  "hash": "e613cfd0",
+  "name": "Float32TrackInstance",
+  "guid": "6d15424f-893b-840d-f94b-c7865834991f",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "32f7d270",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "21fb1be8": {
+  "hash": "21fb1be8",
+  "name": "Int32TrackInstance",
+  "guid": "b62f1cb4-88ad-542b-bac2-dcdab6160b6f",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "e9f5b8e7",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "e9f5b8e7": {
+  "hash": "e9f5b8e7",
+  "name": "Int32Key",
+  "guid": "40c5432d-2dd1-72ef-9465-84df8c0333c4",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "047e684b": {
+  "hash": "047e684b",
+  "name": "Int64Key",
+  "guid": "e25d531c-fb18-7a91-12fb-761668619433",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "eabeeed5": {
+  "hash": "eabeeed5",
+  "name": "Int64TrackInstance",
+  "guid": "07c97bfd-0c15-ff95-f60b-b82d4d5d4276",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "047e684b",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "5da1d9a7": {
+  "hash": "5da1d9a7",
+  "name": "StringTrackInstance",
+  "guid": "2a213b11-f102-ecd2-f6f6-b2aca0620e2c",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "1caf5b2a",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "1caf5b2a": {
+  "hash": "1caf5b2a",
+  "name": "StringKey",
+  "guid": "19fe9dcf-6945-0c6f-d526-e26671dbc393",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "bf90a7b5": {
+  "hash": "bf90a7b5",
+  "name": "UInt64Key",
+  "guid": "3cd17f82-5f25-6803-d365-503299ec09a1",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0xa00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "376db26f": {
+  "hash": "376db26f",
+  "name": "UInt64TrackInstance",
+  "guid": "57c6cde5-2534-4788-917a-f440ad056c4e",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "bf90a7b5",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "e86c4065": {
+  "hash": "e86c4065",
+  "name": "Vector2TrackInstance",
+  "guid": "bb463a4e-5766-ee33-b58e-518582aa7e08",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "6a3903a3",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "6a3903a3": {
+  "hash": "6a3903a3",
+  "name": "Vector2Key",
+  "guid": "46761eb0-ebc9-64d0-f603-b94785b4e24e",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "7563a113": {
+  "hash": "7563a113",
+  "name": "Vector3TrackInstance",
+  "guid": "17c7c87d-3d68-b413-a8ed-7af7d1964dba",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "d28564c6",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "d28564c6": {
+  "hash": "d28564c6",
+  "name": "Vector3Key",
+  "guid": "eea748d7-fbc7-598d-6991-d9246bd9f365",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "10ae0bd3": {
+  "hash": "10ae0bd3",
+  "name": "Vector4TrackInstance",
+  "guid": "df611872-f063-cf32-e52c-e7e52f0271fa",
+  "fields": [
+   {
+    "name": "Track",
+    "hash": "1722d7a2",
+    "code": "0x4201",
+    "elem": "4f525c7f",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "a5eee11d"
+ },
+ "4f525c7f": {
+  "hash": "4f525c7f",
+  "name": "Vector4Key",
+  "guid": "36be9694-2694-1cb6-8923-480c29aee54f",
+  "fields": [
+   {
+    "name": "Value",
+    "hash": "dcb67730",
+    "code": "0x1300",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "7338766c"
+ },
+ "068cd567": {
+  "hash": "068cd567",
+  "name": "CustomPropertyContainerTemplate",
+  "guid": "6e1441cd-a987-92b9-b59f-cba5a0e80ca6",
+  "fields": [
+   {
+    "name": "CustomProperties",
+    "hash": "d8079fd1",
+    "code": "0x4201",
+    "elem": "1294a820",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "71e62ea4": {
+  "hash": "71e62ea4",
+  "name": null,
+  "guid": "8ba28456-746a-42e5-592d-b414fa225173",
+  "fields": [
+   {
+    "name": "WidgetType",
+    "hash": "0bf1e17f",
+    "code": "0x4300",
+    "elem": "17afa8e7",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "OverriddenComponents",
+    "hash": "d7645aed",
+    "code": "0x4201",
+    "elem": "51a18126",
+    "flags": "0x2001",
+    "offset": 16
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "6bf4061d": {
+  "hash": "6bf4061d",
+  "name": null,
+  "guid": "5131427d-0b89-c41e-8455-e64f8e567a8f",
+  "fields": [
+   {
+    "name": null,
+    "hash": "cac44ed4",
+    "code": "0x4201",
+    "elem": "71e62ea4",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "9927b978": {
+  "hash": "9927b978",
+  "name": "AnyEnumValue",
+  "guid": "c48d5404-033d-a4e1-1ef5-167cb9e891bf",
+  "fields": [
+   {
+    "name": "TypeId",
+    "hash": "9c5891a6",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "EnumEntryId",
+    "hash": "2b811b4c",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "46010f35": {
+  "hash": "46010f35",
+  "name": "DummyAsset",
+  "guid": "ea48031b-9e1f-82fa-65ba-275397755911",
+  "fields": [],
+  "parent": "c36e7558"
+ },
+ "d90a3eef": {
+  "hash": "d90a3eef",
+  "name": "FontBaseAsset",
+  "guid": "1516e5bc-9f27-fbe1-61e5-3ce357897bd1",
+  "fields": [
+   {
+    "name": "FontId",
+    "hash": "90c4b9ff",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "DefaultCharacter",
+    "hash": "2e303cc4",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": null,
+    "hash": "c5388847",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "Ascent",
+    "hash": "002d405f",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 52
+   },
+   {
+    "name": "Descent",
+    "hash": "00fa28c8",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "5fa8c936": {
+  "hash": "5fa8c936",
+  "name": "FontDescriptorAsset",
+  "guid": "e0384bc4-c09d-76fb-64e7-07ae4a3b8c36",
+  "fields": [
+   {
+    "name": null,
+    "hash": "dd9db274",
+    "code": "0x401",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "d20bbf28": {
+  "hash": "d20bbf28",
+  "name": "FallbackFontAsset",
+  "guid": "53216cd6-3479-fa1b-6b38-b0899171ecef",
+  "fields": [
+   {
+    "name": "Font",
+    "hash": "70a6a7ec",
+    "code": "0x4400",
+    "elem": "d90a3eef",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "FontDescriptor",
+    "hash": "619e4928",
+    "code": "0x4300",
+    "elem": "5fa8c936",
+    "flags": "0x2001",
+    "offset": 40
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "ca32a806": {
+  "hash": "ca32a806",
+  "name": "FallbackFont",
+  "guid": "c5ad36a3-dbbe-be13-ba20-5812ca543f37",
+  "fields": [
+   {
+    "name": "Font",
+    "hash": "70a6a7ec",
+    "code": "0x4400",
+    "elem": "d90a3eef",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "ScalingFactor",
+    "hash": "9e9fb14b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": null,
+    "hash": "1c2c57ba",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "FontDescriptor",
+    "hash": "619e4928",
+    "code": "0x4300",
+    "elem": "5fa8c936",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "ScalingType",
+    "hash": "763d7ee3",
+    "code": "0xb00",
+    "elem": "cfa64d2e",
+    "flags": "0x2001",
+    "offset": 44
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "bd64a1b1": {
+  "hash": "bd64a1b1",
+  "name": "FallbackFontGroup",
+  "guid": "ae0daf98-7ea5-0123-30c7-7cb0cc65bb6a",
+  "fields": [
+   {
+    "name": "FallbackFonts",
+    "hash": "f2a75896",
+    "code": "0x4201",
+    "elem": "ca32a806",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "defdfd29": {
+  "hash": "defdfd29",
+  "name": null,
+  "guid": "f9dcf392-821d-de94-9585-18b4f7f564f7",
+  "fields": [
+   {
+    "name": "ScalingFactor",
+    "hash": "9e9fb14b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "ScalingType",
+    "hash": "763d7ee3",
+    "code": "0xb00",
+    "elem": "cfa64d2e",
+    "flags": "0x2001",
+    "offset": 20
+   },
+   {
+    "name": "FallbackFont",
+    "hash": "ca32a806",
+    "code": "0x4400",
+    "elem": "d20bbf28",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "8f8600a5": {
+  "hash": "8f8600a5",
+  "name": "GameObjectTemplate",
+  "guid": "5b72ed91-761e-ef85-3de0-1282a85daf1a",
+  "fields": [
+   {
+    "name": "BaseGameObject",
+    "hash": "6b837051",
+    "code": "0x4400",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "068cd567"
+ },
+ "4674a895": {
+  "hash": "4674a895",
+  "name": "LanguageFontException",
+  "guid": "661c035b-8343-7ce3-81fc-a077410444d4",
+  "fields": [
+   {
+    "name": "Language",
+    "hash": "2dad13e3",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "FontException",
+    "hash": "aeeb7b31",
+    "code": "0x4400",
+    "elem": "d90a3eef",
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "FontDescriptor",
+    "hash": "619e4928",
+    "code": "0x4300",
+    "elem": "5fa8c936",
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "ScalingFactor",
+    "hash": "9e9fb14b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "BaselineOffset",
+    "hash": "18ce4cb1",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 60
+   },
+   {
+    "name": "LineSpacingOffset",
+    "hash": "edec760b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 64
+   },
+   {
+    "name": "OnlyUseOfflineCharacters",
+    "hash": "571ffca0",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 68
+   },
+   {
+    "name": null,
+    "hash": "df84b302",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 69
+   },
+   {
+    "name": "FallbackFontGroup",
+    "hash": "bd64a1b1",
+    "code": "0x4400",
+    "elem": "bd64a1b1",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": null,
+    "hash": "5962aa9a",
+    "code": "0x4201",
+    "elem": "defdfd29",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "6dcd0e65": {
+  "hash": "6dcd0e65",
+  "name": "LocalizedFontAsset",
+  "guid": "80427060-fa5b-eaae-23d6-91367bd63571",
+  "fields": [
+   {
+    "name": null,
+    "hash": "8c00a6d0",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x12001",
+    "offset": 88
+   },
+   {
+    "name": "DefaultFont",
+    "hash": "953642ec",
+    "code": "0x4400",
+    "elem": "d90a3eef",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "FontDescriptor",
+    "hash": "619e4928",
+    "code": "0x4300",
+    "elem": "5fa8c936",
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "ScalingFactor",
+    "hash": "9e9fb14b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 96
+   },
+   {
+    "name": "BaselineOffset",
+    "hash": "18ce4cb1",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 100
+   },
+   {
+    "name": "LineSpacingOffset",
+    "hash": "edec760b",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 104
+   },
+   {
+    "name": "Ascent",
+    "hash": "002d405f",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 108
+   },
+   {
+    "name": "Descent",
+    "hash": "00fa28c8",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 112
+   },
+   {
+    "name": "OnlyUseOfflineCharacters",
+    "hash": "571ffca0",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 116
+   },
+   {
+    "name": null,
+    "hash": "df84b302",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 117
+   },
+   {
+    "name": "FallbackFontGroup",
+    "hash": "bd64a1b1",
+    "code": "0x4400",
+    "elem": "bd64a1b1",
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "LanguagesExceptions",
+    "hash": "8d3418a9",
+    "code": "0x4201",
+    "elem": "4674a895",
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": null,
+    "hash": "5962aa9a",
+    "code": "0x4201",
+    "elem": "defdfd29",
+    "flags": "0x2001",
+    "offset": 72
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "9683d911": {
+  "hash": "9683d911",
+  "name": "GuideSet",
+  "guid": "f567acbe-2921-0487-fa0d-7f63c318722e",
+  "fields": [
+   {
+    "name": "Color",
+    "hash": "a79767ed",
+    "code": "0x1300",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "IsLocked",
+    "hash": "d2cca01d",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "4adb90d9": {
+  "hash": "4adb90d9",
+  "name": "Guides",
+  "guid": "cff9f7d7-94ae-31b7-5559-28bfddee0ea8",
+  "fields": [
+   {
+    "name": "Horizontals",
+    "hash": "0ca52f4f",
+    "code": "0x1001",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "Verticals",
+    "hash": "60eee4b3",
+    "code": "0x1001",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 64
+   }
+  ],
+  "parent": "9683d911"
+ },
+ "8e127609": {
+  "hash": "8e127609",
+  "name": "Grid",
+  "guid": "7e199fd4-82d0-a09e-f881-e1b43195bf0c",
+  "fields": [
+   {
+    "name": "CellWidth",
+    "hash": "21c4f135",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "CellHeight",
+    "hash": "0882c2c1",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 52
+   },
+   {
+    "name": "CellPadding",
+    "hash": "79d5009e",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 56
+   },
+   {
+    "name": "Offset",
+    "hash": "5ea6cfe6",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 60
+   },
+   {
+    "name": "Rows",
+    "hash": "aab95b9f",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 68
+   },
+   {
+    "name": "Columns",
+    "hash": "6373f92b",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 72
+   }
+  ],
+  "parent": "9683d911"
+ },
+ "c0f0995c": {
+  "hash": "c0f0995c",
+  "name": "EffectTemplate",
+  "guid": "116c1a5a-9662-b2c3-3c49-3c7addc9be24",
+  "fields": [
+   {
+    "name": "IsBatchable",
+    "hash": "3485a8ad",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "068cd567"
+ },
+ "702da4ea": {
+  "hash": "702da4ea",
+  "name": "TagAssociation",
+  "guid": "7152e1b1-8dd1-f417-a756-db2443fe1368",
+  "fields": [
+   {
+    "name": "Tag",
+    "hash": "3bc4f163",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": "WidgetInstance",
+    "hash": "0c454dec",
+    "code": "0x4200",
+    "elem": "0c454dec",
+    "flags": "0x2001",
+    "offset": 8
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "e1523167": {
+  "hash": "e1523167",
+  "name": "LoadableAssetGroup",
+  "guid": "96dca49d-c679-015a-63e3-344471da3f32",
+  "fields": [
+   {
+    "name": "Associations",
+    "hash": "91101f49",
+    "code": "0x4201",
+    "elem": "702da4ea",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "6877c743": {
+  "hash": "6877c743",
+  "name": "VectorShapeAsset",
+  "guid": "16d45f6f-795b-f22c-8349-1f8305b813fd",
+  "fields": [
+   {
+    "name": "VectorShapeId",
+    "hash": "515e60cf",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Size",
+    "hash": "57f28b54",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "BezierIterations",
+    "hash": "476c3343",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "d6815b4f": {
+  "hash": "d6815b4f",
+  "name": "VideoAsset",
+  "guid": "014048c3-dc16-2f37-4c2c-d0939f85ef58",
+  "fields": [
+   {
+    "name": "VideoId",
+    "hash": "ba3756cd",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "Resolution",
+    "hash": "b28e0c5a",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "c5a2db43": {
+  "hash": "c5a2db43",
+  "name": "AbsConverterInstance",
+  "guid": "5daa35f7-3a83-9cd9-640a-380726443022",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "0f7f54d0": {
+  "hash": "0f7f54d0",
+  "name": "NumericalConverterInstance",
+  "guid": "72633b44-bd23-7cb9-ec3a-3e9771045426",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "23bf72e5": {
+  "hash": "23bf72e5",
+  "name": "AddColorConverterInstance",
+  "guid": "aa9eeee3-d5af-377e-d69c-aa44aa672167",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "97f3862c": {
+  "hash": "97f3862c",
+  "name": "AddConverterInstance",
+  "guid": "54565cb8-534d-4814-98f2-275a993a5837",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "1c36f9d9": {
+  "hash": "1c36f9d9",
+  "name": null,
+  "guid": "e739daed-0d40-7ab2-65b9-dea943c7fd9d",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "bc24ca1c": {
+  "hash": "bc24ca1c",
+  "name": null,
+  "guid": "673d293f-8ffa-6ea5-ed68-f6a2ac9b06e8",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "54c1710a": {
+  "hash": "54c1710a",
+  "name": null,
+  "guid": "9e2be166-e99e-adf0-2862-560c98d0a0b9",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "c346a1bd": {
+  "hash": "c346a1bd",
+  "name": "AssignConverterInstance",
+  "guid": "ae4bca11-17d7-9d07-1090-0f09a6661fe1",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "a91becfd": {
+  "hash": "a91becfd",
+  "name": "BoolToNumberConverterInstance",
+  "guid": "d73a2580-b679-4ce4-388b-b23d3ba998b6",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "22b69259": {
+  "hash": "22b69259",
+  "name": "CeilConverterInstance",
+  "guid": "077a5cc9-82bc-8a0a-daab-fb6ed7acc69c",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "76af01ea": {
+  "hash": "76af01ea",
+  "name": "ClampConverterInstance",
+  "guid": "ee04490d-bb17-9811-fc9a-e3db443118be",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "837c5320": {
+  "hash": "837c5320",
+  "name": "ComparisonConverterInstance",
+  "guid": "5c3a8f23-a0e0-b6df-9bf6-4d9e76cd2ea8",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "ef9a050c": {
+  "hash": "ef9a050c",
+  "name": "ConcatValuesConverterInstance",
+  "guid": "5cd578be-8cff-5822-581e-4625b3c9e034",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "38473df0": {
+  "hash": "38473df0",
+  "name": "CosConverterInstance",
+  "guid": "e758b10b-28fb-5451-6de6-f6a37f5de990",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "3227879c": {
+  "hash": "3227879c",
+  "name": "DegreeToRadianConverterInstance",
+  "guid": "e1e72981-ea6a-6ea3-22d8-20ac65d45890",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "13ffffc1": {
+  "hash": "13ffffc1",
+  "name": "DeltaConverterInstance",
+  "guid": "e0a93d1e-eacc-6357-1d36-6fc66a5e5339",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "4a39ee27": {
+  "hash": "4a39ee27",
+  "name": "DivideColorConverterInstance",
+  "guid": "6bac17ec-c228-2999-6056-4233442b7dc7",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "b52f3dd9": {
+  "hash": "b52f3dd9",
+  "name": "DivideConverterInstance",
+  "guid": "de0a8f04-5ad1-e3f1-ca5b-ceddc2c66f8c",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "fa20916b": {
+  "hash": "fa20916b",
+  "name": "EnumConverterInstance",
+  "guid": "756d3ae3-5025-0d1c-beff-54cac0983267",
+  "fields": [
+   {
+    "name": "EnumAsset",
+    "hash": "b81b8122",
+    "code": "0x4300",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "BindingInfos",
+    "hash": "aa404a68",
+    "code": "0x4201",
+    "elem": "5624481e",
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "6fd1ffc4"
+ },
+ "5624481e": {
+  "hash": "5624481e",
+  "name": "EnumBindingInfo",
+  "guid": "279f5cc9-76cf-5c4c-922f-3f5c1d7f6993",
+  "fields": [
+   {
+    "name": "EnumValueId",
+    "hash": "549a9124",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "TargetIndex",
+    "hash": "5713a178",
+    "code": "0x600",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 12
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "d7ef3d58": {
+  "hash": "d7ef3d58",
+  "name": "EnumToBooleanConverterInstance",
+  "guid": "77069491-c933-82b0-7894-60da0cace618",
+  "fields": [],
+  "parent": "fa20916b"
+ },
+ "5e3ef09a": {
+  "hash": "5e3ef09a",
+  "name": "EnumToEventConverterInstance",
+  "guid": "943f91eb-a0cc-3675-761b-b26c93df82a0",
+  "fields": [],
+  "parent": "fa20916b"
+ },
+ "6c4a2404": {
+  "hash": "6c4a2404",
+  "name": "EnumToValueConverterInstance",
+  "guid": "de76da8c-ddba-49f0-0bf2-7057b089543a",
+  "fields": [
+   {
+    "name": "EnumAsset",
+    "hash": "b81b8122",
+    "code": "0x4400",
+    "elem": "b81b8122",
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": "RuleId",
+    "hash": "953e779d",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   }
+  ],
+  "parent": "6fd1ffc4"
+ },
+ "9bd3b2dc": {
+  "hash": "9bd3b2dc",
+  "name": "EqualConverterInstance",
+  "guid": "a3f0e42c-0b86-81ff-cb0a-5f4d65818b91",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "a3de9f56": {
+  "hash": "a3de9f56",
+  "name": "EventAssignConverterInstance",
+  "guid": "e5cd4d03-f2a7-68dc-8a22-1750c67c97ff",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "be36f265": {
+  "hash": "be36f265",
+  "name": "EventToBoolConverterInstance",
+  "guid": "3640f9f4-1f44-d2d1-6a4c-7e9f2ae185a5",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "c32c7054": {
+  "hash": "c32c7054",
+  "name": "EventToTrueConverterInstance",
+  "guid": "bdb6e771-10ad-d216-fefb-ce5418107731",
+  "fields": [],
+  "parent": "be36f265"
+ },
+ "130e634e": {
+  "hash": "130e634e",
+  "name": "EventToFalseConverterInstance",
+  "guid": "22916636-d594-6d7a-0efb-4b9bf0dd883b",
+  "fields": [],
+  "parent": "be36f265"
+ },
+ "599c5545": {
+  "hash": "599c5545",
+  "name": "EventToBoolChangeConverterInstance",
+  "guid": "0a75e7c0-6b94-5fac-47ef-947a9978aa59",
+  "fields": [],
+  "parent": "be36f265"
+ },
+ "f8fa428f": {
+  "hash": "f8fa428f",
+  "name": "FalseToTrueChangeConverterInstance",
+  "guid": "9cec15a3-80f1-6754-25f6-30d36801adee",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "55bed03f": {
+  "hash": "55bed03f",
+  "name": "FloorConverterInstance",
+  "guid": "d8a77ce4-f375-a3ff-b59c-cd26d6408aa1",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "09d78724": {
+  "hash": "09d78724",
+  "name": "GetCountConverterInstance",
+  "guid": "f4598977-c159-7192-6904-31f29a9d6e96",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "4dad286c": {
+  "hash": "4dad286c",
+  "name": "GetElementAtConverterInstance",
+  "guid": "3c4962b8-eb00-4a0c-1033-45f9dcc29ab5",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "8a049cb7": {
+  "hash": "8a049cb7",
+  "name": "GetRandomValueConverterInstance",
+  "guid": "ae6421f6-9f73-b6af-8e37-280d471e84e2",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "14cebcc9": {
+  "hash": "14cebcc9",
+  "name": "GreaterConverterInstance",
+  "guid": "7a77ec51-cd81-417f-4f27-c03e65da6fa3",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "08ac46a1": {
+  "hash": "08ac46a1",
+  "name": "GreaterOrEqualConverterInstance",
+  "guid": "88561b52-c724-bc0c-232a-3c9ba32545e9",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "e6623aa6": {
+  "hash": "e6623aa6",
+  "name": "IfFalseAssignConverterInstance",
+  "guid": "7c5de319-a003-e91b-545e-199c1ca5d0ba",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "0b2ef3a9": {
+  "hash": "0b2ef3a9",
+  "name": "IfTrueAssignConverterInstance",
+  "guid": "68689a21-8f9f-7b08-ded6-3199d56b98f8",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "fa72bb0a": {
+  "hash": "fa72bb0a",
+  "name": "IfTrueFalseAssignConverterInstance",
+  "guid": "c0c67404-5602-8f60-c70c-fa116e38e72b",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "25838498": {
+  "hash": "25838498",
+  "name": "IsEmptyConverterInstance",
+  "guid": "4d9e82d6-c3b6-2f9a-cf38-fea959a49c81",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "de094420": {
+  "hash": "de094420",
+  "name": "IsInRangeButNotEqualConverterInstance",
+  "guid": "41ea8b33-d59c-4c69-54d5-66de8a1e2bed",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "2308d788": {
+  "hash": "2308d788",
+  "name": "IsInRangeConverterInstance",
+  "guid": "1df9a8c3-8991-6554-69e9-4d29f13c476a",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "2bd13d9d": {
+  "hash": "2bd13d9d",
+  "name": "IsNullConverterInstance",
+  "guid": "300949c4-25ea-480d-4797-383fbf39f6b1",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "72eb91e5": {
+  "hash": "72eb91e5",
+  "name": "LesserConverterInstance",
+  "guid": "8337975b-6fb0-9cb7-f8f3-3f540289e700",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "acef0b0a": {
+  "hash": "acef0b0a",
+  "name": "LesserOrEqualConverterInstance",
+  "guid": "b1c239a0-1312-b758-6d17-d5dab238a50d",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "d0ff2941": {
+  "hash": "d0ff2941",
+  "name": "LogicalConverterInstance",
+  "guid": "b85aa5b8-82c2-5872-09a3-c63fd2c6164d",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "06ac2bda": {
+  "hash": "06ac2bda",
+  "name": "LogicalAndConverterInstance",
+  "guid": "1cf810b1-ad28-6486-72fd-059e958b737e",
+  "fields": [],
+  "parent": "d0ff2941"
+ },
+ "111e8241": {
+  "hash": "111e8241",
+  "name": "LogicalInvertConverterInstance",
+  "guid": "fa8c10a8-3c2b-d39a-5225-3b419427febc",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "9759e6fa": {
+  "hash": "9759e6fa",
+  "name": "LogicalOrConverterInstance",
+  "guid": "8af6a276-133e-63e8-1171-aded124d7c67",
+  "fields": [],
+  "parent": "d0ff2941"
+ },
+ "cf6f7bda": {
+  "hash": "cf6f7bda",
+  "name": "LogicalXOrConverterInstance",
+  "guid": "0f9db634-9eef-c00c-6984-813cd6d4a339",
+  "fields": [],
+  "parent": "d0ff2941"
+ },
+ "4815136f": {
+  "hash": "4815136f",
+  "name": "MaxConverterInstance",
+  "guid": "0bdff368-40d6-d831-c8e4-37b304d7ac82",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "616bee77": {
+  "hash": "616bee77",
+  "name": "MinConverterInstance",
+  "guid": "b6f21a6b-8a41-7b9e-e5da-6d7c18470318",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "dbe093fe": {
+  "hash": "dbe093fe",
+  "name": "ModuloConverterInstance",
+  "guid": "d17ef27e-07ea-b8f2-e775-4354a80eaeae",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "b8770396": {
+  "hash": "b8770396",
+  "name": "MultiplyColorConverterInstance",
+  "guid": "cdfa489c-7003-c835-bc05-69382cb08959",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "d5037298": {
+  "hash": "d5037298",
+  "name": "MultiplyConverterInstance",
+  "guid": "c8e80521-94e5-a51b-276c-6d381c820b1e",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "1bd6542a": {
+  "hash": "1bd6542a",
+  "name": "NotEqualConverterInstance",
+  "guid": "f1316aa1-3354-b954-e625-487817baffc1",
+  "fields": [],
+  "parent": "837c5320"
+ },
+ "0f8445b8": {
+  "hash": "0f8445b8",
+  "name": "NumberToBoolConverterInstance",
+  "guid": "21016194-e819-2fcf-1153-22bf73c0b4fa",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "4aa26b0b": {
+  "hash": "4aa26b0b",
+  "name": "NumberToFloatConverterInstance",
+  "guid": "e80da4ee-a735-d4de-0b2c-2364d59e82d1",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "ca83747e": {
+  "hash": "ca83747e",
+  "name": "OneTimeAssignConverterInstance",
+  "guid": "f985d814-3eff-5c10-1ca2-5be52ae24dae",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "719fa13c": {
+  "hash": "719fa13c",
+  "name": "RadianToDegreeConverterInstance",
+  "guid": "15316fa2-f27c-880b-08d0-34fdff5f4fb1",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "9b18e043": {
+  "hash": "9b18e043",
+  "name": "RoundConverterInstance",
+  "guid": "e58c6275-988c-9d3b-d1cd-1944bf318a30",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "8bd85eca": {
+  "hash": "8bd85eca",
+  "name": "SignConverterConverterInstance",
+  "guid": "379cbf0f-a4ea-fe60-bdb2-f46c7984dca4",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "98550e35": {
+  "hash": "98550e35",
+  "name": "SinConverterInstance",
+  "guid": "74b2c978-4fee-6723-ee8a-e9a654bfbe25",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "a150854b": {
+  "hash": "a150854b",
+  "name": "SquareRootConverterInstance",
+  "guid": "fa8a32a3-69e7-6e28-e19f-4cab462f5e7c",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "fb38a630": {
+  "hash": "fb38a630",
+  "name": "StringToValueConverterInstance",
+  "guid": "342620d6-f551-98aa-7217-78af11ccafcb",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "f98fa2f7": {
+  "hash": "f98fa2f7",
+  "name": "SubtractColorConverterInstance",
+  "guid": "23d0346e-c055-6a39-a13a-6ac55fe547f7",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "072acb84": {
+  "hash": "072acb84",
+  "name": "SubtractConverterInstance",
+  "guid": "098d623f-03d3-4dd1-8ec0-baba3b4a20cf",
+  "fields": [],
+  "parent": "0f7f54d0"
+ },
+ "70b0b523": {
+  "hash": "70b0b523",
+  "name": "TanConverterInstance",
+  "guid": "79471c93-2c77-8ef2-96fc-75659d7b2fad",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "5b0e8ff5": {
+  "hash": "5b0e8ff5",
+  "name": "TrueToFalseChangeConverterInstance",
+  "guid": "43639e5b-4637-6389-cc3c-2fe3b0fa9e46",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "bba41a31": {
+  "hash": "bba41a31",
+  "name": "TwoWayAssignConverterInstance",
+  "guid": "70d8092c-fe55-265f-4c66-1e66d8137d07",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "4c9ce34d": {
+  "hash": "4c9ce34d",
+  "name": "ValueChangeConverterInstance",
+  "guid": "f1c30092-7246-f7eb-93f5-029d6e5e4217",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "19296de7": {
+  "hash": "19296de7",
+  "name": "ValueToStringConverterInstance",
+  "guid": "a1445873-8ff0-3419-8cdd-c3d699e9f1d9",
+  "fields": [],
+  "parent": "6fd1ffc4"
+ },
+ "f18ce54e": {
+  "hash": "f18ce54e",
+  "name": "Grouping",
+  "guid": "b96abf45-36cf-df7c-fee3-179b83a94b26",
+  "fields": [],
+  "parent": "af01aeda"
+ },
+ "cede9435": {
+  "hash": "cede9435",
+  "name": "OrphanPropertyContainer",
+  "guid": "f91f69d6-e1c1-4e9b-81eb-a461fc65566c",
+  "fields": [
+   {
+    "name": "GameObjectTemplate",
+    "hash": "8f8600a5",
+    "code": "0x4300",
+    "elem": "8f8600a5",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "EnumEntry",
+    "hash": "9195460e",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "IsStatic",
+    "hash": "b8de40a9",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 44
+   }
+  ],
+  "parent": "1bb72d66"
+ },
+ "2f208351": {
+  "hash": "2f208351",
+  "name": "GroupTemplate",
+  "guid": "fb8c089c-8ac4-42eb-90c5-8c29b841addf",
+  "fields": [
+   {
+    "name": "WidgetInstances",
+    "hash": "b2be2415",
+    "code": "0x4201",
+    "elem": "0c454dec",
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "BoundingBoxPosition",
+    "hash": "0604d209",
+    "code": "0x1200",
+    "elem": null,
+    "flags": "0x94",
+    "offset": 0
+   },
+   {
+    "name": "BoundingBoxSize",
+    "hash": "1f0d9d58",
+    "code": "0x1100",
+    "elem": null,
+    "flags": "0x94",
+    "offset": 0
+   },
+   {
+    "name": "Groups",
+    "hash": "f7c13c46",
+    "code": "0x4201",
+    "elem": "2f208351",
+    "flags": "0x2001",
+    "offset": 48
+   }
+  ],
+  "parent": "c36e7558"
+ },
+ "ef67f347": {
+  "hash": "ef67f347",
+  "name": "LanguageInfo",
+  "guid": "ae727770-7808-a154-1f86-61ccd6726edd",
+  "fields": [
+   {
+    "name": "LanguageName",
+    "hash": "7acdbc16",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "LanguageRTL",
+    "hash": "53e84634",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 16
+   },
+   {
+    "name": null,
+    "hash": "c386e5b8",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 17
+   },
+   {
+    "name": null,
+    "hash": "42a87aa1",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 18
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "fa702d0c": {
+  "hash": "fa702d0c",
+  "name": "GroupInstance",
+  "guid": "923ee251-fc3f-3d1c-b148-ef7c11f456e0",
+  "fields": [
+   {
+    "name": "GroupTemplate",
+    "hash": "2f208351",
+    "code": "0x4300",
+    "elem": "2f208351",
+    "flags": "0x2001",
+    "offset": 232
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "379e78aa": {
+  "hash": "379e78aa",
+  "name": "VectorShapeWidgetInstance",
+  "guid": "c5ac92c2-2152-b00b-d34d-e662090d6bb5",
+  "fields": [
+   {
+    "name": "VectorShape",
+    "hash": "6071fcb3",
+    "code": "0x4400",
+    "elem": "6877c743",
+    "flags": "0x2001",
+    "offset": 232
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "8eeb57e6": {
+  "hash": "8eeb57e6",
+  "name": "VideoWidgetInstance",
+  "guid": "02b905f9-9622-f823-e9be-c45e7e05dae8",
+  "fields": [
+   {
+    "name": "Video",
+    "hash": "bd06f528",
+    "code": "0x4400",
+    "elem": "d6815b4f",
+    "flags": "0x2001",
+    "offset": 232
+   },
+   {
+    "name": "DynamicVideoId",
+    "hash": "4910177b",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 240
+   },
+   {
+    "name": "AutoStart",
+    "hash": "b24f583f",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 264
+   },
+   {
+    "name": "Repeat",
+    "hash": "affbb6f6",
+    "code": "0x700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 248
+   },
+   {
+    "name": "Volume",
+    "hash": "be36c8e8",
+    "code": "0x1000",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 252
+   },
+   {
+    "name": "Mute",
+    "hash": "6c8bdc62",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 265
+   },
+   {
+    "name": null,
+    "hash": "e9fe6e00",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 266
+   },
+   {
+    "name": "DynamicVideoSizing",
+    "hash": "f02041d8",
+    "code": "0xb00",
+    "elem": "e66f072e",
+    "flags": "0x2001",
+    "offset": 256
+   },
+   {
+    "name": "FillMode",
+    "hash": "a1b67fd1",
+    "code": "0xb00",
+    "elem": "c98c6962",
+    "flags": "0x2001",
+    "offset": 260
+   },
+   {
+    "name": "IsView",
+    "hash": "586cbbb4",
+    "code": "0x100",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 267
+   }
+  ],
+  "parent": "0c454dec"
+ },
+ "af01aeda": {
+  "hash": "af01aeda",
+  "name": "Object",
+  "guid": "7d135118-b22a-267b-c94c-afb251ad01e4",
+  "fields": [
+   {
+    "name": null,
+    "hash": "00000000",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": null
+ },
+ "aec638c6": {
+  "hash": "aec638c6",
+  "name": "ObjectInfo",
+  "guid": "d1d30da4-0cec-1cf7-8720-7946ecd7f14e",
+  "fields": [
+   {
+    "name": "ID",
+    "hash": "11d3633a",
+    "code": "0x1900",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 8
+   },
+   {
+    "name": "ObjectClassID",
+    "hash": "4811858e",
+    "code": "0x1a00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 32
+   },
+   {
+    "name": "PropID",
+    "hash": "59e0e43b",
+    "code": "0x1b00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 36
+   },
+   {
+    "name": "Index",
+    "hash": "41b24805",
+    "code": "0x800",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   },
+   {
+    "name": "PropertyType",
+    "hash": "bb8a6ec6",
+    "code": "0x1e00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": null,
+    "hash": "00000000",
+    "code": "0x0",
+    "elem": null,
+    "flags": "0x0",
+    "offset": 0
+   }
+  ],
+  "parent": "af01aeda"
+ },
+ "bb96607d": {
+  "hash": "bb96607d",
+  "name": "ManagedObject",
+  "guid": "518d3e2e-0da0-8655-b06f-d86577044cdb",
+  "fields": [],
+  "parent": "af01aeda"
+ },
+ "ac9581f2": {
+  "hash": "ac9581f2",
+  "name": "RawFile",
+  "guid": "eb0e39c1-759f-5a83-6438-80b6776c742f",
+  "fields": [
+   {
+    "name": "Extension",
+    "hash": "1d46bfd4",
+    "code": "0x1700",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 48
+   },
+   {
+    "name": "Content",
+    "hash": "31780935",
+    "code": "0xa01",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 24
+   },
+   {
+    "name": null,
+    "hash": "a88cf90a",
+    "code": "0xa00",
+    "elem": null,
+    "flags": "0x2001",
+    "offset": 40
+   }
+  ],
+  "parent": "bb96607d"
+ }
+}

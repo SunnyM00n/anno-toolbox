@@ -1,0 +1,124 @@
+"""Lists and grids in the preview: a widget file whose widget type is one of the dynamic widgets places its one item
+child once per element of its data source, along an axis (a list) or in rows (a grid), each copy bound to its
+element.
+
+``list_kind(files, root)`` tells a list file; ``element_count(samples, owner)`` how many elements the sample values
+hold for one; ``offsets(kind, inputs, n, item)`` where each copy goes. docs/ui/117/lists-grids-tabs-pages.md.
+"""
+
+from __future__ import annotations
+
+import math
+
+from . import fields
+from .viewmodels import Samples
+
+# the widget types a list file names (or extends), by their GUID's first part
+LIST, GRID, DYNAMIC = "dbcf9d78", "af18fdbb", "10997baf"
+KINDS = {LIST: "list", GRID: "grid", DYNAMIC: "list", "6ca90344": "list", "07dcf4d8": "list",
+         "f67963fe": "radial-game", "277a7512": "radial-list", "9eb9b942": "radial-wheel"}  # fmt: skip
+# the radial widgets' StartAngle, TotalAngle and Radius (the Widget Library's UniqueIds) and their defaults
+RADIAL = {
+    "radial-game": ((0x38677509, 0x3EB7FC2F, 0x3D5E2825), (0.0, 180.0, 50.0)),
+    "radial-list": ((0x3C1898AF, 0x3A606D94, 0x37B56040), (0.0, 180.0, 50.0)),
+    "radial-wheel": ((0x3D6EA808, 0x3AFA1D66, 0x3D4CBCB7), (0.0, 360.0, 100.0)),
+}
+PLACEHOLDER_ITEMS = 3  # elements shown for a list whose sample values hold none
+# the list and grid properties (the Widget Library's UniqueIds)
+LIST_HORIZONTAL, LIST_SPACE, LIST_VISIBLE = 0x38700F5E, 0x3FFDE5EF, 0x374A4E11
+GRID_HORIZONTAL, GRID_SPACE_X, GRID_SPACE_Y = 0x3641914A, 0x31757E14, 0x33C30462
+GRID_COLUMNS, GRID_ROWS, CELL = 0x331E7ED6, 0x35E3D8E7, 0x39BFC470  # CELL: the game grid's StaticElementSize
+ELEMENT = 0x90000000  # the data source's element i is 0x90000000 + i in the files' preview values
+
+
+def type_chain(files, root: dict) -> list[str]:
+    """The first parts of the GUIDs of a widget file's widget type and the types it extends, its own first."""
+    wtype, seen, out = fields.get(root, "WidgetType"), set(), []
+    while wtype and wtype not in seen:
+        seen.add(wtype)
+        out.append(wtype[:8])
+        be = files.root(wtype)
+        wtype = fields.get(be, "ParentWidgetType") if be is not None else None
+    return out
+
+
+def list_kind(files, root: dict) -> str | None:
+    """ "list", "grid" or a "radial-..." kind for a widget file of a dynamic widget type (through the types it
+    extends), else None."""
+    return next((KINDS[t] for t in type_chain(files, root) if t in KINDS), None)
+
+
+def element_count(samples: Samples, owner: str) -> int:
+    """The elements the sample values hold for the list instance ``owner`` (its data source's preview values, or
+    values set by hand)."""
+    prefix = Samples.key(owner, [0x30000001]) + "/"
+    found = set()
+    for key in samples.given_under(prefix):  # made-up values fill elements, they do not add any
+        part = key[len(prefix) :].split("/", 1)[0]
+        if len(part) == 8 and int(part, 16) >= ELEMENT:
+            found.add(part)
+    if found:
+        return max(int(p, 16) - ELEMENT for p in found) + 1
+    return PLACEHOLDER_ITEMS if samples.fill else 1
+
+
+def element_key(owner: str, index: int) -> str:
+    return Samples.key(owner, [0x30000001, ELEMENT + index])
+
+
+def _number(inputs: dict, uid: int, default: float) -> float:
+    v = inputs.get(uid)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else default
+
+
+def offsets(kind: str, inputs: dict, n: int, item: tuple[float, float]) -> list[tuple[float, float]]:
+    """The place of each of ``n`` copies of an item of size ``item``: a list along its axis, a grid in rows of its
+    visible column count (columns of its row count when horizontal); the visible counts cap how many are made
+    (the editor's word: the most a list instantiates)."""
+    if kind in RADIAL:
+        return _arc(kind, inputs, n)
+    if kind == "grid":
+        cell = inputs.get(CELL)
+        w, h = (float(cell[0]), float(cell[1])) if isinstance(cell, (tuple, list)) and cell[0] and cell[1] else item
+        gx, gy = _number(inputs, GRID_SPACE_X, 0.0), _number(inputs, GRID_SPACE_Y, 0.0)
+        horizontal = bool(inputs.get(GRID_HORIZONTAL))
+        across = max(1, int(_number(inputs, GRID_ROWS if horizontal else GRID_COLUMNS, 2)))
+        down = int(_number(inputs, GRID_COLUMNS if horizontal else GRID_ROWS, 2))
+        out = []
+        for i in range(min(n, across * down) if down > 0 else n):
+            a, b = i % across, i // across
+            col, row = (b, a) if horizontal else (a, b)
+            out.append((col * (w + gx), row * (h + gy)))
+        return out
+    space = _number(inputs, LIST_SPACE, 0.0)
+    visible = int(_number(inputs, LIST_VISIBLE, 0))
+    count = min(n, visible) if visible > 0 else n
+    horizontal = bool(inputs.get(LIST_HORIZONTAL))
+    step = (item[0] + space, 0.0) if horizontal else (0.0, item[1] + space)
+    return [(step[0] * i, step[1] * i) for i in range(count)]
+
+
+def _arc(kind: str, inputs: dict, n: int) -> list[tuple[float, float]]:
+    """The copies of a radial list on its arc: the first at ``StartAngle``, the rest spread over ``TotalAngle`` (a
+    full circle leaves its end free), the angle from straight up, clockwise (inferred from the editor's words)."""
+    ids, defaults = RADIAL[kind]
+    start, total, radius = (_number(inputs, uid, d) for uid, d in zip(ids, defaults, strict=True))
+    out = []
+    for i in range(n):
+        step = total / n if total >= 360.0 else (total / (n - 1) if n > 1 else 0.0)
+        a = math.radians(start + step * i)
+        out.append((radius * math.sin(a), -radius * math.cos(a)))
+    return out
+
+
+def preview_values(top, key: str) -> dict[str, object]:
+    """The preview values a file carries for a list's elements (``DataSource`` paths ``30000001 9000000i ...``),
+    as sample keys under the instance that holds them; ``top`` is its element tree."""
+    out = {}
+    for el in top.walk():
+        if not el.guid:
+            continue
+        for path, value in fields.property_values(el.node).items():
+            if len(path) > 2 and path[0] == 0x30000001 and value is not None:
+                out[Samples.key(f"{key}:{el.guid}", path)] = value
+    return out

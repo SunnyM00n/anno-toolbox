@@ -1,0 +1,100 @@
+name: release
+# A tag "v<version>" builds the Windows program and its installer and the link helper, writes the SHA256SUMS of each,
+# attests the files and attaches them to the release. The installer is unsigned until the signing job below is
+# switched on (docs/installer.md).
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # attaches the files to the release
+      id-token: write # the attestation's signing identity
+      attestations: write
+    env:
+      QT_QPA_PLATFORM: offscreen
+      TEXCONV_TAG: may2026
+      TEXCONV_SHA256: dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[gui]" pyinstaller==6.22.3
+      - name: The tag is the package's version
+        shell: bash
+        run: |
+          version=$(python -c "import annotoolbox; print(annotoolbox.__version__)")
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME, package $version"; exit 1; }
+      - name: texconv (Microsoft DirectXTex, MIT), by its published hash
+        shell: bash
+        run: |
+          curl -sSL -o tools/texconv.exe "https://github.com/microsoft/DirectXTex/releases/download/$TEXCONV_TAG/texconv.exe"
+          echo "$TEXCONV_SHA256 *tools/texconv.exe" | sha256sum -c -
+      - name: WiX
+        run: dotnet tool install wix --version 6.0.2 --tool-path tools/wix
+      - name: WiX's UI extension
+        working-directory: tools/wix
+        run: .\wix.exe extension add WixToolset.UI.wixext/6.0.2
+      - name: The program, its smoke start and the installer
+        run: python scripts/build_app.py --edition public --smoke --msi
+      - name: The link helper (native/livelink/README.md), with the runner's MSVC
+        shell: cmd
+        run: native\livelink\build.cmd "%GITHUB_WORKSPACE%\out\live-link"
+      - name: The link helper's SHA256SUMS
+        shell: bash
+        working-directory: out/live-link
+        run: sha256sum version.dll > SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            out/installer/public/*.msi
+            out/installer/public/SHA256SUMS
+            out/live-link/version.dll
+            out/live-link/SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: |
+            out/installer/public/*.msi
+            out/installer/public/SHA256SUMS
+            out/live-link/version.dll
+            out/live-link/SHA256SUMS
+      - name: Attach to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # a release names its files by their base name: the link helper's checksums go up as live-link-SHA256SUMS
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          cp out/live-link/SHA256SUMS out/live-link-SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" out/installer/public/*.msi out/installer/public/SHA256SUMS out/live-link/version.dll out/live-link-SHA256SUMS --clobber
+
+  # Signing by SignPath Foundation's free open-source programme: off until the project is onboarded there (the
+  # organisation id, the project and policy slugs and the secret come from that onboarding). To switch it on, remove
+  # the comment marks, make the attestation and the release steps above run on the signed file (this job's output)
+  # instead of the unsigned one, and rewrite SHA256SUMS after signing.
+  #
+  # sign:
+  #   needs: build
+  #   runs-on: windows-latest
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@<pinned sha> # the unsigned artifact "installer"
+  #       with:
+  #         name: installer
+  #         path: unsigned
+  #     - uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+  #       with:
+  #         api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+  #         organization-id: <from SignPath>
+  #         project-slug: anno-toolbox
+  #         signing-policy-slug: release-signing
+  #         github-artifact-id: <the id of the uploaded "installer" artifact>
+  #         wait-for-completion: true
+  #         output-artifact-directory: signed

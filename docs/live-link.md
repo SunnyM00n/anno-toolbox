@@ -1,0 +1,706 @@
+# The live link: the tool suite and the running game
+
+The tool suite (`tool-suite.md`; the asset editor first, then the UI editor, the viewer and the
+island editor) has a live link to the running game, **as a modding feature for every mod developer**, not for this
+project's mods alone. A modder edits an asset, a text, a model, a UI scene or an island in the suite and sees it in
+the running Anno 117 (and, where it can be done, Anno 1800) without restarting the game. It also works the other
+way: pick an object in the game and open it in the editor. This document describes what the link does, its protocol,
+its safety rules, what a modder needs and how it degrades.
+
+Built: the reload of models, model configs and effect files by a key or a file to save (section 1.3), and the link
+itself (section 9). The link is the suite's client, the game side's pipe, the handshake and the requests for assets,
+texts, ambient files, models, effects, select, jump and read, with the player's selection and "edit this object"
+coming back. The scene reload, live widget values, banks, the session reload and the companion mod's key binding
+followed (sections 10 and 11). It is tested against a stand-in for the game and, for the pipe, against the game
+side's own code outside the game. Nothing was tried in a game. Not built: the companion mod's on-screen label
+(section 9.4). The steps and estimates are in `roadmap.md` "The live link".
+
+Note: designed on 2026-11-07. The transport, the reloads of assets, texts, scenes, models and effects, select, jump,
+read, the live widget dump, the panel and the Anno 1800 hand-over were built on 2026-11-12.
+
+## 1. What the game can reload while it runs
+
+This section was read from the game's code on update 3.0. "Follows" means the game re-reads it by itself once asked.
+"Restart" means nothing in the game re-reads it.
+
+| Kind of file | Live? | How the game is asked | What to expect |
+|---|---|---|---|
+| Asset values, templates, properties (`assets.xml` ModOps) | **yes** | the mod loader's hot reload (`Mods:LoadMods()`; Ubisoft's `hot-reload-ubi` mod binds it to Shift+F3) | every enabled mod is patched again, then the asset database is rebuilt; the game freezes for the patching (seconds for a small mod, half a minute for a very large one). Objects already placed keep what they took over when they were built; a new building shows in the build menu of a new game only (`engine-notes.md`) |
+| Assets, rebuild only | yes | Lua `CAssetDataManager:ExecuteFilter()` | the asset database rebuilt from what the last hot reload patched, without patching again; useful only once something else changed the patched data |
+| Texts (`texts_<language>.xml` ModOps) | **yes** (seen 2026-11-07) | the same hot reload | a changed text of a small probe mod showed after Shift+F3 in a session, both ways; Shift+F3 does nothing on the title screen |
+| UI scenes (Phoenix files) | **with the helper library** | the game has a scene reload of its own that a retail build never triggers; the helper library triggers it | the named screens are closed and opened again with their scene read anew; an open panel loses its scroll and typed text. A brand-new scene file needs a hot reload first (the loader must see the new path) |
+| Ambient files (light, sky, fog, weather) | expected | Lua `CEnvironmentManager:ReloadAmbientSettings()` | the ambient settings read again; not tried |
+| Models (`.rdm`) and model configs (`.cfg`) | **with the helper library** (built, not tried) | the game keeps its own reload of a changed model and of a changed model config, which a retail build never triggers; the helper library triggers it (sections 1.1, 1.3) | restart without the library. Anno 1800 has a developer reload of every model behind an engine switch |
+| Textures (`.dds`) | **yes, indirectly** (seen 2026-11-07) | Shift+F3, then anything that requests the texture again (placing a building that uses it) | every object with that texture switched to the new file at once |
+| Shaders and material definitions (`.fx`) | **with the helper library** (built, not tried) | the game keeps its own reload of a changed effect file, its material definitions and its shader variants; the helper library triggers it (sections 1.1, 1.3) | restart without the library (a mod's shader is compiled the first time it is used) |
+| Sound banks (`.bnk`, `.wem`) | partly | the game reloads its localized banks (voices) when the audio language changes; one bank on request later with the helper library | restart for other banks today |
+| Islands (`.a7m`, `.a7t`, the island's pages) | save and load | save, then load the save (later one request of the link) | the island files are read again at the load; the objects (slots among them) come from the save (`island-updates.md`) |
+
+The suite always says which of these a change needs, so a modder is never left wondering whether a reload took
+effect.
+
+Note: read on 2026-11-07. The text and texture reloads were seen in the game on the same day.
+
+### 1.1 Reloading what needs a restart today
+
+This section was read from the game's code on update 3.0. Nothing of it was tried in a game.
+
+- **The engine keeps file-change handlers** for models, model configs, effect files with their material definitions,
+  particles and post effects. They were written for the studio's tools: they re-read one changed file and update what
+  is already on screen. A retail build has nothing that tells them a file changed. The helper library can do that,
+  one file at a time, at a point in the frame where the renderer is not drawing. This is the game's own reload, not
+  a reload of ours.
+- **Models**: a changed `.rdm` is read again with all its levels of detail, and the objects already placed show the
+  new mesh. **Model configs**: a changed `.cfg` (materials, texture paths, switches) is parsed again and applied to
+  the objects that use it, with their animation kept. When both changed, run the model first, then its config.
+- **Effect files**: a changed `.fx` is read again, its material definitions are re-applied to every material on
+  screen, and its shader variants are compiled again (a hitch of up to seconds, as on first use). A broken effect
+  file keeps the old one. Includes (`.fxh`) are not followed: the suite asks for every effect file that includes the
+  changed one.
+- **Textures**: the game's own texture reload is cut from the retail build. A changed file at a path the game already
+  loaded stays as it was until a restart; a new path (a renamed texture in a changed config) loads.
+- **Sound banks**: the game unloads and loads its localized banks when the audio language changes, and switches the
+  banks of a session when the session changes. The helper library can do the same for one bank of the modder's own mod;
+  what plays from that bank stops, and a looping sound comes back only when the game starts it again.
+- **Islands**: there is no handler. Save and load instead: the island's files are read again at the load. A new
+  island path needs a hot reload first so the loader sees it. What a reload carries
+  (`island-updates.md`): the build area, heights and pages, water and river grids, coast and
+  river lines, decoration and props, herds and the ambient come from the files. The slots, sound spots, markers,
+  fertilities and deposits stay as the save has them (a new-game change). The update that enlarged Cinis's build
+  area (1.6.1) reached old saves this way.
+
+Note: read on 2026-11-07 (second pass). What an island reload carries was added on 2026-11-14.
+
+### 1.3 Reloading a model, a model config or an effect file (helper library, built, not tried)
+
+The helper library triggers the game's own reload of these files, so a modder testing a mesh or a shader does not
+restart the game. It works with any mod enabled in the active profile, not only this project's.
+
+1. **Switch it on**: `live_reload=1` in the helper library's settings (`<Documents>/Anno 117 - Pax Romana/log/helper-library.ini`;
+   for this project's played mod in `data/helper-settings.ini`, then `install`). It is off by default.
+2. **Start the game** with the mod enabled. At start the library notes the write time of every `.rdm`, `.cfg`, `.fx` and
+   `.fxh` of the enabled mods (one log line says how many).
+3. **Change files** in the mod's folder (rebuild the mod, or copy a file over), then either
+   - press **Ctrl+Shift+R** in the game, or
+   - save the file **`<Documents>/Anno 117 - Pax Romana/mods/live-reload.txt`** (any content, or none).
+
+   Every file whose write time changed since the last reload is reloaded: models first, then model configs, then effect
+   files, one a frame. A changed include (`.fxh`) reloads every effect file of the same mod whose `#include` line names
+   it.
+4. **To reload exactly some files**, write their paths into `live-reload.txt`, one a line: relative to the mod's folder
+   (`data/graphics/.../house_lod0.rdm`), as `<mod id>:<path>`, or as an absolute path inside an enabled mod's folder;
+   `#` starts a comment. An include named there is refused: name the effect files that include it (the suite finds them
+   the same way, by the `#include` lines of the mod's `.fx` files).
+5. **Read the result** in `<Documents>/Anno 117 - Pax Romana/log/helper-library.log`, a line per file, for example
+   `live reload: model data/graphics/buildings/ark/ark_lod0.rdm of anno2070 (request 2): reloaded in 14.2 ms by the
+   engine's model handler, its objects rebound`.
+
+What to expect:
+
+- Objects already placed show the changed model. A changed config (materials, texture paths, switches) applies to
+  the objects that use it. A model the game has not loaded yet is skipped ("not loaded in this game"): it is read
+  fresh when first used. A model whose levels of detail are still loading waits a few frames.
+- **A replaced vanilla model**: about half of the vanilla model configs are drawn from a baked copy under
+  `shared/`, with its own models (`engine-modloader.md` "Vanilla models and model configs: the `shared/` copies"). A
+  mod's file at the `data/` path of such a model or config is never read. So the reload finds it "not loaded in this
+  game" and nothing changes, before or after a restart. Change the `shared/` files instead (their `_lod0` to `_lod4`
+  models, or the `shared/` config), or give the asset a new config path. The mods' own models at new paths (all of
+  this project's) reload as described.
+- A changed effect file is read again and its shader variants compile again: expect a hitch of up to seconds. A broken
+  effect file keeps the old one.
+- A changed texture (`.dds`) at a path the game already loaded does not reload (a new path does).
+- Nothing is reloaded in a multiplayer game, and a reload asked during a loading screen waits until it ends.
+- Settings: `live_reload_key` (the key with Ctrl+Shift, a Windows virtual-key code, 82 = R; 0 none),
+  `live_reload_models` and `live_reload_effects` (each 1 by default), `live_reload_poll_ms` (how often the file is
+  looked at, 500), `live_reload_wait_frames` (how long a request may wait, 600 frames).
+- The live link's `reload.models` and `reload.effects` messages use the same reload (section 9).
+
+Note: built on 2026-11-07.
+
+### 1.2 What saves a restart without the helper library
+
+| Change | Try | Expected |
+|---|---|---|
+| Asset values, texts | Shift+F3 (`hot-reload-ubi`, or this project's `anno2070-dev`) | as above |
+| Ambient files, the asset database | a key binding of the same kind (`ShortcutConfig`) for `CEnvironmentManager:ReloadAmbientSettings()` or `CAssetDataManager:ExecuteFilter()` | as above; not tried |
+| Voice lines (localized banks) | the audio language to another and back in the options (or `CLanguageManager:SetAudioLanguage` from a key binding) | the localized banks loaded again; not tried |
+| Textures | texture quality one step down and up in the options | every texture queued again; whether a changed file shows is not known |
+| Islands, perhaps models and textures | save, then load the save (or quit to the title and load) | the island files read again; models and textures only if the game dropped them with the session (not known) |
+
+## 2. How it works
+
+```
+  suite (asset editor, UI editor, viewer, islands)          Anno 117
+  ------------------------------------------------          --------------------------------------------
+  edit -> build the mod's files into the mod folder  --->   (the files on disk, as a normal mod build)
+  message "reload assets"       ---- local pipe ---->       helper library: checks, queues, runs on the
+                                                            next frame what a key binding would run
+  status "reloaded in 2.1 s" <-----------------------       the game's own reload, confirmed
+  "open in editor" (selection) <---------------------       the player picks an object, presses the key
+```
+
+- **The suite writes the mod, the game reads it.** Every change goes through the suite's normal build: the same
+  files, at the same paths, that "build mod" writes into the mod's folder. The link carries **no file content** and
+  no change that exists only in memory. When the game crashes, or the link drops, the mod on disk is exactly what
+  the editor shows, and a later start of the game loads the same thing. Undo in the editor is a new build and a new
+  reload.
+- **The game side runs the game's own reloads.** The helper library adds no reload of its own. It asks the game the
+  way a key binding or the developer tools would (section 1), at the point in the frame where the game itself would.
+  It then reports what happened: the mod loader's log lines, the time, and whether the asset rebuild ran (the game
+  can skip it without a word, for instance while a session loads).
+- **Both directions.** Editor to game: reload, select an object, move the camera to it, read live values. Game to
+  editor: what the player selected, and "edit this object" from a key in the game.
+
+## 3. The transport
+
+- **A named pipe of the current Windows user**, opened by the helper library when the link is switched on:
+  `\\.\pipe\anno117-live-link-<process id>`. A pipe needs no network port, so no firewall question (the studio's 2010
+  tool opened a socket and Windows asked), no port clash, and no web page can reach it. The pipe accepts local clients
+  of the same user only, one client at a time.
+- **A session file** tells the suite where the pipe is: `<Documents>/Anno 117 - Pax Romana/live-link/session.json`
+  (game build, helper library version, pipe name, protocol version, a fresh random token), written at the start and
+  deleted at the end of the game. It lives in the user's own folder.
+- **A handshake with the token**: the game sends a random challenge, and the suite answers with a keyed hash of it
+  and the token. A client that cannot read the session file cannot connect. The token changes with every start.
+- **Frames**: a 4-byte length, then one JSON object (UTF-8), at most 1 MB a frame. Every request has an `id`, and
+  every answer carries it back. Events carry none.
+
+## 4. The messages
+
+Protocol version 1. Requests from the suite:
+
+| Request | Arguments | Answer |
+|---|---|---|
+| `hello` | `protocol`, `client` (name, version), `proof` (the handshake) | `welcome`: game, build, helper library version, the enabled mods (ids, folders), what this build supports |
+| `files.changed` | `mod` (a ModID of an enabled mod), `paths` (relative to the mod folder) | `ok` with what each path needs (`reload.assets`, `reload.scenes`, `restart`, ...): the suite asks once, the link decides by the rules of section 1 |
+| `reload.assets` | `mode`: `full` (patch and rebuild, as Shift+F3) or `rebuild` | after the game's confirmation: `done` with the time, the loader's warnings (`No matching node`, `Can't find file to patch`, ...) or `skipped` with the reason |
+| `reload.texts` | - | the same |
+| `reload.scenes` | `states` (UI state names) or `files` (scene files of the mod) | `done` per screen, or `busy` (a loading screen, a transition) |
+| `reload.ambient` | - | `done` |
+| `reload.models` (later) | `mod`, `paths` (`.rdm`, then `.cfg`) | `done` per file, `unavailable` while a model still loads |
+| `reload.effects` (later) | `mod`, `paths` (`.fx`) | `done` per file, or the effect file's error and "old effect kept" |
+| `reload.banks` (later) | `mod`, `banks` (bank names of that mod) | `done` per bank |
+| `reload.session` (later) | - | `done` after the save and the load, or `busy` |
+| `select` | `object` (an object id) or `guid` (the first or next object of that asset in the current session) | `ok` with the object |
+| `jump` | `object`, or `session` and `position` | `ok` |
+| `read` | `guid` and `fields` (value paths such as `Building/BuildCost`), or `object` and fields from a fixed list | the values as the game holds them now |
+| `subscribe` / `unsubscribe` | `topics`: `selection`, `reload`, `session`, `log` | `ok` |
+| `ping`, `bye` | - | `pong`; the link closes |
+
+Events from the game: `selection` (the selected objects: id, GUID, name, session), `edit.request` (the player pressed
+"edit this object": the suite opens the object's asset, the island editor its island), `reload` (a reload the player
+started by hand, so the suite knows the game is current), `session` (entered, left), `log` (new mod loader lines).
+
+Anything else is refused with `unknown`. A message the game build cannot serve is answered `unavailable`.
+
+## 5. Safety
+
+1. **Off unless the modder switches it on**: in the full helper library, with `live_link=1` in its settings. The
+   link helper (section 15) exists for the link and has it on unless `live_link=0`. The link cannot switch itself on,
+   and a game started without it has no pipe.
+2. **Local and for one user**: the current user's pipe only, remote clients refused, one client, the token handshake.
+3. **No code execution**: a closed set of messages with typed arguments (numbers, names matching `[A-Za-z0-9_./-]`).
+   The link never takes script text, a command line or a native address from the client; the Lua it runs is built
+   from fixed templates.
+4. **No file writes by the game side** but these, all under `<Documents>/Anno 117 - Pax Romana/`:
+   - `live-link/session.json`, the session file with the pipe's name and token, deleted when the game ends (and
+     when the link cannot come up);
+   - `log/helper-library.log`, the helper library's log (past 8 MB it becomes `log/helper-library.old.log`, one older
+     file kept);
+   - `log/ui-dump/*.json`, the live widget trees `ui.dump` asks for (section 10.2);
+   - the save `livelink.a8s` in the profile's save folder (`accounts/<account>/<profile>/`), written by the game's
+     own save for `reload.session` and loaded again, overwritten by the next one.
+
+   The paths a client names must lie inside the folder of a mod enabled in the active profile; anything else is
+   refused. The suite writes the files, inside the project's mod folder only.
+5. **No game rules changed**: the link reloads data, selects, moves the camera and reads values. It does not place,
+   delete or change objects, money or anything a savegame keeps. **One exception, behind a second opt-in**
+   (`live_link_commands=1`, section 13): the debug commands of the suite's palette, a closed list of
+   the game's own cheat calls, which do change the game's rules in a single-player game. Without the second switch the
+   game answers `unavailable` and says nothing about them in its welcome.
+6. **Never in multiplayer**: every request but `ping` is refused while a multiplayer game runs (a reload on one
+   computer would split the game).
+7. **Visible**: while a client is connected, the game window's title says so, and with the companion mod (section 6)
+   so does a small label in a corner of the screen. Each request is a line in the helper library's log.
+8. **Limits**: a few requests a second, and at most one reload at a time. A reload asked while one runs is answered
+   `busy`.
+9. **The asset reload is the one that can hurt** (section 12): the game replaces its whole asset database, and
+   objects already placed keep what they had. The link waits for the game's own end of that rebuild and keeps its
+   own asset reads off meanwhile. It refuses while the game saves, loads, changes session or holds another scheduled
+   data action. It tells the suite when the game stops drawing frames.
+
+## 6. Using it with your own mod
+
+- **What a modder needs**: Anno 117 and the mod loader as usual; their mod in the mods folder and enabled in the
+  active profile; the suite with the project pointed at that mod folder; and the **link helper** installed next to
+  the game (section 15). Nothing goes into their mod for the link. Optional: the small **companion mod** that the
+  suite can install (its own ModID), which adds the on-screen label and a key for "edit this object" in the game.
+- **What the public helper library edition must contain**: its core (the check that refuses an unknown game build,
+  the settings, the log, fault containment), what lets it act at the moment and in the way the game's own key
+  bindings do, the script table for the companion mod, and the live link module. It contains none of this project's
+  gameplay modules. It runs in a game without the Anno 2070 mod.
+- **Without the helper library** the suite still works, by hand. It builds the mod and says "press Shift+F3" (with
+  `hot-reload-ubi` enabled) for assets and texts, or "restart" for the rest. The selection and the scene reload are
+  not available. A game update that the helper library does not know yet leaves it inert, and the suite falls back
+  to the same route on its own.
+- **Anno 1800**: no helper library exists for 1800. The game keeps a developer command that starts an external asset
+  tool from its `Tools/ToolOne/` folder with the selected object's GUID. The suite can put a start file there that
+  hands the GUID to the running suite (one way, game to editor; how a player reaches the command is still open).
+  1800's mods are reloaded when its in-game mod browser closes. What follows that reload was not read.
+
+## 7. What only the game can confirm
+
+- That a changed value shows in an open panel. (Texts follow a hot reload: seen on 2026-11-07 with a probe mod in its
+  own profile, in a session. The hot reload reads the *active* profile. The game had reset `profile.txt` to
+  `default`, so a reload with the tested mod off in that profile dropped the mod.)
+- That the scene reload reloads a changed scene of a mod and that the screen works afterwards.
+- That `CAssetDataManager:ExecuteFilter()` and `CEnvironmentManager:ReloadAmbientSettings()` do what their names say.
+- The tries of section 1.2: a changed island after a save and load; a changed model and texture after quitting to the
+  title and loading; a changed texture after a texture quality switch; a changed voice line after an audio language
+  switch; a changed text after a text language switch; the Lua names in a key binding.
+- How long a hot reload takes with one small mod enabled, and that the game stays responsive after it.
+- The link itself: connect, the label, a reload of each kind, select and jump, "edit this object", the refusals
+  (another user, a wrong token, a path outside the mod, multiplayer). The list for the first try is in section 9.5.
+- The reload of section 1.3: a changed model, model config and effect file shown without a restart, the hitch of an
+  effect's compile, a broken effect file kept out, a changed include reaching its effects, nothing in multiplayer.
+
+## 8. Toolbox side: the seam in the suite (the transport behind it is section 9)
+
+The suite carries the client side of this document as an interface without a transport, so every app uses the link
+the same way, whatever transport is behind it. It is tested on a double. Nothing was tried in a game.
+
+- **The interface** (`suite/livelink`): `LiveLink` has `files_changed(paths, mod)`, `reload(kind, paths, mod)` (kinds
+  `assets`, `texts`, `scenes`, `ambient`, `models`, `effects`, `banks`, `session`), `select`, `jump`, `read`,
+  `subscribe` and `unsubscribe`, one typed method each, and `on(event, handler)` for the events (`SELECTION`,
+  `EDIT_REQUEST`, `RELOAD`, `SESSION_EVENT`, `LOG`, `STALLED`). Every answer is a `Reply` (`ok`, `done`, `skipped`, `busy`, `unavailable`,
+  `refused`, `not connected`). `capabilities()` / `supports(kind)` say which reloads the connected game takes (none when
+  not connected); a request for a kind the game cannot serve is answered `unavailable` without being sent, and a path
+  that leaves the mod's folder is `refused` before anything is sent (section 5).
+- **Not connected** is the link a suite starts with (`NotConnected`). Nothing leaves, and each request is kept in
+  `sent` and logged. The answer's message is the manual route of section 6: "press Shift+F3 in the game" for assets
+  and texts, "restart the game" for scenes, ambient files and banks, "restart, or switch on `live_reload` and press
+  Ctrl+Shift+R" for models and effects, and "save and load" for a session. A changed texture gets the note of
+  section 1 (Shift+F3, then use it again; a loaded path needs a restart).
+- **The transport** is one extension point: `livelink.register_connector(fn)`. `fn()` reads the session file
+  (section 3), does the handshake and returns a connected `LiveLink` subclass that sets `_transmit` and calls
+  `set_status` and `emit`. `livelink.connect()` tries the connectors. Calls are safe from any thread. Events arrive
+  on the transport's thread, and the window marshals them.
+- **One registry**: `livelink.current()` is the one link every app takes, `livelink.use(link)` replaces it, and
+  `livelink.on(event, handler)` follows whichever link is current. The suite window shows the status in its status bar
+  ("game link: not connected", or the game and build) and keeps it up to date.
+- **What an app calls** (`suite/linkannounce`): `announce(kinds, mod, paths)` sends `files.changed` and the reloads
+  and returns a `Notice` whose `text` goes on the app's status line (the manual route when not connected).
+  `announce_install(mod, folder, before)` does the same for a mod folder that was just written: it finds the changed
+  files by content (`snapshot` before, then `changed_since`) and sorts them into reload kinds (`classify`). An app
+  whose change is only in the project (the files reach the game with the build and install) says so with
+  `deployed=False` and sends nothing. A file whose name the link refuses (a space, a non-ASCII letter) is left out
+  on its own: the rest is sent and the text names it, and it never claims a reload the game was not asked for. With
+  nothing before (a first install), the files are listed without being read. A handler of an event that fails is
+  logged, and the other handlers still run.
+- **Game to editor** (`suite/linkroute`): the window routes `edit.request` (an asset `guid`, a `file`, an `island`)
+  to the app that provides `show_asset`, `view_file` or `open_island` in `suite/links`, and `selection` to an app
+  that provides `game_selection`, so no app is imported. The asset editor opens a game that is not open yet in the
+  background (the status line says so, and the window stays usable). It serves the one asset asked for once the game
+  is open (a later request replaces a pending one) and answers the link "pending" meanwhile. A game whose folder is
+  not set is reported on the status line, never in a dialog over the user's work.
+
+| App | Where it calls the seam | State |
+|---|---|---|
+| Project (all apps' output) | `project.install`: after the copy, `announce_install` for the files that differ from the installed copy | built |
+| Asset editor | `AssetWindow.build_mod`: `announce((assets, texts), mod)` | built |
+| UI editor | `UiWindow.save`: `announce((scenes,), ..., deployed=False)`; the scene reaches the game through the project install | built |
+| Island editor | `App._copy_mod` (its own install): `announce_install`, so an island file gives `reload.session` | built |
+| Game to editor | the window: `show_asset` (asset editor), `view_file` (viewer), `open_island` (island editor: `App.find_island` by path or file name), `game_selection` (island editor, quiet: selects the open island's objects of the selected assets, the nearest to the game's position, and flies there; `editor/gameselection`) | built, tested on doubles; the selection payload's shape and coordinates are assumed |
+| Viewer | writes nothing; the asset editor's "View" is the other direction | nothing to call |
+| Object builder (models, configs, effects) | after it writes a `.rdm`, `.cfg` or `.fx`: `announce_files(mod, paths)` (or its project install through `project.install`) | not built yet |
+| Sound editor | after a bank is written: `announce((banks,), mod, paths)` | not built yet |
+| Mod manager | after a profile switch: `announce((assets, texts), mod)`, after an install `announce_install` (`modmgr.manager`); the hot reload reads the active profile (section 7) | built |
+
+Without a game the suite says what to do instead. With one it says "game reloaded: assets, texts". Both are one
+sentence from `announce`, so no app words the fallback itself.
+
+Note: the seam was built on 2026-11-09.
+
+## 9. The transport, built (nothing tried in a game)
+
+### 9.1 What was built
+
+- **The suite's client** (`suite/linkprotocol`, `suite/linkclient`): the wire protocol as one module that both ends
+  are written against, the pipe client over the standard library (no extra package), the handshake, requests with
+  their timeouts, the game's events on the transport's thread, and a retry every three seconds, so a game started
+  later is found and a lost link is found again (`ANNO_LIVE_LINK=0` switches the search off). It is the connector
+  behind the seam of section 8. Apps need no change: the status bar and every app's status line start saying "game
+  reloaded: ..." the moment a game answers. A long list of files (a first install names thousands) goes in parts of
+  256. A changed include (`.fxh`) is replaced by the effect files of the mod that include it before it is sent.
+- **The game side** (the helper library's `live_link` module, with a host-tested protocol part): the pipe thread,
+  the session file, the handshake, the closed message set, a few requests a second, one request at a time, and the
+  answers. The reloads run on the game's own frame, as a key binding would (section 1). It also brings the model and
+  effect reload of section 1.3 up for the link (`live_link_models=1`, default), so `reload.models` and
+  `reload.effects` need no second switch. It runs in a game without the Anno 2070 mod: any mod can be edited live.
+- **Scenes, widget values, the panel, Anno 1800** (the second round; section 10): `reload.scenes`, the new request
+  `ui.dump`, the game link panel behind the status bar, reloads asked from a window that never block it, and the
+  start file for Anno 1800's open-in-editor command.
+- **A stand-in game for tests** (`tests/fakegame.py`): the same protocol in Python, over a socket pair or a real named
+  pipe; the client's tests (`tests/test_linkclient.py`) run against it.
+
+### 9.2 Switching it on and using it
+
+1. In the helper library's settings (`<Documents>/Anno 117 - Pax Romana/log/helper-library.ini`) set `live_link=1`.
+   Optional: `live_link_models=0` (no model and effect reload), `live_link_ui=0` (no `ui.dump`),
+   `live_link_edit_key` (a virtual-key code, default 69 = E; the key with Ctrl+Shift sends the selected object to
+   the suite; 0 none), and `live_link_selection_ms` and `live_link_log_ms` (how often the selection and the loader's
+   log are looked at, 500).
+2. Start the game with your mod enabled, then start the suite. The status bar says "game link: anno117 <build>"
+   within a few seconds. The game window's title ends in "[live link]" while the suite is connected. The game's log
+   (`log/helper-library.log`) has a line for every request.
+3. Save in the suite as before: the asset editor's build, the project's install and the island editor's copy tell
+   the game what changed (section 8), and the game reloads it.
+
+### 9.3 The messages as built
+
+Frames: a 4-byte little-endian length, then one JSON object. The game sends `{"challenge", "protocol"}` first. The
+suite answers `hello` with `proof` (HMAC-SHA256 keyed with the session file's token over `client:<challenge>`) and a
+fresh `nonce`. The game's `welcome` carries its own proof (`game:<nonce>`), so a program that only squats the pipe
+name is not trusted either. A request is `{"id", "type", "args"}`, an answer is
+`{"id", "status", "message", "data"}`, and an event is `{"event", "data"}`. A request over 96 KB, a frame over 1 MB,
+an unknown name or an argument outside its type is refused.
+
+| Request | What the game does | Answer |
+|---|---|---|
+| `files.changed` | nothing: it names what each path needs | `ok`, `data.needs`: a reload kind, `textures` (asset reload, then use it again) or `restart` per path |
+| `reload.assets` | the mod pass (as Shift+F3), then waits for the mod loader's "Patching completed" line | `done` with the seconds, the warnings and the first complaint; `skipped` when no such line came in 10 s; `busy` while a session loads. `mode: rebuild` asks for the rebuild alone and answers at once (the game gives no confirmation) |
+| `reload.texts` | the same pass (texts follow it) | the same |
+| `reload.ambient` | the ambient settings read again | `ok` at once (no confirmation) |
+| `reload.models`, `reload.effects` | the model and effect reload of section 1.3 for each path, models first | `done` when any file went through (`data.files`: reloaded, handed, skipped as not loaded, refused, with its time and reason), `skipped` when none was loaded, `refused`, `busy` after 30 s of waiting |
+| `reload.scenes` | the game's own scene reload for the UI states in `states` (the suite names them: a scene file is named after its state, a widget file is looked up in the scenes that place it); the screens are left and entered again, so an open panel loses its scroll and typed text | `done` when the scenes are loaded (the sentence names the states, and the names that are no state of the game), `skipped` when no state is named or the UI did not start it in 10 s, `busy` while a reload runs or a session loads |
+| `ui.dump` | writes the live widget tree of the open scenes of `states` (none: every open scene) to the game's `log/ui-dump/` | `ok`, `data.files`: the file names; `skipped` when no such scene is open |
+| `reload.banks` | each named bank (`banks`: the bank's name, as its `.bnk` file is named) is unloaded and loaded again through the sound engine's own calls (a whole bank first, a prepared one when that is refused); the Init bank is never touched | `done` when any bank went through (`data.banks`: per bank its id, the sound engine's result and `reloaded`, `not unloaded`, `not loaded again`, `refused`, `no answer`), `refused`, `skipped` when no answer came in 10 s |
+| `reload.session` | the game saves under the name `livelink`, the file is awaited, the game loads it again (its island files are read anew) | `done` once the load was asked for, `skipped` when no save file appeared in 30 s, `busy` while a session loads |
+| `select` | selects the object `object`, or the first object of the asset `guid` in the current session | `ok`; `skipped` when the session has none |
+| `jump` | the camera to `object`, to the session whose GUID is `session`, or to `position` (three numbers) inside that session | `ok`; a `position` without its `session` is `refused` |
+| `read` | the values of `fields` of an asset (`guid`) as the game holds them now; of an object only from a fixed list (`GUID`, `ID`, `SessionGuid`, `Direction`, `Visible`, `IsBlueprint`, `Health/CurrentHitPoints`, `Position/x`, `Position/y`, `Position/z`) | `ok`, `data.values`; `unavailable` when the game hands back no text |
+| `debug.list` | which commands of the palette's catalogue the game binds right now and the cheats it registers itself; only with `live_link_commands=1` (section 13) | `ok`, `data.commands`: id to `available` and `state` (true, false or null), `data.cheats`: names |
+| `debug.run` | one command of the catalogue with its typed `values`; the game maps the id to a fixed call and runs it | `done` (`data.state` where the game can read the toggle back), `refused`, `busy`, `unavailable` for a method the build does not bind |
+| `debug.cheat` | one of the cheats the game itself registers, by `name`, which must be on the game's list at that moment | `done`, `refused`, `busy`, `unavailable` |
+| `subscribe`, `unsubscribe`, `ping`, `bye` | as section 4 | `ok`, `ok` with `pong`, the link closes |
+
+Every request but `ping`, `hello`, `subscribe`, `unsubscribe` and `files.changed` is refused in a multiplayer game.
+One request runs at a time (`busy`), and more than about ten a second are `busy`. The events:
+
+- `selection`: the selected object, `{"objects": [{"id", "guid", "session"}]}`, or an empty list when nothing is
+  selected (one object; the game says which of several);
+- `edit.request`: Ctrl+Shift+E in the game (`game`, `object`, `guid`, `session`);
+- `reload`: a mod pass the player started by hand, noticed from the loader's log;
+- `log`: new loader lines.
+
+`reload.banks` is answered `unavailable` by a game build whose sound calls the library does not know, and so is
+`reload.scenes`. The suite then shows the manual route of section 6. A changed `.bnk` file of a mod becomes a
+`reload.banks` for the bank of that name (a sound file alone, `.wem`, is refused: it reloads with its bank).
+
+### 9.4 What is not built
+
+- **The companion mod's on-screen label**: the window title and the panel stand in (the key binding is built,
+  section 9.6). It is not a file of the companion mod, for this reason: a label is a UI panel, and the library fills
+  panels only from the one binding manifest of the Anno 2070 mod (the first one found; a second is left alone; off
+  in a game without that mod unless forced). So the label belongs to that mod's own UI, as a panel bound to
+  `HelperLink:Connected()`, and a standalone companion would need the library to merge manifests first. Neither is
+  built or tried.
+- **Anno 1800: how a player reaches the command** (research; the hand-over works whenever the game runs it).
+
+### 9.5 The checks in the game (the first try of the link)
+
+1. `live_link=1`, start the game with one small mod, start the suite: the status bar names the game; the window's title
+   has "[live link]"; the log has "live link: ready on ..." and "hello (request 0): ok".
+2. Change a value in an asset of the mod, save in the asset editor: "game reloaded: assets" and the value changed in the
+   game (a building placed afterwards); the log says how long the pass took. Then a text.
+3. `reload.assets` with `mode: rebuild` and `reload.ambient`: do the Lua names in the library's templates exist in the
+   game (a wrong one is a Lua error in the game's log, not a crash)?
+4. Change a model and a model config of the mod, install: the placed object shows it; a model not yet used is "skipped".
+5. Select a building in the game: the suite's selection event arrives (the island editor selects its object when the open
+   island holds it); Ctrl+Shift+E opens its asset in the asset editor. If nothing arrives, the game hands back no text for
+   the selection command: `read` is then `unavailable` too.
+6. `select` by object id and `jump` from a tool (the suite has no button yet: `livelink.current().select(object=...)` in a
+   console), and `read` of a field such as `Building/BuildCost`.
+7. The refusals: a second suite window (the pipe takes one client), the session file edited to a wrong token, a file
+   outside the mod, a started multiplayer game.
+8. A reload asked during a loading screen, and one while the mod pass of a large mod runs (the game freezes for it; the
+   suite waits).
+9. The suite started first, the game second: found within a few seconds; the game closed: the status bar goes back to
+   "not connected" and the session file is gone (after a crash it stays, and the suite ignores it when no pipe answers).
+10. The scene reload (section 10.1): save a scene file of the mod in the UI editor, build and install; the screen
+   it belongs to is open: "game reloaded: scenes", the screen works afterwards, an open panel starts again, our own
+   panels (the UI binding) show their values again within a second. A widget file in a scene that is not open: the
+   answer is `skipped`. A scene of a state that is not in the game: the sentence names it.
+11. The UI editor's "Take the live values from the running game" with a scene open in the game: the dump file appears
+    in `log/ui-dump/`, the "Game dump" dock lists the differences against the preview.
+12. The panel: click the status bar's game link: the rows, the game's log lines while it is open, "Connect now" with the
+    game started after the suite, "Reload assets and texts".
+13. Anno 1800: in the panel "Anno 1800: open in the editor ..." with the game's folder, then the game's own command with an
+    object selected: the asset opens in the asset editor.
+14. A reload asked while a long mod pass runs: the asking app's window stays usable and says "game link: reloading ..."
+    and then the answer.
+15. Banks (R3): a mod with its own sound bank; change the bank, install, `livelink.current().reload(livelink.BANKS, ["data/sound/<name>.bnk"], "<mod>")`
+    in a console: `reloaded` and the new sound plays the next time it starts (a looping sound stays silent until it is started
+    again). A prepared bank: the answer's `prepared` is true. The log line of the library names each step's result.
+16. The session reload (R4): `reload.session` in a session: a save called `livelink` appears in the profile's folder, the game loads it
+    and a changed island file shows. Confirm that the save command and the load command ran (`Game:Save`, `Game:Load`: a wrong
+    name is a Lua error in the game's log and the answer is `skipped` after 30 s), that no popup holds the save, and what the
+    save's quota does to a second reload.
+17. `select` with a `guid` (a building of the session): the first object is selected; if `skipped` although one stands there,
+    the object group the game hands back is not indexed like a table (the log shows the Lua error).
+18. `jump` with `session` and `position`: the camera moves (the game's own debug camera command).
+
+### 9.6 The companion mod
+
+`suite/linkcompanion` writes a small mod (the panel's "Companion mod ..." button, or
+`write_companion(<mods folder>)`). The mod is one key binding (default Ctrl+Alt+E, in sessions) in the game's key
+binding asset. It calls the library's script table `HelperLink:EditSelected()`, which sends the selected object to
+the suite as the library's own Ctrl+Shift+E does. The table also gives `HelperLink:Connected()` for a label to bind
+to. The binding is the same kind of ModOp as the quick-reload mod's (`mod/modxml.shortcut_binding`, whose Shift+F3
+was seen to work). The on-screen label is not built. What the game has to confirm (nothing of it was tried):
+
+- that Ctrl+Alt+E is free;
+- that a key binding command can call a table the library registers (otherwise a Lua error in the game's log, and
+  the key does nothing);
+- that the table is registered when the library runs without the 2070 mod;
+- that the object selected arrives in the suite.
+
+Note: the transport was built on 2026-11-12. The reason for the missing label was worked out on 2026-11-13.
+
+## 10. The second round (nothing tried in a game)
+
+### 10.1 The scene reload
+
+`reload.scenes`. The game keeps a reload of UI scenes for development, driven by a list of UI state names in a file
+that a retail build never watches. The library starts the same reload by filling in that list itself, so the game
+does everything else: it marks the states, leaves and enters them on its own thread, loads the scene files anew, and
+clears its busy flag once the scenes are in. Which files change which states is the suite's part
+(`suite/linkscenes`):
+
+- a scene file is named after its state (`data/ui/studio/generated/maintitlescene` is `MainTitle`);
+- a widget file is looked up in the scenes that place it (the UI editor knows them and registers a resolver);
+- anything else names no state and is not sent.
+
+A scene file new to the mod makes the suite run the mod pass first (the loader has not mapped the file yet). After
+the reload every widget is a new object: the library's own UI binding forgets what it wrote and found, and writes its
+values again.
+
+### 10.2 Live widget values
+
+`ui.dump` asks the game for a dump of the live widget tree of the open scenes (the UI dump probe's walk: rectangles,
+visibility, the properties the game's own readers give). The files land in `log/ui-dump/` under Documents, and the
+answer names them. The UI editor's "Take the live values from the running game" opens the one for the open file in
+its "Game dump" dock (`uiedit/gamedump`), the same view as the manual "Compare with a game dump". `live_link_ui=0`
+leaves it out.
+
+### 10.3 The panel
+
+Clicking the status bar's game link opens `suite/linkpanel`: the connection, the reloads the game takes, the mods the
+game has enabled, the session file, the game's latest log lines (the panel subscribes to them while it is open),
+"Connect now", "Reload assets and texts" and the Anno 1800 set-up below.
+
+The debug-command palette is described in `debug-palette.md`. It sends the game's own cheat and
+debug commands as typed ids; the requests it needs from this link are listed in its section 5. The shell opens it
+from the status bar.
+
+### 10.4 Asking without waiting
+
+A reload answers after the game's confirmation, which can take as long as a mod pass.
+`linkannounce.announce_in_background` runs the announcement on the suite's background thread when a game is
+connected. It says "game link: reloading ..." at once, and the answer's sentence when it comes. With no game it is
+instant and runs where it is. The asset editor's build, the mod manager's profile switches and removals and the panel
+use it. The UI editor's save and the install paths already run off the window's thread or send nothing.
+
+### 10.5 Anno 1800
+
+1800 keeps a developer command that starts `Tools/ToolOne/launch.bat -startGUID <guid>` for the selected object.
+`suite/linkhandover` writes a `launch.bat` there that leaves the GUID in a request file under the suite's data folder
+(it never replaces a `launch.bat` that is not its own). A thread of the suite's window turns the request into the
+same `edit.request` that Anno 117's link sends. This is one way, with no library and no pipe. How a player reaches
+the game's command is not known yet. The game starts the file by an unquoted command line, so it only starts from a
+game folder whose path has no space (the suite refuses to write it elsewhere). The file prints nothing and returns
+at once (the game never reads its output). The suite never offers 1800's own data reload as a way to reload that
+game: it swaps the asset database beside a running session with no check of the session, a pause or a save.
+
+### 10.6 The library's public edition
+
+The link module, its framing and checks and the command runner are one self-contained cut of the library (the core,
+the UI frame entry, the command call and the module; no gameplay module). That cut is published as the **link
+helper**, with the numbers of the one game build it supports, and the release attaches it built (section 15).
+
+Note: the second round was built on 2026-11-12. The link helper is published since 2026-11-15.
+
+## 11. Where the third round stopped
+
+Built and host-tested, nothing run in a game: banks, the session reload, select by GUID, a position inside a session,
+the companion mod's key binding and the library's `HelperLink` table, the UI editor's live label texts, the asset
+editor's background open for link requests, and the test hang guard (`tests/hangguard.py`). The in-game checks are
+9.5 items 15 to 18 and section 9.6.
+
+**The test run's exit code 127.** A full run with the game folders set ended with exit code 127 under Git Bash
+although every test had passed. It was no test and no link code. The Python process aborted during its own shutdown
+(the event log shows `0xC0000409` in the C runtime; Git Bash prints 127 for it), after the last test and after
+pytest's last step. A full run opens about 1,500 top-level Qt windows and never closes them, and tearing those down
+inside the interpreter's finalization aborts. Only whole runs showed it (the Qt files alone, the other files alone
+and every sixth of the suite ended normally). `tests/qtcleanup.py` deletes the open windows at the end of the
+session (`conftest.py`, `pytest_sessionfinish`; `tests/test_qtcleanup.py`). With it, a full run ends with pytest's
+own exit code. The long runs showed other things that are not link code: `test_radvideo`
+(`test_a_batch_does_not_end_while_an_output_still_grows`) and `test_modmgr_window`
+(`test_the_projects_build_is_installed_off_the_window_thread`, stuck once inside a message box) each ended a long
+run on the hang guard once while the machine was busy. Their causes were not looked into.
+
+Next: the companion mod's on-screen label (section 9.4: not a file of the companion mod), and the in-game checks
+above and in section 12 (the asset reload's guards).
+
+Note: the third round stopped on 2026-11-12. The exit code was traced on 2026-11-13, the day the guards of
+section 12 were built.
+
+## 12. Asset reloads: what the link guards (host-tested with the game stubbed, nothing run in a game)
+
+The game's own asset reload (what Shift+F3 does, and what `reload.assets` and `reload.texts` end in) replaces the
+whole asset database: the old one is freed, an empty one stands in while the files load, and objects already placed
+are not pointed at the new data. A game without the link has the same risks. The link adds the guards below. Its
+answers keep to the closed message set, one request at a time, and the refusals in multiplayer and while a session
+loads.
+
+- **Confirmed by the game, not assumed.** The answer waits for the game's own end of the rebuild (the lines it
+  writes to its log). It says `skipped` when the game never started the rebuild within 10 s (the game drops a reload
+  without a line in several states), and `error` when it started and did not end within 60 s (its file wait has no
+  limit of its own). A rebuild asked for alone (`mode: rebuild`) is confirmed the same way. A reload the player
+  started by hand is noticed from the same lines.
+- **A pending state.** From the request to the game's end line, the library's own asset lookups answer "none". So
+  every module that looks an asset up fresh each frame skips its work instead of reading a database in the middle of
+  its swap. A table made from asset data is built again afterwards. When the game never began the rebuild, the state
+  ends by itself after 90 s. Once the game's start line is there, only its end line ends it. While it holds, a
+  player the library cannot read counts as a human, so the multiplayer refusal stays in force.
+- **Busy, not run.** Every reload (assets, texts, scenes, models, effects, banks, ambient, session) and every debug
+  change is answered `busy` while the game saves (a save file was written in the last two seconds, or is being
+  written), while a session transition runs, while a session loads, while another asset reload runs and, for an
+  asset reload, while the game holds a scheduled scenario action that a reload would overwrite. The test runs again
+  right before the pass (after the wait for the pause) and before a scene reload is handed over. The model and
+  effect reload's queue waits on the same test, whoever asked for it.
+- **A watchdog for the unbounded wait.** When no UI frame comes for 30 s after an asset request, the library's pipe
+  thread sends a `stalled` event (no topic needed) and the suite's status line says that the game seems to hang in the
+  asset load (a file of the pass is broken or missing; a very large mod pass can take this long too). The pipe thread
+  calls nothing in the game. `live_link_stall_s` changes the 30.
+- **What the modder is told.** A confirmed answer says that objects already placed keep the data from before the reload
+  and that save and load (`reload.session`) gives a clean state.
+- **Paused for the reload.** In a running single-player session, the link pauses the game before the mod pass (or
+  the rebuild alone) with the game's own pause call, `Pause:Paused()` (the full pause the game's menus use; the
+  pause key's `Pause:Toggle()` is the same manager). It waits up to 3 s for the pause to land (it is a game command
+  and takes effect on the next tick) and runs the pass. After the game's end line, it sets the speed it found again
+  with the game's speed buttons (`Pause:Played()`, `Pause:FastForward()`, `Pause:TripleFastForward()`). It leaves
+  the speed alone when the game was paused already (by the player or a menu), outside a session (the title screen),
+  when the player changed the speed in between, and after an `error` answer (a rebuild that did not end): then the
+  game stays paused and the answer says so. A pause that does not land within the 3 s does not stop the reload. The
+  answer's data carries `"pausedByLink": true` and `"resumeAsked"`. The game's asset rebuild runs while it is
+  paused: its 100 ms schedule is timed by the same wall clock as the pause's own ticks (read from the game, not
+  tried). Outside a session, pause by hand as before (the panel's button says so).
+
+Host test: the link's engine side with stand-ins for the game runs against the suite's client over the real pipe
+(confirmation, silent drop, busy, refusal, one request at a time, the stall warning, the pause and the speed set
+again, the speed left alone when paused already or outside a session, a pause that never lands, busy over a
+scheduled scenario action; `tests/test_linkstability.py` is the suite's half).
+
+To check in a game:
+
+- that the log lines come when the game rebuilds;
+- that `busy` stops a reload during a save and a session switch;
+- that no placed object crashes after a reload of a changed building (it keeps the old data);
+- that the stall warning comes when a file of the pass is broken;
+- the checks of the pause and the scenario guard in section 12.1.
+
+Note: the guards were built on 2026-11-13 and the pause on 2026-11-14. The rule that only the game's end line ends
+the pending state, and the queue's wait on the busy test, were added on 2026-11-15.
+
+### 12.1 In-game checks of the pause and the scenario guard (not run)
+
+1. A session at speed Fast, `reload.assets`: the game pauses (does the pause banner show for this full pause?) before the game freezes for the
+   pass, the answer comes after the rebuild, then the game runs at Fast again; the library's log has "the game is paused
+   (speed 5)" and "the pause for the request ends (speed 3 before, 5 now): set again". The same at Normal and Fastest.
+2. The game paused by the player (the pause key) or in the pause menu, `reload.assets`: no pause call in the library's log,
+   the game stays as it was. Does the reload still finish while paused (the rebuild's end line comes)?
+3. Unpause by hand while the pass runs: the answer comes, the speed stays the one chosen.
+4. On the title screen, `reload.assets`: no pause call (outside a session), the reload runs as before.
+5. A console `CAssetDataManager.TriggerScenarioTest = <guid>` (careful: a missing core asset closes the game) or
+   `TriggerRevertScenarios()` and, before the game ran it, `reload.assets`: `busy` with the sentence about a scheduled
+   scenario action. In practice the game runs the action within a frame, so this needs a quick hand. The library's
+   log no longer says the manager is not located.
+
+Note: the checks were listed on 2026-11-14.
+
+## 13. The debug commands (host-tested with the game stubbed, nothing run in a game)
+
+The suite's debug palette (docs/debug-palette.md) sends the game's own cheat calls through the link. The message set
+stays closed. `debug.run` carries a command **id** and `values`, a new argument kind (an object of names to numbers
+or bools, at most 8 entries, no text). The game maps the id to a fixed call of its own table, puts the typed value
+in as a number or `true`/`false`, and runs it inside a guard. So a method the build does not bind answers
+`unavailable` and never breaks the game. The suite checks the id and the values against its catalogue before
+anything is sent (`debug_run` returns `refused` for what does not fit). The game checks them again against its own
+table.
+
+- **A second opt-in.** `live_link_commands=1` in the helper library's settings, besides `live_link=1`. A game with the
+  link on and this off answers `unavailable` to every `debug.*` request and does not list `debug` in its welcome (the
+  suite's `supports("debug")` is then false and the palette's buttons stay off).
+- **Single player only, and only when the game is quiet.** Refused in a multiplayer game. `busy` while a session
+  loads, a save was written a moment ago, a session transition runs or an asset reload is in flight (the same rules
+  as section 12).
+- **Client**: `debug_list()`, `debug_run(command, values)`, `debug_cheat(name)` on the link.
+- **To check in a game**: that the list names the commands the build binds (the selection cheats are expected missing on a
+  retail build), that a toggle's state comes back, that a command with an argument does what its name says, that
+  `destroy_selected` is really destructive (the palette asks first), that the cheat list is what the game registers, and
+  whether a cheat changes what a save keeps (not known; use a throwaway save).
+
+Note: built on 2026-11-13.
+
+## 14. The game side's modules (host-tested with the game stubbed, nothing run in a game)
+
+The helper library's modules can be listed and, where a module allows it, switched while the game runs. Two requests,
+behind the same second opt-in as the debug commands (`live_link_commands=1`) and refused in a multiplayer game:
+
+- **`modules.list`** answers every module with its `name`, its `class` (`game`: on by default; `dev`: a developer's
+  tool, off; `experimental`: built, not yet seen in a game, off until it is; `2070-mode.md` "Feature
+  classes"), whether it runs (`on`), whether it may be switched now (`switchable`) and, when not, `why`.
+- **`modules.set`** takes `module` (a name) and `on` (`true` or `false`, a new argument kind) and answers `done` or
+  `refused` with the game's reason. Only a module that just listens to the game's events and can put back what it
+  changed is switchable. One that changes the game at start, adds assets or changes the engine's own work is not. A
+  module that changes the simulation is never switched in a game of several players. The answer is `busy` while the
+  game is not quiet, as in section 13. Switchable: the UI dump probe, the farm growth (switched off, every growing
+  field is set grown on its next steps) and the production module (switched off, its productivity corrections are
+  taken off the farms on its next steps).
+- **Client**: `modules_list()` and `modules_set(module, on)` on the link. **Panel**: the game link panel's "List
+  modules" fills a small list, one tick per module. A module that cannot be switched is greyed, and its reason is
+  the tooltip.
+- **To check in a game**: that the list names every module with its class as the start log does, that switching the
+  UI dump off and on again changes its key's behaviour and nothing else, and that a module that may not be switched
+  says why.
+
+Note: built on 2026-11-14; the list of switchable modules is of that date.
+
+## 15. The link helper (built and host-tested, nothing run in a game)
+
+The game side of the link is a download of its own: the **link helper**. It is a `version.dll` for Anno 117 that
+holds the link, the reload of models, model configs and effect files, and the live widget walk of `ui.dump`, and
+nothing else.
+Its source is in the Toolbox's repository (`native/livelink/`, with its own README). Each release builds it on
+GitHub's Windows runner and attaches `version.dll`, `live-link-SHA256SUMS` and a build attestation to the release page.
+The build is reproducible, so a copy built from the same tag with the same compiler has the same checksum.
+
+- **One game build.** The helper supports Anno 117 update 3.0 (`Anno117.exe` of 392218104 bytes). At start it
+  compares the running executable's file size, time stamp and image size with the build it was made for. On any
+  other build it stays inert: it forwards the system's version calls, as Windows' own `version.dll` would, its log
+  says `library inert`, and the game runs as without it. A game update therefore needs a new release of the helper.
+- **Installing.** Copy `version.dll` from the release page into the game's executable folder, the one with
+  `Anno117.exe` (`<install folder>\Bin\Win64`). The link is on by default in this build (`live_link=0` in
+  `<Documents>/Anno 117 - Pax Romana/log/helper-library.ini` switches it off). Start the game, then the Toolbox.
+  **Uninstalling**: delete that `version.dll`. The helper changes no game file.
+- **The debug palette.** `live_link_commands=1` in the same file enables the debug commands (section 13) and the module
+  list (section 14). Without it the game answers `unavailable` and the palette's buttons stay off.
+- **What the Toolbox shows without it.** The status bar says `game link: not connected`. A save that would reload
+  something in the game says instead what to do by hand: Shift+F3 with the hot reload mod for assets and texts, a
+  restart for the rest (section 6). The game link panel's search answers "no game answered". Nothing else changes:
+  every editor works without the helper.
+- **To check in a game**: that the helper loads beside a clean install and the start log ends with the link's lines,
+  that the Toolbox connects, and that a second game build leaves it inert.
+
+Note: built on 2026-11-15.

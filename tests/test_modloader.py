@@ -1,0 +1,315 @@
+"""The mod loader reproduced outside the game (``modloader``): XPath, every ModOp type and attribute, conditions,
+variables and options, includes, what is reported, and the mods' folders, profile and order; on synthetic files."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import pytest
+from tests.fakes import asset_list, fake_mod
+
+from annotoolbox.modloader import engine, mods
+from annotoolbox.modloader.patchdoc import PatchDoc, canonical
+from annotoolbox.modloader.xpath import XPathError, evaluate, format_number, select
+
+
+def doc_of(text: str = "") -> PatchDoc:
+    return PatchDoc.load((text or asset_list()).encode())
+
+
+def lazy_doc() -> PatchDoc:
+    """The asset list with every asset kept as bytes (ranges as an index gives them)."""
+    data = asset_list().encode()
+    ranges = [
+        (m.start(), m.end(), int(re.search(rb"<GUID>(\d+)", m.group()).group(1)))
+        for m in re.finditer(rb"<Asset>(?:(?!<Asset>).)*?<Standard><GUID>\d+.*?</Asset>(?=<Asset>|</Assets>)", data)
+    ]
+    return PatchDoc.load(data, ranges)
+
+
+def run(doc: PatchDoc, ops: str, mod=None, variables=None) -> list[engine.Event]:
+    return engine.run_text(doc, f"<ModOps>\n{ops}\n</ModOps>", mod, variables)
+
+
+def value(doc: PatchDoc, guid: int, path: str) -> list[str]:
+    return [doc.string(n) for n in select(doc, f"Values/{path}", doc.assets(str(guid))[0])]
+
+
+def test_xpath_values_functions_and_comparisons():
+    doc = doc_of()
+    hut = doc.assets("2001")[0]
+    assert evaluate(doc, "count(//Asset)", None) == 6.0  # the inline asset of the quest counts
+    assert evaluate(doc, "Values/Building/BuildCost/Item[1]/Amount * 2 + 1", hut) == 9.0
+    assert evaluate(doc, "round(7 div 2)", hut) == 4.0 and evaluate(doc, "-3 mod 2", hut) == -1.0
+    assert evaluate(doc, "Values/Building/Kinds = 'GameObject'", hut) is True
+    assert evaluate(doc, "contains(Values/Standard/Name, 'u') and not(Values/Upkeep)", hut) is True
+    assert evaluate(doc, "Values/Building/Workers/*[last()]/Count", hut)[0].text == "3"
+    assert evaluate(doc, "concat(name(Values/*[2]), '-', string-length('abc'))", hut) == "Building-3"
+    assert [a.tag for a in select(doc, "Values/Standard/GUID/.. | Values/Building", hut)] == ["Standard", "Building"]
+    assert evaluate(doc, "//Values[Standard/GUID=9]/../Template", None)[0].text == "Good"  # the inline one too
+    assert format_number(2.0) == "2" and format_number(0.1 * 3) == "0.3"
+    with pytest.raises(XPathError):
+        evaluate(doc, "Values/[", hut)
+
+
+def test_a_lazy_document_reads_only_the_assets_a_path_can_match():
+    doc = lazy_doc()
+    assert len(doc.lazy) == 5 and doc.assets("2001") and doc.materialized == 0
+    found = select(doc, "//Values[Standard/GUID='2001']/Building/Kinds", None)
+    assert [n.text for n in found] == ["GameObject"] and doc.materialized == 1  # only the hut's bytes hold it
+    assert [a.findtext("Template") for a in select(doc, "//Asset[Template='Mission']", None)] == ["Mission"]
+    assert select(doc, "//Asset[Values/Standard/GUID='9']/Template", None)[0].text == "Good"  # an inline asset
+    assert doc.materialized == 2  # the quest, read once for both
+    full = doc_of()
+    run(doc, '<ModOp GUID="1002" Merge="Standard"><Name>Rock</Name></ModOp>')
+    run(full, '<ModOp GUID="1002" Merge="Standard"><Name>Rock</Name></ModOp>')
+    doc.materialize_all()
+    assert canonical(doc.roots[0]) == canonical(full.roots[0])
+
+
+def test_every_type_and_its_aliases():
+    doc = doc_of()
+    events = run(
+        doc,
+        """<ModOp Type="add" GUID="1001" Path="/Values/Product"><Weight>3</Weight></ModOp>
+<ModOp Type="addNextSibling" GUID="1001"><Asset><Values><Standard><GUID>1100</GUID></Standard></Values></Asset></ModOp>
+<ModOp Type="addAfter" GUID="1100"><Asset><Values><Standard><GUID>1101</GUID></Standard></Values></Asset></ModOp>
+<ModOp Type="addPrevSibling" GUID="1001"><Asset><Values><Standard><GUID>1099</GUID></Standard></Values></Asset></ModOp>
+<ModOp Type="addBefore" GUID="1099"><Asset><Values><Standard><GUID>1098</GUID></Standard></Values></Asset></ModOp>
+<ModOp Type="replace" GUID="2001" Path="/Values/Building/Kinds"><Kinds>EditorObject</Kinds></ModOp>
+<ModOp Type="remove" GUID="2001" Path="/Values/Building/Workers"/>
+<ModOp Type="merge" GUID="2002" Path="/Values/Building"><Upkeep>4</Upkeep><Extra>1</Extra></ModOp>""",
+    )
+    assert events == []
+    goods = [doc.guid_text[a] for a in doc.roots[0].find("Groups/Group/Assets")]
+    assert goods == ["1098", "1099", "1001", "1100", "1101", "1002"]
+    assert value(doc, 1001, "Product/*") == ["12", "3"]
+    assert value(doc, 2001, "Building/Kinds") == ["EditorObject"] and not value(doc, 2001, "Building/Workers")
+    assert value(doc, 2002, "Building/*") == ["4", "1"]
+
+
+def test_new_assets_go_to_the_last_top_level_group_holding_assets():
+    doc = doc_of()
+    run(
+        doc,
+        """<Asset><Values><Standard><GUID>5</GUID></Standard></Values></Asset>
+<Assets><Asset><Values><Standard><GUID>6</GUID></Standard></Values></Asset></Assets>
+<ModOp Type="assets"><Asset><Values><Standard><GUID>7</GUID></Standard></Values></Asset></ModOp>
+<ModOp Type="add"><Asset><Values><Standard><GUID>8</GUID></Standard></Values></Asset></ModOp>
+<ModOp GUID="5" Merge="Standard"><Name>Found at once</Name></ModOp>""",
+    )
+    last = doc.roots[0].findall("Groups/Group")[-1].find("Assets")
+    assert [doc.guid_text.get(a) for a in last] == ["3001", "5", "6", "7", "8"]
+    assert value(doc, 5, "Standard/Name") == ["Found at once"]
+
+
+def test_merge_is_positional_never_shortens_and_has_a_leaf_style():
+    doc = doc_of()
+    run(
+        doc,
+        """<ModOp GUID="2001" Merge="Building/BuildCost"><Item><Amount>9</Amount></Item><Item><Product>1</Product></Item></ModOp>
+<ModOp GUID="2001" Merge="Building/Workers/High/Count"><Count>8</Count></ModOp>
+<ModOp GUID="2001" Merge="Building"><Kinds Kind="x" /></ModOp>""",
+    )
+    assert value(doc, 2001, "Building/BuildCost/Item/*") == ["1001", "9", "1"]
+    assert value(doc, 2001, "Building/Workers/High/Count") == ["8"]
+    kinds = select(doc, "Values/Building/Kinds", doc.assets("2001")[0])[0]
+    assert kinds.get("Kind") == "x" and kinds.text == "GameObject"  # an empty element keeps the text
+
+
+def test_shorthands_paths_and_guid_lists():
+    doc = doc_of()
+    events = run(
+        doc,
+        """<ModOp GUID="1001,1002" Merge="Standard"><Name>Both</Name></ModOp>
+<ModOp Type="merge" GUID="1001" Path="/Standard"><Name>mixed</Name></ModOp>
+<ModOp Type="merge" GUID="1001" Path="//Values[Standard/GUID='2002']/Standard/"><Name>absolute</Name></ModOp>
+<ModOp Type="remove" Path="//Values[Building/Upkeep &amp;gt; 8]/Building/Upkeep"/>
+<ModOp Type="merge" Path="/"><Version>2</Version></ModOp>""",
+    )
+    assert value(doc, 1001, "Standard/Name") == value(doc, 1002, "Standard/Name") == ["Both"]
+    assert [e.code for e in events] == ["nomatch"] and "GUID 1001" in events[0].message  # Type= starts at the asset
+    assert value(doc, 2002, "Standard/Name") == ["absolute"] and not value(doc, 2002, "Building/Upkeep")
+    assert doc.roots[0].findtext("Version") == "2"
+
+
+def test_a_file_with_two_roots_is_patched_through_both():
+    doc = PatchDoc.load(b"<Normal><Fov>40</Fov></Normal><Simple><Fov>50</Fov></Simple>")
+    run(doc, '<ModOp Type="merge" Path="/"><Fov>45</Fov></ModOp><ModOp Type="remove" Path="/Simple/Fov"/>')
+    assert [r.findtext("Fov") for r in doc.roots] == ["45", None]
+
+
+def test_conditions_variables_repeat_skip_and_allow_no_match():
+    me = mods.Mod(Path("."), {}, "me", options={"range": "10"})
+    other = mods.Mod(Path("."), {}, "other")
+    variables = mods.Variables([me, other], {"me": {"range": "30"}})
+    doc = doc_of()
+    events = run(
+        doc,
+        """<ModOp GUID="1001" Merge="Product" Condition="#other and !#gone"><Price>1</Price></ModOp>
+<ModOp GUID="1002" Merge="Standard" Condition="!#other"><Name>never</Name></ModOp>
+<ModOp GUID="1002" Merge="Standard" Condition="$range &gt; 20"><Name>thirty</Name></ModOp>
+<ModOp GUID="1002" Merge="Standard" Condition="$me.range &lt; 20"><Name>ten</Name></ModOp>
+<ModOp GUID="1002" Merge="Standard" Condition="$nothere"><Name>x</Name></ModOp>
+<ModOp GUID="2001" Add="Building/BuildCost" Condition="count(//Asset[Values/Standard/GUID='2001']/Values/Building/BuildCost/Item) &lt; 3"
+ MaxRepeat="5"><Item><Product>1</Product></Item></ModOp>
+<ModOp GUID="2001" Remove="Building" Skip="false"/>
+<Group Skip=""><ModOp GUID="2001" Remove="Building"/></Group>
+<Group Condition="#gone"><ModOp GUID="2001" Remove="Building"/></Group>
+<ModOp GUID="404" Remove="Building" AllowNoMatch="0"/>""",
+        me,
+        variables,
+    )
+    assert value(doc, 1001, "Product/Price") == ["1"] and value(doc, 1002, "Standard/Name") == ["thirty"]
+    assert len(value(doc, 2001, "Building/BuildCost/Item/Product")) == 3 and value(doc, 2001, "Building/Kinds")
+    codes = [(e.code, e.level) for e in events]
+    assert ("variable", "warning") in codes and ("nomatch", "info") in codes
+    assert ("skip", "info") in codes and sum(c == ("modcondition", "info") for c in codes) == 3
+    asked = [e for e in events if e.code == "modcondition"]
+    assert asked[0].others == ("gone", "other") and "True" in asked[0].message
+
+
+def test_mod_value_mod_item_and_content():
+    me = mods.Mod(Path("."), {}, "me", options={"factor": "3"})
+    doc = doc_of()
+    run(
+        doc,
+        """<ModOp GUID="2001" Merge="Building/BuildCost/Item[Product='1001']"><Amount><ModValue Insert="self::node() * $factor"/></Amount></ModOp>
+<ModOp GUID="2001" Merge="Building"><Kinds><ModValue Merge="EditorObject;GameObject"/></Kinds></ModOp>
+<ModOp GUID="2001" Merge="Building/BuildCost"><ModItem Merge="Product"><Product>1001</Product><Amount>5</Amount></ModItem></ModOp>
+<ModOp GUID="2001" Merge="Building/BuildCost"><ModItem Merge="Product"><Product>1002</Product><Amount>1</Amount></ModItem></ModOp>
+<ModOp GUID="2001" Merge="Building/BuildCost"><ModItem Merge="Product" Prepend="Product='1001'"><Product>7</Product></ModItem></ModOp>
+<ModOp GUID="2002" Replace="Building/Upkeep" Content="number(Building/Upkeep) + 1"><Upkeep><ModOpContent/></Upkeep></ModOp>
+<ModOp GUID="1002" Add="Standard" Content="Standard"><Copy><ModOpContent SkipParent="1"/></Copy></ModOp>
+<ModOp GUID="2001" Merge="Building"><Kinds><ModValue Remove="GameObject"/></Kinds></ModOp>""",
+        me,
+        mods.Variables([me]),
+    )
+    assert value(doc, 2001, "Building/BuildCost/Item/Product") == ["7", "1001", "1002"]
+    assert value(doc, 2001, "Building/BuildCost/Item[Product='1001']/Amount") == ["5"]  # 4 * 3, then merged by key
+    assert value(doc, 2001, "Building/Kinds") == ["EditorObject"]
+    assert value(doc, 2002, "Building/Upkeep") == ["10"] and value(doc, 1002, "Standard/Copy/*") == ["1002", "Stone"]
+
+
+def test_includes_relative_up_from_the_root_nested_and_missing(tmp_path):
+    rename = '<ModOps><ModOp GUID="{g}" Merge="Standard"><Name>{n}</Name></ModOp>{more}</ModOps>'
+    mod = fake_mod(tmp_path, "inc", {
+        "data/x/assets.xml": '<ModOps><Include File="a/rel.include.xml"/><Include File="../y/up.include.xml"/>'
+        '<Include File="/top.include.xml"/><Include File="a/missing.include.xml"/>'
+        '<Include File="a/rel.include.xml" Condition="#gone"/></ModOps>',
+        "data/x/a/rel.include.xml": rename.format(g=1001, n="rel", more='<Include File="sub/deep.include.xml"/>'),
+        "data/x/a/sub/deep.include.xml": rename.format(g=1002, n="deep", more=""),
+        "data/y/up.include.xml": rename.format(g=2001, n="up", more=""),
+        "top.include.xml": rename.format(g=2002, n="root", more=""),
+    })  # fmt: skip
+    m, _ = mods.read_mod(mod)
+    session = engine.Session(lambda p: asset_list().encode() if p == "data/x/assets.xml" else None)
+    session.apply_mod(m, mods.Variables([m]))
+    doc = session.docs["data/x/assets.xml"]
+    assert [value(doc, g, "Standard/Name")[0] for g in (1001, 1002, 2001, 2002)] == ["rel", "deep", "up", "root"]
+    assert [e.code for e in session.events if e.level == "warning"] == ["include"]
+    assert [e.file for e in session.events if e.code == "include"] == ["data/x/assets.xml:1"]
+
+
+def test_what_the_loader_drops_or_logs_is_reported_by_file_and_line(tmp_path):
+    mod = fake_mod(tmp_path, "bad", {
+        "data/x/assets.xml": '<ModOps>\n<Modop GUID="1"/>\n<ModOp GUID="1001"/>\n<ModOp Type="Merge" GUID="1001"/>\n'
+        '<ModOp Type="merge" GUID="1001" Path="/Values/[" />\n</ModOps>',
+        "data/x/broken.xml": "<ModOps><ModOp></ModOps>",
+        "data/x/rooted.xml": "<Patch />",
+        "data/x/new.xml": "<ModOps />",
+        "data/x/a.cfg.xml": "<ModOps><ModOp Type='merge' Path='/Config'><Scale>2</Scale></ModOp></ModOps>",
+        "data/infotips/export.bin.xml": "<ModOps />",
+    })  # fmt: skip
+    files = {"data/x/assets.xml": asset_list().encode(), "data/x/broken.xml": b"<a/>", "data/x/rooted.xml": b"<a/>",
+             "data/x/a.cfg": b"<Config><Scale>1</Scale></Config>"}  # fmt: skip
+    m, _ = mods.read_mod(mod)
+    session = engine.Session(files.get)
+    session.apply_mod(m, mods.Variables([m]))
+    found = {(e.file, e.code) for e in session.events}
+    assert {("data/x/assets.xml:2", "child"), ("data/x/assets.xml:3", "notype"), ("data/x/assets.xml:4", "type"),
+            ("data/x/assets.xml:5", "xpath"), ("data/x/broken.xml", "parse"), ("data/x/rooted.xml", "root"),
+            ("data/x/new.xml", "nobase"), ("data/infotips/export.bin.xml", "binary")} <= found  # fmt: skip
+    assert session.docs["data/x/a.cfg"].roots[0].findtext("Scale") == "2"
+
+
+def test_patch_targets_profiles_and_the_load_order(tmp_path):
+    assert mods.patch_target("Data/X/a.cfg.xml") == "data/x/a.cfg" and mods.patch_target("a/b.include.xml") is None
+    assert mods.patch_target("data/infotips/export.bin.xml") == "data/infotips/export.bin"
+    docs, game = tmp_path / "docs", tmp_path / "game"
+    fake_mod(docs, "zeta", {}, ModName={"English": "Alpha"}, Category={"English": "Audio"})
+    fake_mod(docs, "alpha", {}, ModName={"English": "Zulu"}, Category={"English": "Audio"},
+             Dependencies={"LoadAfter": ["beta", "missing"]})  # fmt: skip
+    fake_mod(docs, "beta", {}, ModName={"English": "Beta"}, Category={"English": "Cheat"})
+    fake_mod(docs, "late", {}, ModName={"English": "AAA"}, Dependencies={"LoadAfter": ["*"]})
+    fake_mod(docs, "nocat", {}, ModName={"English": "Name"})
+    fake_mod(docs, "old", {}, Version="1.0.0", Dependencies={"Deprecate": ["beta2"]})
+    fake_mod(docs / "-parked", "x", {})
+    fake_mod(docs, "-parked2", {})
+    (docs / "copy").mkdir()
+    (docs / "copy" / "modinfo.json").write_text('{"Anno": 8, "ModID": "zeta", "Version": "2.0.0"}')
+    fake_mod(game / "mods" / ".ubi", "ubi-mod", {})
+    fake_mod(docs, "wrong-game", {}, Anno=7)
+    found, notes = mods.find_mods([r.path for r in mods.loader_roots("anno117", game, docs)], anno=8)
+    by_id = {m.mod_id: m for m in found}
+    assert "-parked2" not in by_id and by_id["zeta"].version == "2.0.0" and any("version" in n for n in notes)
+    profile = mods.read_profile("## head\nDisplayName X\nEnableNewMods\n# beta\nalpha\nubi-mod\n# old\n")
+    assert profile.on == ["alpha", "ubi-mod"] and profile.off == ["beta", "old"] and profile.enable_new
+    on = mods.enabled(found, profile, (game / "mods", docs))
+    assert {m.mod_id for m in on} == {"alpha", "ubi-mod", "zeta", "late", "nocat"}
+    order = [m.mod_id for m in mods.load_order([by_id[k] for k in ("zeta", "alpha", "beta", "late", "nocat")])]
+    assert order == ["nocat", "zeta", "beta", "alpha", "late"]  # no category first, LoadAfter, "*" last
+    (docs / "profile.txt").write_text("ActiveProfile mine\n")
+    assert mods.active_profile(docs) == docs / "profiles" / "mine.txt"
+    (docs / "active-options.jsonc").write_text('// comment\n{"alpha": {"range": "5"}}')
+    assert mods.read_options(docs) == {"alpha": {"range": "5"}}
+
+
+def test_a_malformed_modinfo_reads_as_a_mod_without_that_list(tmp_path):
+    for name, extra in {
+        "a": {"Dependencies": {"Require": 5}},
+        "b": {"Dependencies": {"LoadAfter": "other"}},
+        "c": {"Options": []},
+        "d": {"Dependencies": []},
+        "e": {"Dependencies": {"Require": ["x", 3, None]}},
+    }.items():
+        fake_mod(tmp_path, name, {}, **extra)
+    found, _ = mods.find_mods([tmp_path], 8)  # one broken modinfo must not stop the scan
+    by_id = {m.mod_id: m for m in found}
+    assert set(by_id) == set("abcde")
+    assert by_id["a"].require == [] and by_id["b"].load_after == [] and by_id["c"].options == {}
+    assert by_id["d"].require == [] and by_id["e"].require == ["x"]
+
+
+def test_a_top_level_load_after_is_ignored_as_the_loader_does(tmp_path):
+    fake_mod(tmp_path, "later", {}, LoadAfter=["base-lib"], ModName={"English": "A"})
+    fake_mod(tmp_path, "base-lib", {}, ModName={"English": "Z"})
+    found, _ = mods.find_mods([tmp_path], 8)
+    later = next(m for m in found if m.mod_id == "later")
+    assert later.load_after == []
+    assert [m.mod_id for m in mods.load_order(found)] == ["later", "base-lib"]  # by display name, not LoadAfter
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a junction")
+def test_a_mod_folder_that_is_a_junction_is_still_in_its_root(tmp_path):
+    import _winapi
+
+    source = tmp_path / "devsrc" / "dev"
+    fake_mod(tmp_path / "devsrc", "dev", {})
+    root = tmp_path / "mods"
+    root.mkdir()
+    _winapi.CreateJunction(str(source), str(root / "dev"))
+    found, _ = mods.find_mods([root], 8)
+    on = mods.switched_on(found, mods.Profile("p", enable_new=True), (root,))
+    assert [m.mod_id for m in on] == ["dev"]
+
+
+def test_two_active_profile_lines_the_last_one_names_the_profile(tmp_path):
+    (tmp_path / "profile.txt").write_text("ActiveProfile first\nActiveProfile second\n")
+    assert mods.active_profile(tmp_path) == tmp_path / "profiles" / "second.txt"
+    (tmp_path / "profile.txt").write_text("## nothing named\n")
+    assert mods.active_profile(tmp_path) == tmp_path / "profiles" / "default.txt"
+    (tmp_path / "profile.txt").write_text("ActiveProfile \n")
+    assert mods.active_profile(tmp_path) is None

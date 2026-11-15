@@ -1,0 +1,303 @@
+"""The base of the viewer's own-shader looks: what ``gamepass.GamePass`` (117), ``fxcpass.FxcPass`` (2070) and
+``forwardpass.ForwardPass`` (2205) share. A subclass sets ``GAME``, ``PREFIX`` (its loader keys), ``SOURCE`` (the type
+its ``_make_source`` returns, by default made of the install's files) and ``NOT_OURS`` (the error of a group the game's shaders do not draw); the title, the
+backend and the compiler's error come from ``render.nativelook.GAMES``.
+
+``OwnPass`` is the base: ``why_not``, ``busy``, ``release_scene`` and ``release`` are shared, ``_split`` sorts a frame's
+groups through ``_model`` (a cloth's mesh follows its simulation), which calls the per-pass ``_make_source``, ``_work``
+(background) and ``_build`` (device side); ``_part`` makes a frame part once it compiled. docs/viewer.md "The renderer".
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+import numpy as np
+
+from ..infra import dxc, fxc
+from ..models import ddsdecode
+from ..render import clothlogo, clothmesh, fxcdraw, nativelook
+from ..render import gameshader as gs
+from ..render.camera import MIRROR
+from ..render.loader import Loader
+
+PLAYER_COLOR = (0.13, 0.32, 0.72)  # the colour a dye material takes in the games' own shaders: a blue player
+COMPILERS = {nativelook.DXC: (dxc.DxcMissing, dxc.WHERE_TO_GET), nativelook.FXC: (fxc.FxcMissing, fxc.WHERE_TO_GET)}
+
+
+class OwnPass:
+    """The parts of one scene as the game's own shaders draw them (module docstring)."""
+
+    GAME = ""
+    PREFIX = ""  # the key of a group's background work in the renderer's loader
+    SOURCE: type = object
+    NOT_OURS: type[Exception] = Exception
+    TITLE = ""
+    BACKEND = ""  # the QRhi backend's name it draws on
+    MISSING: type[Exception] = Exception  # the error of a compiler that is not there
+    # the view's axes are the game's mirrored in x, and the games look their cubes up by world vectors: the cubes go
+    # up mirrored (fxcdraw.cube_faces), unless a pass carries the mirror in a turn (shader-compile.md 11 "Sky cubes")
+    MIRROR_CUBES = True
+    # the old engines' passes draw in the game's own axes instead, the mirror in the projection: their cubes, maps and
+    # turns as stored (shader-compile.md 11 "The game's own axes")
+    GAME_AXES = False
+    WHERE = ""
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        native = nativelook.GAMES.get(cls.GAME)
+        if native is not None:
+            cls.TITLE, cls.BACKEND = native.title, native.backend.upper()
+            cls.MISSING, cls.WHERE = COMPILERS[native.compiler]
+
+    def __init__(self, renderer) -> None:
+        self.r = renderer
+        self.models: dict[tuple, object] = {}  # (part index, group key) -> its model, or the reason it is not one
+        self.sources = Loader()  # kept across scenes: the install's shaders are read once
+        self.cubes: dict[str, object] = {}  # a cube map's file -> its texture on the device (None: not a cube)
+        self.switches: dict[str, bool] = {}  # the frame's parts the view switched off (render.nativelook.FEATURES)
+        self.dummies: fxcdraw.Dummies | None = None  # the FXC passes' stand-in textures, made on first use
+        self.waiting = 0  # the groups of the last frame still compiling (or not yet asked for)
+        self.broken = ""  # a pass of the frame that failed: our look draws the scene (until the next one)
+
+    def why_not(self) -> str:
+        """Why the look cannot draw here ("" when it can, or is still reading the install)."""
+        ctx = self.r.ctx
+        if self.broken:
+            return self.broken
+        if getattr(self.r.files.files, "game", "") != self.GAME:
+            return f"this pass draws {self.TITLE}'s own shaders"
+        if not hasattr(ctx, "native_pass") or ctx.rhi.backendName() != self.BACKEND:
+            return f"{self.TITLE}'s own shaders draw on {_backend_title(self.BACKEND)} (View > Renderer)"
+        found = self.sources.get("source", lambda: self._make_source(self.r.files.files))
+        if isinstance(found, self.MISSING):
+            return f"{self.TITLE}'s own shaders need their shader compiler: {self.WHERE}"
+        if isinstance(found, Exception):
+            return f"{self.TITLE}'s shaders do not read: {type(found).__name__}: {found}"
+        return ""
+
+    def busy(self) -> int:
+        """Work still to come: the install's reads and compiles, and the groups the last frame waited for (their
+        compiles are asked for only once the source is read, a frame later); none once the pass failed or the
+        install's read did (a frame drawn while it was still read left its groups waiting for a compiler that is not
+        there)."""
+        read = self.sources.futures.get("source")
+        if self.broken or (read is not None and read.done() and not isinstance(read.result(), self.SOURCE)):
+            return 0
+        return self.sources.pending() + self.waiting
+
+    def _ready(self):
+        """The install's source once it is read (None while it is not, or when it failed)."""
+        source = self.sources.get("source", lambda: None)
+        return source if isinstance(source, self.SOURCE) else None
+
+    def _key(self, k: int, item: dict) -> tuple:
+        """A group's identity: its part, its mesh in the file and its material (a material can span several meshes:
+        a portrait's shirt is in two)."""
+        return (k, item.get("mesh", 0), item["key"])
+
+    def _model(self, k: int, part, item):
+        """The group's model, an exception (drawn by our look), or None while it compiles."""
+        key = self._key(k, item)
+        if key in self.models:
+            return self.models[key]
+        source = self._ready()
+        if source is None:
+            return None
+        job = f"{self.PREFIX}:{':'.join(map(str, key))}"
+        got = self._job(key, job, lambda: self._work(source, part, item), f"{part.node}: the game's shader")
+        return got if got is None or isinstance(got, Exception) else self._build(key, got)
+
+    def _job(self, key: tuple, job: str, work: Callable, what: str):
+        """The result of ``work`` run in the background as the loader's ``job``: None while it runs; an exception is
+        kept in ``models`` under ``key`` (our look draws it) and said once with ``what``, unless the game's shaders
+        just do not draw it (``NOT_OURS``)."""
+        got = self.r.loader.get(job, work)
+        if isinstance(got, Exception):
+            self.models[key] = got
+            if not isinstance(got, self.NOT_OURS):
+                self.r.say(f"{what}: {type(got).__name__}: {str(got)[:300]}")
+        return got
+
+    def _split(self, drawn: list) -> tuple[list, list, int]:
+        """A frame's groups (part, item, place) sorted: (key, part, item, place, model) of those the game's shaders
+        draw, the (part, item, place) left to our look, and how many still compile."""
+        self._take_failures()
+        index = {id(p): k for k, p in enumerate(self.r.scene.parts)}
+        ready, rest, waiting = [], [], 0
+        for part, item, place in drawn:
+            k = index.get(id(part), -1)
+            model = self._model(k, part, item) if k >= 0 and part.banner is None else ValueError("not a model")
+            if model is None:
+                waiting += 1
+            elif isinstance(model, Exception):
+                rest.append((part, item, place))
+            else:
+                key = self._key(k, item)
+                if getattr(part, "cloth", None) is not None:  # the simulated vertices of this frame
+                    logo = self._logo()
+                    if logo is None:  # the player logo is still read: the cloth is drawn once it is there
+                        waiting += 1
+                        continue
+                    for piece in self._pieces(key, model):
+                        if piece is not None:
+                            clothmesh.follow(item, piece, place, PLAYER_COLOR, logo)
+                ready.append((key, part, item, place, model))
+        self.waiting = waiting
+        return ready, rest, waiting
+
+    def _logo(self):
+        """The player logo's texture for the cloths (``render.clothlogo``), read once in the background: None while it
+        reads, False when the game has none."""
+        files = self.r.files.files
+        if not clothlogo.has_logos(files):
+            return False
+        got = self.r.loader.get("cloth-logo", lambda: clothlogo.default_logo(files) or False)
+        return got if got is None or isinstance(got, ddsdecode.DdsFile) else False
+
+    def _take_failures(self) -> None:
+        """What the device's last frame could not do: a group whose model did not prepare
+        (``render.nativepass.prepared``) goes to our look, and a native pass that raised turns the look off for the
+        scene (``why_not``), each said once. docs/viewer.md "When a pass fails"."""
+        ctx = self.r.ctx
+        failed = getattr(ctx, "failed_models", None)
+        for model, error in failed or ():
+            key = next((k for k, m in self.models.items() if any(model is x for x in self._pieces(k, m))), None)
+            if key is None:
+                self._unowned(model, error)
+            else:
+                self._fall_back(key, error)
+        if failed:
+            failed.clear()
+        errors = getattr(ctx, "pass_errors", None)
+        if errors:
+            self.broken = f"{self.TITLE}'s frame failed ({errors[-1][:300]}): our look draws it"
+            self.r.say(self.broken)
+            errors.clear()
+
+    def _pieces(self, key: tuple, model) -> tuple:
+        """The device-side draws of a group's model: one that fails sends the group to our look."""
+        if isinstance(model, Exception):
+            return ()
+        return (model, *getattr(model, "later", ()), getattr(model, "shadow", None))
+
+    def _unowned(self, model, error: str) -> None:
+        """A frame part of the pass's own (not a group's) that did not prepare."""
+        self.r.say(f"the game's shaders: {error[:300]}")
+
+    def _fall_back(self, key: tuple, error: str) -> None:
+        """The group of ``key`` drawn by our look from now on (its model released), its error said once."""
+        model = self.models.get(key)
+        if model is not None and not isinstance(model, Exception):
+            self._release_model(model)
+        self.models[key] = RuntimeError(error)
+        part = self.r.scene.parts[key[0]] if isinstance(key[0], int) and self.r.scene is not None else None
+        what = part.node if part is not None else key[1]
+        self.r.say(f"{what}: the game's shader: {error[:300]}; our look draws it")
+
+    def _part(self, key: str, compile_: Callable, make: Callable, what: str, instead: str,
+              on_error: Callable[[], None] = lambda: None):  # fmt: skip
+        """One frame part the game's shaders compile: ``make(compiled)`` once the install's source and the part are
+        ready (the result is the caller's to keep), None while they compile; on an error ``what`` is said once with
+        what is used ``instead``, ``on_error`` runs and None comes back."""
+        source = self._ready()
+        if source is None:
+            return None
+        got = self.sources.get(key, lambda: compile_(source))
+        if isinstance(got, Exception):
+            self.r.say(f"{what}: {type(got).__name__}: {str(got)[:300]}; {instead}")
+            on_error()
+            return None
+        return make(got) if got is not None else None
+
+    def _world(self, place) -> np.ndarray:
+        """A part's place (Anno's axes, column vectors) as the pass's world: as it is in the game's axes
+        (``GAME_AXES``), else mirrored into the view's."""
+        m = np.asarray(place, float)
+        return m if self.GAME_AXES else MIRROR @ m
+
+    def _camera(self, camera, size: tuple[int, int]) -> gs.Camera:
+        """The view's orbit camera as the pass's (``gameshader.direct_camera``, in the game's axes with
+        ``GAME_AXES``)."""
+        near, far = camera.planes()
+        return gs.direct_camera(size, camera.eye(), camera.target, camera.fov, near, far, self.GAME_AXES)
+
+    def _direction(self, v) -> tuple:
+        """A direction of the view's (the sun's) in the pass's axes."""
+        return tuple(MIRROR[:3, :3] @ np.asarray(v, float)) if self.GAME_AXES else tuple(v)
+
+    def _map(self, path: str, missing: bool = False):
+        """The device texture of a map file as stored (the shaders turn colours into linear light themselves), None
+        without a path or while it loads; ``missing``: a colour map that does not read shows the checker."""
+        tex = self.r._texture(path, False, missing=missing) if path else None
+        return tex.native if tex is not None else None
+
+    def _dummies(self) -> fxcdraw.Dummies:
+        """The stand-in textures of this device (an FXC pass's draws share them)."""
+        if self.dummies is None:
+            self.dummies = fxcdraw.Dummies(self.r.ctx.rhi)
+        return self.dummies
+
+    def _make_source(self, tree):
+        """The install's source (``SOURCE`` of the install's files, by default)."""
+        return self.SOURCE(tree)
+
+    def _on(self, part: str) -> bool:
+        """Whether View > Rendering leaves the frame part ``part`` on (``nativelook.part_on``)."""
+        return nativelook.part_on(self.GAME, self.switches, part)
+
+    def _work(self, source, part, item):
+        raise NotImplementedError
+
+    def _build(self, key: tuple, got):
+        """On the device: the model of the background work's result, kept in ``models`` under ``key``."""
+        raise NotImplementedError
+
+    def _release_model(self, model) -> None:
+        model.release()
+
+    def _release_frame(self) -> None:
+        """The frame and what else the device holds for the pass."""
+
+    def _cube(self, path: str):
+        """The cube map of a file of the game's (a DDS of six faces), None while it loads or when it is no cube; read
+        in the background, uploaded as stored or mirrored (``MIRROR_CUBES``; ``fxcdraw.cube_of``)."""
+        if path in self.cubes:
+            return self.cubes[path]
+        files = self.r.files.files
+        mirrored = self.MIRROR_CUBES
+
+        def read():  # None for a file that is no cube
+            dds = ddsdecode.DdsFile(files.read(path))
+            return fxcdraw.cube_faces(dds, mirrored) if dds.info.faces == 6 else None
+
+        job = f"cube:{path}:{'mirrored' if mirrored else 'stored'}"
+        got = self.r.loader.get(job, read)
+        if got is None:
+            if not self.r.loader.futures[job].done():
+                return None
+            got = self.r.loader.get(job, read)  # done between the two looks: not "no cube" for good
+        ok = got is not None and not isinstance(got, Exception)
+        self.cubes[path] = fxcdraw.cube_of(self.r.ctx, got) if ok else None
+        return self.cubes[path]
+
+    def release_scene(self) -> None:
+        for m in self.models.values():
+            if not isinstance(m, Exception):
+                self._release_model(m)
+        self.models, self.waiting, self.broken = {}, 0, ""
+        for cube in self.cubes.values():  # made only on a QRhi device
+            self.r.ctx.later(cube)
+        self.cubes = {}
+
+    def release(self) -> None:
+        self.release_scene()
+        self._release_frame()
+        if self.dummies is not None:  # after the frame: its draws bound them
+            self.dummies.release(self.r.ctx)
+            self.dummies = None
+        self.sources.close()
+
+
+def _backend_title(name: str) -> str:
+    return {"D3D11": "Direct3D 11", "D3D12": "Direct3D 12"}.get(name, name)

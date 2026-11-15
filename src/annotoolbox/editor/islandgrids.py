@@ -1,0 +1,84 @@
+"""The gameplay grids of a vanilla new-engine island that an edit sets cell by cell: ``ford`` (``WorldManager/FordGrid``,
+the river tiles units may cross) by ``apply_ford`` and ``environment`` (``WorldManager/EnvironmentGrid``, a zone per
+4 x 4 tiles) by ``apply_environment``; the rest are in docs/island-editor.md ("Island data").
+
+A ford edit is ``edits["ford"]``: ``"x,z"`` -> 1 (a ford) or 0 (none); a ford lies on a river tile in every shipped island
+checked (``RiverGrid``), so a cell off the river is not written and is listed in the report. An environment edit is
+``edits["environment"]``: ``"x,z"`` -> the zone, a number of the game's ``EnvironmentType`` (``ZONES``).
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from ..infra.i18n import N_, tr
+from ..islands.islandgrid import cell_key, read_bits, write_bits
+
+ZONES = (  # (number, name): the zones of the game's EnvironmentType the grid holds, the ones painted most first
+    (8, N_("Meadow")), (4, N_("Forest")), (9, N_("Mountain")), (10, N_("Mountain top")), (1, N_("Coast (rock)")),
+    (2, N_("Coast (sand)")), (7, N_("Marsh")), (5, N_("Lake")), (6, N_("Lake shore")), (3, N_("Field")),
+    (31, N_("Desert")), (29, N_("River crossing")), (30, N_("Embankment")), (20, N_("Sea")),
+    (21, N_("Sea (near the coast)")), (32, N_("Sea (calm)")), (0, N_("None")),
+)  # fmt: skip
+
+
+def parse_cells(cells: dict, size: int, bit: bool = True) -> tuple[list[tuple[int, int, int]], list[str]]:
+    """The (x, z, value) of the edit's cells that lie on the island and the keys of those that do not; ``bit``: the
+    value is on or off (1 / 0), else a byte (a value off 0 to 255 is off too)."""
+    ok, off = [], []
+    for key, value in sorted(cells.items()):
+        cell = cell_key(key, size)
+        try:
+            value = (1 if value else 0) if bit else int(value)
+        except (TypeError, ValueError):
+            cell = None
+        if cell is not None and 0 <= value <= 255:
+            ok.append((*cell, value))
+        else:
+            off.append(str(key))
+    return ok, off
+
+
+def apply_ford(isl, cells: dict) -> dict:
+    """Set the ford cells (``"x,z"`` -> 1 or 0) in the island's ``FordGrid``; only a tile of the ``RiverGrid`` can be a
+    ford. Returns the cells changed and the ones left out (``unmatched``)."""
+    wm = isl.gm.path("WorldManager")
+    ford, river = (wm.find("FordGrid"), wm.find("RiverGrid")) if wm is not None else (None, None)
+    report = {"cells": 0, "unmatched": []}
+    if ford is None or river is None:
+        report["unmatched"].append(tr("no ford grid on this island"))
+        return report
+    grid = np.asarray(read_bits(ford), np.int64)
+    on_river = np.asarray(read_bits(river), bool)
+    ok, off = parse_cells(cells, grid.shape[0])
+    report["unmatched"] += [tr("ford {key}", key=k) for k in off]
+    for x, z, value in ok:
+        if value and not on_river[z, x]:
+            report["unmatched"].append(tr("ford {key}", key=f"{x},{z}"))
+        elif grid[z, x] != value:
+            grid[z, x] = value
+            report["cells"] += 1
+    if report["cells"]:
+        write_bits(ford, grid.tolist())
+    return report
+
+
+def apply_environment(isl, cells: dict) -> dict:
+    """Set the zone cells (``"x,z"`` -> a number 0 to 255) in the island's ``EnvironmentGrid``. Returns the cells
+    changed and the ones left out (``unmatched``)."""
+    grid = isl.gm.path("WorldManager/EnvironmentGrid/EnvironmentGRid")
+    report = {"cells": 0, "unmatched": []}
+    if grid is None:
+        report["unmatched"].append(tr("no environment grid on this island"))
+        return report
+    n = grid.find("x").u32()
+    zones = bytearray(grid.find("val").data)
+    ok, off = parse_cells(cells, n, bit=False)
+    report["unmatched"] += [tr("environment {key}", key=k) for k in off]
+    for x, z, value in ok:
+        if zones[z * n + x] != value:
+            zones[z * n + x] = value
+            report["cells"] += 1
+    if report["cells"]:
+        grid.find("val").data = bytes(zones)
+    return report

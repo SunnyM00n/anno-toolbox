@@ -1,0 +1,2 @@
+# cmd reads its labels reliably only from CRLF files
+*.cmd text eol=crlf
