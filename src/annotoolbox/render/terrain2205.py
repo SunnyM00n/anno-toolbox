@@ -231,6 +231,10 @@ class Terrain2205(Terrain1800):
                 self.keep.append(tex)
                 self.textures[name] = tex
 
+    def pages_on_device(self) -> dict:
+        """The session's normal pages (a stored node's kind names one of them, not a height page)."""
+        return self.ready
+
     def release(self) -> None:
         for made in self.node_maps.values():
             for tex in made.values():

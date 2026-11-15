@@ -382,6 +382,7 @@ class GameIsland1800(GameIsland):
             self._bake_game(models)
         else:
             self._bake_own(opts, [m.node for m in models])
+        models = terrain.shown(models)  # a node not baked yet: the nodes drawn before over its square
         near, far = frame_planes(camera)
         cam = gs.direct_camera(size, e, camera.target, camera.fov, near, far)
         values = ambientforward.light_values(self.light, tuple(f.lt["sunDir"]))
@@ -397,7 +398,17 @@ class GameIsland1800(GameIsland):
         self.r.stats["game_object_levels"] = objects.levels
         self.r.stats["terrain_stored"] = sum(m.kind[0] == "stored" for m in models)
         self.r.stats["terrain_detailed"] = sum(m.kind[0] == "detailed" for m in models)
+        self.animated = self._moving(opts)
         return True
+
+    def _moving(self, opts) -> bool:
+        """Whether the view draws on (``Renderer.animated``): the clouds, the sea and the rivers move with the view's
+        clock, or the frame still settles (nodes to bake, pages to build, the exposure moving). The cascades are
+        fitted in the frame itself (``_cull_casters``): none read back late."""
+        clock = getattr(opts, "particle_time", None) is None
+        moving = clock and (self.ending is not None or self.r.game_sea or self.r.game_inland)
+        settling = (self.pages is not None and self.pages.busy()) or self._unbaked
+        return bool(moving or settling or (self.ending is not None and self.ending.again))
 
     def _water(self, f, opts, eye, values: dict) -> list:
         """The sea by the game's own shaders where the water layer is shown (the view's own sea left out while it

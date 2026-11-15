@@ -398,7 +398,7 @@ class Terrain:
     def shown(self, models: list[TerrainModel]) -> list[TerrainModel]:
         """What draws for this frame's ``models`` (``nodes``) once the frame's bake is recorded: a node not baked yet
         stands in as the nodes drawn before over its square (``terrainnodes.stand_ins``), kept in the slice cache."""
-        pages = self.pages.ready if self.pages is not None else {}
+        pages = self.pages_on_device()
 
         def ready(node) -> bool:  # baked, and its model's page still on the device
             model = self.models.get(node)
@@ -413,6 +413,10 @@ class Terrain:
                 self.cache.slices.move_to_end(node)
         self._drawn = set(nodes)
         return [wanted[n] if n in wanted else self.models[n] for n in nodes]
+
+    def pages_on_device(self) -> dict:
+        """The pages a node's kind names (its second item), by key: what its third item is the ``id`` of."""
+        return self.pages.ready if self.pages is not None else {}
 
     def casters(self, models: list[TerrainModel]) -> list[TerrainModel]:
         """The nodes drawn into the sun's cascades by the terrain's shadow technique: per node model a caster that

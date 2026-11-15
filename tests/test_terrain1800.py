@@ -162,6 +162,53 @@ def test_2205s_stored_node_asks_for_its_page_and_draws_with_it_once_in():
     assert t._kind(Node(3, 0.0, 0.0))[0] == "grid"  # no stored mesh there: the view's heights
 
 
+def test_2205s_stored_node_stands_in_while_its_quarters_bake_by_its_session_page():
+    """2205's stored nodes name a session normal page (the terrain's own store, not height pages): a larger node drawn
+    before stands in for its unbaked quarters while that page is still the one on the device."""
+    from collections import OrderedDict
+    from types import SimpleNamespace
+
+    from annotoolbox.render.terrainnodes import SliceCache
+
+    parent = Node(4, 0.0, 0.0)
+    kids = parent.children(32.0)
+    t = object.__new__(terrain2205.Terrain2205)
+    t.size, t._visible, t.cache, t.pages = 32.0, None, SliceCache(8), None
+    t.ready = OrderedDict({(0, 0, 0): (tex := object())})
+    t.models = {n: SimpleNamespace(node=n, kind=("grid", None, 0)) for n in (parent, *kids)}
+    t.models[parent].kind = ("stored", (0, 0, 0), id(tex))
+    for n in (parent, *kids):
+        t.cache.get(n)
+    t.cache.baked(parent)
+    t._drawn = {parent}
+    wanted = [t.models[k] for k in kids]
+    assert t.shown(wanted) == [t.models[parent]]
+    t.ready[(0, 0, 0)] = object()  # the page let go and read again: the parent's model is stale
+    assert t.shown(wanted) == wanted
+
+
+def test_1800s_look_keeps_the_view_drawing_while_its_water_and_clouds_move_or_it_settles():
+    """With the view's clock the sea, rivers and clouds move: the view drew only on input and the waves stood still;
+    a still clock and a settled frame let it rest."""
+    from types import SimpleNamespace
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.editor.desktop.desktopgame1800 import GameIsland1800
+
+    look = object.__new__(GameIsland1800)
+    look.r = SimpleNamespace(game_sea=False, game_inland=False)
+    look.ending, look.pages, look._unbaked = SimpleNamespace(again=False), None, 0
+    assert look._moving(SimpleNamespace(particle_time=None))  # the clouds drift by the clock
+    still = SimpleNamespace(particle_time=1.0)
+    assert not look._moving(still)
+    look._unbaked = 3  # nodes left to bake: the next frames bake them
+    assert look._moving(still)
+    look._unbaked, look.pages = 0, SimpleNamespace(busy=lambda: True)
+    assert look._moving(still)
+    look.pages, look.ending.again = None, True  # the exposure still moving
+    assert look._moving(still)
+
+
 def test_the_game_look_is_offered_for_1800_and_2205_islands():
     from types import SimpleNamespace
 
