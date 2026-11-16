@@ -124,3 +124,15 @@ class IslandConversion:
     run: Callable[[Any, Any, Any, Callable[[str], None]], Any]
     sources: tuple[str, ...] = ()
     run_many: Callable[[list, Any, Any, Callable[[str], None]], list] | None = None
+
+
+@dataclass(frozen=True)
+class SaveEdit:
+    """More values the Saves app's Edit tab offers (``features.SAVE_EDITS``) for a save of one of ``games``:
+    ``fields(save)`` returns the rows for the opened save (``saveedit.edits.Field``, keys of its own; none when it
+    offers nothing), ``apply(save, parsed, changes, settings)`` returns the parsed save (the format module's) with
+    the changes of those keys, raising ``ValueError`` for one it refuses; ``settings`` are the suite's."""
+
+    games: frozenset[str]
+    fields: Callable[[Any], list]
+    apply: Callable[[Any, Any, dict, Any], Any]

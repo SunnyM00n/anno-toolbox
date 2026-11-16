@@ -368,7 +368,8 @@ class SavesWindow(QMainWindow):
         self.write_button.setEnabled(False)
         self.statusBar().showMessage(tr("writing..."))
         save = self.save
-        self.background.run(lambda: edits.write_beside(save, change), self._written, self.sync)
+        settings = self.settings
+        self.background.run(lambda: edits.write_beside(save, change, settings), self._written, self.sync)
 
     def _written(self, result) -> None:
         self.busy = False

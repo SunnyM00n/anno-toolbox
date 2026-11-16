@@ -23,6 +23,7 @@ MODEL_IMPORTS = "model_imports"  # models of another game made placeable on an i
 FOREST_TABLES = "forest_tables"  # the numbered trees stored beside an island a build wrote
 APPS = "suite_apps"  # an app of the suite's window beyond the built-in ones (``extspecs.AppSpec``)
 ISLAND_CONVERSIONS = "island_ports"  # targets of "Port to region / game" beyond the generation
+SAVE_EDITS = "save_edits"  # more values of a save the Saves app's Edit tab offers (``extspecs.SaveEdit``)
 
 EXTENSIONS = ""
 

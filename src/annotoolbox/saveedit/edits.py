@@ -1,6 +1,7 @@
 """The values a save may be edited in, and the write of a new save next to the original (``docs/save-editor.md``,
 "What can be written, and how"). ``fields(save)`` lists what the form shows, ``write_beside(save, changes)`` writes;
-the format modules do the byte work (``formats.savegame117``, ``formats.savegame2070``).
+the format modules do the byte work (``formats.savegame117``, ``formats.savegame2070``). An edition may add values
+at the extension point ``features.SAVE_EDITS`` (``extspecs.SaveEdit``).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 
 from ..formats import savegame117, savegame2070
 from ..infra.i18n import N_
+from ..suite import features
 from . import summary117
 from .container import TAIL, SaveFile
 
@@ -70,13 +72,24 @@ def _fields2070(save: SaveFile) -> list[Field]:
     return [Field("money", N_("Money of the player ({who})"), NUMBER, savegame2070.read_money(parsed), who)]
 
 
-def fields(save: SaveFile) -> list[Field]:
-    """The editable values with what the save holds now; none for a game whose layout no sample pinned."""
+def _own_fields(save: SaveFile) -> list[Field]:
     if save.game == "anno117":
         return _fields117(save)
     if save.game == "anno2070" and save.part("save.sww") is not None:
         return _fields2070(save)
     return []
+
+
+def _extra_fields(save: SaveFile) -> list[tuple[object, list[Field]]]:
+    """Per ``SaveEdit`` registered for the save's game, the rows it offers."""
+    specs = features.extensions(features.SAVE_EDITS).values()
+    return [(spec, spec.fields(save)) for spec in specs if save.game in spec.games]
+
+
+def fields(save: SaveFile) -> list[Field]:
+    """The editable values with what the save holds now; none for a game whose layout no sample pinned."""
+    own = _own_fields(save)
+    return own + [f for _spec, rows in _extra_fields(save) for f in rows] if own else []
 
 
 def _apply117(save: SaveFile, changes: dict[str, str | int]) -> savegame117.Save:
@@ -141,22 +154,30 @@ def _reserve(original: Path) -> Path:
         return path
 
 
-def write_beside(save: SaveFile, changes: dict[str, str | int]) -> Path:
-    """Write the save with ``changes`` (keys of ``fields``) as a new file next to the original; returns its path."""
+def write_beside(save: SaveFile, changes: dict[str, str | int], settings=None) -> Path:
+    """Write the save with ``changes`` (keys of ``fields``) as a new file next to the original; returns its path.
+    ``settings`` (the suite's) go to the values an extension adds, which may check them against the installed game."""
     if save.game not in EDITABLE:
         raise EditError(f"{save.game}: saves of this game are read only")
-    unknown = sorted(set(changes) - {f.key for f in fields(save)})
+    own_keys = {f.key for f in _own_fields(save)}
+    extra = [(spec, {f.key for f in rows}) for spec, rows in _extra_fields(save)]
+    unknown = sorted(set(changes) - own_keys - {k for _spec, keys in extra for k in keys})
     if unknown:
         raise EditError(f"{save.path.name}: no such value to change: {', '.join(unknown)}")
+    own = {k: v for k, v in changes.items() if k in own_keys}
     dest = _reserve(save.path)
     try:
         if save.game == "anno117":
-            savegame117.write(_apply117(save, changes), dest)
+            parsed = _apply117(save, own)
         else:
             parsed = savegame2070.read_bytes(save.data, save.path.name)
-            if "money" in changes:
-                parsed = savegame2070.set_money(parsed, int(changes["money"]))
-            savegame2070.write(parsed, dest)
+            if "money" in own:
+                parsed = savegame2070.set_money(parsed, int(own["money"]))
+        for spec, keys in extra:
+            mine = {k: v for k, v in changes.items() if k in keys}
+            if mine:
+                parsed = spec.apply(save, parsed, mine, settings)
+        (savegame117 if save.game == "anno117" else savegame2070).write(parsed, dest)
     except BaseException:
         dest.unlink(missing_ok=True)
         raise

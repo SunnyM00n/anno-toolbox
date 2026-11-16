@@ -1,4 +1,5 @@
 name: tests
+# actions pinned by commit, at the versions release.yml uses (Node 24); bump both files together
 on: [push, pull_request]
 jobs:
   test:
@@ -7,13 +8,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.12", "3.13"]
+        python: ["3.12", "3.13", "3.14"]
         extras: ["dev", "dev,gui"]  # the light install, and with the windows
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - name: Qt needs a few system libraries on Linux
@@ -26,7 +27,7 @@ jobs:
     # the link helper (native/livelink/README.md) builds with the runner's MSVC, as the release builds it
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The link helper builds
         shell: cmd
         run: native\livelink\build.cmd "%GITHUB_WORKSPACE%\out\live-link"
