@@ -50,6 +50,7 @@ native/d3d12/deps.json
 native/d3d12/src/commands.cpp
 native/d3d12/src/device.cpp
 native/d3d12/src/gpu.h
+native/d3d12/src/interop.cpp
 native/d3d12/src/module.cpp
 native/d3d12/src/resources.cpp
 native/d3d12/tests/layer_test.cpp
