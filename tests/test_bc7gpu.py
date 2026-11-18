@@ -5,6 +5,7 @@ import warnings
 
 import pytest
 
+from annotoolbox.infra import tools
 from annotoolbox.infra.tools import ToolResult
 from annotoolbox.models import bc7encode, bc7gpu, textures
 
@@ -58,6 +59,9 @@ def test_no_adapter_means_the_cpu(encoders, monkeypatch):
 
 
 def test_a_gpu_error_falls_back_to_the_cpu_and_is_not_cached(encoders, monkeypatch, tmp_path):
+    if tools.find_tool("texconv") is None:  # a picture file's CPU way is texconv's (the CI machines have none)
+        pytest.skip("texconv is not installed")
+
     def fails(dds, srgb):
         raise bc7gpu.GpuError("device lost")
 
