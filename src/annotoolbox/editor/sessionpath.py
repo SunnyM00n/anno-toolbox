@@ -112,4 +112,4 @@ class PathEdits:
                 self._set(k, bool(v))
             s.blockers_changed()
 
-        s._push(tr("path blockers"), lambda: put(before), lambda: put(after))
+        s._push(tr("islands.path_blockers_lower"), lambda: put(before), lambda: put(after))

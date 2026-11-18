@@ -385,6 +385,7 @@ class Bake(ComputeChain):
             slot.release()
         for model in self._done:
             model.release()
+        self.program.release()  # the pipelines of the models let go a frame after their bake (``run``)
         for t in (*self.keep, *self.arrays.values()):
             t.destroy()
         self.common.release()

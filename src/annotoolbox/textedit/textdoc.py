@@ -11,6 +11,7 @@ import functools
 import re
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..assetedit.gamefiles import GameFiles, Layout
 from ..infra.i18n import N_, tr
@@ -19,6 +20,7 @@ from .editfile import Edit, EditFile
 from .fontcover import FontCheck
 from .glossary import Glossary, game_terms
 from .stylelinks import StyleLinks
+from .textfont import Faces
 from .voicedata import Voice
 from .voices import Voices
 
@@ -28,11 +30,11 @@ UNTRANSLATED, TRANSLATED, CHANGED, OUTDATED, NEW = "untranslated", "translated",
 STYLE_ANY = "*"  # the style picker's entry for every text style
 STATUSES = (UNTRANSLATED, OUTDATED, CHANGED, NEW, TRANSLATED)
 STATUS_NAMES = {
-    UNTRANSLATED: N_("untranslated"),
-    TRANSLATED: N_("translated"),
-    CHANGED: N_("changed"),
-    OUTDATED: N_("outdated"),
-    NEW: N_("new"),
+    UNTRANSLATED: N_("texts.untranslated"),
+    TRANSLATED: N_("texts.translated"),
+    CHANGED: N_("common.changed"),
+    OUTDATED: N_("texts.outdated"),
+    NEW: N_("assets.new"),
 }
 
 
@@ -90,6 +92,7 @@ class TextDoc:
         self._glossary: dict[tuple[str, str], Glossary] = {}
         self.fonts = FontCheck(self.files, self.layout.key)
         self.links = StyleLinks(self.files, self.fonts.chain) if self.fonts.chain is not None else None
+        self.faces = Faces(self.files, self.fonts, self.layout.key)
         self.voices = Voices(self.files, self.layout)
         self.glyphs_ready: set[str] = set()
         if self.source not in self.languages and self.languages:
@@ -181,7 +184,7 @@ class TextDoc:
         entry = self.entry(key)
         if entry is None or not entry.kind:
             return ""
-        return self.voices.characters.get(entry.kind) or tr("variation {id}", id=entry.kind[-6:])
+        return self.voices.characters.get(entry.kind) or tr("texts.variation_id", id=entry.kind[-6:])
 
     def fill_twins(self, key: str) -> int:
         """The row's target text for the twins that have the very same source text (one undo step): the number written."""
@@ -191,7 +194,7 @@ class TextDoc:
             for twin in self.twins_of(key)
             if self.source_text(twin) == source and self.target_text(twin) != text
         ]
-        return self.edit_many(items, tr("fill the twins of {id}", id=key)) if text.strip() else 0
+        return self.edit_many(items, tr("texts.fill_twins_id", id=key)) if text.strip() else 0
 
     # voices
     def voice(self, key: str, language: str | None = None) -> Voice | None:
@@ -209,6 +212,10 @@ class TextDoc:
     def clip(self, key: str, side: str) -> tuple[bytes, str]:
         """The voice of a text as a file a player plays (read the bank: run it off the window's thread)."""
         return self.voices.clip(key, self.source if side == "source" else self.target)
+
+    def clip_file(self, key: str, side: str) -> Path:
+        """``clip`` as a file of the cache folder, written once (off the window's thread)."""
+        return self.voices.clip_file(key, self.source if side == "source" else self.target)
 
     def status(self, key: str) -> str:
         source, target = self.source, self.target
@@ -263,6 +270,12 @@ class TextDoc:
             return []
         return [(s.key, s.name) for s in self.fonts.plan(self.target).styles if s.key]
 
+    def face(self, style: str, key: str) -> tuple[str | None, str]:
+        """(the Qt family the target language's text ``key`` is shown in under the picked style, why it is not the game's)."""
+        if self.target not in self.glyphs_ready:  # the fonts of the target are read by ``prepare``
+            return None, ""
+        return self.faces.family(self.target, style, self.linked_fonts(key))
+
     def linked_names(self, key: str) -> list[str]:
         """The names of ``linked_fonts`` in the picker's words."""
         names = dict(self.style_choices())
@@ -288,14 +301,14 @@ class TextDoc:
         takes the edit away."""
         step = self._set(language or self.target, key, text)
         if step[2] != step[3]:  # an apply that changes nothing is no step to undo and no change to save
-            self._record(tr("edit {id}", id=key), [step])
+            self._record(tr("texts.edit_id", id=key), [step])
         return self.status(key)
 
     @_locked
     def revert(self, key: str, language: str | None = None) -> str:
         language = language or self.target
         if self.edits.get(language, key) is not None:
-            self._record(tr("revert {id}", id=key), [(language, key, self.edits.get(language, key), None)])
+            self._record(tr("texts.revert_id", id=key), [(language, key, self.edits.get(language, key), None)])
             self.edits.put(language, key, None)
         return self.status(key)
 

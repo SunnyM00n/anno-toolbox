@@ -383,3 +383,14 @@ def test_the_slot_rows_count_the_slots_standing_after_the_edits_against_those_th
     assert {r["guid"]: r["now"] for r in s.slot_rows()} == {99: 0, 7: 0}
     s.undo.undo()
     assert {r["guid"]: r["now"] for r in s.slot_rows()}[99] == 1
+
+
+def test_a_transform_that_changes_nothing_leaves_no_record_in_the_edit_file():
+    s = EditSession(island())
+    rock = entry(s, "rock.cfg", 5.5)
+    s.transform(rock, "move", position=list(rock.position))
+    start = s.begin_transform([rock])
+    s.set_transform(rock, position=[6.0, 0.7, 6.5])
+    s.set_transform(rock, position=[5.5, 0.7, 6.5])  # dragged away and back
+    assert not s.end_transform(start, "move")
+    assert not s.undo.commands and rock.key not in s.edits["objects"] and not s.undo.dirty

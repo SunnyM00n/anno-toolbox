@@ -112,8 +112,9 @@ class IconSource:
 
     def forget(self, guid: int) -> None:
         """The asset's tiles changed: decode them again next time."""
-        for key in [k for k in self._images if k.startswith(ATLAS) and _split_key(k)[0] == guid]:
-            del self._images[key]
+        for key in list(self._images):  # a copy: the tree's icon job adds pictures from its own thread
+            if key.startswith(ATLAS) and _split_key(key)[0] == guid:
+                self._images.pop(key, None)
 
     def _tile(self, guid: int, position: int) -> QImage | None:
         ref = self.ref_of(guid, position)
@@ -129,7 +130,10 @@ class IconSource:
 
     def key_of(self, doc: AssetDocument, guid: int) -> str:
         """Where the asset's icon is: the file its ``Standard/IconFilename`` names, else its atlas tile; "" for none."""
-        path = self.path_of(doc, guid)
+        return self.key_for(guid, self.path_of(doc, guid))
+
+    def key_for(self, guid: int, path: str = "") -> str:
+        """``path`` (a file the asset names), else the key of its atlas tile; "" for none."""
         if path:
             return path
         ref = self.ref_of(guid)
@@ -148,7 +152,7 @@ class IconSource:
             return key
         ref = self.ref_of(*_split_key(key))
         atlas = self._atlases.get(ref.file_id) if ref else None
-        return tr("tile {index} of {path}", index=ref.index, path=atlas.path) if ref and atlas else key
+        return tr("assets.tile_index_of_path", index=ref.index, path=atlas.path) if ref and atlas else key
 
     def picture(self, key: str) -> QPixmap:
         image = self.image(key) if key else None

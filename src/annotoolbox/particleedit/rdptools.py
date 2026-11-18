@@ -39,7 +39,7 @@ def tint(doc: Doc, rgba: tuple[float, float, float, float]) -> Edit | None:
     factor = np.array([rgba[2], rgba[1], rgba[0], rgba[3]], np.float32)  # the file's order: blue, green, red, alpha
     out = np.clip(np.rint(ticks * factor), 0, 255).astype(np.uint8).tobytes() + node.data[len(ticks) * 4 :]
     shown = " ".join(f"{c:.2f}" for c in rgba)
-    return _put(node, out, tr("tint {rgba}", rgba=shown))
+    return _put(node, out, tr("particles.tint_rgba", rgba=shown))
 
 
 def fade(doc: Doc) -> Edit | None:
@@ -47,7 +47,7 @@ def fade(doc: Doc) -> Edit | None:
     particle that ends visible flashes); None when the data does not hold together."""
     colors, starts, ends = (_blob(doc, n) for n in ("T_Colors", "P_Starts", "P_Ends"))
     frames = doc.root.find("FrameCount")
-    if None in (colors, starts, ends, frames) or not colors.data:
+    if None in (colors, starts, ends, frames) or not (colors.data and starts.data and ends.data):
         return None
     count = int(finite(frames.text))
     if len(starts.data) % 2 or len(starts.data) != len(ends.data) or len(colors.data) % 4:
@@ -60,7 +60,7 @@ def fade(doc: Doc) -> Edit | None:
     at = np.concatenate([[0], np.cumsum(lives)[:-1]]).astype(np.int64)
     data = np.frombuffer(colors.data, np.uint8).copy()
     data[np.concatenate([at, at + lives - 1]) * 4 + 3] = 0
-    return _put(colors, data.tobytes(), tr("fade in and out"))
+    return _put(colors, data.tobytes(), tr("particles.fade_out"))
 
 
 def facts(doc: Doc) -> str:
@@ -68,7 +68,7 @@ def facts(doc: Doc) -> str:
     count = doc.root.find("ParticleCount")
     ticks = doc.root.find("TotalTickCount")
     return tr(
-        "{particles} particles, {ticks} ticks",
+        "particles.particles_ticks",
         particles=count.text if count is not None else "?",
         ticks=ticks.text if ticks is not None else "?",
     )

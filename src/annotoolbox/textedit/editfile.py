@@ -79,7 +79,7 @@ class EditFile:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if data.get("format") != FORMAT:
-                raise ValueError(tr("format {found}, expected {expected}", found=data.get("format"), expected=FORMAT))
+                raise ValueError(tr("texts.format_found_expected", found=data.get("format"), expected=FORMAT))
             texts = {
                 str(lang): {str(k): Edit(str(v["text"]), _text_or_none(v.get("source"))) for k, v in edits.items()}
                 for lang, edits in data.get("texts", {}).items()
@@ -90,4 +90,4 @@ class EditFile:
             }
             return cls(str(data.get("game", game)), str(data.get("source", "english")), texts, glossary)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            raise ValueError(tr("{path} is not a text edit file: {error}", path=path, error=exc)) from exc
+            raise ValueError(tr("texts.not_text_edit_file", path=path, error=exc)) from exc

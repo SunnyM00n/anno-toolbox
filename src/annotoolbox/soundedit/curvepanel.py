@@ -19,7 +19,11 @@ from . import curveedits, formrows, nodebase
 from .bankdoc import BankDoc
 
 NODE_KINDS = (bnkgraph.SOUND, *bnkgraph.CONTAINERS)  # the objects whose node base ends in an RTPC list we find
-PROPERTIES = (("volume", N_("volume")), ("pitch", N_("pitch")), ("low_pass", N_("low-pass filter")))  # what a new RTPC
+PROPERTIES = (
+    ("volume", N_("common.volume")),
+    ("pitch", N_("common.pitch")),
+    ("low_pass", N_("common.low_pass_filter")),
+)  # what a new RTPC
 # entry can drive: the ``nodebase.prop_id`` name and its label
 
 
@@ -47,30 +51,30 @@ class CurvePanel(QWidget):
         self.picked = 0
         self.refs: list[curveedits.CurveRef] = []
         self.which = QComboBox()
-        self.points = QLineEdit(placeholderText=tr("x:y:interpolation, x:y ... (4 linear, 9 constant)"))
+        self.points = QLineEdit(placeholderText=tr("common.x_y_interpolation_4_linear"))
         self.scaling = QSpinBox()
         self.scaling.setRange(0, 255)
-        self.parameter = QLineEdit(placeholderText=tr("game parameter id"))
+        self.parameter = QLineEdit(placeholderText=tr("common.game_parameter_id"))
         self.driven = QComboBox()
         self.driven.addItems([tr(label) for _name, label in PROPERTIES])
         self.slot = QSpinBox()
         self.slot.setRange(0, 23)
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
-        form.addRow(tr("curve"), self.which)
-        form.addRow(tr("points"), self.points)
-        form.addRow(tr("scaling"), self.scaling)
-        form.addRow(tr("new RTPC: game parameter"), self.parameter)
-        form.addRow(tr("new RTPC drives"), self.driven)
-        form.addRow(tr("attenuation slot of a new curve"), self.slot)
+        form.addRow(tr("common.curve"), self.which)
+        form.addRow(tr("common.points"), self.points)
+        form.addRow(tr("common.scaling"), self.scaling)
+        form.addRow(tr("common.new_rtpc_game_parameter"), self.parameter)
+        form.addRow(tr("common.new_rtpc_drives"), self.driven)
+        form.addRow(tr("common.attenuation_slot_new_curve"), self.slot)
         formrows.add_buttons(
             form,
             (
-                (N_("Apply the curve"), self._apply),
-                (N_("Add an RTPC to this object"), self._add_rtpc),
-                (N_("Remove the RTPC"), self._remove_rtpc),
-                (N_("Add a curve to this attenuation"), self._add_curve),
-                (N_("Remove the curve"), self._remove_curve),
+                (N_("common.apply_curve"), self._apply),
+                (N_("common.add_rtpc_object"), self._add_rtpc),
+                (N_("common.remove_rtpc"), self._remove_rtpc),
+                (N_("common.add_curve_attenuation"), self._add_curve),
+                (N_("common.remove_curve"), self._remove_curve),
             ),
         )
         self.which.currentIndexChanged.connect(self._pick)
@@ -105,7 +109,7 @@ class CurvePanel(QWidget):
         try:
             return parse_points(self.points.text())
         except ValueError:
-            self.say(tr("write the points as x:y:interpolation, separated by commas"))
+            self.say(tr("common.write_points_x_y_interpolation"))
             return None
 
     def _apply(self) -> None:
@@ -120,7 +124,7 @@ class CurvePanel(QWidget):
         try:
             parameter = int(self.parameter.text())
         except ValueError:
-            self.say(tr("write the game parameter as a number"))
+            self.say(tr("common.write_game_parameter_number"))
             return
         if points is not None and self.doc is not None:
             driven = nodebase.prop_id(self.doc.version, PROPERTIES[self.driven.currentIndex()][0])
@@ -129,7 +133,7 @@ class CurvePanel(QWidget):
     def _remove_rtpc(self) -> None:
         ref = self._current()
         if ref is None or ref.edit != "set_rtpc":
-            self.say(tr("pick an RTPC entry of this object"))
+            self.say(tr("common.pick_rtpc_entry_object"))
             return
         self.edit("remove_rtpc", **ref.args)
 
@@ -141,6 +145,6 @@ class CurvePanel(QWidget):
     def _remove_curve(self) -> None:
         ref = self._current()
         if ref is None or ref.edit != "set_attenuation_curve":
-            self.say(tr("pick a curve of this attenuation"))
+            self.say(tr("common.pick_curve_attenuation"))
             return
         self.edit("remove_attenuation_curve", **ref.args)

@@ -21,9 +21,9 @@ from ...infra.i18n import N_, tr
 def generator_text(row: dict) -> str:
     """What the generator does with an asset's slots: every one (``ActivateAll``), a number of them, or unknown."""
     if row.get("all") not in (None, "", "0"):
-        return tr("all of them")
+        return tr("common.all_of_them")
     if row.get("count") not in (None, ""):
-        return tr("{n} of them", n=row["count"])
+        return tr("common.n_of_them", n=row["count"])
     return ""
 
 
@@ -31,23 +31,25 @@ def status_text(row: dict) -> str:
     """How the standing slots stand to the island's list: ``""`` when they agree, else what the build does."""
     if row["now"] == row["listed"]:
         return ""
-    return tr("the build lists {n}", n=row["now"])
+    return tr("common.build_lists_n", n=row["now"])
 
 
 class SlotListDialog(QDialog):
     """The rows of ``EditSession.slot_rows`` in a table."""
 
-    COLUMNS = (N_("Slot asset"), N_("Listed"), N_("Standing"), N_("Generator keeps"), N_("Build"))
+    COLUMNS = (
+        N_("common.slot_asset"),
+        N_("common.listed"),
+        N_("common.standing"),
+        N_("common.generator_keeps"),
+        N_("common.build"),
+    )
 
     def __init__(self, parent, rows: list[dict]) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Slot list"))
+        self.setWindowTitle(tr("common.title.slot_list"))
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                tr("The map generator offers the island's slots from this list; the build lists the slots that stand.")
-            )
-        )
+        layout.addWidget(QLabel(tr("common.map_generator_offers_islands_slots")))
         self.table = QTableWidget(len(rows), len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels([tr(c) for c in self.COLUMNS])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -58,7 +60,7 @@ class SlotListDialog(QDialog):
         self.table.resizeColumnsToContents()
         layout.addWidget(self.table)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("Close"))
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("common.close"))
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.resize(640, 320)
@@ -69,6 +71,6 @@ def show(main) -> None:
     doc = main.doc
     rows = doc.session.slot_rows() if doc is not None else []
     if not rows:
-        main.say(tr("this island lists no slots"))
+        main.say(tr("common.island_lists_no_slots"))
         return
     SlotListDialog(main, rows).exec()

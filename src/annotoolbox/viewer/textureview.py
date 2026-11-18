@@ -30,7 +30,7 @@ from ..models.ddsdecode import DdsFile, UnsupportedDds
 from ..models.mipchain import exposed_srgb8
 
 CHANNELS = ("RGBA", "RGB", "R", "G", "B", "A")
-ZOOMS = (N_("Fit"), "25%", "50%", "100%", "200%", "400%")
+ZOOMS = (N_("viewer.fit"), "25%", "50%", "100%", "200%", "400%")
 CHECKER = 8  # pixels per square of the transparency checkerboard
 # where each face of a cube (DDS order: +X, -X, +Y, -Y, +Z, -Z) sits in a cross of 4 x 3 squares (column, row)
 CROSS = ((2, 1), (0, 1), (1, 0), (1, 2), (1, 1), (3, 1))
@@ -66,17 +66,20 @@ def describe(data: bytes) -> list[tuple[str, str]]:
         try:
             info = DdsFile(data).info
         except UnsupportedDds as exc:
-            return [(tr("format"), tr("DDS, not read: {error}", error=exc))]
+            return [(tr("viewer.format"), tr("viewer.dds_not_read", error=exc))]
         rows = [
-            (tr("format"), f"DDS {info.format}" + (" (sRGB)" if info.srgb else "")),
-            (tr("size"), f"{info.width} x {info.height}"),
+            (tr("viewer.format"), f"DDS {info.format}" + (" (sRGB)" if info.srgb else "")),
+            (tr("viewer.size"), f"{info.width} x {info.height}"),
         ]
-        rows += [(tr("mip levels"), str(info.mips)), (tr("faces"), str(info.faces))]
+        rows += [(tr("viewer.mip_levels"), str(info.mips)), (tr("viewer.faces"), str(info.faces))]
         return rows
     from PIL import Image
 
-    img = Image.open(io.BytesIO(data))
-    return [(tr("format"), f"{img.format} {img.mode}"), (tr("size"), f"{img.width} x {img.height}")]
+    try:
+        img = Image.open(io.BytesIO(data))
+    except (OSError, ValueError) as exc:  # no picture the decoders read (an empty file, a format they lack)
+        return [(tr("viewer.format"), str(exc))]
+    return [(tr("viewer.format"), f"{img.format} {img.mode}"), (tr("viewer.size"), f"{img.width} x {img.height}")]
 
 
 class TextureView(QWidget):
@@ -88,14 +91,14 @@ class TextureView(QWidget):
         self.pixels: np.ndarray | None = None
         self.channel = QComboBox()
         self.channel.addItems(CHANNELS)
-        self.mip = QSpinBox(prefix=tr("level "))
-        self.face = QSpinBox(prefix=tr("face "))
-        self.cross = QCheckBox(tr("cross"), toolTip=tr("a cube's six faces at once"))
+        self.mip = QSpinBox(prefix=tr("viewer.level"))
+        self.face = QSpinBox(prefix=tr("viewer.face"))
+        self.cross = QCheckBox(tr("viewer.cross"), toolTip=tr("viewer.tip.cubes_six_faces_once"))
         self.exposure = QDoubleSpinBox(
             minimum=-12.0,
             maximum=12.0,
             singleStep=0.5,
-            prefix=tr("exposure "),
+            prefix=tr("viewer.exposure"),
             suffix=" EV",  # i18n: ok (a unit)
         )
         self.zoom = QComboBox()
@@ -107,13 +110,13 @@ class TextureView(QWidget):
         self.scroll.setWidget(self.picture)
         bar = QHBoxLayout()
         for w in (
-            QLabel(tr("Channel")),
+            QLabel(tr("viewer.channel")),
             self.channel,
             self.mip,
             self.face,
             self.cross,
             self.exposure,
-            QLabel(tr("Zoom")),
+            QLabel(tr("viewer.zoom")),
             self.zoom,
         ):
             bar.addWidget(w)
@@ -134,7 +137,7 @@ class TextureView(QWidget):
             try:
                 self.dds = DdsFile(data)
             except UnsupportedDds as exc:
-                self.info.setText(tr("{path}: {error}", path=path, error=exc))
+                self.info.setText(tr("viewer.path_error", path=path, error=exc))
                 self.picture.clear()
                 return
             for spin, count in ((self.mip, self.dds.info.mips), (self.face, self.dds.info.faces)):
@@ -153,14 +156,13 @@ class TextureView(QWidget):
             self.face.setEnabled(False)
             self.cross.setVisible(False)
             self.exposure.setVisible(False)
-        self.path = path
         self._decode()
 
     def _decode(self) -> None:
         if self.dds is not None:
             try:
                 self.pixels = self.texels(self.mip.value(), self.face.value())
-            except (UnsupportedDds, IndexError) as exc:
+            except (UnsupportedDds, IndexError) as exc:  # a level cut short, a face that is not there
                 self.info.setText(str(exc))
                 self.picture.clear()
                 return

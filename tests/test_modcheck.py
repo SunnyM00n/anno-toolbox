@@ -41,6 +41,8 @@ def test_what_the_loader_would_drop_is_named(tmp_path):
     assert any("operation 1 (add) names no GUID" in p for p in problems)
     assert any("data/gone.a7m" in p for p in problems)
     assert not modcheck.check(root2, in_game=lambda p: p == "data/gone.a7m")[1:]
+    for nameless in ("[]", "7", "{}"):  # JSON that is no record (it stopped the check), or one without the id
+        assert any("no ModID" in p for p in modcheck.check(mod(tmp_path / nameless, GOOD, info=nameless)))
 
 
 def test_an_island_packed_at_another_level_and_without_its_info(tmp_path):

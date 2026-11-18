@@ -33,36 +33,36 @@ TOLERANCE = 1.0  # ms: a segment is its track's visible part when they differ by
 
 def _readable(doc: BankDoc) -> None:
     if not bnkgraph.layout(doc.version).music_readable:
-        raise EditError(tr("music is edited in the banks of Anno 117"))
+        raise EditError(tr("common.music_edited_banks_anno_117"))
 
 
 def _segment(doc: BankDoc, segment: int) -> bnkmusic.MusicSegment:
     _readable(doc)
     obj = doc.obj(segment)
     if obj.type != bnkmusic.MUSIC_SEGMENT:
-        raise EditError(tr("{type_name} {segment} is not a Music Segment", type_name=obj.type_name, segment=segment))
-    with reading(tr("segment {segment}", segment=segment)):
+        raise EditError(tr("common.not_music_segment", type_name=obj.type_name, segment=segment))
+    with reading(tr("sound.segment", segment=segment)):
         return bnkmusic.parse_segment(obj)
 
 
 def _name(name: str | bytes) -> bytes:
     raw = name.encode("utf-8") if isinstance(name, str) else bytes(name)
     if b"\0" in raw:
-        raise EditError(tr("a marker's name has no zero byte"))
+        raise EditError(tr("common.markers_name_no_zero_byte"))
     return raw
 
 
 def _checked(seg: bnkmusic.MusicSegment, markers: list[bnkmusic.Marker]) -> None:
     ids = [m.id for m in markers]
     if len(set(ids)) != len(ids):
-        raise EditError(tr("two markers have the same id"))
+        raise EditError(tr("common.two_markers_same_id"))
     if CUE_ENTRY not in ids or CUE_EXIT not in ids:
-        raise EditError(tr("a segment keeps its entry and exit cues"))
+        raise EditError(tr("common.segment_keeps_entry_exit_cues"))
     for m in markers:
         if not (math.isfinite(m.position) and 0 <= m.position <= seg.duration):
             raise EditError(
                 tr(
-                    "the marker {marker} lies at {position} ms, outside the segment's 0 to {duration} ms",
+                    "common.marker_lies_ms_outside_segments",
                     marker=m.id,
                     position=m.position,
                     duration=seg.duration,
@@ -73,7 +73,7 @@ def _checked(seg: bnkmusic.MusicSegment, markers: list[bnkmusic.Marker]) -> None
 # markers
 
 
-@edit(N_("change the markers"))
+@edit(N_("sound.change_markers"))
 def set_markers(doc: BankDoc, segment: int, markers: list) -> None:
     """A segment's markers as (id, position in ms, name) entries in order; the entry and exit cues stay, every
     position lies within the segment."""
@@ -81,7 +81,7 @@ def set_markers(doc: BankDoc, segment: int, markers: list) -> None:
     try:
         seg.markers = [bnkmusic.Marker(int(i), float(p), _name(n)) for i, p, n in markers]
     except (TypeError, ValueError) as exc:
-        raise EditError(tr("write the markers as (id, position, name)")) from exc
+        raise EditError(tr("common.write_markers_id_position_name")) from exc
     _checked(seg, seg.markers)
     doc.put(bnkmusic.render_segment(seg))
 
@@ -90,14 +90,14 @@ def _marker_list(doc: BankDoc, segment: int) -> list[tuple[int, float, bytes]]:
     return [(m.id, m.position, m.name) for m in _segment(doc, segment).markers]
 
 
-@edit(N_("change a marker"))
+@edit(N_("sound.change_marker"))
 def set_marker(
     doc: BankDoc, segment: int, marker: int, position: float | None = None, label: str | None = None
 ) -> None:
     """One marker of a segment: its position (ms) and its name (``label``)."""
     rows = _marker_list(doc, segment)
     if marker not in [r[0] for r in rows]:
-        raise EditError(tr("the segment {segment} has no marker {marker}", segment=segment, marker=marker))
+        raise EditError(tr("common.segment_no_marker", segment=segment, marker=marker))
     set_markers(
         doc,
         segment,
@@ -108,7 +108,7 @@ def set_marker(
     )
 
 
-@edit(N_("add a marker"))
+@edit(N_("sound.add_marker"))
 def add_marker(doc: BankDoc, segment: int, marker: int, position: float, label: str = "") -> None:
     """A custom marker, before the exit cue."""
     rows = _marker_list(doc, segment)
@@ -116,14 +116,14 @@ def add_marker(doc: BankDoc, segment: int, marker: int, position: float, label: 
     set_markers(doc, segment, [*rows[:at], (marker, position, label), *rows[at:]])
 
 
-@edit(N_("remove a marker"))
+@edit(N_("sound.remove_marker"))
 def remove_marker(doc: BankDoc, segment: int, marker: int) -> None:
     """A custom marker out of a segment (the entry and exit cues stay)."""
     rows = _marker_list(doc, segment)
     if marker not in [r[0] for r in rows]:
-        raise EditError(tr("the segment {segment} has no marker {marker}", segment=segment, marker=marker))
+        raise EditError(tr("common.segment_no_marker", segment=segment, marker=marker))
     if marker in (CUE_ENTRY, CUE_EXIT):
-        raise EditError(tr("a segment keeps its entry and exit cues"))
+        raise EditError(tr("common.segment_keeps_entry_exit_cues"))
     set_markers(doc, segment, [r for r in rows if r[0] != marker])
 
 
@@ -136,12 +136,12 @@ def _container(doc: BankDoc, container: int) -> tuple[HircObject, int, int, list
     if obj.type not in (bnkmusic.MUSIC_RANSEQ_CNTR, bnkmusic.MUSIC_SWITCH_CNTR):
         raise EditError(
             tr(
-                "{type_name} {container} is not a Music Playlist or Music Switch container",
+                "common.not_music_playlist_switch_container",
                 type_name=obj.type_name,
                 container=container,
             )
         )
-    with reading(tr("the rule list of {container}", container=container)):
+    with reading(tr("sound.rule_list_container", container=container)):
         start, end = bnkmusic.locate_trans_rules(obj.payload)
         return obj, start, end, bnkmusic.parse_trans_rules(bnkmusic.Reader(obj.payload[start:end]))
 
@@ -150,42 +150,42 @@ def _put_rules(doc: BankDoc, obj: HircObject, start: int, end: int, rules: list[
     try:
         body = bnkmusic.render_trans_rules(rules)
     except (struct.error, TypeError) as exc:
-        raise EditError(tr("a rule's value is out of range ({exc})", exc=exc)) from exc
+        raise EditError(tr("common.rules_value_out_range", exc=exc)) from exc
     doc.splice(obj, start, end, body)
 
 
 def _fill(rule: bnkmusic.TransRule, fields: dict) -> None:
     bad = [k for k in fields if k not in (*RULE_FIELDS, *RULE_LISTS)]
     if bad:
-        raise EditError(tr("a rule has no field {value}: {value2}", value=bad[0], value2=", ".join(RULE_FIELDS)))
+        raise EditError(tr("common.rule_no_field", value=bad[0], value2=", ".join(RULE_FIELDS)))
     for key, value in fields.items():
         setattr(rule, key, [int(v) for v in value] if key in RULE_LISTS else int(value))
 
 
-@edit(N_("change a transition rule"))
+@edit(N_("sound.change_transition_rule"))
 def set_transition(doc: BankDoc, container: int, index: int, fields: dict) -> None:
     """Fields of one transition rule of a Music Playlist or Music Switch container (``RULE_FIELDS``, and the node id
     lists ``src`` and ``dst``)."""
     obj, start, end, rules = _container(doc, container)
-    _fill(rules[check_index(rules, index, tr("rules"))], fields)
+    _fill(rules[check_index(rules, index, tr("islands.rules"))], fields)
     _put_rules(doc, obj, start, end, rules)
 
 
-@edit(N_("add a transition rule"))
+@edit(N_("sound.add_transition_rule"))
 def add_transition(doc: BankDoc, container: int, copy: int = 0, fields: dict | None = None) -> None:
     """A new rule at the end: a copy of rule ``copy`` with ``fields`` changed."""
     obj, start, end, rules = _container(doc, container)
-    source = rules[check_index(rules, copy, tr("rules"))]
+    source = rules[check_index(rules, copy, tr("islands.rules"))]
     rule = bnkmusic.TransRule(**{**vars(source), "src": list(source.src), "dst": list(source.dst)})
     _fill(rule, fields or {})
     _put_rules(doc, obj, start, end, [*rules, rule])
 
 
-@edit(N_("remove a transition rule"))
+@edit(N_("sound.remove_transition_rule"))
 def remove_transition(doc: BankDoc, container: int, index: int) -> None:
     """A rule out of a container."""
     obj, start, end, rules = _container(doc, container)
-    check_index(rules, index, tr("rules"))
+    check_index(rules, index, tr("islands.rules"))
     _put_rules(doc, obj, start, end, [r for i, r in enumerate(rules) if i != index])
 
 
@@ -201,7 +201,7 @@ def retime(item: bnkmusic.PlaylistItem, new_ms: float, mode: str) -> None:
     """A playlist item whose clip is now ``new_ms`` long. ``scale``: the trims and the start follow the clip's length;
     ``keep``: they stay (an ``EditError`` when they would cut away the whole clip)."""
     if mode not in (SCALE, KEEP):
-        raise EditError(tr("markers go with the clip by {value} or {value2}", value=SCALE, value2=KEEP))
+        raise EditError(tr("common.markers_go_clip", value=SCALE, value2=KEEP))
     old = item.src_duration
     if mode == SCALE and old > 0:
         ratio = new_ms / old
@@ -212,7 +212,7 @@ def retime(item: bnkmusic.PlaylistItem, new_ms: float, mode: str) -> None:
         )
     item.src_duration = new_ms
     if visible(item) <= 0:
-        raise EditError(tr("the trims cut away the whole new clip: let them follow its length instead"))
+        raise EditError(tr("common.trims_cut_away_whole_new"))
 
 
 def _moved(position: float, old: float, new: float, mode: str) -> float:
@@ -230,15 +230,13 @@ def fit_segment(doc: BankDoc, track: int, old: float, new: float, mode: str) -> 
         if track not in seg.children:
             continue
         if abs(seg.duration - old) > TOLERANCE or old <= 0:
-            return tr(
-                "the segment {segment} is not this track's length, so its length and markers stay", segment=obj.id
-            )
+            return tr("common.segment_not_tracks_length_markers", segment=obj.id)
         for m in seg.markers:
             m.position = _moved(m.position, seg.duration, new, mode)
         seg.duration = new
         doc.put(bnkmusic.render_segment(seg))
         return tr(
-            "the segment {segment} is now {length} ms long, its {count} markers moved",
+            "common.segment_now_ms_long_markers",
             segment=obj.id,
             length=round(new),
             count=len(seg.markers),
@@ -279,7 +277,7 @@ def rule_lines(doc: BankDoc, container: int) -> list[str]:
         return []
     return [
         tr(
-            "rule {index}: {src} to {dst}, sync {sync}, fade {fade} ms (curve {curve}), entry {entry}",
+            "common.rule_sync_fade_ms_curve",
             index=i,
             src=_nodes(r.src),
             dst=_nodes(r.dst),

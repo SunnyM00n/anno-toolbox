@@ -66,7 +66,11 @@ def _indices(data) -> np.ndarray:
     stored = data.stored
     if stored is not None and stored.indices:
         return np.asarray(stored.indices, np.int64)
-    return np.concatenate([np.asarray(v, np.int64) for v in data.groups.values()]) if data.groups else np.zeros(0)
+    return (
+        np.concatenate([np.asarray(v, np.int64) for v in data.groups.values()])
+        if data.groups
+        else np.zeros(0, np.int64)
+    )
 
 
 class _Running:

@@ -20,11 +20,11 @@ class PlayBar(QWidget):
         super().__init__(parent)
         self.view = view
         self.length = 1.0
-        self.play = QPushButton(tr("Play"), checkable=True)
+        self.play = QPushButton(tr("common.play"), checkable=True)
         self.slider = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=STEPS)
-        self.loop = QCheckBox(tr("Loop"), checked=True)
+        self.loop = QCheckBox(tr("objects.loop"), checked=True)
         self.pace = QDoubleSpinBox(minimum=0.05, maximum=8.0, singleStep=0.25, value=1.0, decimals=2)
-        self.pace.setPrefix(tr("pace "))
+        self.pace.setPrefix(tr("particles.pace"))
         self.clock = QLabel()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(4, 2, 4, 2)
@@ -45,7 +45,7 @@ class PlayBar(QWidget):
         self.view.playing = on
         self.play.blockSignals(True)
         self.play.setChecked(on)
-        self.play.setText(tr("Pause") if on else tr("Play"))
+        self.play.setText(tr("ui.pause") if on else tr("common.play"))
         self.play.blockSignals(False)
 
     def seek(self, seconds: float) -> None:
@@ -66,4 +66,4 @@ class PlayBar(QWidget):
         self.slider.blockSignals(True)
         self.slider.setValue(round(shown / self.length * STEPS))
         self.slider.blockSignals(False)
-        self.clock.setText(tr("{now} of {length} s", now=number(shown, 2), length=number(self.length, 2)))
+        self.clock.setText(tr("particles.now_of_length_s", now=number(shown, 2), length=number(self.length, 2)))

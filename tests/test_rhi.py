@@ -92,6 +92,26 @@ def test_every_shader_of_ours_bakes_for_every_backend():
         assert baked.vertex[:4] and baked.block_size >= 16 and glslport.CLIP in baked.members
 
 
+def test_the_final_shader_encodes_a_negative_value_as_black_not_as_no_number():
+    """A game's post chain can leave a negative value in the frame; ``pow`` of it is no number, drawn as a black
+    pixel. The formula is checked here on the CPU, the shader only by its text: no device runs in this test."""
+    from annotoolbox.render import shaders as s
+
+    body = s.FINAL_FS.split("vec3 srgb(vec3 c) {", 1)[1].split("}", 1)[0]
+    assert body.strip().startswith("c = max(c, 0.0);")
+
+    def srgb(c: np.ndarray, clamp: bool) -> np.ndarray:
+        c = np.maximum(c, 0.0) if clamp else c
+        with np.errstate(invalid="ignore"):
+            return np.where(c >= 0.0031308, 1.055 * np.power(c, 1.0 / 2.4) - 0.055, 12.92 * c)
+
+    frame = np.array([-0.25, -1e-6, 0.0, 0.002, 0.5, 1.0], "f4")
+    assert not np.isnan(srgb(frame, clamp=True)).any() and srgb(frame, clamp=True)[:3].tolist() == [0.0, 0.0, 0.0]
+    assert np.allclose(srgb(frame, clamp=True)[3:], srgb(frame, clamp=False)[3:])  # nothing else moved
+    with np.errstate(invalid="ignore"):
+        assert np.isnan(np.power(frame[:1], 1.0 / 2.4)).all()  # what the shader's pow made of it before
+
+
 def test_the_views_default_to_direct3d_12_where_the_machine_has_it(monkeypatch):
     """The owner's decision (2026-11-13): 117's islands open on Direct3D 12 in the game's look, so the views' device
     is Direct3D 12 where a device of it can be made; ``ANNO_RENDERER`` and the setting still choose."""
@@ -359,3 +379,61 @@ def test_the_view_follows_its_window_and_a_hidden_view_keeps_its_size():
     assert got["shown"]  # a grab on screen hands the widget its own buffer size back
     assert got["resized"], got  # a resized window draws its whole new size
     assert got["hidden"] and got["same"]  # hidden: nothing drawn, the view keeps its place in the window
+
+
+MOVED_VIEW = """
+import json
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from annotoolbox.render import shaders as S
+from annotoolbox.render.rhiview import RhiView
+app = QApplication([])
+class V(RhiView):
+    made = gone = 0
+    def ready(self, ctx):
+        self.made += 1
+        self.prog = ctx.program(vertex_shader=S.FINAL_VS, fragment_shader=S.FINAL_FS)
+        self.full = ctx.vertex_array(self.prog, [])
+        self.tex = ctx.texture((4, 4), 4, bytes([255, 0, 0, 255]) * 16)
+    def released(self, ctx):
+        self.gone += 1
+        self.old = self.tex
+        self.prog.release()
+    def draw(self, ctx, screen, size):
+        screen.use()
+        self.tex.use(0)
+        self.prog["frame"].value, self.prog["finish"].value, self.prog["exposure"].value = 0, 3, 1.0
+        self.full.render(vertices=3)
+def window():
+    w = QWidget()
+    QVBoxLayout(w)
+    w.resize(200, 150)
+    return w
+a, b = window(), window()
+view = V("%s", a)
+a.layout().addWidget(view)
+a.show()
+app.processEvents()
+view.grabFramebuffer()
+first = view.ctx
+held = len(first._srbs) + len(first._pipelines)
+b.layout().addWidget(view)  # another window: another device
+b.show()
+app.processEvents()
+img = view.grabFramebuffer()
+view.old.release()  # the first device's texture, let go after the device was: destroyed at once
+left = len(first._srbs) + len(first._pipelines) + len(first._samplers) + len(first._doomed) + len(first._dying)
+print(json.dumps({"made": view.made, "gone": view.gone, "held": held, "left": left, "released": first.released,
+                  "new": view.ctx is not None and view.ctx is not first, "failed": view.failed,
+                  "errors": view.ctx.errors, "px": img.pixelColor(50, 50).getRgb()[:3]}))
+"""
+
+
+def test_a_view_moved_to_another_window_releases_its_first_device_and_draws_on_the_new_one():
+    backends = _backends()
+    if not backends:
+        pytest.skip("no QRhi device")
+    for backend in backends:
+        got = _child(MOVED_VIEW % backend)
+        assert got["made"] == 2 and got["gone"] == 1 and got["new"], (backend, got)  # told once, made again
+        assert got["held"] and got["left"] == 0 and got["released"], (backend, got)  # nothing of the first is kept
+        assert not got["failed"] and not got["errors"] and got["px"] == [255, 0, 0], (backend, got)

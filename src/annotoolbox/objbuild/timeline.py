@@ -179,15 +179,15 @@ class SequenceEditor(QWidget):
         self.scene = None
         self.sequences: list[Part] = []
         self.choice = QComboBox(minimumWidth=260)
-        self.play = QPushButton(tr("Play"), checkable=True)
-        self.speed = QDoubleSpinBox(minimum=0.1, maximum=4.0, singleStep=0.1, value=1.0, prefix=tr("speed "))
-        self.clock = QLabel(tr("{seconds} s", seconds=shown_number(0, 2)))
-        self.add_track = QPushButton(tr("Add track"))
-        self.add_element = QPushButton(tr("Add element"))
+        self.play = QPushButton(tr("common.play"), checkable=True)
+        self.speed = QDoubleSpinBox(minimum=0.1, maximum=4.0, singleStep=0.1, value=1.0, prefix=tr("common.speed"))
+        self.clock = QLabel(tr("common.seconds_s", seconds=shown_number(0, 2)))
+        self.add_track = QPushButton(tr("objects.add_track"))
+        self.add_element = QPushButton(tr("objects.add_element"))
         self.view = TrackView()
         bar = QHBoxLayout()
         for w in (
-            QLabel(tr("Sequence")),
+            QLabel(tr("common.sequence")),
             self.choice,
             self.play,
             self.speed,
@@ -254,7 +254,7 @@ class SequenceEditor(QWidget):
         seq = self._current()
         speed = _float(seq.node, "Speed") if seq is not None else 1.0
         length = max([1, *(b.end for b in self.view.bars)]) / 1000
-        self.clock.setText(tr("{seconds} s", seconds=shown_number((seconds * (speed or 1.0)) % length, 2)))
+        self.clock.setText(tr("common.seconds_s", seconds=shown_number((seconds * (speed or 1.0)) % length, 2)))
 
     def _moved(self, bar: Bar, start: int, end: int) -> None:
         changes = []
@@ -276,7 +276,7 @@ class SequenceEditor(QWidget):
         if trackid is not None:
             trackid.text = str(max(ids, default=0) + 1)
         at = _after(seq.node, tracks[-1] if tracks else None)
-        self.edits.emit([cfgdoc.insert(seq.node, at, [track], tr("add a track"))])
+        self.edits.emit([cfgdoc.insert(seq.node, at, [track], tr("objects.add_track_lower"))])
 
     def _add_element(self) -> None:
         seq = self._current()
@@ -286,7 +286,7 @@ class SequenceEditor(QWidget):
             return
         elements = [c for c in tracks[-1].children if c.name == "TrackElement"]
         at = _after(tracks[-1], elements[-1] if elements else None)
-        self.edits.emit([cfgdoc.insert(tracks[-1], at, [element], tr("add a track element"))])
+        self.edits.emit([cfgdoc.insert(tracks[-1], at, [element], tr("objects.add_track_element"))])
 
 
 def one_element(track: Node) -> None:

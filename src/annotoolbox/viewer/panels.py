@@ -107,7 +107,7 @@ class PartsPanel(QTreeWidget):
             group.addChild(item)
             self._add(item, child, prefix)
         for group in sections.values():
-            group.setText(0, tr("{title} ({count})", title=group.text(0), count=group.childCount()))
+            group.setText(0, tr("common.title_count", title=group.text(0), count=group.childCount()))
         if node.kind == "MAIN" or not prefix and node is (self.scene.tree if self.scene else None):
             for group in sections.values():
                 group.setExpanded(group.childCount() <= 12)
@@ -149,7 +149,7 @@ class PropertiesPanel(QTableWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(0, 2, parent)
-        self.setHorizontalHeaderLabels([tr("field"), tr("value")])
+        self.setHorizontalHeaderLabels([tr("common.field"), tr("common.value_lower")])
         self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.verticalHeader().hide()
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -164,13 +164,15 @@ class PropertiesPanel(QTableWidget):
             cell = QTableWidgetItem(value)
             link = file_link(name, value)
             if link:
-                cell.setToolTip(tr("double-click: open {path}", path=link))
+                cell.setToolTip(tr("viewer.tip.double_click_open", path=link))
                 cell.setForeground(QColor("#4f9fd9"))
             self.setItem(row, 1, cell)
         self.resizeColumnToContents(0)
 
     def show_node(self, node: Node) -> None:
-        rows = [(tr("kind"), node.kind), (tr("list"), f"{node.section} [{node.index}]")] if node.kind else []
+        rows = (
+            [(tr("viewer.kind"), node.kind), (tr("viewer.list"), f"{node.section} [{node.index}]")] if node.kind else []
+        )
         rows += [(k[1:] if k == configtree.GROUP else k, v) for k, v in node.fields]
         rows += [
             (k, " ".join((el.text or "").strip() for el in v.iter() if (el.text or "").strip())[:200])
@@ -193,10 +195,10 @@ class UsersPanel(QTreeWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setHeaderLabels([tr("used by"), tr("field")])
+        self.setHeaderLabels([tr("viewer.used_by_lower"), tr("common.field")])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.itemDoubleClicked.connect(self._open)
-        self.note(tr("File > Who uses the file (Ctrl+U) reads every file once."))
+        self.note(tr("viewer.file_gt_uses_ctrl_plus"))
 
     def note(self, text: str) -> None:
         self.clear()
@@ -204,21 +206,21 @@ class UsersPanel(QTreeWidget):
 
     def show_users(self, path: str, configs: list[str], assets: list) -> None:
         self.clear()
-        for title, rows in ((N_("Files"), [(c, "", c) for c in configs]),
-                            (N_("Assets"), [(f"{u.guid}  {u.name}", u.field, u.guid) for u in assets])):  # fmt: skip
-            top = QTreeWidgetItem([tr("{title} ({count})", title=tr(title), count=len(rows))])
+        for title, rows in ((N_("common.files"), [(c, "", c) for c in configs]),
+                            (N_("common.assets"), [(f"{u.guid}  {u.name}", u.field, u.guid) for u in assets])):  # fmt: skip
+            top = QTreeWidgetItem([tr("common.title_count", title=tr(title), count=len(rows))])
             self.addTopLevelItem(top)
             for text, where, target in rows:
                 item = QTreeWidgetItem([text, where])
                 item.setData(0, NODE_ROLE, target)
                 item.setToolTip(
                     0,
-                    tr("double-click: open it") if isinstance(target, str) else tr("double-click: show the asset"),
+                    tr("viewer.double_click_open") if isinstance(target, str) else tr("viewer.double_click_show_asset"),
                 )
                 top.addChild(item)
             top.setExpanded(len(rows) <= 50)
         if not configs and not assets:
-            self.note(tr("nothing names {name}", name=path.rsplit("/", 1)[-1]))
+            self.note(tr("viewer.nothing_names_name", name=path.rsplit("/", 1)[-1]))
 
     def _open(self, item, _col) -> None:
         target = item.data(0, NODE_ROLE)
@@ -237,28 +239,29 @@ class ChecksPanel(QTreeWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setHeaderLabels([tr("file"), tr("why"), tr("named by")])
+        self.setHeaderLabels([tr("common.file_lower"), tr("viewer.why"), tr("viewer.named_by_lower")])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.itemDoubleClicked.connect(
             lambda item, _col: item.data(0, NODE_ROLE) and self.open_file.emit(item.data(0, NODE_ROLE))
         )
-        self.shown = (None, -1)  # (scene, failures listed) the rows were made for
+        self._scene: Scene | None = None  # the scene the rows were made for, and how many failures they list
+        self._failures = -1
 
     def show_checks(self, scene: Scene | None, failed: dict[str, str]) -> None:
         """The rows of a scene and the files its renderer failed to load (``ModelRenderer.failed``)."""
-        if self.shown == (scene, len(failed)):
+        if self._scene is scene and self._failures == len(failed):  # by identity: a scene's parts hold arrays
             return
-        self.shown = (scene, len(failed))
+        self._scene, self._failures = scene, len(failed)
         self.clear()
         missing = scene.resolve.missing() if scene is not None and scene.resolve is not None else []
         for title, rows in (
             (
-                N_("Not in the game's files"),
+                N_("viewer.not_games_files"),
                 [(r.name, r.reason, r.owner, f"{r.kind} {r.slot} {r.node}") for r in missing],
             ),
-            (N_("Do not load"), [(path, why, "", "") for path, why in sorted(failed.items())]),
+            (N_("viewer.not_load"), [(path, why, "", "") for path, why in sorted(failed.items())]),
         ):
-            top = QTreeWidgetItem([tr("{title} ({count})", title=tr(title), count=len(rows))])
+            top = QTreeWidgetItem([tr("common.title_count", title=tr(title), count=len(rows))])
             self.addTopLevelItem(top)
             for name, why, owner, where in rows:
                 item = QTreeWidgetItem([name, why, owner])
@@ -336,12 +339,12 @@ class SequencePanel(QWidget):
         super().__init__(parent)
         self.scene: Scene | None = None
         self.choice = QComboBox(sizeAdjustPolicy=QComboBox.SizeAdjustPolicy.AdjustToContents, minimumWidth=240)
-        self.play = QPushButton(tr("Play"), checkable=True)
-        self.speed = QDoubleSpinBox(minimum=0.1, maximum=4.0, singleStep=0.1, value=1.0, prefix=tr("speed "))
-        self.clock = QLabel(tr("{seconds} s", seconds=number(0, 2)))
+        self.play = QPushButton(tr("common.play"), checkable=True)
+        self.speed = QDoubleSpinBox(minimum=0.1, maximum=4.0, singleStep=0.1, value=1.0, prefix=tr("common.speed"))
+        self.clock = QLabel(tr("common.seconds_s", seconds=number(0, 2)))
         self.timeline = Timeline()
         bar = QHBoxLayout()
-        for w in (QLabel(tr("Sequence")), self.choice, self.play, self.speed, self.clock):
+        for w in (QLabel(tr("common.sequence")), self.choice, self.play, self.speed, self.clock):
             bar.addWidget(w)
         bar.addStretch(1)
         lay = QVBoxLayout(self)
@@ -355,13 +358,13 @@ class SequencePanel(QWidget):
         self.scene = scene
         self.choice.blockSignals(True)
         self.choice.clear()
-        self.choice.addItem(tr("(rest pose)"), None)
+        self.choice.addItem(tr("viewer.rest_pose"), None)
         for k, s in enumerate(scene.sequences):
             seconds = number(s.duration_ms / 1000, 2)
             text = (
-                tr("{label}, {seconds} s, looped", label=s.label, seconds=seconds)
+                tr("viewer.label_seconds_s_looped", label=s.label, seconds=seconds)
                 if s.looped
-                else tr("{label}, {seconds} s", label=s.label, seconds=seconds)
+                else tr("viewer.label_seconds_s", label=s.label, seconds=seconds)
             )
             self.choice.addItem(text, ("seq", k))  # i18n: ok (a datum)
         for part in scene.parts:
@@ -369,9 +372,8 @@ class SequencePanel(QWidget):
                 self.choice.addItem(
                     f"{part.node}: {clip.file.rsplit('/', 1)[-1]}", ("anim", part.node, k)
                 )  # i18n: ok (names)
+        self.choice.setCurrentIndex(1 if scene.sequences and any(s.tracks for s in scene.sequences) else 0)
         self.choice.blockSignals(False)
-        default = 1 if scene.sequences and any(s.tracks for s in scene.sequences) else 0
-        self.choice.setCurrentIndex(default)
         self._chosen()
 
     def _sequence(self) -> Sequence | None:
@@ -411,4 +413,4 @@ class SequencePanel(QWidget):
         self.timeline.set_time(seconds)
         seq = self._sequence()
         speed = seq.speed if seq is not None and seq.speed > 0 else 1.0
-        self.clock.setText(tr("{seconds} s", seconds=number((seconds * speed) % self.length(), 2)))
+        self.clock.setText(tr("common.seconds_s", seconds=number((seconds * speed) % self.length(), 2)))

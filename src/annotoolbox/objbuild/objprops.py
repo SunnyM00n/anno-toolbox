@@ -51,7 +51,7 @@ class PropertyEditor(QTreeWidget):
         self.game, self.part_kind, self.source_names, self.read_only = "", "", False, False
         self.files: Callable[[], Iterable[str]] = tuple
         self.setColumnCount(2)
-        self.setHeaderLabels([tr("field"), tr("value")])
+        self.setHeaderLabels([tr("common.field"), tr("common.value_lower")])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.header().setStretchLastSection(True)
         self.setEditTriggers(QTreeWidget.EditTrigger.EditKeyPressed)  # a double-click goes through ``_double``
@@ -114,15 +114,15 @@ class PropertyEditor(QTreeWidget):
         item.setFlags(flags)
         if kind == "file":
             item.setForeground(1, QColor(LINK))
-            item.setToolTip(0, tr("double-click the name: open the file in the viewer"))
-            item.setToolTip(1, tr("double-click: pick one of the game's files (F2 types the name)"))
+            item.setToolTip(0, tr("objects.tip.double_click_name_open_file"))
+            item.setToolTip(1, tr("objects.tip.double_click_pick_one_games"))
         elif kind == "binary":
-            item.setToolTip(1, tr("a binary value, as hex"))
+            item.setToolTip(1, tr("objects.tip.binary_value_hex"))
         elif kind == "flags":
-            item.setToolTip(1, tr("double-click: tick the bits"))
+            item.setToolTip(1, tr("objects.tip.double_click_tick_bits"))
         elif kind == "swatch":
             item.setIcon(1, self._swatch(entry))
-            item.setToolTip(1, tr("double-click: pick the colour (F2 types the number)"))
+            item.setToolTip(1, tr("objects.tip.double_click_pick_colour_f2"))
         return item
 
     def _text(self, entry: Entry) -> str:
@@ -131,7 +131,7 @@ class PropertyEditor(QTreeWidget):
             return ""
         if f.binary:
             return f.value if len(f.node.data) <= SHORT_BINARY else tr(
-                "{n} bytes: {value}", n=len(f.node.data), value=f.value[: 3 * SHORT_BINARY]
+                "objects.n_bytes_value", n=len(f.node.data), value=f.value[: 3 * SHORT_BINARY]
             )  # fmt: skip
         if kind == "flags":
             names = cfgfields.flag_names(strip(f.name), self.game)
@@ -153,7 +153,7 @@ class PropertyEditor(QTreeWidget):
             combo.addItem(f"{value}  {label}", value)
         at = combo.findData(f.value.strip())
         if at < 0:
-            combo.addItem(tr("{value} (not in the list)", value=f.value), f.value)
+            combo.addItem(tr("objects.value_not_list", value=f.value), f.value)
             at = combo.count() - 1
         combo.setCurrentIndex(at)
         combo.setEnabled(not read_only)
@@ -207,7 +207,7 @@ class PropertyEditor(QTreeWidget):
         def find(query: str) -> list[str]:
             return cfgfields.file_candidates(self.files(), suffixes, self.source_names, query)
 
-        hint = ", ".join(suffixes) or tr("any file")
+        hint = ", ".join(suffixes) or tr("assets.any_file")
         found = pickers.pick_file(self, strip(f.name), hint, find, f.value)
         if found:
             value = cfgfields.file_value(found, f.value)
@@ -238,17 +238,17 @@ def problem(kind: str, value: str) -> str:
         try:
             number = float(value)
         except ValueError:
-            return tr("{value} is no number", value=repr(value))
+            return tr("objects.value_no_number", value=repr(value))
         if not math.isfinite(number):
-            return tr("{value} is no number a config can hold", value=repr(value))
+            return tr("objects.no_number_config_hold", value=repr(value))
     if kind == "binary":
         try:
             bytes.fromhex(value)
         except ValueError:
-            return tr("hex digits in pairs, like 0a ff 10")
+            return tr("objects.hex_digits_pairs_like_0a")
         return ""
     if "<" in value or ">" in value or "CDATA[" in value:
-        return tr("< and > would break the config's tags; leave them out")
+        return tr("objects.break_configs_tags_leave_out")
     if BARE_AMPERSAND.search(value):
-        return tr("a bare & would break the config; write &amp; for it")
+        return tr("objects.bare_break_config_write_amp")
     return ""

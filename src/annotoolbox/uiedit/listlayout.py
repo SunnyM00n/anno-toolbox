@@ -28,7 +28,22 @@ PLACEHOLDER_ITEMS = 3  # elements shown for a list whose sample values hold none
 LIST_HORIZONTAL, LIST_SPACE, LIST_VISIBLE = 0x38700F5E, 0x3FFDE5EF, 0x374A4E11
 GRID_HORIZONTAL, GRID_SPACE_X, GRID_SPACE_Y = 0x3641914A, 0x31757E14, 0x33C30462
 GRID_COLUMNS, GRID_ROWS, CELL = 0x331E7ED6, 0x35E3D8E7, 0x39BFC470  # CELL: the game grid's StaticElementSize
+TOTAL_ITEMS = 0x3E50D33B  # TotalItemCount: the game fills it with the data source's count
+# SectorInfo, the component the game fills on a radial list's item: Position, Rotation, AngleSize
+SECTOR, SECTOR_POSITION, SECTOR_ROTATION, SECTOR_SIZE = "5065a655", 0x77B097F0, 0x70937B58, 0x795500AB
 ELEMENT = 0x90000000  # the data source's element i is 0x90000000 + i in the files' preview values
+# ValueCompare on a list's item: each item reports MyValue, the game gives every item the Min and Max of all of them
+COMPARE, COMPARE_MINE, COMPARE_MIN, COMPARE_MAX = "cf1d5ae2", 0x7F71FFA6, 0x77A51626, 0x72E77949
+
+
+def compared(values: list) -> tuple[tuple, tuple] | None:
+    """The smallest and the largest of the items' ``MyValue`` vectors, per axis (None without any): what the game
+    gives each item's ``ValueCompare`` as ``MinValue`` and ``MaxValue`` (layout.md "Lists, grids and loaders")."""
+    vectors = [tuple(float(x) for x in v) for v in values if isinstance(v, (tuple, list)) and v]
+    if not vectors:
+        return None
+    n = min(len(v) for v in vectors)
+    return tuple(min(v[i] for v in vectors) for i in range(n)), tuple(max(v[i] for v in vectors) for i in range(n))
 
 
 def type_chain(files, root: dict) -> list[str]:
@@ -79,7 +94,8 @@ def offsets(kind: str, inputs: dict, n: int, item: tuple[float, float]) -> list[
         return _arc(kind, inputs, n)
     if kind == "grid":
         cell = inputs.get(CELL)
-        w, h = (float(cell[0]), float(cell[1])) if isinstance(cell, (tuple, list)) and cell[0] and cell[1] else item
+        sized = isinstance(cell, (tuple, list)) and len(cell) >= 2 and cell[0] and cell[1]  # a bound value may be short
+        w, h = (float(cell[0]), float(cell[1])) if sized else item
         gx, gy = _number(inputs, GRID_SPACE_X, 0.0), _number(inputs, GRID_SPACE_Y, 0.0)
         horizontal = bool(inputs.get(GRID_HORIZONTAL))
         across = max(1, int(_number(inputs, GRID_ROWS if horizontal else GRID_COLUMNS, 2)))
@@ -100,14 +116,23 @@ def offsets(kind: str, inputs: dict, n: int, item: tuple[float, float]) -> list[
 
 def _arc(kind: str, inputs: dict, n: int) -> list[tuple[float, float]]:
     """The copies of a radial list on its arc: the first at ``StartAngle``, the rest spread over ``TotalAngle`` (a
-    full circle leaves its end free), the angle from straight up, clockwise (inferred from the editor's words)."""
+    full circle leaves its end free), the angle from straight up, clockwise: the game's selection wheels (layout.md
+    "Lists, grids and loaders in the game"; a radial list's step is open there)."""
+    return [(x, y) for x, y, _, _ in sectors(kind, inputs, n)]
+
+
+def sectors(kind: str, inputs: dict, n: int) -> list[tuple[float, float, float, float]]:
+    """Each copy's sector of a radial list: its point on the arc (x, y), its angle and the angle each item spans, as
+    the game fills the item's ``SectorInfo`` (``SECTOR``: a file that binds it to its own place and rotation is
+    turned by it; layout.md "Lists, grids and loaders in the game")."""
     ids, defaults = RADIAL[kind]
     start, total, radius = (_number(inputs, uid, d) for uid, d in zip(ids, defaults, strict=True))
+    step = total / n if total >= 360.0 else (total / (n - 1) if n > 1 else 0.0)
     out = []
     for i in range(n):
-        step = total / n if total >= 360.0 else (total / (n - 1) if n > 1 else 0.0)
-        a = math.radians(start + step * i)
-        out.append((radius * math.sin(a), -radius * math.cos(a)))
+        angle = start + step * i
+        a = math.radians(angle)
+        out.append((radius * math.sin(a), -radius * math.cos(a), angle, step))
     return out
 
 

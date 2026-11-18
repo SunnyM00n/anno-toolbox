@@ -46,7 +46,7 @@ class Element:
     @property
     def name(self) -> str:
         own = phoenixedit.object_name(self.node) or self.given
-        return own or (tr("(template)") if self.kind == "template" else tr("(unnamed)"))
+        return own or (tr("ui.template") if self.kind == "template" else tr("ui.unnamed"))
 
     @cached_property
     def guid(self) -> str | None:
@@ -130,5 +130,32 @@ def find(top: Element, node: dict) -> Element | None:
     return next((e for e in top.walk() if e.node is node), None)
 
 
+def crc_key(el: Element) -> str | None:
+    """The key of an instance by its name CRC: a running game's ``guid`` is a run-time handle, the file's ``NameCrc``
+    is what both share (names are unique within a file)."""
+    crc = fields.get(el.node, "NameCrc")
+    return crc_name(int(crc)) if crc else None
+
+
+def crc_name(crc: int) -> str:
+    """``crc:<name CRC>``, the one spelling of that key (the file's instances, a dump's and a live answer's widgets)."""
+    return f"crc:{crc & 0xFFFFFFFF:08x}"
+
+
+def keys(el: Element) -> tuple[str, ...]:
+    """The keys a running game's widget is matched to an instance by: its GUID, then its name CRC."""
+    return tuple(k for k in (el.guid, crc_key(el)) if k)
+
+
+def held_for(held: dict, el: Element):
+    """What ``held`` (live values or texts by instance key) has for an instance: by GUID, else by name CRC; None."""
+    return next((held[k] for k in keys(el) if k in held), None) if held else None
+
+
 def by_guid(top: Element, guid: str) -> Element | None:
     return next((e for e in top.walk() if e.guid == guid), None)
+
+
+def by_node_id(top: Element | None, node_id: int) -> Element | None:
+    """The element whose node has this ``id()``: what the preview's signals carry (a node is no signal argument)."""
+    return next((e for e in top.walk() if id(e.node) == node_id), None) if top is not None else None

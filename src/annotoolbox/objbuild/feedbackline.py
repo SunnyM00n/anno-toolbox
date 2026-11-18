@@ -79,7 +79,9 @@ class BarView(QWidget):
                 p.setPen(QColor("#f28c28"))
                 p.drawRect(r)
             p.setPen(QColor("#000"))
-            p.drawText(r.adjusted(3, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, tr(KIND_NAMES.get(b.kind, N_("Element"))))
+            p.drawText(
+                r.adjusted(3, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, tr(KIND_NAMES.get(b.kind, N_("ui.element")))
+            )
         if self._drag is not None and self._drag[1] == "move":
             p.setPen(QColor("#f28c28"))
             p.drawLine(int(self._x), 0, int(self._x), self.height())
@@ -153,11 +155,11 @@ class FeedbackLine(QWidget):
         self.kind = QComboBox()
         for kind in ADDABLE:
             self.kind.addItem(tr(KIND_NAMES[kind]), kind)
-        self.add, self.remove = QPushButton(tr("Add")), QPushButton(tr("Remove"))
-        self.earlier, self.later = QPushButton(tr("Earlier")), QPushButton(tr("Later"))
+        self.add, self.remove = QPushButton(tr("objects.add")), QPushButton(tr("common.remove"))
+        self.earlier, self.later = QPushButton(tr("objects.earlier")), QPushButton(tr("objects.later"))
         self.view = BarView()
         bar = QHBoxLayout()
-        for w in (QLabel(tr("Actor")), self.item, QLabel(tr("State")), self.state, QLabel(tr("Loop")), self.loop,
+        for w in (QLabel(tr("objects.actor")), self.item, QLabel(tr("common.state")), self.state, QLabel(tr("objects.loop")), self.loop,
                   self.kind, self.add, self.remove, self.earlier, self.later):  # fmt: skip
             bar.addWidget(w)
         bar.addStretch(1)
@@ -183,7 +185,7 @@ class FeedbackLine(QWidget):
         self.item.blockSignals(True)
         self.item.clear()
         for it in self.items:
-            self.item.addItem(tr("{n}: {states} states", n=it.index, states=len(it.states)), it.index)
+            self.item.addItem(tr("objects.n_states", n=it.index, states=len(it.states)), it.index)
         self.item.setCurrentIndex(min(max(keep, 0), len(self.items) - 1) if self.items else -1)
         self.item.blockSignals(False)
         for w in (self.add, self.remove, self.earlier, self.later):
@@ -196,7 +198,9 @@ class FeedbackLine(QWidget):
         self.state.clear()
         it = self._item()
         for state in sorted(it.states) if it is not None else []:
-            self.state.addItem(tr("Not working") if state == 0 else tr("Working") if state == 1 else str(state), state)
+            self.state.addItem(
+                tr("objects.not_working") if state == 0 else tr("objects.working") if state == 1 else str(state), state
+            )
         found = self.state.findData(keep)
         self.state.setCurrentIndex(found if found >= 0 else min(1, self.state.count() - 1))
         self.state.blockSignals(False)
@@ -221,9 +225,7 @@ class FeedbackLine(QWidget):
     def _retime(self, bar: Bar, seconds: float) -> None:
         found = feedbackedit.retimed(bar, seconds)
         if not found:
-            self.said.emit(
-                tr("the length of this element is not its own (a walk at its sequence's speed, an instant one)")
-            )
+            self.said.emit(tr("objects.length_element_not_own_walk"))
         self._emit(found)
 
     def _add(self) -> None:
@@ -234,7 +236,7 @@ class FeedbackLine(QWidget):
         kind = int(self.kind.currentData())
         node = feedbackedit.new_element(self.doc, kind) if parent is not None else None
         if node is None:
-            self.said.emit(tr("no element of that kind in this file to copy"))
+            self.said.emit(tr("objects.no_element_kind_file_copy"))
             return
         after = self.view.current.node if self.view.current is not None else None
         self._emit([feedbackedit.added(parent, after, node, kind)])

@@ -15,15 +15,27 @@ from types import SimpleNamespace
 
 from ..formats import phoenixedit
 from ..infra.i18n import tr
-from . import arrange, effects, elements, fields, labels, listlayout, loaders
+from . import arrange, effects, elements, fields, gamedata, labels, listlayout, loaders, playstate, previewdefaults
+from .arrange import vector
 from .fields import property_values
 from .labels import TextStyle
+from .matrices import IDENTITY, Matrix, apply, bounds, invert, mul, own_scale, rotate, scale, translate, union_size
 from .memo import MISS, Memo
-from .scope import SIZE, GameObjectRef, ListSlot, RootInfo, Scope, canon, inputs_key, inputs_of, root_info
+from .scope import (
+    DISPLAYED,
+    SIZE,
+    GameObjectRef,
+    ListSlot,
+    RootInfo,
+    Scope,
+    canon,
+    component_default,
+    inputs_key,
+    inputs_of,
+    root_info,
+)
 from .viewmodels import Samples
 
-Matrix = tuple[float, float, float, float, float, float]  # x' = a x + c y + tx, y' = b x + d y + ty
-IDENTITY: Matrix = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 MAX_DEPTH = 32  # files inside files: 117's scenes nest up to 24 (statisticsscene); cycles are cut by themselves
 PPP = "c7b1e237"  # ProportionalPivotPoint, by the first part of its GUID
 PPP_VALUE = 1965950531  # its own property (the Widget Library)
@@ -34,43 +46,8 @@ HIDDEN_ALPHA = 0.01
 REPLACE = 3  # placings of one frame at most: a value seeded or made up late drops what read it before
 EFFECTED = ("image", "container", "group")  # the kinds whose effects the preview reads
 VISIBLE, IMAGE_ID = 0x80000007, 0x8000002A
-
-
-def mul(m: Matrix, n: Matrix) -> Matrix:
-    """``m`` after ``n`` (a point goes through ``n`` first)."""
-    a, b, c, d, tx, ty = m
-    e, f, g, h, ux, uy = n
-    return (a * e + c * f, b * e + d * f, a * g + c * h, b * g + d * h, a * ux + c * uy + tx, b * ux + d * uy + ty)
-
-
-def apply(m: Matrix, x: float, y: float) -> tuple[float, float]:
-    return m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]
-
-
-def translate(x: float, y: float) -> Matrix:
-    return (1.0, 0.0, 0.0, 1.0, x, y)
-
-
-def scale(sx: float, sy: float) -> Matrix:
-    return (sx, 0.0, 0.0, sy, 0.0, 0.0)
-
-
-def rotate(degrees: float) -> Matrix:
-    r = math.radians(degrees)
-    return (math.cos(r), math.sin(r), -math.sin(r), math.cos(r), 0.0, 0.0)
-
-
-def invert(m: Matrix) -> Matrix:
-    a, b, c, d, tx, ty = m
-    det = a * d - b * c or 1e-12
-    ia, ib, ic, id_ = d / det, -b / det, -c / det, a / det
-    return (ia, ib, ic, id_, -(ia * tx + ic * ty), -(ib * tx + id_ * ty))
-
-
-def bounds(m: Matrix, w: float, h: float) -> tuple[float, float, float, float]:
-    """(x0, y0, x1, y1) of the local rectangle 0..w x 0..h after ``m``."""
-    pts = [apply(m, x, y) for x, y in ((0, 0), (w, 0), (0, h), (w, h))]
-    return min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)
+POSITION, ROTATION = 0x80000001, 0x80000003
+DISPLAYED_TEXT, DISPLAYED_SIZE = DISPLAYED  # a label's text as laid out (``Placer.displayed``)
 
 
 @dataclass
@@ -111,6 +88,7 @@ class Box:
     visible: bool = True
     counts: bool = True  # ConsiderSize: whether its container measures it
     parent: Matrix = IDENTITY  # the parent's matrix: a move in the preview is a move in the parent's units
+    mask: bool = False  # a mask widget: it takes no input
 
 
 @dataclass
@@ -119,6 +97,8 @@ class Frame:
     items: list[DrawItem] = field(default_factory=list)
     boxes: dict[int, Box] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    hits: list = field(default_factory=list)  # the areas Play mode's input reaches, drawn order (``playstate.Hit``)
+    spans: list = field(default_factory=list)  # where each placed file's items and hits are (``playstate.Span``)
 
 
 @dataclass(frozen=True)
@@ -141,6 +121,8 @@ class TemplateRun:
     owner: object = None
     paint: Paint | None = None
     data_owner: str | None = None
+    scale: tuple[float, float] = (1.0, 1.0)  # the placing container's own scale (what FixedToParent divides by)
+    trail: tuple = ()  # the placing instances from the open file down (``playstate.Trail``)
 
 
 @dataclass
@@ -153,6 +135,7 @@ class Child:
     counts: bool
     inputs: dict
     slot: arrange.Slot
+    origin: tuple[float, float] = (0.0, 0.0)  # where its box starts from its own origin (a label's text)
 
 
 @dataclass
@@ -170,11 +153,20 @@ class Context:
     epoch: tuple | None = None  # what the kept results were made under (``place`` starts over when it changes)
     design: bool = True  # the design view: what an animation fades in is shown (ui-editor.md "The preview")
     editor_hidden: bool = False  # draw the layers the author hid in the editor (``IsHidden``) too
+    window_aspect: float = 0.0  # a window of this width over height, 0 the file's own: the root stretches per axis
     animation: tuple[str, float] | None = None  # (animation GUID, seconds) of the open file played at that time
     tweens: dict[str, dict[tuple[int, ...], object]] | None = None  # the open file's tweens at a time (tweens.writes)
-    live_text: dict[str, str] = field(default_factory=dict)  # the running game's label texts by instance GUID (U8)
+    live_text: dict[str, str] = field(
+        default_factory=dict
+    )  # label texts held from a running game, by instance GUID (U8)
+    # the rest a running game's widgets show (Visible, an image's id, own property values), by the same keys
+    live_values: dict[str, dict[tuple[int, ...], object]] = field(default_factory=dict)
+    defaults: object = None  # what the preview assumes of the player's game (``previewdefaults.current``)
+    game_data: object = None  # the installed game's data for what the game fills (``gamedata.GameData``)
     node_values: dict[int, tuple[dict, dict]] = field(default_factory=dict)  # id(node) -> (node, ``values``)
     prefixes: set[str] = field(default_factory=set)  # the sample key prefixes a list counted its elements under
+    play: dict | None = None  # Play mode's values by file (``playstate.PlayState.trees``); None in Design mode
+    play_choices: object = None  # the choices Play mode keeps in the Preview settings (``playstate.Choices``)
 
     def __post_init__(self) -> None:
         self.samples.on_read = self._sample_read
@@ -212,8 +204,14 @@ class Context:
 
     def conditions(self) -> tuple:
         """What the kept results depend on besides the files and the sample values: the view's switches."""
-        return (id(self.files), self.language, self.design, self.editor_hidden, id(self.samples), self.samples.fill,
-                tuple(sorted(self.live_text.items())))  # fmt: skip
+        return (id(self.files), self.language, self.design, self.editor_hidden, self.window_aspect, id(self.samples),
+                self.samples.fill, tuple(sorted(self.live_text.items())), repr(sorted(self.live_values.items())),
+                previewdefaults.current(self).key(), gamedata.stamp(self))  # fmt: skip
+
+    def live_of(self, el: elements.Element) -> dict[tuple[int, ...], object]:
+        """What the running game's widget of this element shows, as property values (by instance GUID, else by the
+        name CRC); empty without held values."""
+        return elements.held_for(self.live_values, el) or {}
 
     def root(self, key: str | None) -> dict | None:
         """The decoded file ``key`` (``files.root``); what is being computed now depends on it."""
@@ -232,12 +230,17 @@ class Context:
         self.memo.forget(("file", key))
 
     def values(self, node: dict) -> dict[tuple[int, ...], object]:
-        """``fields.property_values`` of an instance, kept until an edit (shared: do not change); the History
-        Editions' ``DynamicProperties`` give the placed file's properties by their AtomPropertyId."""
+        """``fields.property_values`` of an instance, kept until an edit (shared: do not change), with what the
+        game gives the components it fills from the player's state; the History Editions' ``DynamicProperties`` give
+        the placed file's properties by their AtomPropertyId."""
         hit = self.node_values.get(id(node))
         if hit is not None and hit[0] is node:
             return hit[1]
         out = property_values(node)
+        comps = arrange.components(node)  # what the game fills from the player's state (previewdefaults)
+        if comps:
+            out.update(previewdefaults.component_values(comps, previewdefaults.current(self)))
+            previewdefaults.resolve_portrait(out, comps, previewdefaults.current(self))
         dynamic = fields.dynamic_properties(node)
         placed = self.root(fields.get(node, "Template")) if dynamic else None
         atoms = (root_info(self, placed).atoms or {}) if placed is not None else {}
@@ -289,16 +292,6 @@ def paint_key(paint: Paint) -> tuple:
     return paint.color, paint.alpha, clips, repr(sorted(paint.effects.items()))
 
 
-def vector(value, default: tuple) -> tuple:
-    """``value`` as a vector of floats as long as ``default`` (a missing or unusable part from ``default``)."""
-    parts = list(value) if isinstance(value, (tuple, list)) else []
-    out = []
-    for i, d in enumerate(default):
-        v = parts[i] if i < len(parts) else d
-        out.append(float(v) if isinstance(v, (int, float)) else float(d))
-    return tuple(out)
-
-
 def scalar(value, default: float) -> float:
     """``value`` as one number (the first part of a vector, ``default`` for anything else)."""
     if isinstance(value, (tuple, list)):
@@ -306,18 +299,18 @@ def scalar(value, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) else float(default)
 
 
-def cancel(modes: dict[str, int], pos, sc, ancestors: tuple[float, float]):
-    """Position and scale with the modes that undo the ancestors' scale applied: Fixed (1) and FixedToParent (2,
-    taken as 1 here) per axis, and the aspect ratio (1 fit the smaller axis, 2 follow the width, 3 the height)
-    (docs/ui/117/layout.md "Position, anchor and pivot")."""
+def cancel(modes: dict[str, int], pos, sc, ancestors: tuple[float, float], parent: tuple[float, float] = (1.0, 1.0)):
+    """Position and scale with the modes that undo a scale above the widget applied: per axis Fixed (1) divides by
+    the product of all ancestors' scales and FixedToParent (2) by the ``parent``'s own scale, and the aspect ratio
+    (1 fit the smaller axis, 2 follow the width, 3 the height) (docs/ui/117/layout.md "Position, anchor and pivot")."""
     ax, ay = (max(abs(a), 1e-6) for a in ancestors)
+    by = {1: (ax, ay), 2: tuple(max(abs(a), 1e-6) for a in parent)}
     pos, sc = list(pos), list(sc)
-    for i, (mode, s) in enumerate((("XRepositioning", ax), ("YRepositioning", ay))):
-        if modes[mode]:
-            pos[i] = float(pos[i]) / s
-    for i, (mode, s) in enumerate((("WidthResizing", ax), ("HeightResizing", ay))):
-        if modes[mode]:
-            sc[i] = float(sc[i]) / s
+    for i, (move, size) in enumerate((("XRepositioning", "WidthResizing"), ("YRepositioning", "HeightResizing"))):
+        if modes[move] in by:
+            pos[i] = float(pos[i]) / by[modes[move]][i]
+        if modes[size] in by:
+            sc[i] = float(sc[i]) / by[modes[size]][i]
     aspect = modes["AspectRatio"]
     if aspect == 1:
         low = min(ax, ay)
@@ -329,9 +322,60 @@ def cancel(modes: dict[str, int], pos, sc, ancestors: tuple[float, float]):
     return tuple(pos), tuple(sc)
 
 
+MASK_KINDS = ("image", "shape")
+
+
+def _is_mask(node: dict) -> bool:
+    return int(fields.get(node, "MaskMode", 0) or 0) != 0
+
+
+def draw_order(children: list, is_mask, receives, zindex) -> list:
+    """A container's children in the order the game draws them (layout.md "Draw order"): the file's order with each run
+    of masks moved in front of the siblings it covers, then, from the first child with a ``ZIndex`` on, sorted by it as
+    an unsigned 32-bit number (stable)."""
+    draw, run, at = [], [], 0
+    for i, child in enumerate(children):
+        if is_mask(child):
+            run.append(child)
+            continue
+        if run:
+            draw[at:at] = run
+            run, at = [], i
+        draw.append(child)
+        if not receives(child):
+            at += 1
+    if run:
+        draw[at:at] = run
+    first = next((i for i, c in enumerate(children) if zindex(c)), None)
+    if first is not None:
+        draw[first:] = sorted(draw[first:], key=lambda c: zindex(c) & 0xFFFFFFFF)
+    return draw
+
+
 def is_size(value) -> bool:
     """Whether a value is a usable size (two numbers or more)."""
     return isinstance(value, (tuple, list)) and len(value) >= 2 and all(isinstance(v, (int, float)) for v in value[:2])
+
+
+def settled(scope: Scope, inputs: dict) -> dict:
+    """A file's own values after its bindings, where they are given or computed (not a default nobody set): what a
+    list lays its items out by (a tab bar's own binding makes it one row)."""
+    given = {uid: scope.own[uid] for uid in inputs if uid in scope.own}
+    return {**inputs, **given, **scope.computed()}
+
+
+@dataclass
+class Listed:
+    """A list file being placed: its kind, its item child, its element count and keys, what it is given (the item
+    count with it), the scope of its first item and what every item is given from all of them (``_compared``)."""
+
+    kind: str
+    item: elements.Element
+    count: int
+    element: Callable[[int], str]
+    inputs: dict
+    scope: Scope
+    given: tuple = ()
 
 
 class Placer:
@@ -340,6 +384,9 @@ class Placer:
     def __init__(self, ctx: Context, frame: Frame) -> None:
         self.ctx, self.frame = ctx, frame
         self.stack: list[str] = []
+        self.parent_scale = (1.0, 1.0)  # the own scale of the widget whose children are being placed
+        self.filled: dict[str, dict] = {}  # what the game fills in a list's item being placed, by instance GUID
+        self.trail: tuple = ()  # the placing instances down to the file being placed (``TemplateRun.trail``)
 
     # sizes
 
@@ -373,9 +420,21 @@ class Placer:
         """A widget file placed with ``inputs``: the union of what counts for its size, and its own properties'
         values after its bindings (what a binding of the file that places it can read). A list is measured with the
         elements of the instance ``owner``, as it is drawn."""
+        return self._measured(key, root, inputs, owner)[:2]
+
+    def start_of(self, key: str, root: dict, inputs: dict, owner: str | None = None) -> tuple[float, float]:
+        """Where a widget file's measured box starts from its origin: above or left of it where what it holds lies
+        there (the options tab's content stands above its origin: layout.md "ConsiderSize and the size of a
+        container"), else at it."""
+        if fields.get(root, FIXED_SIZE):
+            return (0.0, 0.0)
+        return self._measured(key, root, inputs, owner)[2]
+
+    def _measured(self, key: str, root: dict, inputs: dict, owner: str | None = None) -> tuple:
+        """``measure`` with ``start_of``: (size, own values, start)."""
         ref = tuple(fields.get(root, "ReferenceSize", (1920.0, 1080.0)))
         if self._cut(key):
-            return ref, {}
+            return ref, {}, (0.0, 0.0)
         owner = owner if listlayout.list_kind(self.ctx, root) is not None else None  # only a list's size is its own
 
         def make():
@@ -383,12 +442,16 @@ class Placer:
             run = TemplateRun(True, self.stack, data_owner=owner)
             scope = Placer(self.ctx, sub)._template(key, root, IDENTITY, inputs, run)
             boxes = [bounds(b.matrix, *b.size) for b in sub.boxes.values() if b.visible and b.counts]
-            size = (max(0.0, max(b[2] for b in boxes)), max(0.0, max(b[3] for b in boxes))) if boxes else (0.0, 0.0)
-            return size, scope.computed()
+            if not boxes:
+                return (0.0, 0.0), scope.computed(), (0.0, 0.0)
+            # from the origin to the far edge; the near edge only where it lies before the origin
+            start = (min(0.0, min(b[0] for b in boxes)), min(0.0, min(b[1] for b in boxes)))
+            size = (max(0.0, max(b[2] for b in boxes)) - start[0], max(0.0, max(b[3] for b in boxes)) - start[1])
+            return size, scope.computed(), start  # still the edge: a list's boxes repeat one node (layout.md "Open")
 
         # the open file names the sample keys; a file that reads its own size while it is measured gets the reference
         mk = ("size", id(root), key, inputs_key(self.ctx.samples, inputs), tuple(self.stack[:1]), self._elements(owner))
-        return self._kept(mk, root, make, provisional=(ref, {}))
+        return self._kept(mk, root, make, provisional=(ref, {}, (0.0, 0.0)))
 
     def _elements(self, owner: str | None) -> tuple | None:
         """A list instance's elements as a part of what is kept: two lists whose elements hold no given value measure
@@ -419,56 +482,109 @@ class Placer:
             hit = memo.get((mk, here))
         return memo.compute(mk, id(root), make, provisional, here) if hit is MISS else hit
 
+    def own(self, el: elements.Element, scope: Scope) -> dict:
+        """An instance's values: its stored ones, what its scope's bindings write, what the game fills in a list's
+        item (``filled``), then what the game shows (held)."""
+        filled = self.filled.get(el.guid or "", {})
+        return {**self.ctx.values(el.node), **scope.writes.get(el.guid, {}), **filled, **self.ctx.live_of(el)}
+
     def size_of(self, node: dict, scope: Scope) -> tuple[float, float]:
         """The size a binding reads from an instance of ``scope``'s template (``scope.Host``)."""
         el = scope.by_node.get(id(node))
         if el is None:
             return (0.0, 0.0)
-        overrides = {**self.ctx.values(node), **scope.writes.get(el.guid, {})}
+        overrides = self.own(el, scope)
         if el.kind == "group":
             return self.group_size(el, scope, tuple(fields.get(scope.root, "ReferenceSize", (1920.0, 1080.0))))
-        return self.natural_size(el, overrides, inputs_of(overrides), f"{scope.key}:{el.guid}")
+        return self.natural_size(el, overrides, inputs_of(overrides, node), f"{scope.key}:{el.guid}")
 
     def outputs(self, node: dict, scope: Scope) -> dict[int, object]:
         """The own property values of the widget file an instance places, given what the instance passes in."""
+        placed = self.placed_scope(node, scope)
+        return placed.computed() if placed is not None else {}
+
+    def places(self, node: dict, scope: Scope) -> bool:
+        """Whether an instance of ``scope``'s file is placed at all: a loader places only its chosen children (what
+        the others would write into a shared object never happens)."""
+        kind = loaders.loader_kind(self.ctx, scope.root)
+        el = scope.by_node.get(id(node))
+        if kind is None or el is None or len(el.path()) < 2:
+            return True
+        top = root_info(self.ctx, scope.root).top
+        return el.path()[1] in loaders.chosen(kind, top.children, scope.inputs, self.ctx.design,
+                                                  self._picker(scope.root, scope.inputs))  # fmt: skip
+
+    def _picker(self, root: dict, inputs: dict) -> Callable:
+        """What picks an object loader's child (``loaders.chosen``): the class of the game object it is given."""
+        given = inputs.get(gamedata.CURRENT_OBJECT)
+        return lambda children: gamedata.object_child(self.ctx, root, given, children)
+
+    def displayed(self, node: dict, scope: Scope) -> dict[int, object]:
+        """A label's ``DisplayedText`` and ``DisplayedSize`` (the shown text's size after its scale), as its
+        bindings leave it (layout.md "Labels"); {} for any other instance."""
+        el = scope.by_node.get(id(node))
+        if el is None or el.kind != "label":
+            return {}
+        overrides = self.own(el, scope)
+        text, style, _ = labels.label(self.ctx, node, overrides)
+        sx, sy = vector(overrides.get((0x80000035,), fields.get(node, "Scale")), (1.0, 1.0))
+        return {DISPLAYED_TEXT: text, DISPLAYED_SIZE: (style.shown[0] * sx, style.shown[1] * sy)}
+
+    def placed_scope(self, node: dict, scope: Scope) -> Scope | None:
+        """The bindings of the widget file an instance places, evaluated with what the instance passes in (None for
+        any other instance)."""
         el = scope.by_node.get(id(node))
         if el is None or el.kind != "container" or not el.template:
-            return {}
+            return None
         root = self.ctx.root(el.template)
         if root is None:
-            return {}
-        overrides = {**self.ctx.values(node), **scope.writes.get(el.guid, {})}
-        key, inputs = el.template, inputs_of(overrides)
+            return None
+        overrides = self.own(el, scope)
+        key, inputs = el.template, inputs_of(overrides, node)
         if self._cut(key):
-            return {}
+            return None
         # the file's bindings alone, not its whole placing: what the measure of its size would evaluate first
         sub = Placer(self.ctx, Frame(self.frame.size))
         sub.stack = [*self.stack, key]
         sub._seed(key, root)
         owner = f"{self.stack[0]}:{key}" if self.stack else key
-        return sub.scope(key, root, inputs, owner, kept=bool(self.stack)).computed()
+        listed = sub._list(key, root, inputs, owner, f"{scope.key}:{el.guid}", bool(self.stack))  # as it is placed
+        return listed.scope if listed else sub.scope(key, root, inputs, owner, kept=bool(self.stack))
 
     def group_size(self, el: elements.Element, scope: Scope, parent_size: tuple[float, float]) -> tuple[float, float]:
-        """The union of the rectangles of a group's children that count for its size, from its own origin."""
+        """The size of the union of the rectangles of a group's children that count for its size."""
         sub = Placer(self.ctx, Frame(parent_size))
         sub.stack = self.stack
         rule = self.group_rule(el, scope)
         sub._children(el, scope, IDENTITY, parent_size, None, True, Paint(), rule)
         content = el.children[1:] if rule is not None and rule.background is not None else el.children
         kids = [sub.frame.boxes.get(id(k.node)) for k in content]  # a background is not content
-        rects = [bounds(b.matrix, *b.size) for b in kids if b is not None and b.visible and b.counts]
-        return (max(0.0, max(r[2] for r in rects)), max(0.0, max(r[3] for r in rects))) if rects else (0.0, 0.0)
+        width, height = union_size(
+            [bounds(b.matrix, *b.size) for b in kids if b is not None and b.visible and b.counts]
+        )
+        margin = rule.margin if rule is not None and rule.flow and (width or height) else (0.0,) * 4
+        return (width + margin[0] + margin[2], height + margin[1] + margin[3])  # a stack's margin grows its box
 
     def group_rule(self, el: elements.Element, scope: Scope) -> arrange.Rule | None:
         """The stack and background rule of a group instance, None without either component."""
-        overrides = {**self.ctx.values(el.node), **scope.writes.get(el.guid, {})}
+        overrides = self.own(el, scope)
         return arrange.read_rule(arrange.components(el.node), overrides)
 
     # placing
 
     def local(
-        self, el, overrides, size, parent_size, pivot_fraction=None, ancestors=(1.0, 1.0), stretch=None
+        self,
+        el,
+        overrides,
+        size,
+        parent_size,
+        pivot_fraction=None,
+        ancestors=(1.0, 1.0),
+        stretch=None,
+        start=(0.0, 0.0),
     ) -> Matrix:
+        """``start``: where a container's box starts (``start_of``); a proportional pivot is a point of that box (the
+        main menu's portrait: its box from -170, its pivot (0, 0) there, *game* ``20261116-235858-129``)."""
         node = el.node
 
         def val(uid, name, default):
@@ -480,14 +596,14 @@ class Placer:
         pivot = val(0x80000002, "PivotPoint", (0.0, 0.0, 0.0))
         if pivot_fraction is not None:
             fx, fy = vector(pivot_fraction, (0.0, 0.0))
-            pivot = (fx * size[0], fy * size[1])
+            pivot = (start[0] + fx * size[0], start[1] + fy * size[1])
         sc = val(0x80000035, "Scale", (1.0, 1.0, 1.0))
         if stretch is not None:  # a picture given a size is scaled to it, its pivot (in picture units) with it
             sc = (*stretch, 1.0)
         elif is_size(overrides.get((SIZE,))) and (0x80000035,) not in overrides:  # a bound size is the size itself
             sc = (1.0, 1.0, 1.0)
         modes = fields.anchor_fields(node)  # 117's own, or what the History Editions' anchor constraints say
-        pos, sc = cancel(modes, pos, sc, ancestors)
+        pos, sc = cancel(modes, pos, sc, ancestors, self.parent_scale)
         angle = scalar(val(0x80000003, "RotationAngle", 0.0), 0.0)
         anchor = modes["AnchorPoint"]
         ax, ay = (anchor % 3) / 2, (anchor // 3) / 2
@@ -500,33 +616,87 @@ class Placer:
         run = run or TemplateRun()
         measure_only, owner, data_owner = run.measure_only, run.owner, run.data_owner
         paint = run.paint or Paint()
-        self.stack = [*run.stack, key]
+        self.stack, self.parent_scale, self.trail = [*run.stack, key], run.scale, run.trail
         info = self._seed(key, root)
         owner_key = key if not run.stack else f"{run.stack[0]}:{key}"
-        scope = self.scope(key, root, inputs, owner_key, kept=bool(run.stack))
+        listed = self._list(key, root, inputs, owner_key, data_owner, bool(run.stack))
+        scope = listed.scope if listed else self.scope(key, root, inputs, owner_key, kept=bool(run.stack))
         size = tuple(fields.get(root, "ReferenceSize", (1920.0, 1080.0)))
         top = info.top
         loader = loaders.loader_kind(self.ctx, root)
         if loader is not None:  # a loader instantiates one of its children
-            top = SimpleNamespace(children=loaders.chosen(loader, top.children, inputs, self.ctx.design))
-        kind = listlayout.list_kind(self.ctx, root)
-        if kind is None or not top.children:
+            top = SimpleNamespace(children=loaders.chosen(loader, top.children, inputs, self.ctx.design,
+                                                          self._picker(root, inputs)))  # fmt: skip
+        if listed is None:
             self._children(top, scope, matrix, size, owner, measure_only, paint)
             return scope
-        item = top.children[0]  # a list file holds its item template as its one child
-        data = data_owner or owner_key
-        n = listlayout.element_count(self.ctx.samples, data) if data_owner else listlayout.PLACEHOLDER_ITEMS
-        first = self.scope(key, root, inputs, owner_key,
-                           ListSlot(GameObjectRef(listlayout.element_key(data, 0)), 0, item.guid), bool(run.stack))  # fmt: skip
-        for i, (dx, dy) in enumerate(listlayout.offsets(kind, inputs, n, self.size_of(item.node, first))):
-            slot = ListSlot(GameObjectRef(listlayout.element_key(data, i)), i, item.guid)
+        kind, item, element, first, inputs = listed.kind, listed.item, listed.element, scope, listed.inputs
+        settings = settled(scope, inputs)
+        at = listlayout.offsets(kind, settings, listed.count, self.size_of(item.node, first))
+        sectors = listlayout.sectors(kind, settings, listed.count) if kind in listlayout.RADIAL else None
+        for i, (dx, dy) in enumerate(at):
+            slot = ListSlot(GameObjectRef(element(i)), i, item.guid, listed.given)
             copy = first if i == 0 else self.scope(key, root, inputs, owner_key, slot, bool(run.stack))
+            if sectors is not None:  # a wheel's item stands at its arc point, its stored place is the editor's
+                self._sector(item, copy, sectors[i])
+                dx = dy = 0.0
             self._children(SimpleNamespace(children=[item]), copy, mul(matrix, translate(dx, dy)), size, owner,
                            measure_only, paint)  # fmt: skip
             box = self.frame.boxes.get(id(item.node))
             if box is not None and i:  # each copy measures; the first keeps the item's own key
                 self.frame.boxes[hash((id(item.node), i))] = box
+        self.filled.pop(item.guid or "", None)
         return scope
+
+    def _sector(self, item: elements.Element, scope: Scope, sector: tuple[float, float, float, float]) -> None:
+        """What the game gives a radial list's item (``filled``): its place, its point on the arc, and the
+        ``SectorInfo`` of the file it places, that point, its angle and span; the file's own bindings that set its
+        place and rotation from them turn it (the quick tools' segments: layout.md "Lists, grids and loaders")."""
+        x, y, angle, span = sector
+        filled = self.filled[item.guid or ""] = {(POSITION,): (x, y, 0.0)}
+        root = self.ctx.root(item.template) if item.kind == "container" else None
+        comp = arrange.components(root).get(listlayout.SECTOR) if root is not None else None
+        if comp is None:
+            return
+        filled.update({(comp, listlayout.SECTOR_POSITION): (x, y, 0.0), (comp, listlayout.SECTOR_ROTATION): angle,
+                       (comp, listlayout.SECTOR_SIZE): span})  # fmt: skip
+        placed = self.placed_scope(item.node, scope)
+        own = placed.writes.get(None, {}) if placed is not None else {}
+        filled.update({path: v for path, v in own.items() if path in ((POSITION,), (ROTATION,))})
+
+    def _list(self, key, root, inputs, owner_key, data_owner, kept) -> Listed | None:
+        """A list file's elements and the scope of its first item (None for any other file): the item count joins
+        what it is given, as the game fills it, and what the list reads from its item (``DataMode`` 3) is the first
+        item's, so a placing file reads the list's outputs as laid out (layout.md "Lists, grids and loaders")."""
+        kind = listlayout.list_kind(self.ctx, root)
+        top = root_info(self.ctx, root).top
+        if kind is None or not top.children or loaders.loader_kind(self.ctx, root) is not None:
+            return None
+        item = top.children[0]  # a list file holds its item template as its one child
+        data = data_owner or owner_key
+        n = listlayout.element_count(self.ctx.samples, data) if data_owner else listlayout.PLACEHOLDER_ITEMS
+        element = lambda i: listlayout.element_key(data, i)  # noqa: E731
+        n, element = gamedata.list_elements(self.ctx, data, inputs, n, element)  # the game's elements, where known
+        inputs = {**inputs, listlayout.TOTAL_ITEMS: n}
+        n, element = playstate.scrolled(inputs, n, element)  # Play mode scrolled it: from a later element on
+        given = self._compared(key, root, inputs, owner_key, kept, item, n, element)
+        slot = ListSlot(GameObjectRef(element(0)), 0, item.guid, given)
+        return Listed(kind, item, n, element, inputs, self.scope(key, root, inputs, owner_key, slot, kept), given)
+
+    def _compared(self, key, root, inputs, owner_key, kept, item, n, element) -> tuple:
+        """What the game gives every item of a list from all of them: an item's ``ValueCompare`` gets the smallest and
+        the largest ``MyValue`` the list's bindings give the items (the tab bar's widest tab, a category list's
+        widest entry: layout.md "Lists, grids and loaders in the game"). Empty for an item without one."""
+        comp = arrange.components(item.node).get(listlayout.COMPARE)
+        if comp is None:
+            return ()
+        mine = (comp, listlayout.COMPARE_MINE)
+        values = [self.scope(key, root, inputs, owner_key, ListSlot(GameObjectRef(element(i)), i, item.guid), kept)
+                  .writes.get(item.guid, {}).get(mine) for i in range(n)]  # fmt: skip
+        found = listlayout.compared(values)
+        if found is None:
+            return ()
+        return (((comp, listlayout.COMPARE_MIN), found[0]), ((comp, listlayout.COMPARE_MAX), found[1]))
 
     def _seed(self, key: str, root: dict) -> RootInfo:
         """The file's own preview values for its lists into the samples, as the file holds them now."""
@@ -542,6 +712,7 @@ class Placer:
               kept: bool = True) -> Scope:  # fmt: skip
         """The bindings of ``key`` evaluated over ``inputs``, once however many instances place it (``kept`` False: the
         open file, whose animation and tweens change between frames)."""
+        inputs = playstate.narrow(inputs, slot)  # a list's copy gets only its own Play mode values
         if not kept:
             return Scope(key, root, inputs, self.ctx, owner_key, self, slot)
 
@@ -568,22 +739,32 @@ class Placer:
     def _child(self, el: elements.Element, scope: Scope, matrix: Matrix, parent_size, sized: bool = True) -> Child:
         """One child of a group or template, placed by its own values (the group's rule comes after); ``sized``
         False: a hidden child's size is not worked out (nothing it holds is drawn or counted)."""
-        overrides = dict(self.ctx.values(el.node))
-        overrides.update(scope.writes.get(el.guid, {}))
+        overrides = self.own(el, scope)
         if self.ctx.design:  # a scale or size the game feeds at run time (its UI scale) stays as stored
-            for uid in (0x80000035, SIZE):
+            closed = all if _is_mask(el.node) else any  # a mask's size of 0 on one axis is its state (a closed mask)
+            for uid, test in ((0x80000035, any), (SIZE, closed)):
                 v = overrides.get((uid,))
-                if isinstance(v, (tuple, list)) and any(isinstance(x, (int, float)) and abs(x) < 1e-6 for x in v[:2]):
+                if isinstance(v, (tuple, list)) and test(isinstance(x, (int, float)) and abs(x) < 1e-6 for x in v[:2]):
                     del overrides[(uid,)]
         visible = overrides.get((VISIBLE,))
         if visible is None:  # a layer the author hid in the editor (designer helpers) starts hidden
             visible = bool(fields.get(el.node, "Visible", True))
             visible = visible and (self.ctx.editor_hidden or not fields.get(el.node, "IsHidden"))
         visible = bool(visible)
-        inputs = inputs_of(overrides)
+        inputs = inputs_of(overrides, el.node)
         if not visible and not sized:
             return self._hidden(el, overrides, inputs, parent_size)
-        size = self.natural_size(el, overrides, inputs, f"{scope.key}:{el.guid}")
+        origin = (0.0, 0.0)
+        if el.kind == "label" and not is_size(overrides.get((SIZE,))):  # its box may start at its text
+            _, style, size = labels.label(self.ctx, el.node, overrides)
+            origin = style.origin
+        else:
+            size = self.natural_size(el, overrides, inputs, f"{scope.key}:{el.guid}")
+            placed = (
+                self.ctx.root(el.template) if el.kind == "container" and not is_size(overrides.get((SIZE,))) else None
+            )
+            if placed is not None:  # its box starts where what it holds starts, above or left of it
+                origin = self.start_of(el.template or "", placed, inputs, f"{scope.key}:{el.guid}")
         if el.kind == "group" and (SIZE,) not in overrides:  # a group is as large as what it holds
             size = self.group_size(el, scope, parent_size)
         stretch = self.stretch_to(el, overrides, inputs)
@@ -591,15 +772,19 @@ class Placer:
             size = stretch[1]
         comps = arrange.components(el.node)
         if SIZE_OVERRIDE in comps and is_size(overrides.get((comps[SIZE_OVERRIDE], OVERRIDE_SIZE))):
-            size = tuple(float(v) for v in overrides[(comps[SIZE_OVERRIDE], OVERRIDE_SIZE)][:2])
+            size, origin = tuple(float(v) for v in overrides[(comps[SIZE_OVERRIDE], OVERRIDE_SIZE)][:2]), (0.0, 0.0)
         fraction = overrides.get((comps[PPP], PPP_VALUE)) if PPP in comps else None
-        ancestors = (math.hypot(matrix[0], matrix[1]), math.hypot(matrix[2], matrix[3]))
-        local = self.local(el, overrides, size, parent_size, fraction, ancestors, stretch and stretch[0])
+        if fraction is None and PPP in comps:  # not stored: the component's default (the main menu's list: 0, 0)
+            fraction = component_default(self.ctx, el.node, (comps[PPP], PPP_VALUE)) or (0.0, 0.0)
+        ancestors = own_scale(matrix)
+        start = origin if el.kind == "container" else (0.0, 0.0)
+        local = self.local(el, overrides, size, parent_size, fraction, ancestors, stretch and stretch[0], start)
         counts = overrides.get((0x80000080,))
         counts = bool(fields.get(el.node, "ConsiderSize", True) if counts is None else counts)
         pad, align = arrange.read_child(comps, overrides)
-        slot = arrange.Slot(el.guid, local, size, bounds(local, *size), visible and counts, pad, align)
-        return Child(el, overrides, visible, counts, inputs, slot)
+        rect = bounds(mul(local, translate(*origin)), *size)
+        slot = arrange.Slot(el.guid, local, size, rect, visible and counts, pad, align)
+        return Child(el, overrides, visible, counts, inputs, slot, origin)
 
     def _hidden(self, el: elements.Element, overrides: dict, inputs: dict, parent_size) -> Child:
         """A hidden child where no box of it is shown: at its place, no size (measuring a container's widget file
@@ -611,15 +796,23 @@ class Placer:
 
     def _children(self, parent, scope, matrix, parent_size, owner, measure_only, paint: Paint,
                   rule: arrange.Rule | None = None) -> None:  # fmt: skip
-        order = sorted(parent.children, key=lambda e: int(fields.get(e.node, "ZIndex", 0) or 0))
         sized = owner is None and not measure_only  # the open file's boxes, the selection's outline among them
-        kids = [self._child(el, scope, matrix, parent_size, sized) for el in order]
-        if rule is not None:
-            if rule.background is not None and kids:
-                kids[0].slot.background = True  # the first layer's the background
-            arrange.arrange(rule, [k.slot for k in kids])
+        in_file = [self._child(el, scope, matrix, parent_size, sized) for el in parent.children]
+        if (
+            rule is not None
+        ):  # the game's child array is the file's order, not the ZIndex's (layout.md "Layout components")
+            if rule.background is not None and in_file:
+                in_file[0].slot.background = True  # the first layer's the background
+            arrange.arrange(rule, [k.slot for k in in_file])
+        kids = draw_order(in_file, lambda k: _is_mask(k.el.node), lambda k: bool(fields.get(k.el.node, "c90bf7fc")),
+                          lambda k: int(fields.get(k.el.node, "ZIndex", 0) or 0))  # fmt: skip
         masks: list[Clip] = []
+        previous_mask = False
         for kid in kids:
+            now_mask = _is_mask(kid.el.node)
+            if now_mask and not previous_mask:
+                masks.clear()  # a new run of masks starts its chain at the container's own mask
+            previous_mask = now_mask
             self._visit(kid, scope, matrix, owner, measure_only, paint, masks)
 
     def _visit(self, kid: Child, scope, matrix, owner, measure_only, paint: Paint, masks: list[Clip]) -> None:
@@ -628,7 +821,8 @@ class Placer:
         world = mul(matrix, kid.slot.local)
         me = owner if owner is not None else id(el.node)
         if owner is None:
-            self.frame.boxes[id(el.node)] = Box(world, size, kid.visible, kid.counts, matrix)
+            at = mul(world, translate(*kid.origin)) if any(kid.origin) else world
+            self.frame.boxes[id(el.node)] = Box(at, size, kid.visible, kid.counts, matrix, _is_mask(el.node))
         if not kid.visible:
             return
         tint = self.ctx.tint(el.node)
@@ -636,7 +830,7 @@ class Placer:
         own_alpha = scalar(overrides.get((0x80000006,), fields.get(el.node, "AlphaTint", 1.0)), 1.0)
         if self.ctx.design and own_alpha < HIDDEN_ALPHA:  # faded in by an animation in the game
             own_alpha = 1.0
-        is_mask = int(fields.get(el.node, "MaskMode", 0) or 0) != 0
+        is_mask = _is_mask(el.node)
         receives = bool(fields.get(el.node, "c90bf7fc"))  # "receives the mask" (clipping-and-masks.md)
         clips = [*paint.clips, *masks] if receives else list(paint.clips)
         if not is_mask and not receives:
@@ -646,7 +840,8 @@ class Placer:
                         effects={**paint.effects, **effects.drawn(fx)} if el.kind != "image" else paint.effects)  # fmt: skip
         if not measure_only:
             self._emit(el, world, size, below, me, overrides, is_mask, fx if el.kind == "image" else {})
-        if is_mask:
+            playstate.record(self, kid, scope, world)  # where Play mode's input finds it
+        if is_mask and el.kind in MASK_KINDS:  # only a picture or a vector shape clips (layout.md "Draw order")
             soft = fx.get("soft_mask")
             soft = soft if soft is not None and soft.get("Enabled", True) else None
             dyn = overrides.get((IMAGE_ID,), fields.get(el.node, "DynamicImageId")) or None
@@ -654,7 +849,9 @@ class Placer:
         if el.kind == "container":
             self._place_file(kid, scope, world, owner, measure_only, below, me)
         elif el.kind == "group":
+            outer, self.parent_scale = self.parent_scale, own_scale(kid.slot.local)
             self._children(el, scope, world, size, owner, measure_only, below, self.group_rule(el, scope))
+            self.parent_scale = outer
             if owner is None:  # a group's own box: its children's bounds
                 self._group_box(el, world)
 
@@ -664,32 +861,32 @@ class Placer:
         if not el.template or len(self.stack) >= MAX_DEPTH:
             return
         if el.template in self.stack:
-            self.frame.notes.append(
-                tr("{name}: places {template} inside itself; not followed", name=el.name, template=el.template)
-            )
+            self.frame.notes.append(tr("ui.places_inside_itself_not_followed", name=el.name, template=el.template))
             return
         root = self.ctx.root(el.template)
         if root is None:
-            self.frame.notes.append(
-                tr("{name}: the widget file {template} is not in the game", name=el.name, template=el.template)
-            )
+            self.frame.notes.append(tr("ui.widget_file_not_game", name=el.name, template=el.template))
         elif not measure_only:
-            run = TemplateRun(stack=self.stack, owner=me, paint=paint, data_owner=f"{scope.key}:{el.guid}")
+            index = scope.slot.index if scope.slot is not None else None
+            run = TemplateRun(stack=self.stack, owner=me, paint=paint, data_owner=f"{scope.key}:{el.guid}",
+                              scale=own_scale(kid.slot.local), trail=(*self.trail, (el.guid, index)))  # fmt: skip
             mk = ("draw", id(root), el.template, inputs_key(self.ctx.samples, kid.inputs), world, me, run.data_owner,
-                  paint_key(paint), tuple(self.stack))  # fmt: skip
+                  paint_key(paint), tuple(self.stack), run.trail)  # fmt: skip
 
             def make():
                 sub = Frame(self.frame.size)
                 Placer(self.ctx, sub)._template(el.template, root, world, kid.inputs, run)
-                return sub.items, sub.notes
+                return sub.items, sub.notes, sub.hits, sub.spans
 
-            items, notes = self._kept(mk, root, make)  # placed the same way before: the same items
+            items, notes, hits, spans = self._kept(mk, root, make)  # placed the same way before: the same items
+            playstate.span(self.frame, (run.trail, el.template, world, kid.inputs, run), items, hits, spans)
             self.frame.items.extend(items)
             self.frame.notes.extend(notes)
+            self.frame.hits.extend(hits)
 
     def _group_box(self, el: elements.Element, world: Matrix) -> None:
-        kids = [self.frame.boxes.get(id(k.node)) for k in el.children]
-        rects = [bounds(b.matrix, *b.size) for b in kids if b is not None and b.visible]
+        kids = [self.frame.boxes.get(id(k.node)) for k in el.children]  # what counts, as for its size (``group_size``)
+        rects = [bounds(b.matrix, *b.size) for b in kids if b is not None and b.visible and b.counts]
         if rects:
             inv = invert(world)
             x1 = max(apply(inv, r[2], r[3])[0] for r in rects)
@@ -738,11 +935,18 @@ def place(key: str, root: dict, ctx: Context, inputs: dict | None = None) -> Fra
         ctx.epoch = ctx.conditions()
     size = tuple(fields.get(root, "ReferenceSize", (1920.0, 1080.0)))
     if elements.kind_of(root) != "template":
-        return Frame(size, notes=[tr("only widget files and scenes have a preview")])
+        return Frame(size, notes=[tr("ui.only_widget_files_scenes_preview")])
+    matrix = IDENTITY
+    if ctx.window_aspect > 0:  # the game stretches the root per axis to the window, the height kept (layout.md)
+        size, matrix = (
+            (size[1] * ctx.window_aspect, size[1]),
+            (size[1] * ctx.window_aspect / size[0], 0.0, 0.0, 1.0, 0.0, 0.0),
+        )
+    run = TemplateRun(scale=own_scale(matrix))  # the root's own scale is the window's stretch
     for _ in range(REPLACE):
         ctx.memo.dropped = 0
         frame = Frame(size)
-        _, read = ctx.memo.gather(lambda f=frame: Placer(ctx, f)._template(key, root, IDENTITY, inputs or {}))
+        _, read = ctx.memo.gather(lambda f=frame: Placer(ctx, f)._template(key, root, matrix, inputs or {}, run))
         if not ctx.memo.dropped:  # no value a part of it read was made up or seeded after it was read
             break
     ctx.samples.seen = {}

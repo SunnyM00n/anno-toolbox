@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QActionGroup, QKeySequence
+from PySide6.QtGui import QActionGroup, QImageWriter, QKeySequence
 from PySide6.QtWidgets import QDockWidget, QFileDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget
 
 from ..exporting import banks
@@ -22,7 +22,7 @@ from ..models import configtree, fileresolve
 from ..render import nativelook, rhiview
 from ..sources import gametree
 from ..sources.overlay import normalize
-from ..suite import links, widgets
+from ..suite import gamesync, links, widgets
 from ..suite.background import Background
 from ..suite.gameopen import open_installed
 from . import modelscene, states
@@ -42,7 +42,7 @@ from .soundview import SoundView
 from .textureview import TextureView, describe
 
 APP = "viewer"  # the key of its remembered state in the settings
-TITLE = N_("Viewer")
+TITLE = N_("common.viewer")
 HISTORY = 30  # files to go back through
 
 
@@ -74,9 +74,7 @@ class ViewerWindow(QMainWindow):
         self.sound = SoundView(cache=self.cache)
         self.sounddb = SoundDbView(cache=self.cache)
         self.data = DataView()
-        self.message = QLabel(
-            tr("File > Open game, then pick a file on the left."), alignment=Qt.AlignmentFlag.AlignCenter
-        )
+        self.message = QLabel(tr("viewer.file_gt_open_game_pick"), alignment=Qt.AlignmentFlag.AlignCenter)
         self.pages = QStackedWidget()
         for page in (self.message, self.model, self.texture, self.sound, self.sounddb, self.data):
             self.pages.addWidget(page)
@@ -85,18 +83,18 @@ class ViewerWindow(QMainWindow):
         self.users = UsersPanel()
         self.checks = ChecksPanel()
         self.docks = {}
-        for name, widget, area in (
-            (N_("Files"), self.browser, Qt.DockWidgetArea.LeftDockWidgetArea),
-            (N_("Parts"), self.parts, Qt.DockWidgetArea.LeftDockWidgetArea),
-            (N_("Properties"), self.props, Qt.DockWidgetArea.RightDockWidgetArea),
-            (N_("Used by"), self.users, Qt.DockWidgetArea.RightDockWidgetArea),
-            (N_("Checks"), self.checks, Qt.DockWidgetArea.RightDockWidgetArea),
-            (N_("Sequences"), self.sequences, Qt.DockWidgetArea.BottomDockWidgetArea),
+        for key, name, widget, area in (
+            ("Files", N_("common.files"), self.browser, Qt.DockWidgetArea.LeftDockWidgetArea),
+            ("Parts", N_("viewer.parts"), self.parts, Qt.DockWidgetArea.LeftDockWidgetArea),
+            ("Properties", N_("common.properties"), self.props, Qt.DockWidgetArea.RightDockWidgetArea),
+            ("Used by", N_("viewer.used_by"), self.users, Qt.DockWidgetArea.RightDockWidgetArea),
+            ("Checks", N_("common.checks"), self.checks, Qt.DockWidgetArea.RightDockWidgetArea),
+            ("Sequences", N_("common.sequences"), self.sequences, Qt.DockWidgetArea.BottomDockWidgetArea),
         ):
-            dock = QDockWidget(tr(name), self, objectName=f"viewer{name}")
+            dock = QDockWidget(tr(name), self, objectName=f"viewer{key}")
             dock.setWidget(widget)
             self.addDockWidget(area, dock)
-            self.docks[name] = dock
+            self.docks[key] = dock
         self.resizeDocks([self.docks["Files"], self.docks["Properties"]], [340, 320], Qt.Orientation.Horizontal)
         self.tabifyDockWidget(self.docks["Used by"], self.docks["Checks"])
         self.exports = ExportTools(self)  # before the menus: it adds its dock and its File entries
@@ -104,64 +102,64 @@ class ViewerWindow(QMainWindow):
         self._menus()
         self._wire()
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("No game open"))
+        self.statusBar().showMessage(tr("common.no_game_open"))
 
     # building the window
     def _menus(self) -> None:
-        file = self.menuBar().addMenu(tr("&File"))
-        games = file.addMenu(tr("Open &game"))
+        file = self.menuBar().addMenu(tr("common.menu.file"))
+        games = file.addMenu(tr("common.menu.open_game"))
         self.game_actions = {}
         for key, name in gametree.GAMES.items():
             act = games.addAction(name, lambda k=key: self.open_game(k))
             self.game_actions[key] = act
-        file.addAction(tr("Open a &folder of loose files..."), self._open_folder)
-        file.addAction(tr("Lay a &mod folder over the game..."), self._lay_mod)
+        file.addAction(tr("common.open_folder_loose_files"), self._open_folder)
+        file.addAction(tr("viewer.lay_mod_folder_over_game"), self._lay_mod)
         file.addSeparator()
-        file.addAction(tr("&Back"), self.back, QKeySequence(QKeySequence.StandardKey.Back))
-        file.addAction(tr("&Who uses the file"), self.find_users, QKeySequence("Ctrl+U"))
-        self.place_action = file.addAction(tr("&Place on the open island"), self._place)
+        file.addAction(tr("viewer.back"), self.back, QKeySequence(QKeySequence.StandardKey.Back))
+        file.addAction(tr("viewer.who_uses_file"), self.find_users, QKeySequence("Ctrl+U"))
+        self.place_action = file.addAction(tr("viewer.place_open_island"), self._place)
         self.place_action.setVisible(links.available(links.PLACE_MODEL))  # alone, the viewer has no island editor
-        self.edit_action = file.addAction(tr("&Edit in the object builder"), self._edit_object)
+        self.edit_action = file.addAction(tr("viewer.edit_object_builder"), self._edit_object)
         self.edit_action.setVisible(links.available(links.EDIT_OBJECT))
-        self.effect_action = file.addAction(tr("Edit the effect in the &particle editor"), self._edit_effect)
+        self.effect_action = file.addAction(tr("viewer.edit_effect_particle_editor"), self._edit_effect)
         self.effect_action.setVisible(links.available(links.EDIT_EFFECT))
-        file.addAction(tr("Save the &picture..."), self._save_picture, QKeySequence("Ctrl+Shift+S"))
+        file.addAction(tr("common.save_picture_dots"), self._save_picture, QKeySequence("Ctrl+Shift+S"))
         self.references.add_actions(file)
         self.exports.add_actions(file)
-        view = self.menuBar().addMenu(tr("&View"))
-        self.rendering = RenderingMenu(self, view.addMenu(tr("&Rendering")))
+        view = self.menuBar().addMenu(tr("common.menu.view"))
+        self.rendering = RenderingMenu(self, view.addMenu(tr("common.menu.rendering")))
         view.addSeparator()
         self.toggles = {}
         for key, text, on in (
-            ("shadows", N_("&Shadows"), True),
-            ("ground", N_("G&round"), True),
-            ("particles", N_("&Effects"), True),
-            ("wireframe", N_("&Wireframe"), False),
-            ("cloth", N_("Simulate &cloth"), False),
-            ("night", N_("&Night: the lights shine (the game's look)"), False),
+            ("shadows", N_("common.shadows"), True),
+            ("ground", N_("common.ground"), True),
+            ("particles", N_("common.effects_accel"), True),
+            ("wireframe", N_("viewer.wireframe"), False),
+            ("cloth", N_("viewer.simulate_cloth"), False),
+            ("night", N_("viewer.night_lights_shine_games_look"), False),
         ):
             self.toggles[key] = toggle_action(view, tr(text), on, lambda on, k=key: self._set_state(**{k: on}))
-        self.bits_menu = view.addMenu(tr("Condition &bits"))
+        self.bits_menu = view.addMenu(tr("viewer.menu.condition_bits"))
         self.bits_menu.aboutToShow.connect(self._fill_bits)
         view.addSeparator()
-        lods = view.addMenu(tr("&Level of detail"))
+        lods = view.addMenu(tr("common.menu.level_detail"))
         group = QActionGroup(self, exclusive=True)
         self.lod_actions = []
         for n in range(configtree.LOD_COUNT):
-            act = lods.addAction(tr("LOD {n}", n=n), lambda n=n: self._reload_model(lod=n))
+            act = lods.addAction(tr("common.lod_n", n=n), lambda n=n: self._reload_model(lod=n))
             act.setCheckable(True)
             act.setChecked(n == 0)
             group.addAction(act)
             self.lod_actions.append(act)
         self.shared_action = toggle_action(
-            view, tr("Read the baked &shared/ copy (as the game does)"), True, lambda on: self._reload_model(shared=on)
+            view, tr("common.read_baked_shared_copy_game"), True, lambda on: self._reload_model(shared=on)
         )
-        view.addAction(tr("&Frame the model"), lambda: self.model.frame_model(), QKeySequence("F"))
-        windows = self.menuBar().addMenu(tr("&Window"))
-        for dock in self.docks.values():
-            windows.addAction(dock.toggleViewAction())
+        view.addAction(tr("common.frame_model"), lambda: self.model.frame_model(), QKeySequence("F"))
+        windows = self.menuBar().addMenu(tr("common.menu.window"))
+        widgets.add_docks(windows, self.docks.values())
 
     def _wire(self) -> None:
+        widgets.find_key(self, self.browser.search)
         self.browser.opened.connect(self.open_path)
         self.browser.picked.connect(self._file_facts)
         self.parts.selected.connect(self._node_picked)
@@ -195,7 +193,7 @@ class ViewerWindow(QMainWindow):
         if rhiview.api_of(backend) != rhiview.api_of(self.model.backend):
             self.statusBar().showMessage(
                 tr(
-                    "{renderer}: from the next start of the viewer (a window keeps the graphics API it opened with)",
+                    "viewer.next_start_viewer_window_keeps",
                     renderer=RENDERERS[name],
                 ),
                 12000,
@@ -214,14 +212,14 @@ class ViewerWindow(QMainWindow):
         old.release()
         self.pages.removeWidget(old)
         old.deleteLater()
-        note = tr(" ({backend} in this window)", backend=backend) if backend != name else ""
-        self.statusBar().showMessage(
-            tr("The 3D view draws with {renderer}{note}", renderer=RENDERERS[name], note=note), 8000
-        )
+        note = tr("viewer.backend_in_this_window", backend=backend) if backend != name else ""
+        self.statusBar().showMessage(tr("viewer.3d_view_draws", renderer=RENDERERS[name], note=note), 8000)
 
     # games and files
     def open_game(self, key: str, then: str = "", wait: bool = False) -> None:
         """Open an installed game (its folder from the settings) in the background; ``then``: a file to show."""
+        if not gamesync.may_switch(self, key):  # the suite's other apps follow (suite.md "One game")
+            return
         open_installed(
             self, self.settings, key, self.background, then=lambda tree: self._opened(tree, key, then), wait=wait
         )
@@ -229,7 +227,7 @@ class ViewerWindow(QMainWindow):
     def _opened(self, tree, key: str, then: str) -> None:
         if isinstance(tree, Exception):
             self.statusBar().showMessage(
-                tr("{game} did not open: {error}", game=gametree.GAMES.get(key, key), error=tree)
+                tr("common.game_not_open_error", game=gametree.GAMES.get(key, key), error=tree)
             )
             return
         self.set_tree(tree)
@@ -239,31 +237,48 @@ class ViewerWindow(QMainWindow):
 
     def set_tree(self, tree) -> None:
         """Browse and show the files of ``tree`` (a ``sources.gametree.GameTree``)."""
+        if self.tree is None or tree.game != self.tree.game:
+            self.history = []  # another game's paths: Back would look them up in this one
         self.tree, self.files = tree, ModelFiles(tree)
-        self.users.note(tr("File > Who uses the file (Ctrl+U) reads every file once."))
+        self.current, self.scene = "", None  # nothing of the tree before is open any more
+        self.parts.clear()
+        self.props.show_rows([])  # the side panels showed the file of the tree before
+        self.sequences.show_scene(Scene("", tree.game))
+        self.checks.show_checks(None, {})
+        self.exports.file_shown("")
+        self.users.note(tr("viewer.file_gt_uses_ctrl_plus"))
         self.browser.set_tree(tree)
         self.references.tree_changed()
         self.rendering.apply()
         self.model.clear()
         self.pages.setCurrentWidget(self.message)
-        self.message.setText(
-            tr("{name}: pick a file on the left (models, textures, effects, sounds, data).", name=tree.name)
-        )
-        self.setWindowTitle(tr("{name} - {title}", name=tree.name, title=tr(TITLE)))
-        self.statusBar().showMessage(tr("{name}: {count} files", name=tree.name, count=number(len(tree.paths))))
+        self.message.setText(tr("viewer.pick_file_left_models_textures", name=tree.name))
+        self.setWindowTitle(tr("common.title.name_title", name=tree.name, title=tr(TITLE)))
+        self.statusBar().showMessage(tr("viewer.name_count_files", name=tree.name, count=number(len(tree.paths))))
 
     def _open_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("A folder of loose game files"))
+        folder = QFileDialog.getExistingDirectory(self, tr("viewer.folder_loose_game_files"))
         if folder:
-            tree = gametree.loose_tree(Path(folder))
-            tree.game = self.tree.game if self.tree else ""
-            self.set_tree(tree)
+            self.open_folder(Path(folder))
+
+    def open_folder(self, folder: Path, wait: bool = False) -> None:
+        """Browse a folder of loose files as files of the open game; the folder is listed off the window's thread
+        (an unpacked game holds hundreds of thousands of files)."""
+        self.statusBar().showMessage(tr("viewer.reading_every_file_folder", folder=folder))
+        self.background.run(lambda: gametree.loose_tree(folder), lambda tree: self._folder_read(tree, folder), wait)
+
+    def _folder_read(self, tree, folder: Path) -> None:
+        if isinstance(tree, Exception):
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=folder, error=tree))
+            return
+        tree.game = self.tree.game if self.tree else ""
+        self.set_tree(tree)
 
     def _lay_mod(self) -> None:
         if self.tree is None:
-            QMessageBox.information(self, tr(TITLE), tr("Open a game first."))
+            QMessageBox.information(self, tr(TITLE), tr("viewer.open_game_first_sentence"))
             return
-        folder = QFileDialog.getExistingDirectory(self, tr("A mod folder: its files win over the game's"))
+        folder = QFileDialog.getExistingDirectory(self, tr("viewer.mod_folder_files_win_over"))
         if folder:
             self.set_tree(self.tree.over(Path(folder)))
 
@@ -279,9 +294,9 @@ class ViewerWindow(QMainWindow):
         another game is open, that one opens first (its files are then exported with File > Export)."""
         if self.tree is None or self.tree.game != game:
             self.open_game(game, paths[0] if paths else "")
-            self.statusBar().showMessage(tr("{game} opens; then File > Export...", game=game), 8000)
+            self.statusBar().showMessage(tr("viewer.opens_file_export", game=game), 8000)
             return bool(paths)
-        return self.exports.export_paths([game_file(self.tree, p) for p in paths], tr("Export"))
+        return self.exports.export_paths([game_file(self.tree, p) for p in paths], tr("common.export"))
 
     def open_path(self, path: str, remember: bool = True) -> None:
         """Show a game file in the view its kind needs; the browser selects it."""
@@ -289,7 +304,7 @@ class ViewerWindow(QMainWindow):
             return
         path = game_file(self.tree, path)
         if not self.tree.exists(path):
-            self.statusBar().showMessage(tr("{path} is not in the files", path=path), 8000)
+            self.statusBar().showMessage(tr("viewer.path_not_files", path=path), 8000)
             return
         if remember and self.current and self.current != path:
             self.history = [*self.history, self.current][-HISTORY:]
@@ -299,9 +314,7 @@ class ViewerWindow(QMainWindow):
             self._show(path)
         except Exception as exc:  # a file the views do not take: say so, keep the window usable
             self.pages.setCurrentWidget(self.message)
-            self.message.setText(
-                tr("{path} could not be shown:\n{kind}: {error}", path=path, kind=type(exc).__name__, error=exc)
-            )
+            self.message.setText(tr("viewer.could_not_shown", path=path, kind=type(exc).__name__, error=exc))
         self.exports.file_shown(path)
         self.references.file_shown(path)
         self.settings.apps.setdefault(APP, {})["file"] = path
@@ -313,32 +326,32 @@ class ViewerWindow(QMainWindow):
 
     def _show_asset(self, guid: int) -> None:
         if self.tree is None or not links.available(links.SHOW_ASSET):
-            self.statusBar().showMessage(tr("the asset editor opens assets in the suite's window"), 8000)
+            self.statusBar().showMessage(tr("viewer.asset_editor_opens_assets_suites"), 8000)
             return
         if not links.follow(links.SHOW_ASSET, self.tree.game, guid):
-            self.statusBar().showMessage(tr("asset {guid} is not in the asset editor's game", guid=guid), 8000)
+            self.statusBar().showMessage(tr("viewer.asset_not_editors_game", guid=guid), 8000)
 
     def _edit_object(self) -> None:
         if self.tree is None or not self.current.endswith((".cfg", ".mcf", ".prp")):
-            self.statusBar().showMessage(tr("open a model config to edit it"), 8000)
+            self.statusBar().showMessage(tr("viewer.open_model_config_edit"), 8000)
         elif not links.follow(links.EDIT_OBJECT, self.tree.game, self.current):
-            self.statusBar().showMessage(tr("the object builder opens in the suite's window"), 8000)
+            self.statusBar().showMessage(tr("viewer.object_builder_opens_suites_window"), 8000)
 
     def _edit_effect(self) -> None:
         row = self.parts.currentItem()
         found = effect_to_edit(self.scene, (row.data(0, NODE_ROLE) if row is not None else "") or "")
         if self.tree is None or found is None:
-            self.statusBar().showMessage(tr("select the part that places an effect, or open an effect file"), 8000)
+            self.statusBar().showMessage(tr("viewer.select_part_places_effect_open"), 8000)
         elif not links.follow(links.EDIT_EFFECT, self.tree.game, *found):
-            self.statusBar().showMessage(tr("the particle editor opens in the suite's window"), 8000)
+            self.statusBar().showMessage(tr("viewer.particle_editor_opens_suites_window"), 8000)
 
     def _place(self) -> None:
         if self.tree is None or not self.current.endswith(".cfg"):
-            self.statusBar().showMessage(tr("open a model config to place it"), 8000)
+            self.statusBar().showMessage(tr("viewer.open_model_config_place"), 8000)
             return
         why = links.follow(links.PLACE_MODEL, self.tree.game, self.current)
         if why is None:
-            why = tr("the island editor places models in the suite's window")
+            why = tr("viewer.island_editor_places_models_suites")
         if why:
             self.statusBar().showMessage(why, 8000)
 
@@ -403,19 +416,19 @@ class ViewerWindow(QMainWindow):
             return
         data = self.tree.read(path)
         found = self.tree.origins(path)
-        rows = [(tr("path"), path), (tr("read from"), found[0] if found else "-")]
-        rows += [(tr("also in (overridden)"), ", ".join(found[1:]))] if len(found) > 1 else []
-        rows.append((tr("size"), tr("{n} bytes", n=number(len(data)))))
+        rows = [(tr("common.path"), path), (tr("viewer.read_from"), found[0] if found else "-")]
+        rows += [(tr("viewer.also_overridden"), ", ".join(found[1:]))] if len(found) > 1 else []
+        rows.append((tr("viewer.size"), tr("viewer.n_bytes", n=number(len(data)))))
         if path.endswith(KINDS["Textures"]):
             rows += describe(data)
         elif path.endswith((".wem", ".wav")):
             try:
                 rows += [(k, str(v)) for k, v in banks.wave_info(data).items()]
             except banks.Unplayable as exc:
-                rows.append((tr("format"), str(exc)))
+                rows.append((tr("viewer.format"), str(exc)))
         shared = configtree.shared_config(path) if path.endswith(".cfg") else ""
         if shared and self.tree.exists(shared):
-            rows.append((tr("baked copy"), tr("{path} (the game reads this one)", path=shared)))
+            rows.append((tr("viewer.baked_copy"), tr("viewer.game_reads_one", path=shared)))
         self.props.show_rows(rows)
 
     def _node_picked(self, path) -> None:
@@ -425,7 +438,7 @@ class ViewerWindow(QMainWindow):
         node = self.scene.tree.find(path) if path else self.scene.tree
         if node is None:  # a nested config's part: its own file has the fields
             self.props.show_rows(
-                [(tr("part"), path), (tr("open"), tr("double-click the FILE entry's FileName to open it"))]
+                [(tr("common.part"), path), (tr("viewer.open"), tr("viewer.double_click_file_entrys_filename"))]
             )
             return
         self.props.show_node(node)
@@ -433,7 +446,7 @@ class ViewerWindow(QMainWindow):
     def _part_clicked(self, node: str) -> None:
         if node:
             self.parts.select_node(node)
-            self.statusBar().showMessage(tr("part {node}", node=node), 8000)
+            self.statusBar().showMessage(tr("viewer.part_node", node=node), 8000)
         else:
             self.parts.setCurrentItem(self.parts.topLevelItem(0))
 
@@ -456,13 +469,13 @@ class ViewerWindow(QMainWindow):
         game = self.scene.game if self.scene is not None else ""
         found = states.bits_read(self.scene) if self.scene is not None else []
         for bit in sorted({*found, *(b for b in range(32) if self.held >> b & 1)}):
-            name = tr("Bit {bit}: {name}", bit=bit, name=states.bit_name(bit, game)) if game == "anno117" else None
-            toggle_action(self.bits_menu, name or tr("Bit {bit}", bit=bit), bool(self.held >> bit & 1),
+            name = tr("viewer.bit_name", bit=bit, name=states.bit_name(bit, game)) if game == "anno117" else None
+            toggle_action(self.bits_menu, name or tr("viewer.bit", bit=bit), bool(self.held >> bit & 1),
                           lambda on, b=bit: self.hold_bits(self.held | 1 << b if on else self.held & ~(1 << b)))  # fmt: skip
         if not found:
-            self.bits_menu.addAction(tr("(the open model reads no condition bits)")).setEnabled(False)
+            self.bits_menu.addAction(tr("viewer.open_model_reads_no_condition")).setEnabled(False)
         self.bits_menu.addSeparator()
-        self.bits_menu.addAction(tr("&Release all"), lambda: self.hold_bits(0))
+        self.bits_menu.addAction(tr("viewer.release_all"), lambda: self.hold_bits(0))
 
     def hold_bits(self, held: int) -> None:
         """Hold these condition bits by hand from now on (with the sequence's)."""
@@ -494,10 +507,15 @@ class ViewerWindow(QMainWindow):
         if self.pages.currentWidget() is not self.model:
             return
         name, _f = QFileDialog.getSaveFileName(
-            self, tr("Save the picture"), "", "PNG (*.png)"
+            self, tr("common.save_picture"), "", "PNG (*.png)"
         )  # i18n: ok (a file filter)
-        if name:
-            self.model.image().save(name)
+        if not name:
+            return
+        writer = QImageWriter(name)
+        if not writer.write(self.model.image()):  # a folder that takes no files, a suffix Qt writes no picture for
+            self.statusBar().showMessage(
+                tr("viewer.could_not_write_name", name=name, error=writer.errorString()), 12000
+            )
 
     def closeEvent(self, event) -> None:
         self.sound._stop()

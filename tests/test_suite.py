@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QLabel  # after the platform is chosen
 from tests.fakes import asset_game
 
+from annotoolbox.infra.i18n import english
 from annotoolbox.suite import apps, guidrangedialog, guidranges, project, shell
 from annotoolbox.suite.extspecs import AppSpec
 from annotoolbox.suite.settings import Settings
@@ -63,6 +64,64 @@ def test_an_app_that_fails_to_start_says_why_and_the_others_stay(qt, settings):
     window = shell.SuiteWindow([AppSpec("bad", "Bad", "app_assets", "", broken)], *settings)
     page = window.show_app("bad")
     assert "no game" in page.text()
+
+
+def test_a_page_that_refuses_to_close_keeps_the_window_and_the_page_in_front(qt, settings):
+    """The pages asked before the one that refused were closed already: the one in front stayed hidden, a blank window."""
+    from PySide6.QtWidgets import QWidget
+
+    class Unsaved(QWidget):
+        def closeEvent(self, event):
+            event.ignore()
+
+    specs = [AppSpec("one", "One", "app_islands", "", lambda _s: QLabel("one")),
+             AppSpec("two", "Two", "app_assets", "", lambda _s: Unsaved())]  # fmt: skip
+    window = shell.SuiteWindow(specs, *settings)
+    window.show_app("two")
+    front = window.show_app("one")
+    window.show()
+    assert not window.close() and window.isVisible()
+    assert front.isVisible() and window.stack.currentWidget() is front
+    assert window._follow_system_scheme is not None  # still open: it goes on following the system's colours
+    window.pages.pop("two").deleteLater()
+    assert window.close() and window._follow_system_scheme is None
+
+
+def test_every_app_has_a_shortcut_shown_in_its_tip_and_the_palette_does_not_take_the_windows_colours(qt, settings):
+    from PySide6.QtGui import QPalette
+
+    specs = [AppSpec(f"app{n}", f"App {n}", "app_islands", "About", lambda _s: QLabel()) for n in range(1, 24)]
+    window = shell.SuiteWindow(specs, *settings)
+    keys = [a.shortcut().toString() for a in window.switch_actions.values()]
+    assert (
+        keys == [f"Ctrl+{n}" for n in range(1, 10)] + ["Ctrl+0"] + [f"Ctrl+Shift+{n}" for n in range(1, 10)] + [""] * 4
+    )
+    assert len(set(filter(None, keys))) == 19  # no key twice
+    tips = [a.toolTip() for a in window.switch_actions.values()]
+    assert tips[9] == "About (Ctrl+0)" and tips[10] == "About (Ctrl+Shift+1)" and tips[-1] == "About"
+    opened = window.open_palette()
+    assert window.debug_palette is opened and isinstance(window.palette(), QPalette)
+    opened.close()
+    window.close()
+
+
+@pytest.mark.parametrize("opener", ["open_palette", "open_link_panel", "open_project"])
+def test_a_window_of_the_suite_is_reused_while_open_and_a_closed_one_is_deleted(qt, settings, opener, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from shiboken6 import isValid
+
+    monkeypatch.setenv("ANNO_LIVE_LINK", "0")
+    window = shell.SuiteWindow([AppSpec("one", "One", "app_islands", "", lambda _s: QLabel())], *settings)
+    first = getattr(window, opener)()
+    assert getattr(window, opener)() is first and first.isVisible()  # a second click: the same window, in front
+    first.close()
+    first.background.join()
+    second = getattr(window, opener)()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert second is not first and second.isVisible() and not isValid(first)
+    assert sum(type(child) is type(second) for child in window.children()) == 1
+    second.close()
+    window.close()
 
 
 def test_the_asset_window_opens_a_game_edits_undoes_checks_and_builds(qt, settings, tmp_path):
@@ -142,7 +201,7 @@ def test_the_smoke_start_opens_every_app_and_the_project_window(qt, settings, ca
     window = shell.SuiteWindow(list(apps.BUILTIN), *settings, apps.parts())
     assert shell.smoke_test(qt, window) == 0
     out = capsys.readouterr().out
-    assert all(f"{a.title}: started" in out for a in apps.BUILTIN) and "Project: opened" in out
+    assert all(f"{english(a.title)}: started" in out for a in apps.BUILTIN) and "Project: opened" in out
 
 
 def test_the_project_window_saves_the_project_and_builds_its_mod(qt, settings, tmp_path):

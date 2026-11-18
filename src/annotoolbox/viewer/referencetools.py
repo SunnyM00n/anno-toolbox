@@ -42,12 +42,10 @@ class ReferencePanel(QTreeWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setHeaderLabels([tr("file"), tr("asset")])
+        self.setHeaderLabels([tr("common.file_lower"), tr("viewer.asset")])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.itemDoubleClicked.connect(lambda item, _col: self._open(item))
-        self.note(
-            tr("File > Find the unreferenced files reads every file once; then this panel follows the open file.")
-        )
+        self.note(tr("viewer.file_gt_find_unreferenced_files"))
 
     def note(self, text: str) -> None:
         self.clear()
@@ -55,8 +53,8 @@ class ReferencePanel(QTreeWidget):
 
     def show_references(self, path: str, named_by: list[str], names: list[str]) -> None:
         self.clear()
-        for title, rows in ((N_("Named by"), named_by), (N_("Names"), names)):
-            top = QTreeWidgetItem([tr("{title} ({count})", title=tr(title), count=number(len(rows)))])
+        for title, rows in ((N_("viewer.named_by"), named_by), (N_("viewer.names"), names)):
+            top = QTreeWidgetItem([tr("common.title_count", title=tr(title), count=number(len(rows)))])
             self.addTopLevelItem(top)
             for source in rows[:1000]:
                 file, guid = scan.split_source(source)
@@ -65,7 +63,7 @@ class ReferencePanel(QTreeWidget):
                 top.addChild(item)
             top.setExpanded(len(rows) <= 50)
         if not named_by:
-            self.note(tr("no file names {name}", name=path.rsplit("/", 1)[-1]))
+            self.note(tr("viewer.no_file_names", name=path.rsplit("/", 1)[-1]))
 
     def _open(self, item) -> None:
         path = item.data(0, PATH_ROLE)
@@ -82,7 +80,7 @@ class ReferenceTools(QObject):
         self.unreferenced: list[str] = []
         self.building = None  # the tree whose graph is being read
         self.panel = ReferencePanel()
-        dock = QDockWidget(tr("References"), window, objectName="viewerReferences")
+        dock = QDockWidget(tr("viewer.references"), window, objectName="viewerReferences")
         dock.setWidget(self.panel)
         window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         window.docks["References"] = dock
@@ -91,8 +89,8 @@ class ReferenceTools(QObject):
         self.panel.open_file.connect(window.open_path)
 
     def add_actions(self, file_menu) -> None:
-        file_menu.addAction(tr("Find the &unreferenced files"), self.find)
-        file_menu.addAction(tr("Export the unreferenced files (&CSV)..."), self.export_csv)
+        file_menu.addAction(tr("viewer.find_unreferenced_files"), self.find)
+        file_menu.addAction(tr("viewer.export_unreferenced_files_csv"), self.export_csv)
 
     def find_users(self) -> None:
         """File > Who uses the file: the same graph as ``find``, shown in the Used by panel."""
@@ -112,9 +110,7 @@ class ReferenceTools(QObject):
         tree = self.window.tree
         cache = self._cache()
         if tree is None or cache is None or not cache.exists():
-            self.panel.note(
-                tr("File > Find the unreferenced files reads every file once; then this panel follows the open file.")
-            )
+            self.panel.note(tr("viewer.file_gt_find_unreferenced_files"))
             return
         self.window.background.run(lambda: _judged(tree, refgraph.cached(tree, cache)), lambda f: self._found(tree, f))
 
@@ -122,7 +118,7 @@ class ReferenceTools(QObject):
         """Build the graph in the background (kept beside the game), then fill the filter and the panel."""
         tree = self.window.tree
         if tree is None:
-            self.window.statusBar().showMessage(tr("Open a game first"), 8000)
+            self.window.statusBar().showMessage(tr("viewer.open_game_first"), 8000)
             return
         if self.graph is not None:
             self._show()
@@ -131,7 +127,7 @@ class ReferenceTools(QObject):
             return
         self.building = tree
         cache = self._cache()
-        reading = tr("reading every file that can name another (once, kept beside the game)...")
+        reading = tr("viewer.reading_every_file_name_another")
         self.panel.note(reading)
         self.window.users.note(reading)
         self.window.docks["References"].raise_()
@@ -143,9 +139,7 @@ class ReferenceTools(QObject):
         if tree is not self.window.tree:
             return
         if isinstance(found, Exception):
-            self.panel.note(
-                tr("could not build the references: {kind}: {error}", kind=type(found).__name__, error=found)
-            )
+            self.panel.note(tr("viewer.could_not_build_references", kind=type(found).__name__, error=found))
             return
         if found is None:
             return
@@ -156,7 +150,7 @@ class ReferenceTools(QObject):
         self.window.browser.set_unreferenced(self.unreferenced)
         self.window.statusBar().showMessage(
             tr(
-                "{count} files are named by no file that is in use (the game may still load one)",
+                "viewer.files_named_no_file_use",
                 count=number(len(self.window.browser.unreferenced)),
             ),
             10000,
@@ -171,14 +165,19 @@ class ReferenceTools(QObject):
     def export_csv(self) -> None:
         tree = self.window.tree
         if tree is None or self.graph is None:
-            self.window.statusBar().showMessage(tr("Find the unreferenced files first"), 8000)
+            self.window.statusBar().showMessage(tr("viewer.find_unreferenced_files_first"), 8000)
             return
         proposal = f"{tree.game or 'game'}-unreferenced.csv"
         name, _ = QFileDialog.getSaveFileName(  # i18n: ok
-            self.window, tr("Export the unreferenced files"), proposal, "CSV (*.csv)"
+            self.window, tr("viewer.export_unreferenced_files"), proposal, "CSV (*.csv)"
         )
-        if name:
+        if not name:
+            return
+        try:
             Path(name).write_text(
                 refgraph.unreferenced_csv(tree, self.graph, self.verdicts), encoding="utf-8", newline="\n"
             )
-            self.window.statusBar().showMessage(tr("Wrote {name}", name=name), 8000)
+        except OSError as exc:  # open in a spreadsheet, a folder that takes no files
+            self.window.statusBar().showMessage(tr("viewer.could_not_write_name", name=name, error=exc), 12000)
+            return
+        self.window.statusBar().showMessage(tr("viewer.wrote_name", name=name), 8000)

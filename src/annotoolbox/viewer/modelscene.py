@@ -273,7 +273,7 @@ def _new_engine(files, path: str, at: tuple, prefix: str, scene: Scene, options:
             if node.get("FileName"):
                 scene.note(
                     tr(
-                        "{where}: {file} is not in the files",
+                        "viewer.where_file_not_files",
                         where=f"{prefix}{node.path}",
                         file=configtree.mesh_file(node),
                     )
@@ -337,7 +337,7 @@ def _nested(tree: Node, at: tuple, prefix: str, scene: Scene, depth: int, follow
         except Exception as exc:  # a nested config that does not read: the rest of the model still draws
             scene.note(
                 tr(
-                    "{where}: {file} does not read ({kind}: {error})",
+                    "viewer.where_file_not_read_kind",
                     where=f"{prefix}{node.path}",
                     file=name,
                     kind=type(exc).__name__,
@@ -349,9 +349,9 @@ def _nested(tree: Node, at: tuple, prefix: str, scene: Scene, depth: int, follow
 def _not_followed(scene: Scene, where: str, name: str, found: str) -> None:
     """Say why a nested config is not drawn: not in the files, or nested too deep."""
     if found:
-        scene.note(tr("{where}: {file} nests too deep", where=where, file=name))
+        scene.note(tr("viewer.nests_too_deep", where=where, file=name))
     else:
-        scene.note(tr("{where}: {file} is not in the files", where=where, file=name))
+        scene.note(tr("viewer.where_file_not_files", where=where, file=name))
 
 
 def _materials(model: Node, level: int, prefix: str, resolve: Resolver, owner: str) -> dict[int, Material]:
@@ -458,7 +458,7 @@ def _part2070(m, node: str, at: tuple, prefix: str, path: str, scene: Scene, tex
     resolve = scene.resolve
     mesh = resolve.mesh(m.filename, path, node)
     if not mesh:
-        scene.note(tr("{where}: {file} is not in the files", where=node, file=normalize(m.filename)))
+        scene.note(tr("viewer.where_file_not_files", where=node, file=normalize(m.filename)))
         return None
     surfaces = modelread.surfaces(m.materials, texture)
     _other_slots2070(m.materials, resolve, path, node)
@@ -520,7 +520,7 @@ def _cfg2070(files, path: str, at: tuple, prefix: str, scene: Scene, depth: int,
         except Exception as exc:  # a nested config that does not read: the rest still draws
             scene.note(
                 tr(
-                    "{where}: {file} does not read ({kind}: {error})",
+                    "viewer.where_file_not_read_kind",
                     where=f"{prefix}Files/{k}",
                     file=name,
                     kind=type(exc).__name__,
@@ -596,12 +596,12 @@ def _mcf1701(files, path: str, scene: Scene) -> None:
     model = read_1701_model(path, lambda p: files.read(p).decode("utf-8", "replace"), files.exists, 1 / TILE, texture)
     bits = {name: k for k, name in enumerate(model.states()[:32])}
     for name, k in bits.items():
-        scene.note(tr("State bit {bit}: {name}", bit=k, name=name))
+        scene.note(tr("viewer.state_bit_name", bit=k, name=name))
     for file, error in model.unread:
         if error is None or isinstance(error, OSError | KeyError):
             _not_followed(scene, path, file, file if error is None else "")
         else:
-            scene.note(tr("{where}: {file} does not read ({kind}: {error})", where=path, file=file,
+            scene.note(tr("viewer.where_file_not_read_kind", where=path, file=file,
                           kind=type(error).__name__, error=error))  # fmt: skip
 
     def when(names) -> tuple[int, ...]:  # one mask per condition: all of them needed
@@ -611,7 +611,7 @@ def _mcf1701(files, path: str, scene: Scene) -> None:
         node, piece = f"Models/{k}", item.piece
         mesh = scene.resolve.mesh(piece.mesh, path, node)
         if not mesh:
-            scene.note(tr("{where}: {file} is not in the files", where=node, file=piece.mesh))
+            scene.note(tr("viewer.where_file_not_files", where=node, file=piece.mesh))
             continue
         part = Part(node, mesh, matrix(piece.place), when=when(item.conditions))
         part.materials = {

@@ -747,3 +747,16 @@ def test_what_a_box_holds_takes_its_colour_and_its_width_and_a_block_box_is_as_w
     assert calls[1][2] == (("n", ("half",)),)
     _name, block, _h = stage._box(QTextDocument(), sheet.get("block"), "a", (font, (1, 2, 3), 600))
     assert block == 570  # the text's width less the block's margins
+
+
+def test_a_game_without_the_font_table_file_reads_its_fonts_from_the_localisation_file(tree, tmp_path: Path):
+    loca = tmp_path / "game/data/loca/eng/localisation.xml"
+    loca.write_text(
+        "<Localisation><Font><Name>Default</Name><RelativeFontSize>18</RelativeFontSize><Weight>700</Weight>"
+        "<FontName>Times New Roman</FontName></Font></Localisation>",
+        encoding="utf-8",
+    )
+    old = files.OldGui(gametree.loose_tree(tmp_path / "game"))
+    font = old.fonts["Default"]
+    assert (font.family, font.size, font.weight, font.file) == ("Times New Roman", 18.0, 700, "")
+    assert old.font_file(font) is None  # a Windows family: the install ships no file for it

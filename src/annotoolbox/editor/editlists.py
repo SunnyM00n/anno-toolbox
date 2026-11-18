@@ -74,7 +74,7 @@ def library_items(library: dict, source: str, query: str = "", forest_models=())
             "name": label_of({"cfg": cfg}),
             "cfg": cfg,
             "tree": v,
-            "group": tr("forest of this island"),
+            "group": tr("islands.forest_island"),
             "title": f"forest:{cfg}",
         }
         for v, cfg in enumerate(forest_models)

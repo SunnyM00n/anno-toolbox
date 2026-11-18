@@ -403,7 +403,7 @@ class Terrain:
         def ready(node) -> bool:  # baked, and its model's page still on the device
             model = self.models.get(node)
             page = model.kind[1] if model is not None else None
-            current = page is None or (page in pages and id(pages[page]) == model.kind[2])
+            current = page is None or (page in pages and pages[page] is model.kind[2])
             return model is not None and current and node in self.cache.slices and node not in self.cache.fresh
 
         wanted = {m.node: m for m in models}
@@ -415,7 +415,8 @@ class Terrain:
         return [wanted[n] if n in wanted else self.models[n] for n in nodes]
 
     def pages_on_device(self) -> dict:
-        """The pages a node's kind names (its second item), by key: what its third item is the ``id`` of."""
+        """The pages a node's kind names (its second item), by key: its third item is the page's entry here (the
+        entry itself, held: the ``id`` of a page let go is given again to one made later)."""
         return self.pages.ready if self.pages is not None else {}
 
     def casters(self, models: list[TerrainModel]) -> list[TerrainModel]:
@@ -462,10 +463,10 @@ class Terrain:
         if self.detailed is not None and self.pages is not None and page is not None and node.level <= DETAILED_LEVEL:
             self.pages.want(page, src.pages[page])
             if page in ready:
-                return ("detailed", page, id(ready[page]))
+                return ("detailed", page, ready[page])
         tiles = 2**node.level
         if (int(node.x // tiles), int(node.z // tiles)) in src.meshes.get(node.level, {}):
-            return ("stored", page, id(ready[page])) if page in ready else ("stored", None, 0)
+            return ("stored", page, ready[page]) if page in ready else ("stored", None, 0)
         return ("grid", None, 0)
 
     def normals(self) -> np.ndarray:

@@ -7,7 +7,7 @@ import array
 import struct
 
 import pytest
-from tests.test_soundedit import VERSIONS, bank_bytes
+from tests.test_soundedit import VERSIONS, bank_bytes, sound_window  # noqa: F401
 
 from annotoolbox.formats import bnk, bnkmusic
 from annotoolbox.soundedit import musicedits
@@ -223,16 +223,8 @@ def test_the_detail_panel_lists_markers_rules_and_track_items_and_the_waveform_g
     assert musicedits.track_marks(doc, 30) == []
 
 
-def test_the_window_edits_markers_and_rules_through_the_music_panel(monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
+def test_the_window_edits_markers_and_rules_through_the_music_panel(sound_window):  # noqa: F811
+    window = sound_window
     window.doc = music([rule()])
     window._fill_outline()
     window._select(30)
@@ -244,6 +236,9 @@ def test_the_window_edits_markers_and_rules_through_the_music_panel(monkeypatch)
     window.music.fields.setText("sync_type=2")
     window.music._apply_rule()
     assert "sync 2" in window.facts.toPlainText()
+    window.music.rule.setValue(250)  # 117 ships up to 95 rules in a container: a few added ones passed the old 99
+    assert window.music.rule.value() == 250
+    window.music.rule.setValue(0)
     window.music.markers.setText("")
     window._select(30)
     window.music.markers.setText("x")

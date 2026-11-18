@@ -29,11 +29,44 @@ def test_a_group_without_stack_or_background_has_no_rule():
     assert arrange.read_rule({}, {}) is None
 
 
-def test_a_horizontal_stack_aligns_across_by_the_group_or_the_child():
+def test_a_stack_lays_the_last_child_of_the_file_out_first():
+    """The game's dump of the options scene (2026-11-16): "Buttons", Middle, 32 apart: ConfirmBtn (the file's second
+    child) at 0, ResetBtn at 316 + 32."""
+    rule = _rule(STACK_SPACE=32.0)
+    reset, confirm = _slot(158, 0, 316, 48), _slot(158, 0, 316, 48)
+    arrange.arrange(rule, [reset, confirm])
+    assert (confirm.rect[0], reset.rect[0]) == (0.0, 348.0)
+    rule = _rule(STACK_SPACE=32.0, STACK_INVERT=True)  # the stored InvertOrder was never true in the dumps: unseen
+    reset, confirm = _slot(0, 0, 316, 48), _slot(0, 0, 316, 48)
+    arrange.arrange(rule, [reset, confirm])
+    assert (reset.rect[0], confirm.rect[0]) == (0.0, 348.0)
+
+
+def test_a_hidden_child_takes_no_room_in_a_stack():
+    """ "ResetBtnGroup" (options scene): the file lists DecoRight, ResetBtn, DecoLeft (hidden); 8 apart."""
+    rule = _rule(STACK_SPACE=8.0)
+    right, button = _slot(0, 0, 48, 48), _slot(0, 0, 260, 48)
+    left = arrange.Slot(None, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (48.0, 48.0), (0.0, 0.0, 48.0, 48.0), False)
+    arrange.arrange(rule, [right, button, left])
+    assert (button.rect[0], right.rect[0]) == (0.0, 268.0)
+
+
+def test_a_stack_aligns_across_with_the_paddings_inside_the_widest_child():
+    """ "Header_Button" (omresidence scene): Middle, children 28 high with a top padding of 6 in a box 52 high sit at
+    15, as (52 - 34) / 2 + 6; the margin moves no child."""
+    rule = _rule(STACK_ALIGN=arrange.MIDDLE, STACK_MARGIN=(10.0, 4.0, 0.0, 0.0))
+    close, headlines, info = _slot(0, 0, 28, 28, pad=(0.0, 6.0, 0.0, 0.0)), _slot(0, 0, 214, 52), _slot(0, 0, 28, 28)
+    close.pad = info.pad = (0.0, 6.0, 0.0, 0.0)
+    arrange.arrange(rule, [close, headlines, info])
+    assert (close.rect[1], headlines.rect[1], info.rect[1]) == (15.0, 0.0, 15.0)
+    assert info.rect[0] == 0.0 and headlines.rect[0] == 28.0 and close.rect[0] == 242.0
+
+
+def test_a_stack_aligns_across_by_the_group_or_the_child():
     rule = _rule(STACK_SPACE=10.0)
     slots = [_slot(50, 50, 20, 20), _slot(0, 0, 30, 60), _slot(0, 0, 10, 10, align=arrange.END)]
     arrange.arrange(rule, slots)
-    assert [s.rect[0] for s in slots] == [0.0, 30.0, 70.0]  # one after another, 10 apart
+    assert [s.rect[0] for s in slots] == [60.0, 20.0, 0.0]  # the last child first, 10 apart
     assert [s.rect[1] for s in slots[:2]] == [0.0, 0.0]  # begin: the group's default, the top edge
     assert slots[2].rect[1] == 50.0  # the child's own end: the bottom of the tallest (60)
     rule.align = arrange.MIDDLE
@@ -42,15 +75,24 @@ def test_a_horizontal_stack_aligns_across_by_the_group_or_the_child():
     assert slots[0].rect[1] == 20.0 and slots[1].rect[1] == 0.0
 
 
-def test_a_vertical_stack_has_its_margin_paddings_and_inverted_order():
-    rule = _rule(STACK_ORIENTATION=arrange.VERTICAL, STACK_MARGIN=(4.0, 6.0, 0.0, 0.0), STACK_INVERT=True)
+def test_a_vertical_stack_has_its_paddings_and_the_margin_moves_nothing():
+    rule = _rule(STACK_ORIENTATION=arrange.VERTICAL, STACK_MARGIN=(4.0, 6.0, 0.0, 0.0))
     first, second = _slot(0, 0, 10, 10, pad=(0.0, 2.0, 0.0, 3.0)), _slot(0, 0, 20, 10)
     arrange.arrange(rule, [first, second])
-    assert second.rect[:2] == (4.0, 6.0)  # inverted: the second child leads; margin left 4, top 6
-    assert first.rect[:2] == (4.0, 6.0 + 10.0 + 2.0)  # then the first with its top padding
+    assert second.rect[:2] == (0.0, 0.0)  # the last child leads, at the group's origin
+    assert first.rect[:2] == (0.0, 10.0 + 2.0)  # then the first with its top padding
     hidden = arrange.Slot(None, (1.0, 0.0, 0.0, 1.0, 9.0, 9.0), (5.0, 5.0), (9.0, 9.0, 14.0, 14.0), False)
     arrange.arrange(rule, [hidden, first])
     assert hidden.rect == (9.0, 9.0, 14.0, 14.0)  # a hidden child is neither placed nor counted
+
+
+def test_a_containers_size_is_the_union_of_what_counts_and_a_stacks_margin_grows_it():
+    """ "Deco_GoldenS1" (the game's dump): strokes from -187 to 0 and 0 to 187, 6 high, make a box 374 by 6."""
+    from annotoolbox.uiedit import layout
+
+    assert layout.union_size([(0.0, 0.0, 187.0, 6.0), (-187.0, 0.0, 0.0, 6.0)]) == (374.0, 6.0)
+    assert layout.union_size([(10.0, 5.0, 30.0, 25.0)]) == (20.0, 20.0)  # not the edge from the origin (30, 25)
+    assert layout.union_size([]) == (0.0, 0.0)
 
 
 def test_a_background_covers_the_content_plus_its_margin():
@@ -193,3 +235,25 @@ def test_layers_the_author_hid_start_hidden_unless_asked(tmp_path):
     assert len(layout.place(HIDDEN, files.root(HIDDEN), layout.Context(files)).items) == 1
     ctx = layout.Context(files, editor_hidden=True)
     assert len(layout.place(HIDDEN, files.root(HIDDEN), ctx).items) == 2
+
+
+def test_a_centred_label_sized_by_its_text_has_its_box_at_the_text(tmp_path):
+    from tests.test_uiedit_compose import _root
+
+    from annotoolbox.uiedit import layout
+
+    key = str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_URL, "label-box"))
+    root = _root(key)
+    label = _instance("41a404e5", "Centred", (10.0, 0.0, 0.0))
+    for field, value in (("Text", "ab"), ("TextPlane", (100.0, 80.0)), ("AlignmentX", 1), ("HorizontalSizing", 1)):
+        phoenixedit.set_field(label, field, value)
+    wf = phoenixedit.WidgetFile(SCHEMA, root, versions=VERSIONS)
+    wf.add_instance(label)
+    wf.finish("label-box")
+    files = _files(tmp_path, **{key: root})
+    ctx = layout.Context(files, measure=lambda text, style, width: (24.0, 30.0))
+    frame = layout.place(key, files.root(key), ctx)
+    (box,) = frame.boxes.values()
+    assert layout.bounds(box.matrix, *box.size) == (48.0, 0.0, 72.0, 30.0)  # 10 + (100 - 24) / 2: the text's place
+    (text,) = [i for i in frame.items if i.kind == "text"]
+    assert layout.apply(text.matrix, 0, 0) == (10.0, 0.0)  # the text is still drawn in its plane

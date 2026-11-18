@@ -49,7 +49,7 @@ class Glossary:
         for term in self.terms_in(source):
             wanted = self.translation(term) or ""
             if wanted and wanted.lower() not in lowered:
-                out.append(tr("{term} is {wanted} in the glossary", term=term, wanted=wanted))
+                out.append(tr("texts.term_wanted_glossary", term=term, wanted=wanted))
         return out
 
 

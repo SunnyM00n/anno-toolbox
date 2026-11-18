@@ -30,7 +30,7 @@ ICON_ROWS = 300  # rows a fill or an opened group gives an icon (each is a file 
 SEARCH_DELAY = 250  # ms the search waits after a key before it fills the tree
 SHOWN = 2000  # rows a search or a filter lists at once
 FILTERED = 20000  # assets a value filter looks at (it resolves each one's layers)
-GROUPS, TEMPLATES = N_("Groups"), N_("Templates")
+GROUPS, TEMPLATES = N_("assets.groups"), N_("assets.templates")
 GUID_ROLE = Qt.ItemDataRole.UserRole
 MEMBERS_ROLE = Qt.ItemDataRole.UserRole + 1  # every asset of a group row, its subgroups' too
 OWN_ROLE = Qt.ItemDataRole.UserRole + 2  # the assets a group row holds itself
@@ -51,19 +51,19 @@ class AssetTree(QWidget):
         self._background = Background(self)
         self._typing = QTimer(self, singleShot=True, interval=SEARCH_DELAY)
         layout = QVBoxLayout(self)
-        self.search = QLineEdit(placeholderText=tr("search: GUID, name or template (Enter: find next)"))
+        self.search = QLineEdit(placeholderText=tr("assets.search_guid_name_template_enter"))
         row = QHBoxLayout()
         self.mode = QComboBox()
         for key in (GROUPS, TEMPLATES):
             self.mode.addItem(tr(key), key)
         self.template = QComboBox(editable=True)
-        self.template.setToolTip(tr("only assets of this template"))
-        row.addWidget(QLabel(tr("by")))
+        self.template.setToolTip(tr("assets.tip.only_assets_template"))
+        row.addWidget(QLabel(tr("assets.by")))
         row.addWidget(self.mode)
         row.addWidget(self.template, 1)
-        self.value_filter = QLineEdit(placeholderText=tr("value filter: Building/Upkeep >= 5  (= >= <= ~ ^ in)"))
+        self.value_filter = QLineEdit(placeholderText=tr("assets.value_filter_building_upkeep_gt"))
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels([tr("Asset"), tr("GUID")])
+        self.tree.setHeaderLabels([tr("common.asset"), tr("assets.guid")])
         self.tree.setColumnWidth(0, 260)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)  # several assets to cut or copy
         self.count = QLabel()
@@ -95,7 +95,7 @@ class AssetTree(QWidget):
     def _row(self, guid: int, icon: bool = True) -> QTreeWidgetItem:
         c = self.doc.changes
         mark = " *" if guid in c.new or (guid in c.assets and not c.assets[guid].empty) else ""
-        item = QTreeWidgetItem([f"{self.doc.name(guid) or tr('(no name)')}{mark}", str(guid)])
+        item = QTreeWidgetItem([f"{self.doc.name(guid) or tr('assets.no_name')}{mark}", str(guid)])
         item.setData(0, GUID_ROLE, guid)
         item.setToolTip(0, self.doc.template(guid))
         if icon and self.icons is not None and self._icon_budget > 0:
@@ -150,14 +150,14 @@ class AssetTree(QWidget):
 
     def _fill_rows(self) -> None:
         if self.doc is None:
-            self.count.setText(tr("no game open"))
+            self.count.setText(tr("assets.no_game_open"))
             return
         query = self.search.text().strip()
         if query or filters.parse(self.value_filter.text()) is not None:
             return self._flat(query)
         guids = self._entries()
         if self.doc.changes.new:
-            top = QTreeWidgetItem([tr("New in this change set ({n})", n=len(self.doc.changes.new)), ""])
+            top = QTreeWidgetItem([tr("assets.new_change_set", n=len(self.doc.changes.new)), ""])
             top.addChildren([self._row(g) for g in self.doc.changes.new if g in guids])
             self.tree.addTopLevelItem(top)
             top.setExpanded(True)
@@ -166,9 +166,9 @@ class AssetTree(QWidget):
         for key in sorted(k for k in self._groups if len(k) == 1):
             self.tree.addTopLevelItem(self._group_item(key))
         self.count.setText(
-            tr("{n} assets in {count} templates", n=len(guids), count=len(self._groups))
+            tr("assets.n_assets_count_templates", n=len(guids), count=len(self._groups))
             if by_template
-            else tr("{n} assets in {count} groups", n=len(guids), count=len(self._groups))
+            else tr("assets.n_assets_count_groups", n=len(guids), count=len(self._groups))
         )
 
     def _bucket(self, guids: list[int], by_template: bool) -> dict[tuple, dict]:
@@ -186,9 +186,9 @@ class AssetTree(QWidget):
         for g in guids:
             e = self.doc.index.by_guid[g]
             path = (
-                (e.template or tr("(no template)"),)
+                (e.template or tr("assets.no_template"),)
                 if by_template
-                else self.doc.index.groups[e.group] or (tr("(no group)"),)
+                else self.doc.index.groups[e.group] or (tr("assets.no_group"),)
             )
             node(path)["own"].append(g)
             for k in range(1, len(path) + 1):
@@ -215,8 +215,8 @@ class AssetTree(QWidget):
         else:
             hits = self._entries()
         self.tree.addTopLevelItems([self._row(g) for g in hits[:SHOWN]])
-        more = " " + tr("(the first {n} shown)", n=SHOWN) if len(hits) > SHOWN else ""
-        self.count.setText(tr("{n} found", n=len(hits)) + more)
+        more = " " + tr("assets.first_n_shown", n=SHOWN) if len(hits) > SHOWN else ""
+        self.count.setText(tr("assets.n_found", n=len(hits)) + more)
 
     def mark(self, guids: set) -> None:
         """The rows of these assets say again whether the change set edits them (`` *``) and show their icon as it is

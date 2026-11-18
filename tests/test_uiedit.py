@@ -330,19 +330,38 @@ def test_real_scenes_place_and_widget_files_keep_their_bytes(tmp_path):
         assert doc.exact and doc.to_bytes() == doc.original
 
 
-def test_the_window_opens_a_file_edits_and_keeps_it(ui_tree, tmp_path):
+@pytest.fixture
+def window(ui_tree, tmp_path):
+    """The UI editor's window offscreen on the synthetic game; closed without a question afterwards."""
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
 
     from annotoolbox.suite.settings import Settings
-    from annotoolbox.uiedit import canvas
     from annotoolbox.uiedit.uiwindow import UiWindow, _Game
 
     qt = QApplication.instance() or QApplication([])
-    settings = Settings(workspace=str(tmp_path / "ws"), project=str(tmp_path / "proj"))
-    window = UiWindow(settings)
-    window.sync_layout = True  # the layout runs on this thread: the frame is there at once
-    window._opened("anno117", "", _Game("anno117", ui_tree, None))
+    w = UiWindow(Settings(workspace=str(tmp_path / "ws"), project=str(tmp_path / "proj")))
+    w.sync_layout = True  # the layout runs on this thread: the frame is there at once
+    w._opened("anno117", "", _Game("anno117", ui_tree, None))
+    yield w
+    for doc in w.docs.values():
+        doc.undo.mark_clean()
+    w.close()
+    qt.processEvents()
+
+
+def _move_picture(window) -> None:
+    """Open the widget file and move its picture: the file has an edit the project does not."""
+    window.open_file(WIDGET)
+    picture = next(e for e in window.top.walk() if e.kind == "image")
+    window.preview.moved.emit(id(picture.node), 5.0, 5.0)
+    assert window.doc.dirty
+
+
+def test_the_window_opens_a_file_edits_and_keeps_it(window):
+    from annotoolbox.uiedit import canvas
+
+    settings = window.settings
     window.open_file("testscene")
     assert window.frame is not None and any(i.kind == "image" for i in window.frame.items)
     window.open_file(WIDGET)
@@ -355,8 +374,129 @@ def test_the_window_opens_a_file_edits_and_keeps_it(ui_tree, tmp_path):
     assert saved.read_bytes() == window.doc.to_bytes() and not window.doc.dirty
     img = canvas.render(window.frame, window.pictures, 0.25)
     assert (img.width(), img.height()) == (480, 270)
+
+
+def test_another_game_asks_about_unkept_edits_and_shows_nothing_of_the_game_before(window, ui_tree, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from annotoolbox.uiedit import uiwindow
+
+    opened: list[str] = []
+    monkeypatch.setattr(uiwindow.gameopen, "open_installed", lambda _w, _s, key, *_a, **_k: opened.append(key))
+    answers = [QMessageBox.StandardButton.Cancel]
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a, **_k: answers[0])
+    _move_picture(window)
+    window.open_game("anno1800")
+    assert opened == [] and window.doc.dirty  # cancelled: the game and its edits stay
+    answers[0] = QMessageBox.StandardButton.No
+    window.open_game("anno1800")
+    assert opened == ["anno1800"]
+    window._opened("anno117", "", uiwindow._Game("anno117", ui_tree, None))
+    assert window.doc is None and window.top is None and window.selected is None and window.frame is None
+    assert window.element_tree.topLevelItemCount() == 0 and window.preview.frame is None
+    assert window.windowTitle() == "UI editor"
+
+
+def test_a_file_that_cannot_be_kept_is_said_and_keeps_the_window_open(window, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from annotoolbox.uiedit import projectpart
+
+    def refuse(*_a):
+        raise OSError("the disk is full")
+
+    shown: list[str] = []
+    monkeypatch.setattr(projectpart, "save_file", refuse)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _w, _t, text, *_a: shown.append(text))
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a, **_k: QMessageBox.StandardButton.Save)
+    _move_picture(window)
+    assert window.save() is False and "the disk is full" in shown[0] and window.doc.dirty
+    window.show()
+    assert not window.close() and window.isVisible()
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_a, **_k: ("Fresh", True))
+    window.new_widget_file()  # the same refusal for a new file: said, not raised
+    assert len(shown) == 3 and window.doc.key == WIDGET
+
+
+def test_closing_drops_a_scene_still_being_drawn_and_a_replaced_old_page_is_deleted(window, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QWidget
+
+    from annotoolbox.uiedit import uiwindow
+
+    class Still:
+        cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    gone: list[str] = []
+    monkeypatch.setattr(uiwindow, "OldGuiPage", lambda _tree: QWidget())
+    window._opened_old("anno1404", object())
+    window.old_page.destroyed.connect(lambda: gone.append("first"))
+    window._opened_old("anno1404", object())
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert gone == ["first"]
+    still = window.world_menu.still = Still()
     window.close()
-    qt.processEvents()
+    assert still.cancelled and window.world_menu.still is None
+
+
+def test_a_number_its_field_does_not_hold_is_said_and_leaves_the_file(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from annotoolbox.uiedit import panels, timeline
+
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _w, _t, text, *_a: shown.append(text))
+    window.open_file(WIDGET)
+    picture = next(e for e in window.top.walk() if e.kind == "image")
+    before = window.doc.to_bytes()
+    window.props.edit_value.emit(
+        picture.node, [0x10000001], fields.I32, 2**40
+    )  # no 32 bits: it raised out of the signal
+    window.props.edit_field.emit(picture.node, "RotationAngle", 1e40)  # nor a float of 32
+    assert len(shown) == 2 and window.doc.to_bytes() == before and not window.doc.dirty
+    for text in ("inf", "-inf", "nan"):  # typed where a whole number goes: refused as any other word
+        with pytest.raises(ValueError):
+            panels.parse(text, fields.U32)
+        with pytest.raises(ValueError):
+            timeline.parse_key_value(timeline.COLOR_TRACK, f"1 {text} 3")
+    assert panels.parse("1e3", fields.I32) == 1000 and panels.parse("0x10", fields.U32) == 16
+
+
+def test_a_sample_or_name_file_that_does_not_read_is_said_and_not_written_over(window, ui_tree, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from annotoolbox.uiedit import projectpart
+    from annotoolbox.uiedit.uiwindow import _Game
+
+    samples, names = (projectpart.sidecar(window.project(), "anno117", n) for n in ("samples", "names"))
+    samples.parent.mkdir(parents=True, exist_ok=True)
+    samples.write_text('{"format": 1, "values": {"a/1000', encoding="utf-8")  # cut short
+    names.write_text('{"names": {"not hex": "Text"}}', encoding="utf-8")
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _w, _t, text, *_a: shown.append(text))
+    window._opened("anno117", "", _Game("anno117", ui_tree, None))  # it raised here: the game was left half open
+    assert len(shown) == 1 and "anno117-samples.json" in shown[0] and "anno117-names.json" in shown[0]
+    assert window.file_list.topLevelItemCount() == 3 and window.samples.values == {} and window.names.names == {}
+    window.samples.set("a/10000001", 3)
+    window.samples.save()
+    window.names.save()
+    assert samples.read_text(encoding="utf-8").endswith("a/1000") and "not hex" in names.read_text(encoding="utf-8")
+    for odd in ("[1]", '{"values": [1]}', '{"values": {}, "generated": 5}'):
+        samples.write_text(odd, encoding="utf-8")
+        assert viewmodels.Samples(samples).error and viewmodels.Samples(samples).path is None
+
+
+def test_a_folder_of_loose_files_is_read_off_the_windows_thread(window, tmp_path, monkeypatch):
+    runs: list[tuple] = []
+    monkeypatch.setattr(window.background, "run", lambda work, done, wait=False: runs.append((work, done)))
+    game = window.game
+    window.open_folder(tmp_path / "loose")
+    assert len(runs) == 1 and window.game is game  # nothing read yet
+    runs[0][1](OSError("no such folder"))
+    assert "no such folder" in window.statusBar().currentMessage() and window.game is game
 
 
 def test_the_states_that_show_a_widget_file_come_through_the_files_that_place_it():

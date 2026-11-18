@@ -30,7 +30,7 @@ class OrderView(QTreeWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        _setup(self, ["#", "ModID", tr("Name"), tr("Version"), tr("Why here")])
+        _setup(self, ["#", "ModID", tr("common.name"), tr("common.version"), tr("mods.why_here")])
 
     def set_plan(self, plan: Plan | None) -> None:
         self.clear()
@@ -45,13 +45,19 @@ class IssueView(QTreeWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        _setup(self, ["", tr("Mod"), tr("Rule"), tr("What")])
+        _setup(self, ["", tr("mods.mod"), tr("mods.rule"), tr("mods.what")])
 
     def set_issues(self, issues: list[Issue]) -> None:
         self.clear()
         for issue in sorted(issues, key=lambda i: (i.level != PROBLEM, i.mod, i.code)):
             item = QTreeWidgetItem(
-                self, [tr("problem") if issue.level == PROBLEM else tr("note"), issue.mod, issue.code, issue.text]
+                self,
+                [
+                    tr("mods.problem_lower") if issue.level == PROBLEM else tr("mods.note_lower"),
+                    issue.mod,
+                    issue.code,
+                    issue.text,
+                ],
             )
             item.setToolTip(3, issue.text)
             if issue.level == PROBLEM:
@@ -63,36 +69,38 @@ class LogView(QTreeWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        _setup(self, [tr("Mod"), tr("Version"), tr("Last start"), tr("Patch time")], root_decorated=True)
+        _setup(
+            self,
+            [tr("mods.mod"), tr("common.version"), tr("mods.last_start"), tr("mods.patch_time")],
+            root_decorated=True,
+        )
         self.summary = ""
 
     def set_log(self, log: LoadLog | None) -> str:
         """Show ``log``; returns its one-line summary (what to tell the person when there is none)."""
         self.clear()
         if log is None:
-            self.summary = tr(
-                "no mod-loader.log in the mods folder: the game has not been started with this folder yet"
-            )
+            self.summary = tr("mods.no_mod_loader_log_mods")
             return self.summary
         for mod_id in log.order + [m for m in log.mods if m not in log.order]:
             run = log.mods[mod_id]
-            said = tr("loaded") if run.loaded else tr("enabled, not loaded")
+            said = tr("mods.loaded") if run.loaded else tr("mods.enabled_not_loaded")
             time = f"{run.seconds:.1f} s" if run.seconds is not None else ""
             item = QTreeWidgetItem(self, [mod_id, run.version, said, time])
             for line in run.problems:
                 QTreeWidgetItem(item, [line]).setForeground(0, BAD)
             item.setExpanded(bool(run.problems))
         if log.problems:
-            item = QTreeWidgetItem(self, [tr("(no mod)"), "", tr("{n} line(s)", n=len(log.problems)), ""])
+            item = QTreeWidgetItem(self, [tr("mods.no_mod"), "", tr("mods.n_lines", n=len(log.problems)), ""])
             for line in log.problems:
                 QTreeWidgetItem(item, [line]).setForeground(0, BAD)
             item.setExpanded(True)
-        total = tr(", patched in {seconds:g} s", seconds=log.seconds) if log.seconds is not None else ""
+        total = tr("mods.patched_seconds_s", seconds=log.seconds) if log.seconds is not None else ""
         counted = (
-            tr("{n} mod(s) enabled", n=log.enabled) if log.enabled is not None else tr("{n} mod(s)", n=len(log.mods))
+            tr("mods.n_mods_enabled", n=log.enabled) if log.enabled is not None else tr("mods.n_mods", n=len(log.mods))
         )
         self.summary = tr(
-            "{counted}{total}; {n} problem line(s); log of {when}",
+            "mods.problem_lines_log",
             counted=counted,
             total=total,
             n=log.problem_count,

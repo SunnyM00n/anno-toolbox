@@ -17,12 +17,13 @@ import numpy as np
 from ....formats.isd2070 import FIXED, Node
 from ....infra.i18n import N_, tr
 from ....islands.islandgrid import edited_points, nearest_segments
+from ... import groundedit
 
 POINT_NAMES = (("p", "w"), ("position", "width"))  # a river point's position and width: 2070's, 1404's
 BLOCKER_LAYERS = ("m_HeightPathBlockerLayer", "m_PathBlockerLayer")  # 2070 keeps both, 1404 the second
 PATH_MARGIN = 0.25  # tiles a path cell centre may lie off a river's outline and still be blocked (vanilla: never less)
 CELLS = 2  # path blocker cells per tile and axis
-SHAPE_LABELS = {"build": N_("build blocker shape {k}"), "camera": N_("camera blocker shape {k}")}
+SHAPE_LABELS = {"build": N_("islands.build_blocker_shape"), "camera": N_("islands.camera_blocker_shape")}
 SHAPES = {"build": "BuildBlockerShapes", "camera": "CamBlockerShapes"}  # the edit file's kinds and their lists
 
 
@@ -192,8 +193,8 @@ def apply_rivers(root: Node, rivers: dict) -> tuple[int, list[str]]:
     """Edited rivers (``"k"`` -> ``points``, ``widths``): returns how many were written and the unmatched."""
     items, done, stale = river_items(root), 0, []
     for k, change in sorted(rivers.items(), key=lambda kv: str(kv[0])):
-        if not str(k).isdigit() or int(k) >= len(items) or len(change["points"]) != len(change["widths"]):
-            stale.append(tr("river {k}", k=k))
+        if not str(k).isdigit() or int(k) >= len(items) or not groundedit.river_edit_ok(change):
+            stale.append(tr("islands.river_k", k=k))
             continue
         item = items[int(k)]
         if _set_river(item, change["points"], change["widths"]):
@@ -208,7 +209,7 @@ def apply_lakes(root: Node, lakes: dict) -> tuple[int, list[str]]:
     items, done, stale = lake_items(root), 0, []
     for k, level in sorted(lakes.items(), key=lambda kv: str(kv[0])):
         if not str(k).isdigit() or int(k) >= len(items):
-            stale.append(tr("lake {k}", k=k))
+            stale.append(tr("islands.lake_k", k=k))
             continue
         node = items[int(k)].find("m_WaterHeight")
         node.text = str(round(float(level) * FIXED))
@@ -231,7 +232,7 @@ def apply_coast(root: Node, coast: dict) -> tuple[int, list[str]]:
     items, done, stale = coast_items(root), 0, []
     for k, change in sorted(coast.items(), key=lambda kv: str(kv[0])):
         if not str(k).isdigit() or int(k) >= len(items) or len(change["points"]) < 2:
-            stale.append(tr("coast line {k}", k=k))
+            stale.append(tr("islands.coast_line_k", k=k))
             continue
         node = items[int(k)]
         old_nodes = _pairs(node.find("Points"))
@@ -326,7 +327,7 @@ def apply_blockers(root: Node, cells: dict) -> tuple[int, list[str]]:
     outside it, so the game combines the two)."""
     layers = blocker_layers(root)
     if not cells or not layers:
-        return 0, [tr("path cell {k}", k=k) for k in cells]
+        return 0, [tr("islands.path_cell_k", k=k) for k in cells]
     layer = layers[0]
     bits = _bits(layer).copy()
     n = layer.int("m_XSize")
@@ -334,7 +335,7 @@ def apply_blockers(root: Node, cells: dict) -> tuple[int, list[str]]:
     for k, v in sorted(cells.items()):
         cx, cz = map(int, k.split(","))
         if not (0 <= cx < n and 0 <= cz < n):
-            stale.append(tr("path cell {k}", k=k))
+            stale.append(tr("islands.path_cell_k", k=k))
             continue
         bits[cz, cx] = 1 if v else 0
         done += 1

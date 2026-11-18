@@ -34,6 +34,12 @@ class RhiIslandView3D(IslandControls, rhiview.RhiView):
     def ready(self, ctx) -> None:
         self.renderer = None  # its resources were the old device's (the widget moved to another window)
 
+    def released(self, ctx) -> None:
+        """The device goes away (the widget moved to another window, its window closes): the renderer's resources
+        are that device's and are released with it, and so is a pick still waiting for its readback."""
+        self._pick = self._picked = None
+        self._release_renderer()
+
     def draw(self, ctx, screen, size: tuple[int, int]) -> None:
         self._frame(ctx, screen, *size)
         if self._pick is not None and self.renderer is not None:

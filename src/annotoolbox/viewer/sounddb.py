@@ -28,10 +28,42 @@ from ..suite.clipplayer import ClipPlayer
 from ..suite.widgets import ROLE, add_row, read_only_table
 
 TABLES = {
-    N_("Sounds"): (N_("id"), N_("file"), N_("kind"), N_("volume"), N_("at once"), N_("zoom range"), N_("group")),
-    N_("Lists"): (N_("list"), N_("event"), N_("sound"), N_("weight"), N_("file")),
-    N_("Ambients"): (N_("ambient"), N_("name"), N_("channel"), N_("pause (ms)"), N_("sounds")),
-    N_("Timeline"): (N_("sequence"), N_("length (ms)"), N_("at (ms)"), N_("sound"), N_("file")),
+    "Sounds": (
+        N_("ui.id"),
+        N_("common.file_lower"),
+        N_("viewer.kind"),
+        N_("common.volume"),
+        N_("viewer.at_once"),
+        N_("viewer.zoom_range"),
+        N_("common.group_lower"),
+    ),
+    "Lists": (
+        N_("viewer.list"),
+        N_("viewer.event"),
+        N_("viewer.sound"),
+        N_("common.weight"),
+        N_("common.file_lower"),
+    ),
+    "Ambients": (
+        N_("viewer.ambient"),
+        N_("common.name_lower"),
+        N_("viewer.channel_lower"),
+        N_("viewer.pause_ms"),
+        N_("viewer.sounds_lower"),
+    ),
+    "Timeline": (
+        N_("viewer.sequence"),
+        N_("viewer.length_ms"),
+        N_("viewer.at_ms"),
+        N_("viewer.sound"),
+        N_("common.file_lower"),
+    ),
+}
+TABLE_TITLES = {
+    "Sounds": N_("viewer.sounds"),
+    "Lists": N_("viewer.lists"),
+    "Ambients": N_("viewer.ambients"),
+    "Timeline": N_("viewer.timeline"),
 }
 
 
@@ -75,9 +107,9 @@ class SoundDbView(QWidget):
         self.tables = {name: read_only_table(columns) for name, columns in TABLES.items()}
         self.tabs = QTabWidget()
         for name, table in self.tables.items():
-            self.tabs.tabBar().setTabData(self.tabs.addTab(table, tr(name)), name)
+            self.tabs.tabBar().setTabData(self.tabs.addTab(table, tr(TABLE_TITLES[name])), name)
             table.cellDoubleClicked.connect(lambda _r, _c: self._play())
-        play, stop = QPushButton(tr("Play")), QPushButton(tr("Stop"))
+        play, stop = QPushButton(tr("common.play")), QPushButton(tr("viewer.stop"))
         play.clicked.connect(self._play)
         stop.clicked.connect(self._stop)
         bar = QHBoxLayout()
@@ -107,7 +139,7 @@ class SoundDbView(QWidget):
 
     def _file_of(self, sound: int) -> str:
         found = self.db.sounds.get(sound)
-        return found.filename if found else tr("(not in the database)")
+        return found.filename if found else tr("viewer.not_database")
 
     # what is shown
     def show_database(self, path: str, data: bytes, files) -> None:
@@ -119,21 +151,21 @@ class SoundDbView(QWidget):
             self.summary.setText(f"{path}: {exc}")
             return
         self.summary.setText(
-            tr("{path}: {sounds} sounds, {lists} lists, {ambients} ambients, {groups} groups", path=path,
+            tr("viewer.sounds_lists_ambients_groups", path=path,
                sounds=len(db.sounds), lists=len(db.lists), ambients=len(db.ambients), groups=len(db.groups))
         )  # fmt: skip
         for sid, s in db.sounds.items():
-            self._row(N_("Sounds"), [str(sid), s.filename, tr(sounddb.TYPES.get(s.number("SoundType"), "")),
+            self._row("Sounds", [str(sid), s.filename, tr(sounddb.TYPES.get(s.number("SoundType"), "")),
                                      str(s.number("MasterVolume")), str(s.number("MaxCount")),
                                      f"{s.number('MinDistance')}-{s.number('MaxDistance')}", str(s.number("SoundGroupID"))], sid)  # fmt: skip
         for lid, entry in db.lists.items():
             for event, members in entry.events.items():
                 for sid, weight in members:
-                    self._row(N_("Lists"), [str(lid), "" if event == sounddb.NO_EVENT else str(event), str(sid),
+                    self._row("Lists", [str(lid), "" if event == sounddb.NO_EVENT else str(event), str(sid),
                                             str(weight), self._file_of(sid)], sid)  # fmt: skip
         for aid, amb in db.ambients.items():
             for k, channel in enumerate(amb.channels):
-                self._row(N_("Ambients"), [str(aid), amb.name, str(k), f"{channel.min_pause}-{channel.max_pause}",
+                self._row("Ambients", [str(aid), amb.name, str(k), f"{channel.min_pause}-{channel.max_pause}",
                                            ", ".join(f"{s} ({w})" for s, w in channel.members)])  # fmt: skip
         for table in self.tables.values():
             table.resizeColumnsToContents()
@@ -158,7 +190,7 @@ class SoundDbView(QWidget):
         self.background.run(lambda: self._database_of(files), fill, wait)
         placed = sum(len(rows) for rows in timeline.placements.values())
         self.summary.setText(
-            tr("{path}: {sequences} sequences, {placed} sounds placed", path=path,
+            tr("viewer.sequences_sounds_placed", path=path,
                sequences=len(timeline.durations), placed=placed)
         )  # fmt: skip
         for name in ("Sounds", "Lists", "Ambients"):
@@ -169,9 +201,9 @@ class SoundDbView(QWidget):
         for seq in sorted(set(timeline.durations) | set(timeline.placements)):
             length = str(timeline.durations.get(seq, ""))
             for place in timeline.placements.get(seq) or [None]:
-                at = "" if place is None else (tr("whole sequence") if place.at < 0 else str(place.at))
+                at = "" if place is None else (tr("viewer.whole_sequence") if place.at < 0 else str(place.at))
                 sound = "" if place is None else str(place.sound)
-                self._row(N_("Timeline"), [str(seq), length, at, sound, self._file_of(place.sound) if place else ""],
+                self._row("Timeline", [str(seq), length, at, sound, self._file_of(place.sound) if place else ""],
                           place.sound if place else None)  # fmt: skip
         self.tables["Timeline"].resizeColumnsToContents()
 
@@ -186,7 +218,7 @@ class SoundDbView(QWidget):
         self.bars.show_levels(envelope.levels)
         self.summary.setText(
             tr(
-                "{path}: {count} levels every {ms} ms, {seconds:.1f} seconds",
+                "viewer.levels_every_ms_seconds",
                 path=path,
                 count=len(envelope.levels),
                 ms=envelope.interval_ms,
@@ -217,11 +249,11 @@ class SoundDbView(QWidget):
     def _play(self) -> None:
         path = self._selected_file()
         if not path or self.files is None or not self.files.exists(path):
-            self.status.setText(tr("nothing to play: pick a row whose file is in the game"))
+            self.status.setText(tr("viewer.nothing_play_pick_row_whose"))
             return
         why = self.player.play(path, self.files.read(path), self.cache / "sounds" if self.cache else None)
-        self.status.setText(why or tr("playing {name}", name=path))
+        self.status.setText(why or tr("viewer.playing_name", name=path))
 
     def _stop(self) -> None:
         self.player.stop()
-        self.status.setText(tr("stopped"))
+        self.status.setText(tr("viewer.stopped"))

@@ -29,16 +29,16 @@ class ColorButton(QPushButton):
     def set_color(self, rgba) -> None:
         self.rgba = [float(v) for v in rgba] if rgba is not None else None
         if self.rgba is None:
-            self.setText(tr("none"))
+            self.setText(tr("common.none"))
             self.setStyleSheet("")
             return
         q = to_qcolor(self.rgba)
         text = "#ffffff" if q.lightness() < 128 else "#000000"
-        self.setText(tr("{color}  alpha {alpha}", color=q.name(), alpha=f"{self.rgba[3]:.2f}"))
+        self.setText(tr("islands.color_alpha", color=q.name(), alpha=f"{self.rgba[3]:.2f}"))
         self.setStyleSheet(f"background-color: {q.name()}; color: {text};")
 
     def _pick(self) -> None:
         start = to_qcolor(self.rgba) if self.rgba is not None else QColor("white")
-        chosen = QColorDialog.getColor(start, self, tr("Tint"), QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        chosen = QColorDialog.getColor(start, self, tr("islands.tint"), QColorDialog.ColorDialogOption.ShowAlphaChannel)
         if chosen.isValid():
             self.picked.emit([chosen.redF(), chosen.greenF(), chosen.blueF(), chosen.alphaF()])

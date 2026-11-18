@@ -1,19 +1,40 @@
 """The workbench's jobs (a mixin of ``workbench.MainWindow``): the island lists' builds, ports and restores started
 through ``editorapp.App`` (one job at a time), their log followed in the Log page (``poll``, on the window's timer),
-the island a build made opened when it is done; and the tool windows registered at ``features.TOOLS``. Plan and
-use: ``docs/island-editor.md``.
+the island a build made opened when it is done, the question and the wait for what still runs when the window closes
+(``ask_running_job``, ``finish_work``); and the tool windows registered at ``features.TOOLS``. Plan and use:
+``docs/island-editor.md``.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QInputDialog, QMessageBox
+import time
+
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from ...infra.i18n import N_, tr
-from ...suite import features
+from ...suite import features, widgets
 from .. import archivedelivery
 
-JOB_STATES = (N_("running"), N_("done"), N_("failed"))  # what ``editorapp.Job`` reports, shown with tr
+JOB_STATES = {
+    "running": N_("islands.running"),
+    "done": N_("islands.done"),
+    "failed": N_("common.failed"),
+    "stopped": N_("viewer.stopped"),
+}  # what ``editorapp.Job`` reports -> how it is shown
+WAIT_STEP = 0.03  # seconds between two looks at a worker the closing window waits for
+
+
+STOP, WAIT, CANCEL = "stop", "wait", "cancel"
+
+
+def ask_stop_wait_cancel(parent, title: str, text: str) -> str:
+    """The question of a window closed while a job runs: ``STOP`` it, ``WAIT`` for it (Enter) or ``CANCEL`` the
+    closing (Esc)."""
+    roles = QMessageBox.ButtonRole
+    choices = ((STOP, tr("islands.stop_the_build"), roles.DestructiveRole), (WAIT, tr("common.wait"), roles.AcceptRole),
+               (CANCEL, QMessageBox.StandardButton.Cancel, None))  # fmt: skip
+    return widgets.ask_choice(parent, title, text, choices, default=WAIT, escape=CANCEL)
 
 
 class JobRunner:
@@ -54,18 +75,23 @@ class JobRunner:
 
         offered = targets(key, path)
         if not offered:
-            QMessageBox.information(self, self.title, tr("No port is offered for this island."))
+            QMessageBox.information(self, self.title, tr("islands.no_port_offered_island"))
             return
         labels = [text for _id, text in offered]
         text, ok = QInputDialog.getItem(
-            self, self.title, tr("Port {island} to:", island=path.rsplit("/", 1)[-1]), labels, 0, False
+            self, self.title, tr("islands.port_island_to", island=path.rsplit("/", 1)[-1]), labels, 0, False
         )
         if not ok:
             return
         target = offered[labels.index(text)][0]
-        answer = QMessageBox.question(self, self.title, tr("Install the ported island into the mods folder too?"))
+        ways = [tr("islands.place_in_pool"), tr("islands.place_on_maps")]  # islandconvert.FITS after the pool
+        way, ok = QInputDialog.getItem(self, self.title, tr("islands.port_how_placed"), ways, 0, False)
+        if not ok:
+            return
+        fit = "" if ways.index(way) == 0 else "map"
+        answer = QMessageBox.question(self, self.title, tr("islands.install_ported_island_mods_folder"))
         install = answer == QMessageBox.StandardButton.Yes
-        self._start(lambda: self.app.convert_region(key, path, target, install))
+        self._start(lambda: self.app.convert_region(key, path, target, install, fit))
 
     def convert_new(self, size: int) -> None:
         self._start(lambda: self.app.build(f"new{size}", install=False), open_after=f"new{size}")
@@ -92,6 +118,32 @@ class JobRunner:
         """Give a game its own files back (``IslandDelivery.restore``)."""
         self._start(lambda: self.app.restore(key))
 
+    def ask_running_job(self) -> str:
+        """The window is closed: ``WAIT`` when no job runs, else what the person answers (``ask_stop_wait_cancel``).
+        An island being read is waited for without a question: it takes seconds and writes nothing."""
+        job = self.app.job
+        if job is None or job.wait(0):
+            return WAIT
+        return ask_stop_wait_cancel(self, self.title, tr("islands.job_running_stop_wait", name=job.name))
+
+    def finish_work(self) -> None:
+        """The window closes: wait for the running job and for the island being read, then for the background reads
+        of the island just closed. Their threads end with the program, and one cut off mid-write left a half-written
+        build or install behind. The window keeps painting and takes no input; the status line says what it waits
+        for (island-editor "Closing the window")."""
+        self._open_after = None  # a build that ends now opens nothing into the closing window
+        self.closing, said = True, None
+        try:
+            while (name := self.busy_with()) is not None:
+                if name != said:
+                    said = name
+                    self.statusBar().showMessage(tr("islands.waiting_before_closing", name=name))
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                time.sleep(WAIT_STEP)
+        finally:
+            self.closing = False
+        self.background.join()
+
     def poll(self) -> None:
         """The running job's new log lines; when it has ended, the island lists are read again and the island it
         built is opened."""
@@ -103,7 +155,13 @@ class JobRunner:
             self.log.appendPlainText(line)
         self._log_next = status["next"]
         if status["state"] != self._job_state:
-            self.statusBar().showMessage(tr("{name}: {state}", name=status["name"], state=tr(status["state"])))
+            self.statusBar().showMessage(
+                tr(
+                    "islands.name_state",
+                    name=status["name"],
+                    state=tr(JOB_STATES.get(status["state"], status["state"])),
+                )
+            )
             if self._job_state == "running":  # just finished: its island is built (or not)
                 QTimer.singleShot(0, self.reload)
                 if status["state"] == "done" and self._open_after:

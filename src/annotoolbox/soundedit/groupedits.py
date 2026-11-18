@@ -32,17 +32,17 @@ def _id(name_or_id) -> int:
     """An id given as a number or as a name (hashed)."""
     if isinstance(name_or_id, str):
         if not name_or_id.strip():
-            raise EditError(tr("a group or value needs a name"))
+            raise EditError(tr("common.group_value_needs_name"))
         return group_id(name_or_id.strip())
-    return check_u32(name_or_id, tr("an id"), zero=False)
+    return check_u32(name_or_id, tr("sound.an_id"), zero=False)
 
 
 def manager(doc: BankDoc) -> bnkstmg.StateManager:
     """The bank's state manager; ``EditError`` for a bank without one (only the Init bank has it)."""
     data = doc.chunk(STMG)
     if data is None:
-        raise EditError(tr("the state manager is in the Init bank: open it to add, change or remove a group"))
-    with reading(tr("the state manager")):
+        raise EditError(tr("common.state_manager_init_bank_open"))
+    with reading(tr("sound.state_manager")):
         return bnkstmg.read(data, doc.version)
 
 
@@ -60,7 +60,7 @@ def _name(doc: BankDoc, ident: int, name: str, values) -> None:
 
 def _transition(value) -> int:
     if not 0 <= int(value) < 2**31:
-        raise EditError(tr("a transition time is a number of milliseconds"))
+        raise EditError(tr("common.transition_time_number_milliseconds"))
     return int(value)
 
 
@@ -68,19 +68,19 @@ def _customs(rows) -> list[tuple[int, int, int]]:
     try:
         return [(_id(a), _id(b), _transition(t)) for a, b, t in rows]
     except (TypeError, ValueError) as exc:
-        raise EditError(tr("write a custom transition as (from state, to state, milliseconds)")) from exc
+        raise EditError(tr("common.write_custom_transition_state")) from exc
 
 
 # state groups
 
 
-@edit(N_("add a state group"))
+@edit(N_("sound.add_state_group"))
 def add_state_group(doc: BankDoc, group: str, states: list | None = None, transition: int = 0) -> int:
     """A state group (``group``: its name, hashed; ``states``: the names of its states, kept as names) with its default
     transition time in ms; returns its id."""
     sm, ident = manager(doc), _id(group)
     if ident in [g.id for g in sm.states]:
-        raise EditError(tr("the state manager has the group {group} already", group=ident))
+        raise EditError(tr("common.state_manager_group_already", group=ident))
     sm.states.append(bnkstmg.StateGroup(ident, _transition(transition)))
     _put(doc, sm)
     _name(doc, ident, group if isinstance(group, str) else str(group), states or [])
@@ -91,11 +91,11 @@ def _state_group(sm: bnkstmg.StateManager, group) -> bnkstmg.StateGroup:
     ident = _id(group)
     found = next((g for g in sm.states if g.id == ident), None)
     if found is None:
-        raise EditError(tr("the state manager has no state group {group}", group=ident))
+        raise EditError(tr("common.state_manager_no_group", group=ident))
     return found
 
 
-@edit(N_("change a state group"))
+@edit(N_("sound.change_state_group"))
 def set_state_group(doc: BankDoc, group, transition: int | None = None, custom: list | None = None) -> None:
     """A state group's default transition time and its custom transitions (rows of from state, to state, ms; a state
     as a name or an id)."""
@@ -108,7 +108,7 @@ def set_state_group(doc: BankDoc, group, transition: int | None = None, custom: 
     _put(doc, sm)
 
 
-@edit(N_("remove a state group"))
+@edit(N_("sound.remove_state_group"))
 def remove_state_group(doc: BankDoc, group) -> None:
     """A state group out of the state manager."""
     sm = manager(doc)
@@ -123,15 +123,15 @@ def _points(rows) -> list[tuple[float, int, int]]:
     try:
         out = [(float(x), _id(switch), int(interp)) for x, switch, interp in rows]
     except (TypeError, ValueError) as exc:
-        raise EditError(tr("write a point as (parameter value, switch, interpolation)")) from exc
+        raise EditError(tr("common.write_point_parameter_value_switch")) from exc
     try:
         bnkcurves.check_curve([p[0] for p in out], [p[2] for p in out], minimum=1)
     except ValueError as exc:
-        raise EditError(tr("a switch group follows a parameter along points ({exc})", exc=exc)) from exc
+        raise EditError(tr("sound.switch_group_follows_parameter_along", exc=exc)) from exc
     return out
 
 
-@edit(N_("add a switch group"))
+@edit(N_("sound.add_switch_group"))
 def add_switch_group(
     doc: BankDoc, group: str, parameter, points: list, switches: list | None = None
 ) -> int:  # fmt: skip
@@ -140,7 +140,7 @@ def add_switch_group(
     returns the group's id."""
     sm, ident = manager(doc), _id(group)
     if ident in [s.id for s in sm.switches]:
-        raise EditError(tr("the state manager has the group {group} already", group=ident))
+        raise EditError(tr("common.state_manager_group_already", group=ident))
     sm.switches.append(bnkstmg.SwitchGroup(ident, _id(parameter), 0, _points(points)))
     _put(doc, sm)
     values = [*(switches or []), *[p[1] for p in points if isinstance(p[1], str)]]
@@ -148,13 +148,13 @@ def add_switch_group(
     return ident
 
 
-@edit(N_("remove a switch group"))
+@edit(N_("sound.remove_switch_group"))
 def remove_switch_group(doc: BankDoc, group) -> None:
     """A switch group out of the state manager."""
     sm, ident = manager(doc), _id(group)
     found = next((s for s in sm.switches if s.id == ident), None)
     if found is None:
-        raise EditError(tr("the state manager has no switch group {group}", group=ident))
+        raise EditError(tr("common.state_manager_no_switch_group", group=ident))
     sm.switches.remove(found)
     _put(doc, sm)
 
@@ -170,7 +170,7 @@ def plan_group(
     parameter drives), else the sentence that tells where it lives. A group that needs no definition is named in the
     editor so the lists show it, and its ids are given for the forms that take one."""
     if not name.strip():
-        return tr("a group needs a name")
+        return tr("common.group_needs_name")
     state = kind == "state"
     if (state or parameter.strip()) and doc.chunk(STMG) is not None:
         if state:
@@ -180,14 +180,13 @@ def plan_group(
     ids = ", ".join(f"{v} = {group_id(v)}" for v in values)
     if state:
         return tr(
-            "state groups are registered in the Init bank: open it to add {name}; its id is {id}, its states: {ids}",
+            "common.state_groups_registered_init_bank",
             name=name.strip(),
             id=group_id(name),
             ids=ids,
         )
     return tr(
-        "the switch group {name} needs no definition in a bank: use its id {id} (values: {ids}) in a Switch container or"
-        " a Set-Switch action",
+        "common.switch_group_needs_no_definition",
         name=name.strip(),
         id=group_id(name),
         ids=ids,
@@ -208,22 +207,18 @@ def group_lines(doc: BankDoc, ident: int) -> list[str]:
 
     for g in sm.states:
         if g.id == ident:
-            lines = [
-                tr("state group {name} ({id}), default transition {time} ms", name=title, id=ident, time=g.transition)
-            ]
-            return lines + [
-                tr("transition {src} to {dst}: {time} ms", src=value(a), dst=value(b), time=t) for a, b, t in g.custom
-            ]
+            lines = [tr("common.state_group_default_transition_ms", name=title, id=ident, time=g.transition)]
+            return lines + [tr("common.transition_to_ms", src=value(a), dst=value(b), time=t) for a, b, t in g.custom]
     for s in sm.switches:
         if s.id == ident:
             return [
                 tr(
-                    "switch group {name} ({id}), driven by the game parameter {parameter}",
+                    "common.switch_group_driven_game_parameter",
                     name=title,
                     id=ident,
                     parameter=s.parameter,
                 )
-            ] + [tr("from {x} the switch {name}", x=f"{x:g}", name=value(sw)) for x, sw, _k in s.points]
+            ] + [tr("common.x_switch_name", x=f"{x:g}", name=value(sw)) for x, sw, _k in s.points]
     return []
 
 
@@ -235,6 +230,6 @@ def group_rows(doc: BankDoc) -> list[tuple[int, str]]:
         return []
 
     named = doc.info.group_label
-    out = [(g.id, tr("state group {name}", name=named(g.id))) for g in sm.states]
-    out += [(s.id, tr("switch group {name}", name=named(s.id))) for s in sm.switches]
+    out = [(g.id, tr("sound.state_group_name", name=named(g.id))) for g in sm.states]
+    out += [(s.id, tr("sound.switch_group_name", name=named(s.id))) for s in sm.switches]
     return sorted(out, key=lambda row: row[1])

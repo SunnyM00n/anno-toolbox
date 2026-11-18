@@ -6,11 +6,10 @@ import array
 import math
 
 import pytest
-from tests.test_soundedit import NEW, bank_bytes
+from tests.test_soundedit import NEW, bank_window, sound_window  # noqa: F401
 
 from annotoolbox.formats import bnk
 from annotoolbox.soundedit import clipcodec, waveform
-from annotoolbox.sources import gametree
 
 
 def sine(n: int = 640, amplitude: int = 8000) -> array.array:
@@ -55,20 +54,8 @@ def test_a_vorbis_clip_is_drawn_when_the_tools_are_there():
     assert shape.seconds == pytest.approx(1.0, abs=0.05) and max(hi for _lo, hi in shape.peaks) > 6000
 
 
-def test_the_window_draws_the_picked_sound_and_says_when_there_is_none(monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
-    path = "data/sound/generatedsoundbanks/windows/9.bnk"
-    files = {path: bank_bytes(NEW)}
-    window.tree, window.key = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t"), "anno117"
-    window.open_bank(path)
+def test_the_window_draws_the_picked_sound_and_says_when_there_is_none(sound_window, monkeypatch):  # noqa: F811
+    window = bank_window(sound_window, monkeypatch, NEW)
     window.outline.expandAll()
     window.outline.setCurrentItem(window.outline.topLevelItem(1).child(0).child(0))  # sound 11, audio in the bank
     assert window.wave.shape is not None, window.wave.message

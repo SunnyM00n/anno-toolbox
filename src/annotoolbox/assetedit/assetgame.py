@@ -126,13 +126,13 @@ def open_game(
     say = progress or (lambda _text: None)
     layout = LAYOUTS[key]
     files = game1701.open_files(folder, cache) if layout.virtual else open_files(key, folder, cache)
-    say(tr("reading the schema of {game}", game=layout.name))
+    say(tr("assets.reading_schema_game", game=layout.name))
     schema = read_schema_of(layout, files)
     notes = []
     if not schema.properties:
         notes.append(
             tr(
-                "no property definitions found ({files}): forms show raw values",
+                "assets.no_property_definitions_found_forms",
                 files=", ".join(layout.properties),
             )
         )
@@ -140,17 +140,17 @@ def open_game(
         dl = LAYOUTS[layout.donor]
         try:
             gained = borrow(schema, read_schema_of(dl, open_files(dl.key, donor, cache)))
-            notes.append(tr("{n} descriptions borrowed from {game}", n=gained, game=dl.name))
+            notes.append(tr("assets.n_descriptions_borrowed_game", n=gained, game=dl.name))
         except (OSError, ValueError) as exc:
-            notes.append(tr("no descriptions from {game}: {reason}", game=dl.name, reason=exc))
+            notes.append(tr("assets.no_descriptions_game_reason", game=dl.name, reason=exc))
     written = descriptions.apply(schema, descriptions.load(key))
     if written:
-        notes.append(tr("{n} descriptions written for this editor", n=written))
+        notes.append(tr("assets.descriptions_written_editor", n=written))
     paths = asset_files(layout, files)
     if not paths:
         raise FileNotFoundError(
             tr(
-                "no asset files of {game} under {folder} ({files})",
+                "assets.no_asset_files_under",
                 game=layout.name,
                 folder=folder,
                 files=", ".join(layout.assets),
@@ -159,7 +159,7 @@ def open_game(
     index = build_index(files, paths, say, layout.follow_links)
     game = Game(layout, files, schema, index, notes + index.problems)
     if layout.atlas_icons:
-        say(tr("reading the icon tables of {game}", game=layout.name))
+        say(tr("assets.reading_icon_tables", game=layout.name))
         game.icon_data = icons2070.load_icon_data(files.read, files.exists)
     return game
 
@@ -182,13 +182,23 @@ def open_installed(settings, key: str, progress: Callable[[str], None] | None = 
     descriptions (the forms need them, a comparison or a build does not). FileNotFoundError when a folder is unset."""
     folder = installed_folder(settings, key)
     if folder is None:
-        raise FileNotFoundError(tr("the folder of {game} is not set or is missing in the settings", game=key))
+        raise FileNotFoundError(tr("moddiff.folder_not_set_missing_settings", game=key))
     workspace = str(getattr(settings, "workspace", "") or "").strip()
     if not workspace:
-        raise FileNotFoundError(tr("the workspace is not set in the settings"))
+        raise FileNotFoundError(tr("moddiff.workspace_not_set_settings"))
     donor_key = LAYOUTS[key].donor
     donor = installed_folder(settings, donor_key) if borrow and donor_key else None
     return open_game(key, folder, cache_dir(workspace), donor, progress)
+
+
+def installed_index(settings, key: str, workspace: str | Path) -> AssetIndex | None:
+    """The asset index alone of the installed game ``key`` (no schema: for a reader of names, icons and values),
+    from the shared cache of ``workspace``; None when its folder is not set or the game keeps no asset files."""
+    folder, layout = installed_folder(settings, key), LAYOUTS.get(key)
+    if folder is None or layout is None or layout.virtual:
+        return None
+    files = open_files(key, folder, cache_dir(workspace))
+    return build_index(files, asset_files(layout, files), None, layout.follow_links)
 
 
 def interface_language() -> str:

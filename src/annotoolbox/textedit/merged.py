@@ -25,7 +25,7 @@ class Conflict:
 
     def sentence(self) -> str:
         return tr(
-            "{language} text {key}: the Texts app and the asset editor changed it differently, the Texts app's is written",
+            "texts.text_texts_app_asset_editor",
             language=self.language,
             key=self.key,
         )

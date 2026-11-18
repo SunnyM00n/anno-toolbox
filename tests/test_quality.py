@@ -105,20 +105,20 @@ def test_the_island_views_maps_are_halved_to_the_quality():
     assert shadow_side(None) == 2048 and shadow_side(quality.preset("anno117", "low")) == 1024
 
 
-@pytest.mark.skipif(not os.environ.get("ANNO117_DIR"), reason="needs an installed Anno 117 (ANNO117_DIR)")
-def test_117s_engine_settings_give_five_levels():
+@pytest.mark.parametrize(
+    "game, env, key, column",
+    [("anno117", "ANNO117_DIR", "LODBias", 0), ("anno1800", "ANNO1800_DIR", "MinimumObjectSizeInPixels", 1)],
+)
+def test_an_installed_games_engine_settings_give_its_five_levels(game, env, key, column):
+    """Installed: the values ``VANILLA`` stands in with are the game's own (117's bias, 1800's smallest size)."""
+    if not os.environ.get(env):
+        pytest.skip(f"needs an installed game ({env})")
     from annotoolbox.othergames import installs
 
-    tree = installs.GAMES["anno117"].tree(Path(os.environ["ANNO117_DIR"]))
-    levels = quality.game_levels(tree.read(quality.SETTINGS_FILE["anno117"]).decode("utf-8", "replace"))
-    assert len(levels) == 5 and [lv["LODBias"] for lv in levels] == [b for b, _ in quality.VANILLA["anno117"]]
-
-
-@pytest.mark.skipif(not os.environ.get("ANNO1800_DIR"), reason="needs an installed Anno 1800 (ANNO1800_DIR)")
-def test_1800s_engine_settings_give_five_levels():
-    from annotoolbox.othergames import installs
-
-    tree = installs.GAMES["anno1800"].tree(Path(os.environ["ANNO1800_DIR"]))
-    levels = quality.game_levels(tree.read_text(quality.SETTINGS_FILE["anno1800"]))
-    pixels = [lv["MinimumObjectSizeInPixels"] for lv in levels]
-    assert len(levels) == 5 and pixels == [p for _, p in quality.VANILLA["anno1800"]]
+    tree = installs.GAMES[game].tree(Path(os.environ[env]))
+    if hasattr(tree, "read_text"):  # the archives' tree; 117's files hand out bytes
+        text = tree.read_text(quality.SETTINGS_FILE[game])
+    else:
+        text = tree.read(quality.SETTINGS_FILE[game]).decode("utf-8", "replace")
+    levels = quality.game_levels(text)
+    assert len(levels) == 5 and [lv[key] for lv in levels] == [row[column] for row in quality.VANILLA[game]]

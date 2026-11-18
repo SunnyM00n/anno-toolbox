@@ -39,14 +39,14 @@ def read(gm: filedb.Tag) -> dict:
 def problem(key: str, value, grid: int) -> str | None:
     """Why the game would not take ``value`` for the setting ``key`` on an island of ``grid`` tiles, None when it would."""
     if key in ("ambient", "vegetation"):
-        return None if str(value).strip() else tr("the session's {key} is empty", key=key)
+        return None if str(value).strip() else tr("islands.sessions_key_empty", key=key)
     try:
         x0, z0, x1, z1 = (int(v) for v in value)
     except (TypeError, ValueError):
-        return tr("the playable area {area} is not four numbers", area=value)
+        return tr("islands.playable_area_not_four_numbers", area=value)
     if not (0 <= x0 < x1 <= grid and 0 <= z0 < z1 <= grid):
         return tr(
-            "the playable area {area} must lie inside the {grid}-tile grid, corners in order",
+            "islands.playable_area_must_lie_inside",
             area=(x0, z0, x1, z1),
             grid=grid,
         )
@@ -60,7 +60,7 @@ def apply(gm: filedb.Tag, edit: dict, grid: int) -> dict:
     report: dict = {"set": [], "unmatched": []}
     for key, value in edit.items():
         attr = node.find(FIELDS[key]) if node is not None and key in FIELDS else None
-        why = problem(key, value, grid) if attr is not None else tr("session {key}", key=key)
+        why = problem(key, value, grid) if attr is not None else tr("islands.session_key", key=key)
         if why:
             report["unmatched"].append(why)
             continue

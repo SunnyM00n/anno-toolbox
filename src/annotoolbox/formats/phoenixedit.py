@@ -84,8 +84,6 @@ def get_ref(node: dict, field: str) -> str | None:
     e = get_entry(node, field)
     if e is not None and "raw" in e and e["raw"][:1] == b"\x01":
         return str(uuid.UUID(bytes_le=e["raw"][5:21]))
-    if e is not None and e["field"]["name"] == "TextStyle" and e.get("raw", b"")[:1] == bytes([TEXT_STYLE_TAIL]):
-        return str(uuid.UUID(bytes_le=e["raw"][1:17]))  # the label form ``set_text_style`` writes
     return None
 
 
@@ -164,21 +162,12 @@ def set_ref(node: dict, field: str, type_hash: str, guid: str) -> None:
     e["raw"] = ref_bytes(type_hash, guid)
 
 
-# A label's TextStyle as the shipped files store it: flag 01, the type hash c697c96c, the GUID. The decoder cuts it
-# four bytes late (the enum before it holds "01 6c c9 97", the entry starts at the hash's last byte), so ``set_ref``
-# shifted the hash into the GUID (engine-notes "Text style references").
-TEXT_STYLE_HEAD = b"\x01\x6c\xc9\x97"
-TEXT_STYLE_TAIL = 0xC6
+TEXT_STYLE = "c697c96c"  # the type hash a label's TextStyle reference carries
 
 
 def set_text_style(node: dict, guid: str) -> None:
-    """Point a label's ``TextStyle`` at the style file ``guid``."""
-    e = get_entry(node, "TextStyle")
-    at = node["fields"].index(e) if e else 0
-    before = node["fields"][at - 1] if at > 0 else None
-    if before is None or before["raw"] != TEXT_STYLE_HEAD or len(e["raw"]) != 21 or e["raw"][0] != TEXT_STYLE_TAIL:
-        raise ValueError("TextStyle is not stored the way the shipped labels have it")
-    e["raw"] = bytes([TEXT_STYLE_TAIL]) + uuid.UUID(guid).bytes_le + e["raw"][17:]
+    """Point a label's ``TextStyle`` at the style file ``guid`` (present or not)."""
+    set_raw(node, "TextStyle", ref_bytes(TEXT_STYLE, guid))
 
 
 def set_name(node: dict, name: str) -> None:
@@ -273,10 +262,10 @@ DEFAULTS: dict[tuple[str, str], object] = {  # non-zero values most shipped obje
     ("c19f99dd", "DynamicImageSizing"): 1,
     ("41a404e5", "0d2df3ef"): True,
     ("41a404e5", "AllowResize"): True,
-    ("41a404e5", "ResizeAnchor"): 0x97C96C01,
-    ("41a404e5", "AlignmentY"): 0x3F800000,  # a u32 field holding 1.0f
-    ("41a404e5", "HorizontalSizing"): 4,
-    ("41a404e5", "VerticalOverflow"): 1,
+    ("41a404e5", "LineSpacing"): 1.0,
+    ("41a404e5", "HorizontalOverflow"): 5,  # Visible
+    ("41a404e5", "VerticalOverflow"): 4,  # Visible
+    ("41a404e5", "VerticalSizing"): 1,  # DisplayedContent
     ("da06bd6e", "ReferenceSize"): (1920.0, 1080.0),
     ("232cec0d", "4ebb2751"): 3,
     ("c7613662", "BottomRight"): (1.0, 1.0),

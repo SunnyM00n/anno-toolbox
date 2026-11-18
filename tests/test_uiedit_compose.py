@@ -144,6 +144,8 @@ def test_a_group_is_as_large_as_what_it_holds_and_lists_count_their_elements():
     assert listlayout.element_count(samples, "f:g") == 5
     assert listlayout.element_count(samples, "f:other") == listlayout.PLACEHOLDER_ITEMS
     grid = listlayout.offsets("grid", {listlayout.GRID_COLUMNS: 2, listlayout.GRID_ROWS: 1}, 5, (10.0, 20.0))
+    short = {listlayout.GRID_COLUMNS: 2, listlayout.CELL: (5.0,)}  # a cell size a binding left short: the item's
+    assert listlayout.offsets("grid", short, 2, (10.0, 20.0)) == [(0.0, 0.0), (10.0, 0.0)]
     assert grid == [(0.0, 0.0), (10.0, 0.0)]  # the visible cells cap the copies
 
 
@@ -235,7 +237,14 @@ def test_labels_take_the_fonts_and_the_overflow_modes(composed):
     QApplication.instance() or QApplication([])
     style = labels.TextStyle(size=20.0, wrap=True)
     laid = fonts.lay_out("one two three four five six", style, 80.0)
-    assert len(laid.lines) > 1 and laid.height == pytest.approx(len(laid.lines) * 24.0)
+    # the game: the first line is the font's own height, each further one a step of leading x size
+    assert len(laid.lines) > 1 and laid.first > 0 and laid.line_height == pytest.approx(24.0)
+    assert laid.height == pytest.approx(laid.first + (len(laid.lines) - 1) * 24.0)
+    word = fonts.lay_out("unbelievablylongwordwithoutanyspaces", style, 80.0)  # a word wider than the plane is broken
+    assert len(word.lines) > 1 and "".join(word.lines) == "unbelievablylongwordwithoutanyspaces" and word.width <= 80.0
+    fits = laid.first + 24.0 + 1.0  # a plane two lines high: the vertical overflow modes keep the lines that fit
+    cut = fonts.lay_out("one two three four five six", labels.TextStyle(size=20.0, wrap=True, vcut="line"), 80.0, fits)
+    assert cut.lines == laid.lines[:2] and cut.height == pytest.approx(laid.first + 24.0)
     style = labels.TextStyle(size=20.0, cut="ellipsis")
     assert fonts.lay_out("a very long line of text", style, 60.0).lines[0].endswith(fonts.ELLIPSIS)
     assert fonts.GameFonts(composed).family(None).family  # no font asset: a stand-in face

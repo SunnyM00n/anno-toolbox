@@ -78,7 +78,7 @@ class Summary:
     game: str
     sections: list[Section] = field(default_factory=list)
     mods: list[ModEntry] = field(default_factory=list)
-    notes: list[tuple[str, dict]] = field(default_factory=list)  # (marked text, its places)
+    notes: list[tuple[str, dict]] = field(default_factory=list)  # (string id, its places)
 
     def section(self, title: str) -> Section:
         found = next((s for s in self.sections if s.title == title), None)
@@ -97,6 +97,10 @@ def number(text: str | None, default: int = 0) -> int:
         return int(text)
     except (TypeError, ValueError):
         return default
+
+
+def u16(data: bytes) -> int:
+    return struct.unpack_from("<H", data)[0] if len(data) >= 2 else 0
 
 
 def u32(data: bytes) -> int:

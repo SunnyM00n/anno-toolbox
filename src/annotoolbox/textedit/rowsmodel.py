@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor
 from ..infra.i18n import N_, tr
 from .textdoc import CHANGED, NEW, OUTDATED, STATUS_NAMES, UNTRANSLATED, TextDoc
 
-COLUMNS = (N_("Id"), N_("Status"), N_("Source"), N_("Target"))
+COLUMNS = (N_("texts.id"), N_("texts.status"), N_("texts.source"), N_("common.target"))
 TINTS = {UNTRANSLATED: QColor(230, 150, 40, 60), OUTDATED: QColor(220, 200, 40, 70), CHANGED: QColor(70, 170, 90, 55),
          NEW: QColor(70, 130, 220, 55)}  # fmt: skip
 SHOWN = 120  # characters of a text a cell shows

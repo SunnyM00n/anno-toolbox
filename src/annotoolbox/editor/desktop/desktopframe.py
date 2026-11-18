@@ -67,7 +67,7 @@ class FramePasses:
             if isinstance(got, bytes):
                 game_heights = heights_with_edits(np.frombuffer(got, "<f4").reshape(s.width, s.width), s)
             elif isinstance(got, Exception):
-                self._message(tr("no game terrain: {reason}", reason=got))
+                self._message(tr("islands.no_game_terrain", reason=got))
         if change.heights is not None or (game_heights is not None) != self._shown_game_terrain:
             self._ground_version += 1  # the decals follow the ground
         self._update_terrain(change.heights, game_heights)
@@ -205,7 +205,7 @@ class FramePasses:
             if got is None:
                 return None
             if isinstance(got, Exception):
-                self._message(tr("no game grade: {reason}", reason=got))
+                self._message(tr("islands.no_game_grade", reason=got))
                 self.textures["lut"] = None
                 return None
             n = round((len(got) // 12) ** (1 / 3))

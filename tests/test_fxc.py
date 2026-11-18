@@ -195,3 +195,26 @@ def test_the_variable_may_name_several_folders(tmp_path, monkeypatch):
     monkeypatch.setenv(fxc.FXC_ENV, f"{tmp_path / 'nowhere'}{os.pathsep}{tmp_path / 'b'}{os.pathsep}{tmp_path / 'a'}")
     _pretend_loader(monkeypatch, lambda path: True)
     assert fxc.Fxc.find().path == tmp_path / "b" / fxc.DLL
+
+
+def test_the_missing_compilers_reason_is_in_the_interface_language_and_english_for_a_log(tmp_path, monkeypatch):
+    from annotoolbox.infra import dxc, i18n
+
+    (tmp_path / "System32").mkdir()
+    (tmp_path / "System32" / fxc.DLL).write_bytes(b"x")
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.delenv(fxc.FXC_ENV, raising=False)
+    _pretend_loader(monkeypatch, lambda path: False)
+    i18n.use("de")
+    with pytest.raises(fxc.FxcMissing) as caught:
+        fxc.Fxc.find()
+    shown, english = str(caught.value), caught.value.english
+    assert shown.startswith(f"keine {fxc.DLL} gefunden: d3dcompiler_47.dll: Bin/Win64 des Spiels")
+    assert english.startswith(f"no {fxc.DLL} found: d3dcompiler_47.dll: the game's own Bin/Win64")
+    assert shown.endswith("not a valid Win32 application") and english.endswith("not a valid Win32 application")
+    monkeypatch.setattr(dxc.os, "name", "posix")
+    with pytest.raises(dxc.DxcMissing) as caught:
+        dxc.Dxc(tmp_path)
+    assert str(caught.value).startswith("DXC ist hier eine Windows-DLL: dxcompiler.dll und dxil.dll")
+    assert caught.value.english.startswith("DXC is a Windows DLL here: dxcompiler.dll and dxil.dll: the Anno 117")
+    assert dxc.DxcMissing("no DXC found").english == "no DXC found" and not i18n.missing()

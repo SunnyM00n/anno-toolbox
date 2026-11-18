@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..formats import filedb
 from ..infra import buildcache
 from ..infra.i18n import tr
 from ..islands import regions, regiontables
@@ -25,7 +26,7 @@ from ..mod.modxml import modinfo
 from ..modloader import modswap
 from ..sources import gametree
 from ..suite import features
-from . import gametransfer, groundedit, portpictures, regionconvert
+from . import gametransfer, groundedit, islandplaces, portpictures, regionconvert
 from .assetmodels import AssetModels
 from .formats.a7m import edit117 as a7m_edit117
 from .formats.a7m.reader import GameFiles, IslandFile1800
@@ -33,19 +34,24 @@ from .islandfiles import island_paths
 from .regionconvert import ASSET_GAMES, DEFAULT_SETS, material_set_of
 
 SIDE_FILES = (".a7me",)  # copied beside the ported island (the .a7minfo is written)
+FIT_MAP = "map"  # Request.fit: no pool asset; the island takes its donor's fixed places on the game's maps
+FITS = (FIT_MAP,)
 GAME_NAMES = {"anno117": "Anno 117", "anno1800": "Anno 1800"}
 
 
 @dataclass(frozen=True)
 class Request:
     """One island to convert: its game and game path, the target region (``<game>:<key>``), the new island's name
-    (default ``<island>_<region>``) and the pool region it is registered in (default the target's)."""
+    (default ``<island>_<region>``), the pool region it is registered in (default the target's) and how it is placed
+    (``fit``: "" a pool asset of its size, ``FIT_MAP`` a fixed place on the game's maps, island-regions "A place on a
+    map")."""
 
     game: str
     source: str
     target: str
     name: str = ""
     pool_region: str = ""
+    fit: str = ""
 
 
 @dataclass
@@ -193,14 +199,14 @@ def convert(
     if src.key not in regions.GENERATION:
         return _extension_for(src.key, request).run(request, src, dst, log)
     if not any(r.id == request.target for r in regions.REGIONS):
-        raise ValueError(tr("unknown region {region}: island regions <game> lists them", region=request.target))
+        raise ValueError(tr("islands.unknown_region_island_regions_lists", region=request.target))
     target = regions.region(request.target)
     own = regions.region_of(src.key, request.source)
     if own is None:
-        raise ValueError(tr("{path}: not an island of a region of {game}", path=request.source, game=src.key))
+        raise ValueError(tr("islands.not_island_region", path=request.source, game=src.key))
     if target.game != src.key:
         return _transferred(src, dst, request, target, colour_reader(src, dst) if colours else None, log)
-    log(tr("reading {island}", island=request.source))
+    log(tr("islands.reading_island", island=request.source))
     isl = src.open(request.source)
     gd = groundedit.gamedata(src.files, request.source)
     set_text = src.text(material_set_of(isl, src.key))
@@ -210,7 +216,7 @@ def convert(
             target, src.text(target.material_set or DEFAULT_SETS[src.key]), src.inventory(target), src.asset_names
         ),
     )
-    log(tr("making the tables from {region}'s islands", region=tr(target.label)))
+    log(tr("islands.making_tables_s_islands", region=tr(target.label)))
     tables = regiontables.build(
         *sides, colour_reader(src, src) if colours and not regions.same_look(own, target) else None
     )
@@ -218,15 +224,18 @@ def convert(
     if regions.same_look(own, target):  # the region itself, or Cape Trelawney and the Old World
         a7m, info, changed, report = src.read(request.source), src.read(request.source[:-4] + ".a7minfo"), {}, {}
     else:
-        log(tr("changing the ground, props and objects"))
+        log(tr("islands.changing_ground_props_objects"))
         changed, report = regionconvert.apply(isl, gd, tables)
         a7m, info = isl.write(), isl.write_info()
         if colours:
-            log(tr("drawing the map pictures"))
+            log(tr("islands.drawing_map_pictures"))
             changed |= _redrawn(src, isl, gd, changed, sides[1].set_text)
     done = Ported(request, path, a7m, info, {rel: changed.get(rel) or gd.read(rel) for rel in gd.names}, report=report)
     _side_files(done, src, request.source)
-    done.asset = registration(src, request, target, path, request.source)
+    if request.fit == FIT_MAP:  # a region's maps place their own islands: the Maps app puts this one
+        done.report["maps"] = []
+    else:
+        done.asset = registration(src, request, target, path, request.source, isl.size)
     done.report["tables"] = _table_summary(tables)
     return done
 
@@ -245,9 +254,7 @@ def _extension_for(game: str, request: Request):
     for ext in features.extensions(features.ISLAND_CONVERSIONS).values():
         if any(t == request.target for t, _label in ext.targets(game, request.source)):
             return ext
-    raise ValueError(
-        tr("{path}: {game} has no port to {region}", path=request.source, game=game, region=request.target)
-    )
+    raise ValueError(tr("islands.no_port_to", path=request.source, game=game, region=request.target))
 
 
 def convert_all(
@@ -283,7 +290,13 @@ def _transferred(src: GameSide, dst: GameSide, request: Request, target: Region,
     path = target_path(target, new_name(request, target))
     done = Ported(request, path, carried.a7m, carried.info, carried.gamedata, report=carried.report)
     _side_files(done, dst, carried.donor)
-    done.asset = registration(dst, request, target, path, carried.donor)
+    if request.fit == FIT_MAP:
+        places = islandplaces.take_place(dst, carried.donor, path, Path(path).stem)
+        done.side.update(places)
+        done.report["maps"] = sorted(places)
+    else:
+        grid = gametransfer.grid_size(filedb.read(carried.info))
+        done.asset = registration(dst, request, target, path, carried.donor, grid)
     done.report["tables"] = _table_summary(carried.tables)
     return done
 
@@ -300,14 +313,20 @@ def _table_summary(tables: regiontables.Tables) -> dict:
     return {"materials": tables.materials, "props": len(tables.props), "objects": len(tables.objects)}
 
 
-def registration(dst: GameSide, request: Request, region: Region, path: str, anchor: str) -> str:
+def registration(
+    dst: GameSide, request: Request, region: Region, path: str, anchor: str, grid: int | None = None
+) -> str:
     """The ModOp that adds the ported island's pool asset next to ``anchor``'s (a copy of it: the island it came
-    from, or the donor), else next to the first of the target region's; "" when the game has none."""
+    from, or the donor), else next to the first of the target region's whose island has the ported one's ``grid``
+    (the asset's slot size must hold it); "" when the game has none. A region whose pool has no island of that grid
+    is refused: the map generator would put it in a smaller island's place."""
     blocks = dst.pool()
     pool_region = request.pool_region or region.island_region
     vanilla = a7m_edit117.random_island(blocks, anchor) or next(
-        (b for b in blocks if f"<IslandRegion>{pool_region}</IslandRegion>" in b), None
+        (b for b in _region_blocks(blocks, pool_region) if grid is None or _grid_of(dst, b) == grid), None
     )
+    if vanilla is None and grid is not None and _region_blocks(blocks, pool_region):
+        raise ValueError(tr("islands.no_pool_size_slot", region=pool_region, size=grid))
     if vanilla is None:
         return ""
     guid = a7m_edit117.IslandGuids().get(path)
@@ -326,6 +345,19 @@ def registration(dst: GameSide, request: Request, region: Region, path: str, anc
             asset = asset.replace("</IslandRegion>", "</IslandRegion>" + tag, 1)
     anchor_guid = re.search(r"<GUID>(\d+)</GUID>", vanilla)[1]
     return f'<ModOp Type="addNextSibling" GUID="{anchor_guid}">\n{asset}\n</ModOp>'
+
+
+def _region_blocks(blocks: list[str], pool_region: str) -> list[str]:
+    return [b for b in blocks if f"<IslandRegion>{pool_region}</IslandRegion>" in b]
+
+
+def _grid_of(dst: GameSide, block: str) -> int | None:
+    """The grid (tiles across) of the island a pool asset names, None where its ``.a7minfo`` does not read."""
+    found = re.search(r"<FilePath>([^<|]+)", block)
+    try:
+        return gametransfer.grid_size(filedb.read(dst.read(found[1][:-4] + ".a7minfo"))) if found else None
+    except (KeyError, OSError, ValueError, AttributeError):  # no file, no FileDB, no MapSize
+        return None
 
 
 def write_mod(out: Path, mod_id: str, mod_name: str, game: str, done: list[Ported], trash=None) -> list[str]:
@@ -388,4 +420,6 @@ def summary(done: Ported) -> str:
             parts.append(f"{key} {r[key]}")
     if r.get("ground"):
         parts.append(f"ground maps {r['ground'].get('maps', 0)}")
+    if "maps" in r:
+        parts.append(tr("islands.placed_on_maps", n=len(r["maps"])) if r["maps"] else tr("islands.no_map_places"))
     return ", ".join(parts)

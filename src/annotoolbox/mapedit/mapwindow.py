@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -28,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import N_, tr
 from ..sources import gametree
-from ..suite import gameopen, links, widgets
+from ..suite import gameopen, gamesync, links, widgets
 from ..suite import project as suite_project
 from ..suite.background import Background
 from . import grow, mapdoc, mapmod, placing, pool, projectpart, variants
@@ -47,7 +46,7 @@ from .mapview import MapView
 from .template import KIND_FIXED, KIND_SLOT, KIND_START, new_element
 
 APP = "maps"
-TITLE = N_("Map editor")
+TITLE = N_("maps.map_editor")
 GAMES = {key: gametree.GAMES[key] for key in ("anno117", "anno1800", "anno2070", "anno1404", "anno1701", "anno2205")}
 ROLE = Qt.ItemDataRole.UserRole
 VARIANTS_KEPT = "#levels"  # the project files the three difficulties of a map made, kept apart from the map's own
@@ -62,16 +61,18 @@ class MapWindow(QMainWindow):
         self.paths: list[str] = []
         self.doc: mapdoc.MapDoc | None = None
         self.saved: bytes | None = None  # the map as last kept (None: never)
+        self._opening = 0  # counts the maps asked for: only the last one's reading is shown
+        self._reading = ""  # the map being read now: one picked meanwhile says that it takes its place
         self.kept: dict[str, set[str]] = {}  # per map: the project files its last save made
         self.choice = mapmod.Choice()
         self.last_variant_findings: list[str] = []  # what the checks found in the last three difficulties
-        self.filter = QLineEdit(placeholderText=tr("filter the maps"))
+        self.filter = QLineEdit(placeholderText=tr("maps.filter_maps"))
         self.list = QListWidget()
         self.view = MapView()
         self.panel = MapPanel(self._apply_element, self._apply_map, self._details)
         self._build()
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("File > Open game, then pick a map on the left."))
+        self.statusBar().showMessage(tr("maps.file_gt_open_game_pick"))
 
     # layout and menus
     def _build(self) -> None:
@@ -85,6 +86,7 @@ class MapWindow(QMainWindow):
             split.setStretchFactor(split.count() - 1, stretch)
         split.setSizes([300, 900, 340])
         self.setCentralWidget(split)
+        widgets.find_key(self, self.filter)
         self.filter.textChanged.connect(self._fill_list)
         self.list.itemActivated.connect(lambda item: self.open_map(item.data(ROLE)))
         self.view.edited.connect(self._edited)
@@ -94,32 +96,32 @@ class MapWindow(QMainWindow):
 
     def _menus(self) -> None:
         bar = self.menuBar()
-        file = bar.addMenu(tr("&File"))
-        games = file.addMenu(tr("Open game"))
+        file = bar.addMenu(tr("common.menu.file"))
+        games = file.addMenu(tr("common.menu.open_game"))
         for key, title in GAMES.items():
             games.addAction(title, lambda k=key: self.open_game(k))  # i18n: ok
-        file.addAction(tr("&Save to the project"), self.save, QKeySequence.StandardKey.Save)
-        file.addAction(tr("Write as a new map..."), self.save_as_new)
-        file.addAction(tr("Write easy, medium and hard..."), self.write_variants)
-        file.addAction(tr("Write as a mod folder..."), self.write_mod_folder)
+        file.addAction(tr("sound.save_to_project"), self.save, QKeySequence.StandardKey.Save)
+        file.addAction(tr("maps.write_new_map"), self.save_as_new)
+        file.addAction(tr("maps.write_easy_medium_hard"), self.write_variants)
+        file.addAction(tr("maps.write_mod_folder"), self.write_mod_folder)
         edit, _undo, _redo = widgets.edit_menu(self, self.undo, self.redo)
-        edit.addAction(tr("Rotate a quarter turn"), self.view.rotate_selected, QKeySequence("R"))
-        edit.addAction(tr("Remove"), self.view.remove_selected, QKeySequence.StandardKey.Delete)
-        edit.addAction(tr("Duplicate"), self._duplicate, QKeySequence("Ctrl+D"))
-        edit.addAction(tr("Select the complex"), self._select_complex)
-        edit.addAction(tr("Mine slots and fertilities..."), self._details)
-        add = bar.addMenu(tr("&Add"))
-        add.addAction(tr("A random slot..."), self._add_slot)
-        add.addAction(tr("A start position"), self._add_start)
-        add.addAction(tr("An island of the game..."), self._add_island)
-        add.addAction(tr("An island file on disk..."), self._add_island_file)
-        add.addAction(tr("A complex of another map..."), self._add_complex)
-        mapm = bar.addMenu(tr("&Map"))
-        mapm.addAction(tr("Grow the map..."), self._grow)
-        mapm.addAction(tr("Show the last growth's report"), self._show_report)
-        mapm.addAction(tr("Mirrored copies..."), self._mirror)
-        mapm.addAction(tr("Fit the map"), self.view.fit, QKeySequence("Home"))
-        mapm.addAction(tr("Open the island in the Islands app"), self._open_in_islands)
+        edit.addAction(tr("maps.rotate_quarter_turn"), self.view.rotate_selected, QKeySequence("R"))
+        edit.addAction(tr("maps.remove_element"), self.view.remove_selected, QKeySequence.StandardKey.Delete)
+        edit.addAction(tr("maps.duplicate_element"), self._duplicate, QKeySequence("Ctrl+D"))
+        edit.addAction(tr("maps.select_complex"), self._select_complex)
+        edit.addAction(tr("maps.mine_slots_fertilities"), self._details)
+        add = bar.addMenu(tr("maps.menu.add"))
+        add.addAction(tr("maps.random_slot_dots"), self._add_slot)
+        add.addAction(tr("maps.a_start_position"), self._add_start)
+        add.addAction(tr("maps.island_game"), self._add_island)
+        add.addAction(tr("maps.island_file_disk"), self._add_island_file)
+        add.addAction(tr("maps.complex_another_map_dots"), self._add_complex)
+        mapm = bar.addMenu(tr("maps.menu.map"))
+        mapm.addAction(tr("maps.grow_map"), self._grow)
+        mapm.addAction(tr("maps.show_last_growths_report"), self._show_report)
+        mapm.addAction(tr("maps.mirrored_copies"), self._mirror)
+        mapm.addAction(tr("maps.fit_map"), self.view.fit, QKeySequence("Home"))
+        mapm.addAction(tr("maps.open_island_islands_app"), self._open_in_islands)
 
     # games and maps
     def project(self) -> suite_project.Project:
@@ -127,6 +129,8 @@ class MapWindow(QMainWindow):
 
     def open_game(self, key: str, then: str = "", wait: bool = False) -> None:
         """Open an installed game (its folder from the settings) off the window's thread; ``then``: a map to open."""
+        if not gamesync.may_switch(self, key, self._may_leave):  # asks; the suite's other apps follow
+            return
 
         def prepare(tree):
             mine = projectpart.EDITS.folder(self.project(), key)
@@ -135,17 +139,30 @@ class MapWindow(QMainWindow):
 
         def opened(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("{game} did not open: {error}", game=GAMES.get(key, key), error=result))
+                self.statusBar().showMessage(tr("common.game_not_open_error", game=GAMES.get(key, key), error=result))
                 return
+            self.close_map()
             self.tree, self.maps, self.paths = result
             self.key = key
             self.settings.apps.setdefault(APP, {})["game"] = key
             self._fill_list()
-            self.statusBar().showMessage(tr("{name}: {count} maps", name=GAMES.get(key, key), count=len(self.paths)))
+            self.statusBar().showMessage(tr("maps.name_count_maps", name=GAMES.get(key, key), count=len(self.paths)))
             if then:
                 self.open_map(then, wait=wait)
 
         gameopen.open_installed(self, self.settings, key, self.background, then=opened, prepare=prepare, wait=wait)
+
+    def close_map(self) -> None:
+        """Let the open map go (its game was left; asked about before): the view and the panel are emptied."""
+        self._opening += 1  # a map still being read belongs to the game before
+        self._reading = ""
+        self.doc, self.saved = None, None
+        self.view.pictures.clear()
+        self.view.set_doc(None)
+        self.view.update()
+        self.panel.show_element(None)
+        self.panel.findings.clear()
+        self.setWindowTitle(tr(TITLE))
 
     def _fill_list(self) -> None:
         self.list.clear()
@@ -163,11 +180,12 @@ class MapWindow(QMainWindow):
         if self.key in mapdoc.SESSION_GAMES:
             shown = links.follow(links.OPEN_ISLAND, self.key, path) if links.available(links.OPEN_ISLAND) else False
             self.statusBar().showMessage(
-                tr("Anno 2205's sessions are one baked map each: nothing to place; the Islands app edits them")
-                + (tr(" (opened there)") if shown else "")
+                tr("maps.anno_2205s_sessions_one_baked") + (tr("maps.opened_there") if shown else "")
             )
             return
         tree, key, maps = self.tree, self.key, self.maps
+        self._opening += 1
+        asked = self._opening
 
         def work():
             doc = mapdoc.open_map(tree, key, path, maps)  # reads every island's grid once, here
@@ -177,12 +195,18 @@ class MapWindow(QMainWindow):
                 self._pictures(doc, [e.map_file_path for e in doc.elements if e.kind == KIND_FIXED]),
             )
 
-        self.statusBar().showMessage(tr("Opening {path}...", path=path))
-        self.background.run(work, self._opened, wait=wait)
+        before, self._reading = self._reading, path
+        self.statusBar().showMessage(
+            tr("maps.opening_instead", path=path, before=before) if before else tr("maps.opening_path", path=path)
+        )
+        self.background.run(work, lambda result: self._opened(result, asked), wait=wait)
 
-    def _opened(self, result) -> None:
+    def _opened(self, result, asked: int | None = None) -> None:
+        if asked is not None and asked != self._opening:
+            return  # another map was asked for while this one was read
+        self._reading = ""
         if isinstance(result, Exception):
-            self.statusBar().showMessage(tr("the map did not open: {error}", error=result))
+            self.statusBar().showMessage(tr("maps.map_not_open", error=result))
             return
         doc, findings, pictures = result
         self.doc, self.saved, self.choice = doc, None, mapmod.Choice()
@@ -197,7 +221,7 @@ class MapWindow(QMainWindow):
         counts = {k: sum(1 for e in doc.elements if e.kind == k) for k in (KIND_FIXED, KIND_SLOT, KIND_START)}
         self.statusBar().showMessage(
             tr(
-                "{path}: {fixed} fixed islands, {slots} random slots, {starts} start positions",
+                "maps.fixed_islands_random_slots_start",
                 path=doc.path,
                 fixed=counts[KIND_FIXED],
                 slots=counts[KIND_SLOT],
@@ -224,8 +248,11 @@ class MapWindow(QMainWindow):
             if isinstance(result, dict):
                 for path, data in result.items():
                     self.view.set_picture(path, data)
-            if self.doc is doc:
-                then()
+            if self.doc is not doc:
+                return
+            then()
+            if isinstance(result, Exception):  # the island is placed by its size class, without its picture
+                self.statusBar().showMessage(tr("maps.island_not_read", error=result))
 
         self.background.run(lambda: self._pictures(doc, paths), done)
 
@@ -250,7 +277,7 @@ class MapWindow(QMainWindow):
             item.setData(ROLE, list(f.elements))
             self.panel.findings.addItem(item)
         if not findings:
-            self.panel.findings.addItem(tr("no findings"))
+            self.panel.findings.addItem(tr("assets.no_findings"))
 
     def _one(self) -> int | None:
         return self.view.selected[0] if self.doc is not None and len(self.view.selected) == 1 else None
@@ -281,7 +308,7 @@ class MapWindow(QMainWindow):
         (w0, h0), (w1, h1) = self.doc.size, values["size"]
         if (w1, h1) != (w0, h0):
             if w1 < w0 or h1 < h0:
-                self.statusBar().showMessage(tr("a map only grows; to shrink it, start from a smaller template"))
+                self.statusBar().showMessage(tr("maps.map_only_grows_shrink_start"))
                 return
             self._run_grow((0, 0, w1 - w0, h1 - h0), True)
             return
@@ -308,7 +335,7 @@ class MapWindow(QMainWindow):
 
     def _add_slot(self) -> None:
         if self.doc is None or not (self.doc.is_template or self.doc.record.random):
-            self.statusBar().showMessage(tr("random slots belong to map templates and random-map templates"))
+            self.statusBar().showMessage(tr("maps.random_slots_belong_map_templates"))
             return
         dialog = SlotDialog(self.doc.size_names(), self)
         if dialog.exec():
@@ -322,7 +349,8 @@ class MapWindow(QMainWindow):
     def _add_island(self) -> None:
         if self.doc is None:
             return
-        dialog = IslandDialog(self.maps.pool if self.doc.is_template else [], self.maps.island_files, self)
+        maps = self.doc.maps  # the open map's game, also after another game was opened
+        dialog = IslandDialog(maps.pool if self.doc.is_template else [], maps.island_files, self)
         if not self.doc.is_template:
             dialog.every.setChecked(True)
         if dialog.exec() and dialog.chosen():
@@ -343,13 +371,13 @@ class MapWindow(QMainWindow):
         """An island from a folder (a project's build, another mod): its game path is the part from ``data/``."""
         if self.doc is None:
             return
-        name, _ = QFileDialog.getOpenFileName(self, tr("An island file"), "", tr("Island files (*.a7m *.isd)"))
+        name, _ = QFileDialog.getOpenFileName(self, tr("maps.island_file"), "", tr("maps.island_files_a7m_isd"))
         if not name:
             return
         local = Path(name).as_posix()
         cut = local.lower().find("/data/")
         if cut < 0:
-            self.statusBar().showMessage(tr("the file must lie in a folder named data, as in a mod"))
+            self.statusBar().showMessage(tr("maps.file_must_lie_folder_named"))
             return
         root, game_path = Path(local[:cut]), local[cut + 1 :].lower()
         loose = gametree.loose_tree(root, "island")
@@ -361,8 +389,10 @@ class MapWindow(QMainWindow):
             return pool.read_island_info(loose, game_path), loose.read(picture) if picture else b""
 
         def done(result) -> None:
-            if isinstance(result, Exception) or self.doc is not doc:
-                self.statusBar().showMessage(tr("the island did not read: {error}", error=result))
+            if self.doc is not doc:
+                return  # another map was opened while the island was read
+            if isinstance(result, Exception):
+                self.statusBar().showMessage(tr("maps.island_not_read", error=result))
                 return
             doc.extra_files[game_path] = result[0]
             self._add(new_element(KIND_FIXED, x, z, map_file_path=game_path, randomize_fertilities=doc.is_template))
@@ -383,7 +413,7 @@ class MapWindow(QMainWindow):
 
     def _mirror(self) -> None:
         if self.doc is None or not self.view.selected:
-            self.statusBar().showMessage(tr("select what to mirror first"))
+            self.statusBar().showMessage(tr("maps.select_what_mirror_first"))
             return
         dialog = MirrorDialog(self)
         if dialog.exec():
@@ -395,22 +425,26 @@ class MapWindow(QMainWindow):
         """A complex of another map of the game, read off the window's thread, placed at the view's centre."""
         if self.doc is None:
             return
-        path, ok = QInputDialog.getItem(self, tr("A complex of another map"), tr("Map:"), self.paths, 0, False)
+        doc = self.doc
+        tree, key, maps = doc.tree, doc.game, doc.maps
+        paths = self.paths if key == self.key else mapdoc.map_paths(tree, key)
+        path, ok = QInputDialog.getItem(self, tr("maps.complex_another_map"), tr("maps.map_colon"), paths, 0, False)
         if not ok:
             return
-        tree, key, maps, doc = self.tree, self.key, self.maps, self.doc
 
         def work():
             other = mapdoc.open_map(tree, key, path, maps)
             return other, other.complexes()
 
         def done(result) -> None:
-            if isinstance(result, Exception) or self.doc is not doc:
-                self.statusBar().showMessage(tr("the map did not open: {error}", error=result))
+            if self.doc is not doc:
+                return
+            if isinstance(result, Exception):
+                self.statusBar().showMessage(tr("maps.map_not_open", error=result))
                 return
             other, groups = result
             if not groups:
-                self.statusBar().showMessage(tr("{path} has no complex of islands", path=path))
+                self.statusBar().showMessage(tr("maps.no_complex_islands", path=path))
                 return
             self._place_complex(other, groups)
 
@@ -418,10 +452,10 @@ class MapWindow(QMainWindow):
 
     def _place_complex(self, other: mapdoc.MapDoc, groups: list[list[int]]) -> None:
         labels = [
-            tr("{count} islands at {x}, {z}", count=len(g), x=other.elements[g[0]].x, z=other.elements[g[0]].z)
+            tr("maps.count_islands_x_z", count=len(g), x=other.elements[g[0]].x, z=other.elements[g[0]].z)
             for g in groups
         ]
-        label, ok = QInputDialog.getItem(self, tr("A complex of another map"), tr("Complex:"), labels, 0, False)
+        label, ok = QInputDialog.getItem(self, tr("maps.complex_another_map"), tr("maps.complex"), labels, 0, False)
         if not ok:
             return
         chosen = [other.elements[i].copy() for i in groups[labels.index(label)]]
@@ -429,7 +463,8 @@ class MapWindow(QMainWindow):
         cx, cz = self._centre()
         for e in chosen:
             e.x, e.z = e.x - x0 + int(cx) // 8 * 8, e.z - z0 + int(cz) // 8 * 8
-            self.doc.extra_files.setdefault(e.map_file_path, other.info(e.map_file_path))
+            key = e.map_file_path.replace("\\", "/").lower()  # as ``MapDoc.info`` looks it up
+            self.doc.extra_files.setdefault(key, other.info(e.map_file_path))
         self.view.select(self.doc.add_all(chosen))
         self.doc.learn_seams(chosen)
         self._load_pictures([e.map_file_path for e in chosen])
@@ -442,13 +477,17 @@ class MapWindow(QMainWindow):
         """The selected fixed island's mine slots and areas: its slot objects read off the window's thread."""
         index = self._one()
         if index is None or self.doc.elements[index].kind != KIND_FIXED or not self.doc.is_template:
-            self.statusBar().showMessage(tr("select one fixed island of a map template"))
+            self.statusBar().showMessage(tr("maps.select_one_fixed_island_map"))
             return
-        doc, tree, e = self.doc, self.tree, self.doc.elements[index]
+        doc, e = self.doc, self.doc.elements[index]
+        tree = doc.tree
         field = doc.record.mine_field or {"anno117": "MineSlotActivation", "anno1800": "MineSlotMapping"}[doc.game]
 
         def done(result) -> None:
-            if isinstance(result, Exception) or self.doc is not doc:
+            if self.doc is not doc:
+                return
+            if isinstance(result, Exception):
+                self.statusBar().showMessage(tr("maps.island_not_read", error=result))
                 return
             dialog = DetailsDialog(e, result, field, doc.maps, self)
             if not wait and dialog.exec():
@@ -461,10 +500,10 @@ class MapWindow(QMainWindow):
         index = self._one()
         e = self.doc.elements[index] if index is not None else None
         if e is None or e.kind != KIND_FIXED or not links.available(links.OPEN_ISLAND):
-            self.statusBar().showMessage(tr("select one fixed island; the Islands app opens it when it runs beside"))
+            self.statusBar().showMessage(tr("maps.select_one_fixed_island_islands"))
             return
-        if not links.follow(links.OPEN_ISLAND, self.key, e.map_file_path):
-            self.statusBar().showMessage(tr("the Islands app does not know {path}", path=e.map_file_path))
+        if not links.follow(links.OPEN_ISLAND, self.doc.game, e.map_file_path):
+            self.statusBar().showMessage(tr("maps.islands_app_not_know", path=e.map_file_path))
 
     # growing
     def _grow(self) -> None:
@@ -480,7 +519,8 @@ class MapWindow(QMainWindow):
         except ValueError as exc:
             self.statusBar().showMessage(str(exc))
             return
-        doc, tree = self.doc, self.tree
+        doc = self.doc
+        tree = doc.tree
 
         def work():
             scripts = {}
@@ -491,14 +531,17 @@ class MapWindow(QMainWindow):
             return doc.grow(sides, widen, scripts)
 
         def done(result) -> None:
+            if self.doc is not doc:
+                return
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("the map did not grow: {error}", error=result))
+                self.statusBar().showMessage(tr("maps.map_not_grow", error=result))
+                self._edited()  # the map as it was
                 return
             self.view.fit()
             self._edited()
             self.statusBar().showMessage(
                 tr(
-                    "grown to {w} x {h}: {moved} references moved, {kept} kept",
+                    "maps.grown_x_references_moved_kept",
                     w=self.doc.size[0],
                     h=self.doc.size[1],
                     moved=len(result.report.moved()),
@@ -508,12 +551,12 @@ class MapWindow(QMainWindow):
             if not wait:
                 ReportDialog(result.report.lines(), self).exec()
 
-        self.statusBar().showMessage(tr("Growing the map (the session file too)..."))
+        self.statusBar().showMessage(tr("maps.growing_map_session_file_too"))
         self.background.run(work, done, wait=wait)
 
     def _show_report(self) -> None:
         if self.doc is None or self.doc.grown is None:
-            self.statusBar().showMessage(tr("the map has not grown"))
+            self.statusBar().showMessage(tr("maps.map_not_grown"))
             return
         ReportDialog(self.doc.grown.report.lines(), self).exec()
 
@@ -527,17 +570,17 @@ class MapWindow(QMainWindow):
         def work():
             files = files_of()
             report = doc.grown.report.to_json() if doc.grown else ""
-            projectpart.save(project, self.key, files, earlier, report)
+            projectpart.save(project, doc.game, files, earlier, report)
             return files
 
         def done(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("not kept: {error}", error=result))
+                self.statusBar().showMessage(tr("maps.not_kept_error", error=result))
                 return
             self.kept[kept_key] = set(result)
-            if kept_key == doc.path:
+            if kept_key == doc.path and self.doc is doc:
                 self.saved = doc.render()
-            self.statusBar().showMessage(done_text or tr("kept {count} files in the project", count=len(result)))
+            self.statusBar().showMessage(done_text or tr("maps.kept_files_project", count=len(result)))
             if after is not None:
                 after()
 
@@ -546,7 +589,7 @@ class MapWindow(QMainWindow):
     def save(self, wait: bool = False) -> None:
         """Keep the map's files in the project (``map-edits``); what an earlier save made and this one lacks goes."""
         if self.doc is None:
-            self.statusBar().showMessage(tr("nothing changed"))
+            self.statusBar().showMessage(tr("common.nothing_changed"))
             return
         doc, choice = self.doc, self.choice
         self._keep(lambda: mapmod.map_files(doc, choice) if (doc.changed() or choice.as_new) else {}, doc.path, wait)
@@ -566,7 +609,7 @@ class MapWindow(QMainWindow):
         folder = project.folder / projectpart.EDITS.edits
         kept, taken = mapmod.read_guids(folder), mapmod.taken_guids(project)
         if len(set(picked.values())) < len(picked):
-            self.statusBar().showMessage(tr("two new maps cannot share a GUID"))
+            self.statusBar().showMessage(tr("maps.two_new_maps_cannot_share"))
             return True
         for name, guid in picked.items():
             problem = mapmod.guid_problem(guid, project.guid_range, taken, kept, name)
@@ -579,7 +622,7 @@ class MapWindow(QMainWindow):
 
     def save_as_new(self) -> None:
         if self.doc is None or not self.doc.is_template:
-            self.statusBar().showMessage(tr("a new map is a map template of 117 or 1800"))
+            self.statusBar().showMessage(tr("maps.new_map_template_117_1800"))
             return
         project = self.project()
         name = self.doc.path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + "_edited"
@@ -595,7 +638,7 @@ class MapWindow(QMainWindow):
     def write_variants(self, picked: tuple | None = None, wait: bool = False) -> None:
         """The map's three difficulties kept in the project (``picked``: the dialog's values, for a test)."""
         if self.doc is None or not self.doc.is_template:
-            self.statusBar().showMessage(tr("difficulties are map templates of 117 and 1800"))
+            self.statusBar().showMessage(tr("maps.difficulties_map_templates_117_1800"))
             return
         doc, project = self.doc, self.project()
         base = doc.path.rsplit("/", 1)[-1].rsplit(".", 1)[0].replace("_medium", "")
@@ -619,17 +662,18 @@ class MapWindow(QMainWindow):
             return files
 
         def after() -> None:  # what the checks find in each level, shown once the files are kept
-            problems = [f"{tr(level)}: {f.text}" for level, fs in found.items() for f in fs]
+            titles = {level.key: level.title for level in variants.LEVELS}
+            problems = [f"{tr(titles[level])}: {f.text}" for level, fs in found.items() for f in fs]
             self.last_variant_findings = problems
             if problems and not wait:
                 ReportDialog(problems, self).exec()
 
-        self._keep(files_of, doc.path + VARIANTS_KEPT, wait, tr("kept the three difficulties in the project"), after)
+        self._keep(files_of, doc.path + VARIANTS_KEPT, wait, tr("maps.kept_three_difficulties_project"), after)
 
     def write_mod_folder(self) -> None:
         if self.doc is None:
             return
-        folder = QFileDialog.getExistingDirectory(self, tr("The folder to write the mod into"))
+        folder = QFileDialog.getExistingDirectory(self, tr("maps.folder_write_mod"))
         if not folder:
             return
         doc, choice = self.doc, self.choice
@@ -643,9 +687,9 @@ class MapWindow(QMainWindow):
 
         def done(result) -> None:
             text = (
-                tr("not written: {error}", error=result)
+                tr("maps.not_written_error", error=result)
                 if isinstance(result, Exception)
-                else tr("written: {folder}", folder=result)
+                else tr("maps.written_folder", folder=result)
             )
             self.statusBar().showMessage(text)
 
@@ -655,15 +699,14 @@ class MapWindow(QMainWindow):
         """Ask before an unkept edited map is left (another map opened, the window closed)."""
         if self.doc is None or not self.doc.undos or (self.saved is not None and self.doc.render() == self.saved):
             return True
-        answer = QMessageBox.question(
-            self,
-            tr(TITLE),
-            tr("The map has changes that are not kept in the project. Keep them first?"),
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-        )
-        if answer == QMessageBox.StandardButton.Save:
+
+        def keep() -> bool:
+            doc = self.doc
+            self.saved = None
             self.save(wait=True)
-        return answer != QMessageBox.StandardButton.Cancel
+            return self.saved is not None and self.doc is doc  # not kept (the status line says why): stay
+
+        return widgets.ask_keep(self, tr(TITLE), tr("maps.map_changes_not_kept_project"), keep)
 
     def closeEvent(self, event) -> None:
         if not self._may_leave():

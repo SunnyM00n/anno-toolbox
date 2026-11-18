@@ -32,9 +32,9 @@ def wem_plugin(wem: bytes) -> int:
     try:
         kind = wave_info(wem)["format"]
     except (ValueError, struct.error) as exc:
-        raise EditError(tr("not a .wem file ({exc})", exc=exc)) from exc
+        raise EditError(tr("sound.not_wem_file", exc=exc)) from exc
     if kind not in PLUGIN_OF_FORMAT:
-        raise EditError(tr("a .wem of format {kind} is not one of PCM, ADPCM and Wwise Vorbis", kind=kind))
+        raise EditError(tr("sound.wem_format_not_one_pcm", kind=kind))
     return PLUGIN_OF_FORMAT[kind]
 
 
@@ -42,7 +42,7 @@ def plan_media(doc: BankDoc, sound: int, name: str = "") -> int:
     """The media id a Sound's new clip gets: the one it plays now when no other Sound shares it, else a new one."""
     node = doc.graph.get(sound)
     if node is None or node.source is None:
-        raise EditError(tr("object {sound} is not a Sound", sound=sound))
+        raise EditError(tr("sound.object_not_sound", sound=sound))
     media = node.source.media
     others = [s for s in doc.media_users(media) if s != sound]
     return doc.new_id(name or f"sound-{sound}-media") if others else media
@@ -74,20 +74,20 @@ def _store(doc: BankDoc, src: bnkgraph.Source, wem: bytes, media: int, owner: in
     return new
 
 
-@edit(N_("replace the audio"))
+@edit(N_("sound.replace_audio"))
 def replace_audio(doc: BankDoc, sound: int, wem: bytes, media: int) -> None:
     """A Sound plays another clip (``wem``), kept as media ``media`` (``plan_media``)."""
     obj = doc.obj(sound)
     if obj.type != bnkgraph.SOUND:
-        raise EditError(tr("{type_name} {sound} is not a Sound", type_name=obj.type_name, sound=sound))
+        raise EditError(tr("sound.type_name_sound_not", type_name=obj.type_name, sound=sound))
     src, end = _source_end(obj, doc.family)
     if src.plugin & 0xF == bnkgraph.SOURCE_PLUGIN:
-        raise EditError(tr("this Sound is a silence source (no clip): add a Sound instead"))
+        raise EditError(tr("sound.sound_silence_source_no_clip"))
     new = _store(doc, src, wem, media, sound)
     doc.put(HircObject(obj.type, obj.id, bnkgraph.render_source(new, doc.family) + obj.payload[end:]))
 
 
-@edit(N_("add a sound"))
+@edit(N_("sound.add_sound"))
 def add_sound(
     doc: BankDoc, sound: int, template: int, parent: int, wem: bytes, media: int, weight: int = edits.DEFAULT_WEIGHT,
     value: int | None = None,
@@ -96,10 +96,10 @@ def add_sound(
     (0: under none; a Random/Sequence or Actor-Mixer container, or a Switch container's branch ``value``)."""
     tpl = doc.obj(template)
     if tpl.type != bnkgraph.SOUND:
-        raise EditError(tr("{type_name} {template} is not a Sound to copy", type_name=tpl.type_name, template=template))
+        raise EditError(tr("sound.not_sound_copy", type_name=tpl.type_name, template=template))
     src, end = _source_end(tpl, doc.family)
     if src.plugin & 0xF == bnkgraph.SOURCE_PLUGIN:
-        raise EditError(tr("the template is a silence source: pick a Sound that plays a clip"))
+        raise EditError(tr("sound.template_silence_source_pick_sound"))
     fresh = replace(src, stream=src.stream if src.stream == 0 else 2)
     new = _store(doc, fresh, wem, media, sound)
     made = HircObject(bnkgraph.SOUND, sound, bnkgraph.render_source(new, doc.family) + tpl.payload[end:])
@@ -108,7 +108,7 @@ def add_sound(
         edits.add_child(doc, parent, sound, weight, value)
 
 
-@edit(N_("replace the track's audio"))
+@edit(N_("sound.replace_tracks_audio"))
 def replace_track_audio(
     doc: BankDoc, track: int, index: int, wem: bytes, media: int, markers: str = musicedits.SCALE
 ) -> str:
@@ -118,9 +118,9 @@ def replace_track_audio(
     the sentence about the segment for the status line."""
     obj = doc.obj(track)
     if not bnkgraph.layout(doc.version).music_readable or obj.type != bnkmusic.MUSIC_TRACK:
-        raise EditError(tr("music tracks are edited in Anno 117's banks"))
+        raise EditError(tr("sound.music_tracks_edited_anno_117s"))
     t = bnkmusic.parse_track(obj)
-    check_index(t.sources, index, tr("sources"))
+    check_index(t.sources, index, tr("sound.sources"))
     old = t.sources[index]
     src = bnkgraph.Source(old.plugin_id, old.stream_type, old.source_id & 0xFFFFFFFF, size=old.in_memory_size)
     src.flags, src.high = old.source_bits, old.source_id >> 32

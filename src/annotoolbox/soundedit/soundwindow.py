@@ -8,10 +8,10 @@ docs/sound-editor.md is the user's guide.
 from __future__ import annotations
 
 import hashlib
-import tempfile
+import struct
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -33,13 +33,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..assetedit import assetgame
 from ..exporting import banks
 from ..formats import bnkgraph, bnkmusic
 from ..infra.i18n import N_, tr
 from ..sources import gametree
-from ..suite import gameopen, widgets
+from ..suite import gameopen, gamesync, widgets
 from ..suite import project as suite_project
 from ..suite.background import Background
+from ..suite.clipplayer import ClipPlayer
 from . import (
     audioedits,
     clipcodec,
@@ -62,11 +64,12 @@ from .registry import EditError
 from .wavewidget import WaveformView
 
 APP = "sound"
-TITLE = N_("Sound editor")
+TITLE = N_("sound.sound_editor")
 OLD_GAMES = ("anno2070", "anno1404", "anno1701")  # no Wwise banks: a sound database and loose clips
 GAMES = {key: gametree.GAMES[key] for key in ("anno117", "anno1800", "anno2205", *OLD_GAMES)}
 ROLE = Qt.ItemDataRole.UserRole
 WAVE_BINS = 1000  # columns of peaks kept per clip; the view picks from them
+MEDIA_ERRORS = (OSError, ValueError, KeyError, IndexError, struct.error)  # a clip that does not read
 
 
 class SoundWindow(QMainWindow):
@@ -74,13 +77,16 @@ class SoundWindow(QMainWindow):
         super().__init__()
         self.settings, self.settings_path = settings, settings_path
         self.background = Background(self)
+        self.sync = False  # a test's: the reads run on the caller's thread
+        self.asked = {"bank": 0, "wave": 0, "play": 0}  # the latest request of each kind: an older answer is dropped
+        self.player = ClipPlayer(self)
         self.key, self.tree = "", None
         self.doc: BankDoc | None = None
         self.selected = 0
         self.shown = (0.0, 0.0, 0.0, 0.0)  # the settings boxes as last loaded
         self.kept: dict[str, set[str]] = {}  # per bank: the project files its last save made
         self.banks = QListWidget()
-        self.filter = QLineEdit(placeholderText=tr("filter the banks"))
+        self.filter = QLineEdit(placeholderText=tr("sound.filter_banks"))
         self.outline = QTreeWidget()
         self.outline.setHeaderHidden(True)
         self.facts = QPlainTextEdit(readOnly=True)
@@ -97,7 +103,7 @@ class SoundWindow(QMainWindow):
             (self.rand_hi, -2400, 2400),
         ):
             box.setRange(lo, hi)
-        self.playlist = QLineEdit(placeholderText=tr("child:weight, child:weight ..."))
+        self.playlist = QLineEdit(placeholderText=tr("sound.child_weight"))
         self.codec = QComboBox()
         self.codec.addItems(list(clipcodec.CODECS))
         self.status_label = QLabel()
@@ -107,7 +113,7 @@ class SoundWindow(QMainWindow):
         self.started: set[str] = set()  # the project's files of the older game's database when it was opened
         self._build()
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("File > Open game, then pick a bank on the left."))
+        self.statusBar().showMessage(tr("sound.file_gt_open_game_pick"))
 
     # layout
     def _build(self) -> None:
@@ -117,26 +123,29 @@ class SoundWindow(QMainWindow):
         lay.addWidget(self.banks)
         form_box = QWidget()
         form = QFormLayout(form_box)
-        form.addRow(tr("volume (dB)"), self.volume)
-        form.addRow(tr("pitch (cents)"), self.pitch)
-        form.addRow(tr("random pitch from"), self.rand_lo)
-        form.addRow(tr("random pitch to"), self.rand_hi)
-        form.addRow(tr("playlist"), self.playlist)
-        form.addRow(tr("encode a clip as"), self.codec)
+        form.addRow(tr("sound.volume_db"), self.volume)
+        form.addRow(tr("sound.pitch_cents"), self.pitch)
+        form.addRow(tr("sound.random_pitch"), self.rand_lo)
+        form.addRow(tr("sound.random_pitch_to"), self.rand_hi)
+        form.addRow(tr("sound.playlist"), self.playlist)
+        form.addRow(tr("sound.encode_clip"), self.codec)
         buttons = QWidget()
         blay = QVBoxLayout(buttons)
-        formrows.add_buttons(
+        made = formrows.add_buttons(
             blay,
             (
-                (N_("Apply the settings"), self._apply),
-                (N_("Apply the playlist"), self._apply_playlist),
-                (N_("Play"), self._play),
-                (N_("Replace the audio..."), self._replace),
-                (N_("Add a sound here..."), self._add_sound),
-                (N_("Add an event that plays this..."), self._add_event),
-                (N_("New state or switch group..."), self._new_group),
+                (N_("sound.apply_settings"), self._apply),
+                (N_("sound.apply_playlist"), self._apply_playlist),
+                (N_("sound.play_clip"), self._play),
+                (N_("sound.replace_audio_dots"), self._replace),
+                (N_("sound.add_sound_here"), self._add_sound),
+                (N_("sound.add_event_plays"), self._add_event),
+                (N_("sound.new_state_switch_group"), self._new_group),
             ),
         )
+        self.play_button = made[2]
+        self.play_button.setShortcut(QKeySequence("Ctrl+Space"))
+        self.play_button.setToolTip(tr("sound.tip.play_clip"))
         right = QWidget()
         rlay = QVBoxLayout(right)
         rlay.addWidget(self.wave)
@@ -153,12 +162,13 @@ class SoundWindow(QMainWindow):
         self.pages.addWidget(split)
         self.pages.addWidget(self.old)
         self.setCentralWidget(self.pages)
-        menu = self.menuBar().addMenu(tr("&File"))
-        games = menu.addMenu(tr("Open &game"))
+        menu = self.menuBar().addMenu(tr("common.menu.file"))
+        games = menu.addMenu(tr("common.menu.open_game"))
         for key, name in GAMES.items():
             games.addAction(name, lambda k=key: self.open_game(k))
-        menu.addAction(tr("&Save to the project"), self.save, QKeySequence.StandardKey.Save)
+        menu.addAction(tr("sound.save_to_project"), self.save, QKeySequence.StandardKey.Save)
         widgets.edit_menu(self, self.undo, self.redo)
+        widgets.find_key(self, self.filter)
         self.filter.textChanged.connect(self._fill_banks)
         self.banks.itemActivated.connect(lambda item: self.open_bank(item.data(ROLE)))
         self.outline.currentItemChanged.connect(lambda item, _old: self._select(item.data(0, ROLE) if item else 0))
@@ -169,7 +179,7 @@ class SoundWindow(QMainWindow):
 
     def open_game(self, key: str, then: str = "", wait: bool = False) -> None:
         """Open an installed game (its folder from the settings) in the background; ``then``: a bank to open."""
-        if not self.may_leave():
+        if not gamesync.may_switch(self, key, self.may_leave):  # asks; the suite's other apps follow
             return
 
         def prepare(tree):
@@ -178,7 +188,7 @@ class SoundWindow(QMainWindow):
 
         def opened(tree) -> None:
             if isinstance(tree, Exception):
-                self.statusBar().showMessage(tr("{game} did not open: {error}", game=GAMES.get(key, key), error=tree))
+                self.statusBar().showMessage(tr("common.game_not_open_error", game=GAMES.get(key, key), error=tree))
                 return
             self.key, self.tree = key, tree
             self.doc = None  # asked about in ``may_leave`` before the game was opened
@@ -190,7 +200,7 @@ class SoundWindow(QMainWindow):
                 self.old.open_game(tree)
                 return
             self._fill_banks()
-            self.statusBar().showMessage(tr("{name}: {count} banks", name=GAMES.get(key, key), count=len(self.banks)))
+            self.statusBar().showMessage(tr("sound.name_count_banks", name=GAMES.get(key, key), count=len(self.banks)))
             if then:
                 self.open_bank(then)
 
@@ -207,20 +217,38 @@ class SoundWindow(QMainWindow):
                 self.banks.addItem(short)
                 self.banks.item(self.banks.count() - 1).setData(ROLE, path)
 
+    def _latest(self, kind: str, done):
+        """``done`` as a callback that runs only while no later request of ``kind`` was made."""
+        self.asked[kind] += 1
+        mine = self.asked[kind]
+        return lambda result: done(result) if self.asked[kind] == mine else None
+
     def open_bank(self, path: str) -> None:
+        """Read a bank off the window's thread and show it; the bank asked for last is the one shown."""
         if self.tree is None or not self.may_leave():
             return
         tree = self.tree
-        info = banks.read_info(path, tree.exists, lambda p: tree.read(p).decode("utf-8", "replace"))
-        try:
-            self.doc = BankDoc(tree.read(path), path, info)
-        except (ValueError, OSError) as exc:
-            self.statusBar().showMessage(tr("{path} does not read: {error}", path=path, error=exc))
+
+        def work() -> BankDoc:
+            info = banks.read_info(path, tree.exists, lambda p: tree.read(p).decode("utf-8", "replace"))
+            return BankDoc(tree.read(path), path, info)
+
+        self.statusBar().showMessage(tr("sound.reading_bank", path=path))
+        self.background.run(work, self._latest("bank", lambda doc: self._bank_read(path, tree, doc)), self.sync)
+
+    def _bank_read(self, path: str, tree, doc: BankDoc | Exception) -> None:
+        if tree is not self.tree:
+            return  # another game was opened while it was read
+        if isinstance(doc, Exception):
+            if not isinstance(doc, (ValueError, OSError)):
+                raise doc
+            self.statusBar().showMessage(tr("common.path_not_read_error", path=path, error=doc))
             return
+        self.doc = doc
         self._fill_outline()
         self.statusBar().showMessage(
             tr(
-                "{path}: version {version}, {count} objects",
+                "sound.path_version_count_objects",
                 path=path,
                 version=self.doc.version,
                 count=len(self.doc.bank.hirc),
@@ -232,7 +260,7 @@ class SoundWindow(QMainWindow):
         if self.doc is None:
             return
         for group, rows in outline.outline(self.doc).items():
-            top = QTreeWidgetItem([tr("{title} ({count})", title=tr(group), count=len(rows))])
+            top = QTreeWidgetItem([tr("common.title_count", title=tr(group), count=len(rows))])
             self.outline.addTopLevelItem(top)
             for row in rows:
                 self._add_row(top, row)
@@ -255,8 +283,8 @@ class SoundWindow(QMainWindow):
                 lay = containers.read_layout(self.doc.obj(obj_id), node, self.doc.version)
                 self.playlist.setText(", ".join(f"{c}:{w}" for c, w in lay.playlist))
                 if lay.table:
-                    table = "; ".join(tr("{value} plays {name}", value=v, name=n) for v, n in lay.table.items())
-                    lines.append(tr("values: {table}", table=table))
+                    table = "; ".join(tr("sound.value_plays_name", value=v, name=n) for v, n in lay.table.items())
+                    lines.append(tr("sound.values_table", table=table))
             except containers.LayoutError as exc:
                 lines.append(str(exc))
         self.facts.setPlainText("\n".join(lines))
@@ -266,22 +294,35 @@ class SoundWindow(QMainWindow):
         self.curves.load(self.doc, obj_id)
 
     def _load_wave(self) -> None:
-        """Draw the clip of the picked Sound or music track (``waveform``), or say why there is none."""
-        try:
-            data = self._media_of(self.selected)
-        except (OSError, ValueError, KeyError):
-            data = None
-        if not data:
-            self.wave.show_message(tr("no clip picked"))
+        """Draw the clip of the picked Sound or music track (``waveform``), or say why there is none. The clip
+        is read and decoded off the window's thread; the selection made last is the one drawn."""
+        picked, kept = self.selected, dict(self.waves)
+
+        def work() -> tuple[str, waveform.Shape] | str:
+            try:
+                data = self._media_of(picked)
+            except MEDIA_ERRORS:
+                data = None
+            if not data:
+                return tr("common.no_clip_picked")
+            key = hashlib.sha1(data).hexdigest()
+            try:
+                return key, kept.get(key) or waveform.shape(data, WAVE_BINS)
+            except clipcodec.ClipError as exc:
+                return str(exc)
+
+        self.wave.show_message(tr("sound.reading_clip"))
+        self.background.run(work, self._latest("wave", lambda found: self._wave_read(picked, found)), self.sync)
+
+    def _wave_read(self, picked: int, found) -> None:
+        if isinstance(found, Exception):
+            raise found
+        if isinstance(found, str):
+            self.wave.show_message(found)
             return
-        key = hashlib.sha1(data).hexdigest()
-        try:
-            if key not in self.waves:
-                self.waves = dict(list(self.waves.items())[-7:]) | {key: waveform.shape(data, WAVE_BINS)}
-        except clipcodec.ClipError as exc:
-            self.wave.show_message(str(exc))
-            return
-        self.wave.show_shape(self.waves[key], musicedits.track_marks(self.doc, self.selected))
+        key, shape = found
+        self.waves = dict(list(self.waves.items())[-7:]) | {key: shape}
+        self.wave.show_shape(shape, musicedits.track_marks(self.doc, picked) if self.doc is not None else [])
 
     def _load_props(self) -> None:
         for box in (self.volume, self.pitch, self.rand_lo, self.rand_hi):
@@ -309,12 +350,12 @@ class SoundWindow(QMainWindow):
         try:
             note = self.doc.do(name, **args)
         except EditError as exc:
-            self.statusBar().showMessage(tr("cannot: {error}", error=exc))
+            self.statusBar().showMessage(tr("sound.cannot_error", error=exc))
             return False
         keep = self.selected
         self._fill_outline()
         self._select(keep)
-        done = tr("{name} done (Ctrl+Z undoes it)", name=registry.label(name))
+        done = tr("sound.done_ctrl_plus_z_undoes", name=registry.label(name))
         self.statusBar().showMessage(f"{done}; {note}" if isinstance(note, str) and note else done)
         return True
 
@@ -332,7 +373,7 @@ class SoundWindow(QMainWindow):
         if (lo, hi) != (was_lo, was_hi):
             ranges[pitch] = (lo, hi) if (lo, hi) != (0.0, 0.0) else None
         if not props and not ranges:
-            self.statusBar().showMessage(tr("no setting was changed"))
+            self.statusBar().showMessage(tr("sound.no_setting_changed"))
             return
         self._edit("set_props", id=self.selected, props=props, ranges=ranges)
 
@@ -342,7 +383,7 @@ class SoundWindow(QMainWindow):
                 tuple(int(x) for x in part.split(":")) for part in self.playlist.text().split(",") if part.strip()
             ]
         except ValueError:
-            self.statusBar().showMessage(tr("write the playlist as child:weight, child:weight"))
+            self.statusBar().showMessage(tr("sound.write_playlist_child_weight"))
             return
         self._edit("set_playlist", container=self.selected, entries=entries)
 
@@ -358,7 +399,7 @@ class SoundWindow(QMainWindow):
 
     def _pick_clip(self) -> bytes | None:
         path, _ = QFileDialog.getOpenFileName(
-            self, tr("A WAV or Ogg file"), "", "Audio (*.wav *.ogg *.mp3 *.flac)"
+            self, tr("sound.wav_ogg_file"), "", "Audio (*.wav *.ogg *.mp3 *.flac)"
         )  # i18n: ok (a file filter)
         return self._clip(path) if path else None
 
@@ -377,7 +418,7 @@ class SoundWindow(QMainWindow):
                     markers=self.music.fit.currentText(),
                 )  # fmt: skip
         except EditError as exc:
-            self.statusBar().showMessage(tr("cannot: {error}", error=exc))
+            self.statusBar().showMessage(tr("sound.cannot_error", error=exc))
 
     def _track_media(self) -> int:
         return bnkmusic.parse_track(self.doc.obj(self.selected)).sources[0].source_id & 0xFFFFFFFF
@@ -390,7 +431,7 @@ class SoundWindow(QMainWindow):
         template = next(
             (s for s in self.doc.graph.values() if s.source is not None and (s.parent == parent or not parent)), None
         )
-        name, ok = QInputDialog.getText(self, tr(TITLE), tr("Name of the new sound"))
+        name, ok = QInputDialog.getText(self, tr(TITLE), tr("sound.name_new_sound"))
         if not ok or not name.strip() or template is None or not (wem := self._pick_clip()):
             return
         value = None
@@ -403,7 +444,7 @@ class SoundWindow(QMainWindow):
     def _add_event(self) -> None:
         if self.doc is None or not self.selected:
             return
-        name, ok = QInputDialog.getText(self, tr(TITLE), tr("Name of the new event (the game posts it by name)"))
+        name, ok = QInputDialog.getText(self, tr(TITLE), tr("sound.name_new_event_game_posts"))
         if ok and name.strip():
             self._edit(
                 "add_event", event=self.doc.new_id(name), action=self.doc.new_id(name + ".action"), target=self.selected
@@ -413,23 +454,31 @@ class SoundWindow(QMainWindow):
         """Ask for a group (kind, name, values and, for a switch group, its game parameter and points) and add it."""
         if self.doc is None:
             return
-        kinds = [tr("state group"), tr("switch group")]
-        kind, ok = QInputDialog.getItem(self, tr(TITLE), tr("Kind of the group"), kinds, 0, False)
-        name, named = QInputDialog.getText(self, tr(TITLE), tr("Name of the group (its id is the hash of the name)"))
-        if not ok or not named or not name.strip():
+        kinds = [tr("sound.state_group"), tr("sound.switch_group")]
+        kind, ok = QInputDialog.getItem(self, tr(TITLE), tr("sound.kind_group"), kinds, 0, False)
+        if not ok:
             return
-        text, _ = QInputDialog.getText(self, tr(TITLE), tr("Its values, separated by commas"))
-        values = [v.strip() for v in text.split(",") if v.strip()]
+        name = self._ask(tr("sound.name_group_id_hash"))
+        if not name:
+            return
+        text = self._ask(tr("sound.values_separated_commas"))
+        if text is None:
+            return
+        values = formrows.entries(text)
         state = kind == kinds[0]
         parameter, points = "", []
         if not state:
-            parameter, _ = QInputDialog.getText(self, tr(TITLE), tr("Game parameter that drives it (empty: none)"))
-            if parameter.strip():
-                rows, _ = QInputDialog.getText(self, tr(TITLE), tr("Points as value:switch, value:switch ..."))
+            parameter = self._ask(tr("sound.game_parameter_drives_empty_none"))
+            if parameter is None:
+                return
+            if parameter:
+                rows = self._ask(tr("sound.points_value_switch"))
+                if rows is None:
+                    return
                 try:
-                    points = [(float(x), s.strip(), 9) for x, s in (r.split(":") for r in rows.split(",") if r.strip())]
+                    points = [(float(x), s.strip(), 9) for x, s in (r.split(":") for r in formrows.entries(rows))]
                 except ValueError:
-                    self.statusBar().showMessage(tr("write the points as value:switch, separated by commas"))
+                    self.statusBar().showMessage(tr("sound.write_points_value_switch_separated"))
                     return
         plan = groupedits.plan_group(self.doc, "state" if state else "switch", name, values, parameter, points)
         if isinstance(plan, str):
@@ -438,49 +487,61 @@ class SoundWindow(QMainWindow):
         else:
             self._edit(plan[0], **plan[1])
 
-    def _play(self) -> None:
-        data = self._media_of(self.selected)
-        if not data:
-            self.statusBar().showMessage(tr("nothing to play here: pick a sound or a music track"))
-            return
-        try:
-            out, suffix = banks.playable(data, "x.wem")
-        except banks.Unplayable as exc:
-            self.statusBar().showMessage(tr("cannot play: {error}", error=exc))
-            return
-        target = Path(tempfile.gettempdir()) / f"soundedit-{hashlib.sha1(data).hexdigest()[:12]}{suffix}"
-        target.write_bytes(out)
-        from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+    def _ask(self, label: str) -> str | None:
+        """One line asked of the person, stripped; None when they cancelled."""
+        text, ok = QInputDialog.getText(self, tr(TITLE), label)
+        return text.strip() if ok else None
 
-        if not hasattr(self, "_player"):
-            self._player, self._out = QMediaPlayer(self), QAudioOutput(self)
-            self._player.setAudioOutput(self._out)
-        self._player.setSource(QUrl.fromLocalFile(str(target)))
-        self._player.play()
+    def _play(self) -> None:
+        """Play the picked clip: read and decoded off the window's thread, the one asked for last is played."""
+        picked, cache = self.selected, self._cache()
+
+        def work() -> Path | str:
+            try:
+                data = self._media_of(picked)
+                if not data:
+                    return tr("sound.nothing_play_here_pick_sound")
+                return self.player.prepare("x.wem", data, cache)
+            except MEDIA_ERRORS as exc:  # the clip did not read, or its decoded copy could not be written
+                return tr("common.cannot_play_error", error=exc)
+
+        self.statusBar().showMessage(tr("sound.reading_clip"))
+        self.background.run(work, self._latest("play", self._play_read), self.sync)
+
+    def _play_read(self, found: Path | str | Exception) -> None:
+        if isinstance(found, Exception):
+            raise found
+        if isinstance(found, str):
+            self.statusBar().showMessage(found)
+            return
+        self.statusBar().clearMessage()
+        self.player.start(found)
 
     def _media_of(self, obj_id: int) -> bytes | None:
         """The clip of a sound or the first source of a music track: an edit's, the bank's, the loose file's."""
-        doc = self.doc
+        doc, tree = self.doc, self.tree  # read once: a worker thread calls this while the window goes on
         if doc is None or not obj_id:
             return None
         node = doc.graph.get(obj_id)
         media = node.source.media if node is not None and node.source is not None else None
         if media is None and doc.obj(obj_id).type == 11:
-            media = self._track_media()
+            media = bnkmusic.parse_track(doc.obj(obj_id)).sources[0].source_id & 0xFFFFFFFF
         if media is None:
             return None
         if media in doc.loose:
             return doc.loose[media].data
         if (data := doc.media(media)) is not None and not (node and node.source and node.source.stream):
             return data
-        if self.tree is None:
+        if tree is None:
             return doc.media(media)
-        found = banks.media_file(doc.path, media, doc.info, self.tree.exists)
-        return self.tree.read(found) if found else doc.media(media)
+        found = banks.media_file(doc.path, media, doc.info, tree.exists)
+        return tree.read(found) if found else doc.media(media)
 
     # the stack and the project
     def _cache(self) -> Path:
-        return Path(tempfile.gettempdir()) / "anno-toolbox-sound"
+        """Where a played clip is written, once per content: the workspace cache's ``sounds``, which the other apps
+        that play a clip share (the temp folder kept every clip for good)."""
+        return assetgame.cache_dir(self.settings.workspace) / "sounds"
 
     def _old_open(self) -> bool:
         return self.pages.currentIndex() == 1 and self.old.doc is not None
@@ -516,24 +577,24 @@ class SoundWindow(QMainWindow):
             else:
                 self._save_bank()
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, tr(TITLE), tr("could not save: {error}", error=exc))
+            QMessageBox.warning(self, tr(TITLE), tr("islands.could_not_save", error=exc))
             return False
         return True
 
     def _save_bank(self) -> None:
         if self.doc is None or self.tree is None:
-            self.statusBar().showMessage(tr("nothing changed"))
+            self.statusBar().showMessage(tr("common.nothing_changed"))
             return
         earlier = self.kept.get(self.doc.path, set())
         if not self.doc.changed and not earlier:
-            self.statusBar().showMessage(tr("nothing changed"))
+            self.statusBar().showMessage(tr("common.nothing_changed"))
             return
         made = outputs.render(self.doc, self.tree)  # no files when every edit was undone: the earlier ones go
         notice = projectpart.save(self.project(), self.key, made.files, earlier)
         self.kept[self.doc.path] = set(made.files)
         self.doc.mark_saved()
         self.statusBar().showMessage(
-            tr("kept {count} files in the project; {text}", count=len(made.files), text=notice.text)
+            tr("sound.kept_files_project", count=len(made.files), text=notice.text)
             + "".join(f"; {p}" for p in made.problems[:3])
         )
 
@@ -543,7 +604,7 @@ class SoundWindow(QMainWindow):
         doc, files = self.old.doc, self.old.doc.files()
         earlier = self.kept.get(doc.path, set())
         if not files and not earlier:
-            self.statusBar().showMessage(tr("nothing changed"))
+            self.statusBar().showMessage(tr("common.nothing_changed"))
             return
         for path in earlier - set(files):
             if path in self.started and self.tree is not None:
@@ -551,9 +612,7 @@ class SoundWindow(QMainWindow):
         notice = projectpart.save(self.project(), self.key, files, earlier)
         self.kept[doc.path] = set(files)
         doc.mark_saved()
-        self.statusBar().showMessage(
-            tr("kept {count} files in the project; {text}", count=len(files), text=notice.text)
-        )
+        self.statusBar().showMessage(tr("sound.kept_files_project", count=len(files), text=notice.text))
 
     def unsaved(self) -> bool:
         """Whether the open bank (or older game's database) has edits the project does not have yet."""
@@ -565,15 +624,12 @@ class SoundWindow(QMainWindow):
         cancelled or the save failed."""
         if not self.unsaved():
             return True
-        buttons = QMessageBox.StandardButton
-        answer = QMessageBox.question(self, tr(TITLE), tr("Keep the edits in the project first?"),
-                                      buttons.Save | buttons.Discard | buttons.Cancel)  # fmt: skip
-        if answer == buttons.Save:
-            return self.save()
-        return answer != buttons.Cancel
+        return widgets.ask_keep(self, tr(TITLE), tr("texts.keep_edits_project_first"), self.save)
 
     def closeEvent(self, event) -> None:
         if not self.may_leave():
             event.ignore()
             return
+        self.player.stop()
+        self.old.stop()
         super().closeEvent(event)

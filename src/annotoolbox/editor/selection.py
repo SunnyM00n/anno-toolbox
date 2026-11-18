@@ -120,7 +120,7 @@ class Selection:
         start = self.session.begin_transform(rows)
         for e in rows:
             self.session.set_transform(e, position=np.add(e.position, delta).tolist())
-        return self.session.end_transform(start, self._label(tr("move")))
+        return self.session.end_transform(start, self._label(tr("islands.move_lower")))
 
     def turn(self, yaw: float, about=None) -> bool:
         """Turn everything by ``yaw`` (radians, about the vertical) round ``about`` (default: the centre)."""
@@ -133,7 +133,7 @@ class Selection:
             self.session.set_transform(
                 e, position=pos.tolist(), rotation=list(meshxform.qmul(tuple(q), tuple(e.rotation)))
             )
-        return self.session.end_transform(start, self._label(tr("turn")))
+        return self.session.end_transform(start, self._label(tr("islands.turn_lower")))
 
     def scale(self, factor: float, about=None) -> bool:
         """Scale everything and the distances between them by ``factor`` round ``about`` (default: the centre)."""
@@ -144,11 +144,11 @@ class Selection:
             pos = pivot + (np.asarray(e.position) - pivot) * factor
             s = [v * factor for v in e.scale] if isinstance(e.scale, list) else e.scale * factor
             self.session.set_transform(e, position=pos.tolist(), scale=s)
-        return self.session.end_transform(start, self._label(tr("scale")))
+        return self.session.end_transform(start, self._label(tr("common.scale")))
 
     def delete(self) -> int:
         rows = [e for e in self.entries if not self.session.readonly]
-        with one_change(self.session, self._label(tr("delete"))):
+        with one_change(self.session, self._label(tr("islands.delete"))):
             for e in rows:
                 self.session.delete(e)
         self.clear()
@@ -156,14 +156,14 @@ class Selection:
 
     def duplicate(self) -> list[Entry]:
         """A copy of everything two tiles off; the copies become the selection."""
-        with one_change(self.session, self._label(tr("duplicate"))):
+        with one_change(self.session, self._label(tr("islands.duplicate_lower"))):
             copies = [c for c in (self.session.duplicate(e) for e in self._editable()) if c is not None]
         self.set(copies)
         return copies
 
     def _label(self, verb: str) -> str:
         n = len(self._entries)
-        return verb if n == 1 else tr("{verb} {n}", verb=verb, n=n)
+        return verb if n == 1 else tr("islands.verb_n", verb=verb, n=n)
 
 
 def _item_of(e: Entry) -> dict:
@@ -223,7 +223,7 @@ def paste(session: EditSession, clipboard: dict, at, yaw: float = 0.0, on_ground
     q = yaw_quat(yaw)
     out = []
     n = len(clipboard["items"])
-    with one_change(session, tr("paste") if n == 1 else tr("paste {n}", n=n)):
+    with one_change(session, tr("islands.paste_lower") if n == 1 else tr("islands.paste_n", n=n)):
         for item in clipboard["items"]:
             pos = np.asarray(at, float) + meshxform.qrotate(tuple(q), tuple(item["offset"]))
             if on_ground:

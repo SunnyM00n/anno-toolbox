@@ -376,6 +376,8 @@ def test_a_part_scaled_to_nothing_holds_no_box_and_stops_the_cloth():
     from annotoolbox.viewer.clothplay import ClothPart, ClothPlayer
 
     assert clothcollide.collider("Box", np.diag([0.0, 1.0, 1.0, 1.0]), {}) is None
+    assert clothcollide.kind_name("3") == "Box" and clothcollide.kind_name("9") == "9"
+    assert clothcollide.collider("²", np.identity(4), {}) is None  # a digit that is no index: a kind without a shape
     assert clothsim.inverse(np.zeros((4, 4))) is None
     part, item = _player_item()
     part.cloth = ClothPart(part.cloth.params, (("Box", np.eye(4) + _shift(10.0), {}),))

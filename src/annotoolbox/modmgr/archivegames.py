@@ -161,7 +161,7 @@ def with_flag(text: str, on: bool) -> str:
     """``text`` with the key set (the file's own spelling, ``true``/``false`` or ``1``/``0``, kept)."""
     m = FLAG.search(text)
     if m is None:
-        raise LooseError(tr("engine.ini does not name PreferLocalFiles: start the game once so that it writes it"))
+        raise LooseError(tr("common.engine_ini_not_name_preferlocalfiles"))
     word = m["value"].lower() in ("true", "false")
     new = ("true" if on else "false") if word else ("1" if on else "0")
     return text[: m.start("value")] + new + text[m.end("value") :]
@@ -182,14 +182,14 @@ def _safe(rel: str) -> str:
     parts = p.split("/")
     bad = any(x in ("", ".", "..") or x.endswith((".", " ")) or set(x) & set(':<>"|?*') for x in parts)
     if p.startswith("/") or bad:
-        raise LooseError(tr("{path} does not stay inside the game's folder", path=rel))
+        raise LooseError(tr("common.not_stay_inside_games_folder", path=rel))
     return p
 
 
 def _inside(root: Path, path: Path) -> Path:
     """``path`` when it really lies under ``root`` (a junction or link in between would lead out of it)."""
     if root.resolve() not in path.resolve().parents:
-        raise LooseError(tr("{path} does not stay inside the game's folder", path=path))
+        raise LooseError(tr("common.not_stay_inside_games_folder", path=path))
     return path
 
 
@@ -218,7 +218,7 @@ class LooseGame:
 
     def _need_confirmed(self) -> None:
         if not self.confirmed:
-            raise LooseError(tr("loose files are not confirmed for this game yet (docs/mod-manager.md)"))
+            raise LooseError(tr("common.loose_files_not_confirmed_game"))
 
     # the switch
 
@@ -235,19 +235,19 @@ class LooseGame:
         self._need_confirmed()
         ini = self.ini
         if ini is None:
-            raise LooseError(tr("no engine.ini found for this game: start it once so that it writes one"))
+            raise LooseError(tr("common.no_engine_ini_found_game"))
         before = ini.read_bytes()
         text, enc = _decode(before)
         new = with_flag(text, on)
         kept = self.root / INI_KEPT
         if not kept.exists():
             buildcache.write_atomic(kept, before)
-            log(tr("kept {file} as {backup}", file=ini.name, backup=kept))
+            log(tr("common.kept_file_as_backup", file=ini.name, backup=kept))
         buildcache.write_atomic(ini, new.encode(enc))
         if prefer_local(ini) is not on:
             buildcache.write_atomic(ini, before)  # the file as this call found it, not the first kept state
-            raise LooseError(tr("engine.ini did not take the change; the file was put back as it was"))
-        log(tr("PreferLocalFiles is {state} in {file}", state=tr("on") if on else tr("off"), file=ini))
+            raise LooseError(tr("common.engine_ini_not_take_change"))
+        log(tr("common.preferlocalfiles_state_file", state=tr("mods.on") if on else tr("mods.off"), file=ini))
 
     # the mods
 
@@ -260,7 +260,7 @@ class LooseGame:
             try:
                 m = json.loads(path.read_text(encoding="utf-8"))
                 out.append(LooseMod(m["name"], m["installed"], tuple(m["files"]), len(m["replaced"])))
-            except (OSError, ValueError, KeyError):
+            except (OSError, ValueError, KeyError, TypeError):  # TypeError: JSON, but not a manifest
                 continue
         return out
 
@@ -271,15 +271,15 @@ class LooseGame:
         source = Path(source)
         name = name or source.name
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]*", name):
-            raise LooseError(tr("{name} is not a plain name", name=name))
+            raise LooseError(tr("common.not_plain_name", name=name))
         found = sorted(p for p in source.rglob("*") if p.is_file())
         if not found:
-            raise LooseError(tr("{folder} holds no files", folder=source))
+            raise LooseError(tr("common.holds_no_files", folder=source))
         rels = {p: _safe(p.relative_to(source).as_posix()) for p in found}
-        owned = {f: m.name for m in self.mods() if m.name != name for f in m.files}
-        clash = sorted(r for r in rels.values() if r in owned)
+        owned = {f.lower(): m.name for m in self.mods() if m.name != name for f in m.files}
+        clash = sorted(r.lower() for r in rels.values() if r.lower() in owned)  # the games' paths ignore case
         if clash:
-            raise LooseError(tr("{path} belongs to the loose mod {mod}", path=clash[0], mod=owned[clash[0]]))
+            raise LooseError(tr("common.belongs_loose_mod", path=clash[0], mod=owned[clash[0]]))
         if self._manifest(name).is_file():
             self.remove_mod(name, log)
         replaced: dict[str, str] = {}
@@ -295,14 +295,14 @@ class LooseGame:
         installed = datetime.now().strftime("%Y-%m-%d %H:%M")
         manifest = {"name": name, "installed": installed, "files": done, "replaced": replaced}
         buildcache.write_kept(self._manifest(name), manifest)
-        log(tr("installed {name}: {n} files", name=name, n=len(done)))
+        log(tr("common.installed_name_n_files", name=name, n=len(done)))
         return LooseMod(name, installed, tuple(done), len(replaced))
 
     def _put(self, source: Path, rel: str, name: str, replaced: dict[str, str]) -> None:
         """One file into the install; what stood there is copied to the workspace first (noted in ``replaced``)."""
         target = _inside(self.install, self.install / rel)
         if target.is_dir():
-            raise LooseError(tr("{path} is a folder in the game, not a file", path=rel))
+            raise LooseError(tr("common.folder_game_not_file", path=rel))
         if target.is_file():
             keep = self.root / "originals" / name / rel
             buildcache.copy_atomic(target, keep)
@@ -318,16 +318,12 @@ class LooseGame:
             m = json.loads(path.read_text(encoding="utf-8"))
             files, replaced = dict(m["files"]), dict(m["replaced"])
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise LooseError(tr("{name} is not an installed loose mod", name=name)) from exc
+            raise LooseError(tr("common.not_installed_loose_mod", name=name)) from exc
         left = self._take_out(name, files, replaced)
         path.unlink()
         log(
-            tr("removed {name}", name=name)
-            + (
-                "; " + tr("left in place, changed since or no original kept: {files}", files=", ".join(left))
-                if left
-                else ""
-            )
+            tr("common.removed_name", name=name)
+            + ("; " + tr("common.left_place_changed_since_no", files=", ".join(left)) if left else "")
         )
         return left
 
@@ -371,8 +367,8 @@ def loose_for(settings, key: str, **kwargs) -> LooseGame:
 
 
 LOOSE_NOTES = {
-    "anno2205": N_("engine.ini was seen; the setting is read by the game's file system"),
-    "anno2070": N_("2070 is expected to ignore the setting: try it last"),
-    "anno1404": N_("the executables know the setting; untried"),
-    "anno1701": N_("the executable knows the setting; untried"),
+    "anno2205": N_("common.engine_ini_seen_setting_read"),
+    "anno2070": N_("common.2070_expected_ignore_setting_try"),
+    "anno1404": N_("common.executables_know_setting_untried"),
+    "anno1701": N_("common.executable_knows_setting_untried"),
 }

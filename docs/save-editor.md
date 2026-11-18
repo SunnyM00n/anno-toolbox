@@ -181,7 +181,7 @@ bytes and nothing else. Everything else is shown and stays read-only.
 
 | Game | Editable | Written as | Tried in the game |
 |---|---|---|---|
-| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant | `formats/savegame117.py` (`set_save_name`, `set_player`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
+| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant; the emperor who reigns and each reputation with him ([`save-emperor.md`](save-emperor.md): `saveedit/emperoredit.py`, `emperor117.py`, `emperorzones.py`) | `formats/savegame117.py` (`set_save_name`, `set_player`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
 | 2070 | the human player's money | `formats/savegame2070.py`: the text value of `Credits` (credits times 1,024) and `stats.xml` `GoldAmount` re-encoded in the binary tag tree, the two parts packed afresh, the other three parts' bytes and the preamble's 24 bytes kept | no |
 | 1800, 2205, 1404, 1701 | nothing | - | - |
 
@@ -201,6 +201,15 @@ bytes and nothing else. Everything else is shown and stays read-only.
 - **A value the form does not have is refused**, so a mistyped key does not write an unchanged copy. Money and GUIDs in
   the form are read in decimal (leading zeros and `,` are allowed; a GUID may be `0x...`), not by Python's base-0 rule,
   which rejects `0100`.
+- **The thousands separator is the interface language's** (`edits.parse_value`). In English `1,000` is a thousand and
+  a point is refused. In German `1.000` is a thousand: a point must have exactly three digits after it (`1.5` and
+  `1.0000` are refused), and a comma is refused with a sentence that says it is the decimal sign. So the same text is
+  never read as two different numbers without the form saying so.
+- **A read can be stopped and replaced.** While a save is read, **Stop** at the right of the status line gives the read
+  up: the save shown before stays the open one and stays writable. A save picked meanwhile takes the place of the one
+  being read, and the status line says so ("reading B instead of A"). The read that was given up ends at its next
+  step (the file, the summary, the values) and its result is dropped. A save picked while a file is being written is
+  not opened: the status line says to open it when the write is done.
 - **The game must not be running** when you load the written file. It saves over its own files only, but a running
   117 rescans the folder only when the load screen opens.
 
@@ -221,8 +230,11 @@ bytes and nothing else. Everything else is shown and stays read-only.
 ## The window
 
 - **Left: the saves.** A game box (every game) and the saves found in its folders, grouped by profile (117, 1800) or
-  account, newest first, with size and time. **Open a file...** takes any other file. Opening reads the file once into
-  memory off the window's thread, and the summary is then made, also off it.
+  account, newest first, with size and time. **Open a file...** takes any other file; it is read as a save of the
+  game shown in the box where that game writes the file's extension (1404 and 1701 write `.sww` as 2070 does), else
+  as the game the extension belongs to. Opening reads the file once into memory off the window's thread, and the
+  summary is then made, also off it. A save whose editable values do not read (a damaged `data.a7s`, a layout the
+  reader does not know) still opens: its summary says why, the tree shows it, and the Edit tab is read-only.
 - **Summary** tab: version and file version, the save's name and profile, times, the mods and DLCs, the players with
   their money, the sessions with their islands (owner, goods tracked), the game setup, population and quests, and what
   the reader could not read.

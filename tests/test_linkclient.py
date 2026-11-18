@@ -1,4 +1,6 @@
-"""The live link's wire protocol and the suite's client, against the stand-in for the game (``tests/fakegame.py``)."""
+"""The live link's wire protocol and the suite's client, against the stand-in for the game (``tests/fakegame.py``),
+and the suite's side of the stability guards (docs/live-link.md, "Asset reloads"): the game's stall warning, the note
+that placed objects keep stale data, and what the suite never offers."""
 
 from __future__ import annotations
 
@@ -6,35 +8,31 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from tests import fakegame
-from tests.fakegame import FakeGame
+from tests.fakegame import FakeGame, wait_for
 
 from annotoolbox.sources import gametree
-from annotoolbox.suite import linkclient, livelink
+from annotoolbox.suite import linkannounce, linkclient, livelink
 from annotoolbox.suite import linkprotocol as proto
-
-
-def wait_for(condition, seconds: float = 3.0) -> bool:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if condition():
-            return True
-        time.sleep(0.01)
-    return condition()
 
 
 @pytest.fixture
 def link():
     """A link connected to a stand-in game over a socket pair; the game is on ``link.game``."""
-    channel, game = fakegame.pair()
-    mine = linkclient.PipeLink(channel)
-    assert mine.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
-    mine.game = game
+    mine = fakegame.connect()
     yield mine
-    mine.close()
-    game.drop()
+    fakegame.disconnect(mine)
+
+
+@pytest.fixture
+def current_link(link):
+    """The same link as the suite's current one, which the apps' announcements go to."""
+    livelink.use(link)
+    yield link
+    livelink.reset()
 
 
 # frames and the handshake
@@ -131,7 +129,7 @@ def test_a_handshake_gives_a_connected_link_that_knows_the_game(link):
 def test_a_wrong_token_is_refused_and_a_game_that_cannot_prove_it_is_not_trusted():
     channel, game = fakegame.pair()
     mine = linkclient.PipeLink(channel)
-    info = fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1")
+    info = fakegame.session_for(game)
     wrong = proto.SessionInfo(info.pipe, "f" * 32, proto.PROTOCOL)
     assert not mine.open(wrong) and not mine.connected and not game.welcomed.is_set()
     channel, game = fakegame.pair(FakeGame(token="e" * 32))  # a game with another token greets us too
@@ -158,23 +156,19 @@ def test_a_request_the_client_would_send_wrong_is_refused_before_it_leaves(link)
 
 
 def test_a_kind_the_game_cannot_serve_is_unavailable_and_not_sent():
-    channel, game = fakegame.pair(FakeGame(kinds=(livelink.ASSETS,)))
-    mine = linkclient.PipeLink(channel)
-    assert mine.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
+    mine = fakegame.connect(FakeGame(kinds=(livelink.ASSETS,)))
     assert mine.reload(livelink.BANKS, mod="m", banks=["b"]).status == livelink.UNAVAILABLE
-    assert "reload.banks" not in game.names()
-    mine.close()
+    assert "reload.banks" not in mine.game.names()
+    fakegame.disconnect(mine)
 
 
 def test_a_header_named_for_an_effect_reload_becomes_the_effects_that_include_it(tmp_path):
     (tmp_path / "fx").mkdir()
     (tmp_path / "fx/water.fx").write_text('#include "light.fxh"\n', encoding="utf-8")
-    channel, game = fakegame.pair(FakeGame(mods=[{"id": "m", "folder": str(tmp_path)}]))
-    mine = linkclient.PipeLink(channel)
-    assert mine.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
+    mine = fakegame.connect(FakeGame(mods=[{"id": "m", "folder": str(tmp_path)}]))
     mine.reload(livelink.EFFECTS, ["fx/light.fxh", "fx/own.fx"], "m")
-    assert game.requests[-1] == ("reload.effects", {"mod": "m", "paths": ["fx/own.fx", "fx/water.fx"]})
-    mine.close()
+    assert mine.game.requests[-1] == ("reload.effects", {"mod": "m", "paths": ["fx/own.fx", "fx/water.fx"]})
+    fakegame.disconnect(mine)
 
 
 def test_events_of_the_game_reach_the_handlers_of_the_current_link(link):
@@ -198,6 +192,25 @@ def test_a_handler_that_fails_does_not_stop_the_link(link):
     link.on(livelink.SELECTION, got.append)
     link.game.push("selection", {"objects": []})
     assert wait_for(lambda: got) and link.reload(livelink.ASSETS).ok
+
+
+def test_a_frame_of_another_shape_is_dropped_and_the_link_goes_on(link, monkeypatch):
+    """An id that is no number ended the reader: the link stayed "connected" and every request ran into its timeout."""
+    monkeypatch.setattr(linkclient, "REQUEST_TIMEOUT", 1.0)
+    got = []
+    link.on(livelink.SELECTION, got.append)
+    for frame in ({"id": [1], "status": "ok"}, {"id": {"a": 1}}, {"event": "selection", "data": [1, 2]}):
+        link.game.channel.write(proto.encode_frame(frame))
+    assert wait_for(lambda: got) and got == [{}]  # data that is no object reaches a handler as an empty one
+    assert link.connected and link.select(guid=1).ok
+
+
+def test_a_welcome_of_another_shape_gives_a_link_without_mods_or_kinds():
+    game = FakeGame()
+    game.mods, game.kinds = 5, ("assets", ["x"])
+    mine = fakegame.connect(game)
+    assert mine.mods == [] and mine.status().kinds == frozenset({"assets"})
+    fakegame.disconnect(mine)
 
 
 def test_a_game_that_does_not_answer_times_out_and_a_late_answer_is_ignored(link, monkeypatch):
@@ -230,11 +243,9 @@ def test_a_lost_connection_answers_the_waiting_and_marks_the_link_not_connected(
 def test_a_game_that_stops_answering_pings_is_dropped(monkeypatch):
     monkeypatch.setattr(linkclient, "PING_AFTER", 0.1)
     monkeypatch.setattr(linkclient, "PING_WAIT", 0.2)
-    channel, game = fakegame.pair()
-    mine = linkclient.PipeLink(channel)
-    assert mine.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
-    game.silent = True
-    assert wait_for(lambda: not mine.connected, 3) and "ping" in game.names()
+    mine = fakegame.connect()
+    mine.game.silent = True
+    assert wait_for(lambda: not mine.connected, 3) and "ping" in mine.game.names()
 
 
 def test_requests_from_several_threads_each_get_their_own_answer(link):
@@ -284,10 +295,8 @@ def test_autoconnect_finds_a_game_that_starts_later_and_one_that_comes_back(monk
         if len(games) < 1 and not attempts:
             attempts.append(1)
             return None  # the first look: no game yet
-        channel, game = fakegame.pair()
-        link = linkclient.PipeLink(channel)
-        link.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
-        games.append(game)
+        link = fakegame.connect()
+        games.append(link.game)
         return link
 
     attempts: list[int] = []
@@ -311,6 +320,53 @@ def test_autoconnect_can_be_switched_off(monkeypatch):
 
 
 # the real pipe
+
+
+class _SlowPipe:
+    """The system's pipe calls for a ``PipeChannel``: a look that waits until the test lets it go, every call noted."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.looking, self.go_on = threading.Event(), threading.Event()
+
+    def available(self, handle: int) -> int:
+        self.calls.append("look")
+        self.looking.set()
+        self.go_on.wait(5)
+        return 3
+
+    def read(self, handle: int, count: int) -> bytes:
+        self.calls.append("read")
+        return b"abc"[:count]
+
+    def write(self, handle: int, data: bytes) -> bool:
+        self.calls.append("write")
+        return True
+
+    def close(self, handle: int) -> None:
+        self.calls.append("close")
+
+
+def test_closing_a_pipe_waits_for_the_read_under_way_and_the_handle_is_not_used_again():
+    calls = _SlowPipe()
+    channel = linkclient.PipeChannel(7, calls)
+    got: list[bytes] = []
+    reader = threading.Thread(target=lambda: got.append(channel.read(1.0)), daemon=True)
+    reader.start()
+    assert calls.looking.wait(5)
+    closer = threading.Thread(target=channel.close, daemon=True)
+    closer.start()
+    closer.join(0.1)
+    assert closer.is_alive() and "close" not in calls.calls  # the handle stays open under the reader
+    calls.go_on.set()
+    reader.join(5)
+    closer.join(5)
+    assert got == [b"abc"] and calls.calls == ["look", "read", "close"]
+    for use in (lambda: channel.read(0.0), lambda: channel.write(b"x")):
+        with pytest.raises(linkclient.ChannelClosed):
+            use()
+    channel.close()
+    assert calls.calls == ["look", "read", "close"]  # closed once, and nothing asked of a closed handle
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="a Windows named pipe")
@@ -393,15 +449,6 @@ def test_the_state_names_the_suite_knows_are_the_documented_ones():
     assert len(linkscenes.state_names()) == 160
 
 
-def test_a_ui_dump_names_the_states_and_the_files_come_back(link):
-    link.game.answers["ui.dump"] = (livelink.OK, "", {"files": ["a.json"]})
-    assert link.ui_dump(["HUD"]).data == {"files": ["a.json"]}
-    assert link.ui_dump().ok
-    sent = [a for n, a in link.game.requests if n == "ui.dump"]
-    assert sent == [{"states": ["HUD"]}, {}]
-    assert link.ui_dump(["a b"]).status == livelink.REFUSED
-
-
 def test_the_1800_hand_over_names_a_user_folder_with_other_letters_through_its_variable(tmp_path, monkeypatch):
     from annotoolbox.suite import linkhandover
 
@@ -465,3 +512,58 @@ def test_a_changed_bank_file_is_asked_for_by_its_name_and_the_session_reload_tak
     assert link.reload(livelink.BANKS, ["data/sound/12345.wem"], "m").status == livelink.REFUSED
     assert link.reload(livelink.SESSION).ok and link.game.requests[-1] == ("reload.session", {})
     assert link.select(guid=1010343).ok and link.jump(session="180023", position=(1.0, 2.5, -3.0)).ok
+
+
+# the stability guards
+
+
+def test_the_stall_warning_shows_in_the_status_until_the_game_answers_again(current_link):
+    link, seen = current_link, []
+    remove = livelink.on(livelink.STALLED, seen.append)
+    link.game.push(livelink.STALLED, {"seconds": 31, "message": "no UI frame for 31 s"})
+    assert wait_for(lambda: seen) and seen[0]["seconds"] == 31
+    text = link.status().text
+    assert "hang" in text and text.startswith("linked to Anno 117") and link.connected
+    assert link.reload(livelink.AMBIENT).ok  # the game answers: it lives
+    assert link.status().note == "" and "hang" not in link.status().text
+    remove()
+
+
+@pytest.mark.parametrize(
+    ("answer", "said", "unsaid"),
+    [
+        pytest.param(  # the engine confirmed the swap: placed objects keep their old data, and the notice says so
+            (livelink.DONE, "patched in 3 s", {"confirmed": True, "staleObjects": True}),
+            ("game reloaded: assets", "keep the data from before the reload", "save and load"),
+            (),
+            id="stale-objects",
+        ),
+        pytest.param((livelink.DONE, "", {}), ("game reloaded: assets",), ("keep the data",), id="an-old-game"),
+        pytest.param(  # a reload the game found busy is not called a reload
+            (livelink.BUSY, "the game is saving: ask again in a moment", {}),
+            ("the game is saving",),
+            ("game reloaded",),
+            id="busy",
+        ),
+    ],
+)
+def test_the_notice_of_an_asset_reload_says_what_the_game_answered(current_link, answer, said, unsaid):
+    current_link.game.answers["reload.assets"] = answer
+    notice = linkannounce.announce((livelink.ASSETS,), mod="m")
+    assert notice.sent and all(text in notice.text for text in said)
+    assert not any(text in notice.text for text in unsaid)
+    if answer[0] == livelink.DONE:
+        assert notice.text.startswith("game reloaded: assets")
+
+
+def test_the_suite_offers_no_data_reload_of_the_game_for_1800():
+    suite = Path(livelink.__file__).parent
+    offenders = [p.name for p in suite.glob("*.py") if "reloadData" in p.read_text(encoding="utf-8")]
+    assert offenders == []
+
+
+def test_off_windows_the_link_is_unsupported_and_never_looks_for_a_game(monkeypatch):
+    monkeypatch.delenv("ANNO_LIVE_LINK", raising=False)
+    monkeypatch.setattr(linkclient, "os", type("Os", (), {"name": "posix", "environ": {}})())  # not the global os.name
+    assert not linkclient.supported()
+    assert linkclient.autoconnect() is None and linkclient.connect_game() is None

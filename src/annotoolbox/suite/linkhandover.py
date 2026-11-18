@@ -63,9 +63,7 @@ def batch_path(path: Path) -> str:
             rest = "\\".join(Path(path).relative_to(base).parts)  # cmd's separator on any host the file is written on
             if rest.isascii() and "%" not in rest:
                 return f"%{var}%\\{rest}" if rest else f"%{var}%"
-    raise UnsuitableFolder(
-        tr("{path} has letters the game's start file cannot hold: set LOCALAPPDATA to a folder without them", path=path)
-    )
+    raise UnsuitableFolder(tr("common.letters_games_start_file_cannot", path=path))
 
 
 def bat_path(game_dir: Path) -> Path:
@@ -79,12 +77,12 @@ def install(game_dir: Path, data: Path | None = None) -> Path:
     if not folder_ok(game_dir):
         raise UnsuitableFolder(
             tr(
-                "{path} has a space in its name: the game starts the file without quotes and would not find it",
+                "common.space_name_game_starts_file",
                 path=path,
             )
         )
     if path.is_file() and MARK not in path.read_text(encoding="utf-8", errors="replace"):
-        raise FileExistsError(tr("{path} is not the suite's: it is left as it is", path=path))
+        raise FileExistsError(tr("common.not_suites_left", path=path))
     text = bat_text(request_file(data))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(text.encode("ascii"))  # CRLF as written, for cmd.exe

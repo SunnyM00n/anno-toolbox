@@ -67,6 +67,19 @@ def test_an_empty_strip_has_nothing_alive():
     assert len(strip().at(1.0)) == 0 and strip().seconds == pytest.approx(1.0)
 
 
+def test_a_strip_without_a_frame_time_stands_still_and_a_time_before_its_start_is_the_pass_before():
+    from dataclasses import replace
+
+    fx = strip(particle(0, 4), particle(8, 2))
+    still = replace(fx, frame_ms=0.0)  # a file's FrameTime 0: no division, the first tick at any time
+    assert len(still.at(0.0)) == len(still.at(7.3)) == len(fx.at(0.0)) == 1
+    assert len(replace(fx, frame_count=0).at(1.0)) == 0
+    assert len(fx.at(1.0, speed=float("inf"))) == len(fx.at(0.0))  # a pace that is no number: the first tick too
+    before, after = fx.at(-0.65), fx.at(0.35)  # 6.5 ticks before the start is tick 3.5 of the pass before
+    assert len(before) == len(after) == 1 and before.position[0, 0] == pytest.approx(after.position[0, 0])
+    assert len(fx.at(-0.15)) == 1 and len(fx.at(-0.05)) == 1  # ticks 8 and 9: the second particle's two
+
+
 # The files
 
 

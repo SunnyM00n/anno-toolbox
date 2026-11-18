@@ -22,6 +22,9 @@ from PySide6.QtGui import (
     QRhiTextureUploadDescription,
     QRhiTextureUploadEntry,
     QShader,
+    QShaderCode,
+    QShaderKey,
+    QShaderVersion,
 )
 
 from ..models import mipchain
@@ -39,7 +42,7 @@ NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR, LINEAR_MIP
 )
 ZERO, ONE, SRC_COLOR, ONE_MINUS_SRC_COLOR, SRC_ALPHA, ONE_MINUS_SRC_ALPHA = 0, 1, 0x300, 0x301, 0x302, 0x303
 DST_ALPHA, ONE_MINUS_DST_ALPHA, DST_COLOR, ONE_MINUS_DST_COLOR = 0x304, 0x305, 0x306, 0x307
-SRGB8_ALPHA8 = 0x8C43
+SRGB8, SRGB8_ALPHA8 = 0x8C41, 0x8C43  # OpenGL's sRGB formats of three and four components
 
 F = QRhiTexture.Format
 # (dtype, components) -> (QRhi format, numpy type, components stored)
@@ -85,6 +88,22 @@ class Uniform:
             shaderbake.write_member(self.program.data, self.program.baked.members[self.name], bytes(data))
 
 
+def with_bytecode(shader: QShader, profile: str) -> None:
+    """``shader``'s HLSL (shader model 5.0) also as DXBC, compiled as QRhi's Direct3D backends compile it when a
+    pipeline is made and kept (``shaderbake.dxbc``): the backends take the bytecode, so a start makes the view's
+    pipelines without compiling (island-117-view.md "Speed", part 14). Left as it is where none compiles."""
+    hlsl = QShaderKey(QShader.Source.HlslShader, QShaderVersion(50))
+    code = shader.shader(hlsl)
+    if code.shader().isEmpty():
+        return
+    blob = shaderbake.dxbc(bytes(code.shader().data()), bytes(code.entryPoint().data()).decode(), profile)
+    if blob is None:
+        return
+    key = QShaderKey(QShader.Source.DxbcShader, QShaderVersion(50))
+    shader.setShader(key, QShaderCode(QByteArray(blob), code.entryPoint()))
+    shader.setResourceBindingMap(key, shader.nativeResourceBindingMap(hlsl))
+
+
 class Program:
     """A vertex and fragment shader pair of ours, ported and baked, with its uniform block's current values."""
 
@@ -96,6 +115,9 @@ class Program:
             QShader.fromSerialized(QByteArray(self.baked.vertex)),
             QShader.fromSerialized(QByteArray(self.baked.fragment)),
         )
+        if ctx.rhi.backend() in (QRhi.Implementation.D3D11, QRhi.Implementation.D3D12):
+            for shader, profile in zip(self.shaders, ("vs_5_0", "ps_5_0"), strict=True):
+                with_bytecode(shader, profile)
         self.data = bytearray(max(16, self.baked.block_size))
         self.values: dict[str, object] = {}
         self.units = dict.fromkeys(self.ported.samplers, 0)
@@ -415,6 +437,14 @@ class RhiContext(rhipass.Recorder):
                 self._srgb_mips.append(None)
         return self._srgb_mips[0]
 
+    def release(self) -> None:
+        """``Recorder.release``, and the builder of sRGB levels."""
+        super().release()
+        for builder in self._srgb_mips:
+            if builder is not None:
+                builder.release()
+        self._srgb_mips = []
+
     def program(self, vertex_shader: str, fragment_shader: str, **_unused) -> Program:
         return Program(self, vertex_shader, fragment_shader)
 
@@ -435,7 +465,7 @@ class RhiContext(rhipass.Recorder):
         return tex
 
     def texture(self, size, components, data=None, samples=0, alignment=1, dtype="f1", internal_format=None):
-        srgb = internal_format == SRGB8_ALPHA8
+        srgb = internal_format in (SRGB8, SRGB8_ALPHA8)  # three components are stored as four: sRGB all the same
         if srgb and self.decode_srgb and data is not None and dtype == "f1":
             # QRhi's OpenGL backend samples sRGB textures undecoded: decoded here, kept as half floats
             px = np.frombuffer(bytes(data), np.uint8).reshape(-1, components)

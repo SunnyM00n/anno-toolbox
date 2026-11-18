@@ -70,6 +70,8 @@ typedef struct {
     int has_command, has_cheat, nvalues;
     int has_module, has_on, on; /* modules.set: a module's name and its switch */
     char module[LL_NAME_LEN];
+    int has_file; /* ui.values: the open widget file's GUID, as text */
+    char file[LL_NAME_LEN];
     char command[LL_NAME_LEN], cheat[LL_NAME_LEN];
     char vname[LL_VALUES_MAX][LL_NAME_LEN]; /* debug.run's values: a name, a number, whether it was a JSON true or false */
     double vval[LL_VALUES_MAX];
@@ -127,6 +129,7 @@ const char *ll_files_status(const LLFileResult *f, int n, const char **message);
 
 /* topics */
 enum { LL_TOPIC_SELECTION = 1, LL_TOPIC_RELOAD = 2, LL_TOPIC_SESSION = 4, LL_TOPIC_LOG = 8 };
+enum { LL_TOPIC_SCENE = 16 }; /* "ui.scene": the open scenes followed (docs/live-link.md section 18) */
 int ll_topic_bit(const char *name); /* 0 when it is not a topic */
 const char *ll_topic_name(int bit);
 
@@ -145,8 +148,10 @@ int ll_rate_take(LLRate *r, uint64_t now_ms); /* 1 when the request may go on */
 enum {
     LL_KIND_ASSETS = 1, LL_KIND_TEXTS = 2, LL_KIND_SCENES = 4, LL_KIND_AMBIENT = 8, LL_KIND_MODELS = 16,
     LL_KIND_EFFECTS = 32, LL_KIND_BANKS = 64, LL_KIND_SESSION = 128, LL_KIND_SELECT = 256, LL_KIND_JUMP = 512,
-    LL_KIND_READ = 1024, LL_KIND_UIDUMP = 2048, LL_KIND_DEBUG = 4096
+    LL_KIND_READ = 1024, LL_KIND_DEBUG = 4096
 };
+/* ui.values, the live widget values; the ui.scene event (no request: the welcome lists it as "follow") */
+enum { LL_KIND_VALUES = 16384, LL_KIND_FOLLOW = 32768 };
 int ll_kind_of_request(const char *type); /* the LL_KIND_* a request needs; 0 for the control requests */
 int ll_gate(const LLRequest *r, int multiplayer, int kinds_bits, const char **why);
 const char *ll_kind_name(int bit);
@@ -210,7 +215,7 @@ typedef struct {
 } LLSaveWatch;
 int ll_save_watch(LLSaveWatch *w, int newer, int64_t size, uint64_t now_ms);
 
-/* {"files": [names]} for the answer to ui.dump: names as the dump wrote them (plain file names) */
+/* {"files": [names]} plain file names */
 int ll_names_json(char *out, size_t cap, const char *key, char (*names)[160], int n);
 
 /* the in-flight request's age against its limit, from the clock: 1 when it has waited out */

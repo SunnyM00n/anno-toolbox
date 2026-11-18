@@ -15,6 +15,7 @@ from collections.abc import Callable
 import numpy as np
 
 from ..infra import dxc, fxc
+from ..infra.i18n import tr
 from ..models import ddsdecode
 from ..render import clothlogo, clothmesh, fxcdraw, nativelook
 from ..render import gameshader as gs
@@ -41,7 +42,7 @@ class OwnPass:
     # the old engines' passes draw in the game's own axes instead, the mirror in the projection: their cubes, maps and
     # turns as stored (shader-compile.md 11 "The game's own axes")
     GAME_AXES = False
-    WHERE = ""
+    WHERE = ""  # the string id of the sentence that says where the compiler is from
 
     def __init_subclass__(cls, **kwargs) -> None:
         super().__init_subclass__(**kwargs)
@@ -66,14 +67,16 @@ class OwnPass:
         if self.broken:
             return self.broken
         if getattr(self.r.files.files, "game", "") != self.GAME:
-            return f"this pass draws {self.TITLE}'s own shaders"
+            return tr("viewer.pass_draws_title_own_shaders", title=self.TITLE)
         if not hasattr(ctx, "native_pass") or ctx.rhi.backendName() != self.BACKEND:
-            return f"{self.TITLE}'s own shaders draw on {_backend_title(self.BACKEND)} (View > Renderer)"
+            backend = _backend_title(self.BACKEND)
+            return tr("viewer.title_own_shaders_draw_on_backend", title=self.TITLE, backend=backend)
         found = self.sources.get("source", lambda: self._make_source(self.r.files.files))
         if isinstance(found, self.MISSING):
-            return f"{self.TITLE}'s own shaders need their shader compiler: {self.WHERE}"
+            return tr("viewer.title_own_shaders_need_compiler", title=self.TITLE, where=tr(self.WHERE))
         if isinstance(found, Exception):
-            return f"{self.TITLE}'s shaders do not read: {type(found).__name__}: {found}"
+            kind = type(found).__name__
+            return tr("viewer.title_shaders_not_read", title=self.TITLE, kind=kind, error=str(found))
         return ""
 
     def busy(self) -> int:
@@ -105,7 +108,8 @@ class OwnPass:
         if source is None:
             return None
         job = f"{self.PREFIX}:{':'.join(map(str, key))}"
-        got = self._job(key, job, lambda: self._work(source, part, item), f"{part.node}: the game's shader")
+        what = tr("viewer.node_games_shader", node=part.node)
+        got = self._job(key, job, lambda: self._work(source, part, item), what)
         return got if got is None or isinstance(got, Exception) else self._build(key, got)
 
     def _job(self, key: tuple, job: str, work: Callable, what: str):
@@ -116,7 +120,7 @@ class OwnPass:
         if isinstance(got, Exception):
             self.models[key] = got
             if not isinstance(got, self.NOT_OURS):
-                self.r.say(f"{what}: {type(got).__name__}: {str(got)[:300]}")
+                self.r.say(tr("viewer.name_kind_error", name=what, kind=type(got).__name__, error=str(got)[:300]))
         return got
 
     def _split(self, drawn: list) -> tuple[list, list, int]:
@@ -171,7 +175,8 @@ class OwnPass:
             failed.clear()
         errors = getattr(ctx, "pass_errors", None)
         if errors:
-            self.broken = f"{self.TITLE}'s frame failed ({errors[-1][:300]}): our look draws it"
+            error = errors[-1][:300]
+            self.broken = tr("viewer.title_frame_failed_our_look_draws", title=self.TITLE, error=error)
             self.r.say(self.broken)
             errors.clear()
 
@@ -183,7 +188,7 @@ class OwnPass:
 
     def _unowned(self, model, error: str) -> None:
         """A frame part of the pass's own (not a group's) that did not prepare."""
-        self.r.say(f"the game's shaders: {error[:300]}")
+        self.r.say(tr("viewer.games_shaders_error", error=error[:300]))
 
     def _fall_back(self, key: tuple, error: str) -> None:
         """The group of ``key`` drawn by our look from now on (its model released), its error said once."""
@@ -193,19 +198,20 @@ class OwnPass:
         self.models[key] = RuntimeError(error)
         part = self.r.scene.parts[key[0]] if isinstance(key[0], int) and self.r.scene is not None else None
         what = part.node if part is not None else key[1]
-        self.r.say(f"{what}: the game's shader: {error[:300]}; our look draws it")
+        self.r.say(tr("viewer.node_games_shader_our_look_draws", node=what, error=error[:300]))
 
     def _part(self, key: str, compile_: Callable, make: Callable, what: str, instead: str,
               on_error: Callable[[], None] = lambda: None):  # fmt: skip
         """One frame part the game's shaders compile: ``make(compiled)`` once the install's source and the part are
         ready (the result is the caller's to keep), None while they compile; on an error ``what`` is said once with
-        what is used ``instead``, ``on_error`` runs and None comes back."""
+        what is used ``instead`` (two string ids), ``on_error`` runs and None comes back."""
         source = self._ready()
         if source is None:
             return None
         got = self.sources.get(key, lambda: compile_(source))
         if isinstance(got, Exception):
-            self.r.say(f"{what}: {type(got).__name__}: {str(got)[:300]}; {instead}")
+            kind, error = type(got).__name__, str(got)[:300]
+            self.r.say(tr("viewer.part_kind_error_instead", part=tr(what), kind=kind, error=error, instead=tr(instead)))
             on_error()
             return None
         return make(got) if got is not None else None

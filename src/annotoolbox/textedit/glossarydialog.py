@@ -23,14 +23,14 @@ from ..infra.i18n import tr
 class GlossaryDialog(QDialog):
     def __init__(self, parent, own: dict[str, str], game: dict[str, str]) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Glossary"))
+        self.setWindowTitle(tr("texts.title.glossary"))
         self.resize(560, 480)
         self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels([tr("Source term"), tr("Translation")])
+        self.table.setHorizontalHeaderLabels([tr("texts.source_term"), tr("texts.translation")])
         self.table.horizontalHeader().setStretchLastSection(True)
         for term, wanted in sorted(own.items()):
             self._add(term, wanted)
-        add, remove = QPushButton(tr("Add a term")), QPushButton(tr("Remove the row"))
+        add, remove = QPushButton(tr("texts.add_term")), QPushButton(tr("texts.remove_row"))
         add.clicked.connect(lambda: self._add("", ""))
         remove.clicked.connect(lambda: self.table.removeRow(self.table.currentRow()))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -40,9 +40,7 @@ class GlossaryDialog(QDialog):
         row.addWidget(add)
         row.addWidget(remove)
         lay = QVBoxLayout(self)
-        lay.addWidget(
-            QLabel(tr("Your terms (they win over the {count} terms read from the game's texts):", count=len(game)))
-        )
+        lay.addWidget(QLabel(tr("texts.your_terms_they_win_over", count=len(game))))
         lay.addWidget(self.table)
         lay.addLayout(row)
         lay.addWidget(buttons)

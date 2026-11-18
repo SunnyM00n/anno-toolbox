@@ -11,15 +11,15 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 
-from ..infra.i18n import N_
+from ..infra.i18n import N_, english
 from . import cfgdoc, feedbackplay
 from .cfgdoc import Doc, Edit, Node
 from .feedbackread import element_kind
 
-KINDS = {0: N_("Walk"), 1: N_("Play"), 2: N_("Wait"), 3: N_("Branch"), 4: N_("Walk a spline"), 6: N_("Show or hide"),
-         7: N_("Barrier"), 9: N_("Scale"), 10: N_("Turn"), 11: N_("Walk around"), 12: N_("Play one of"),
-         13: N_("Walk around")}  # fmt: skip
-LOOPS = (N_("Enter"), N_("Repeat"), N_("Leave"))  # Loop0, Loop1, Loop2 of a sequence definition
+KINDS = {0: N_("common.walk"), 1: N_("common.play"), 2: N_("common.wait"), 3: N_("common.branch"), 4: N_("common.walk_spline"), 6: N_("common.show_hide"),
+         7: N_("common.barrier"), 9: N_("islands.scale"), 10: N_("islands.turn"), 11: N_("common.walk_around"), 12: N_("common.play_one"),
+         13: N_("common.walk_around")}  # fmt: skip
+LOOPS = (N_("common.enter"), N_("common.repeat"), N_("common.leave"))  # Loop0, Loop1, Loop2 of a sequence definition
 NOMINAL = 1.0  # seconds a bar of an element the play did not reach is drawn with (a leave loop's, an untaken branch)
 SHORT = 0.25  # seconds an instant element (show, scale, turn, barrier) is drawn with
 # a newer game's element of a kind the file has none of to copy: the fields the shipped files give it
@@ -146,11 +146,11 @@ def moved(bar: Bar, to: int) -> Edit | None:
     step = next(i for i, c in enumerate(bar.parent.children) if c is siblings[to]) - next(
         i for i, c in enumerate(bar.parent.children) if c is bar.node
     )
-    return cfgdoc.move(bar.parent, bar.node, step, f"move {KINDS.get(bar.kind, 'element')}")
+    return cfgdoc.move(bar.parent, bar.node, step, f"move {english(KINDS.get(bar.kind, 'element'))}")
 
 
 def removed(bar: Bar) -> Edit:
-    return cfgdoc.remove(bar.parent, bar.node, f"remove {KINDS.get(bar.kind, 'element')}")
+    return cfgdoc.remove(bar.parent, bar.node, f"remove {english(KINDS.get(bar.kind, 'element'))}")
 
 
 def new_element(doc: Doc, kind: int) -> Node | None:
@@ -177,7 +177,7 @@ def new_element(doc: Doc, kind: int) -> Node | None:
 def added(parent: Node, after: Node | None, node: Node, kind: int) -> Edit:
     """``node`` put into a loop's elements after ``after`` (None: at the end)."""
     at = next((i + 1 for i, c in enumerate(parent.children) if c is after), len(parent.children))
-    return cfgdoc.insert(parent, at, [node], f"add {KINDS.get(kind, 'element')}")
+    return cfgdoc.insert(parent, at, [node], f"add {english(KINDS.get(kind, 'element'))}")
 
 
 def part_path(doc: Doc, node: Node) -> str:

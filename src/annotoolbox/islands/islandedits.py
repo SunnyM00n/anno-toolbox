@@ -31,6 +31,7 @@ from .islandgrid import (
     write_bits,
     write_sparse,
 )
+from .islandground import stroke_material
 from .islandwater import clone_object, last_serial
 from .propgrid import append_props
 
@@ -238,7 +239,7 @@ def apply_area(gm: filedb.Tag, cells: dict) -> dict:
     if not cells:
         return report
     if tag is None:
-        report["unmatched"].append(tr("no area grid on this island"))
+        report["unmatched"].append(tr("islands.no_area_grid_island"))
         return report
     grid = read_sparse(tag)
     kinds = {v for row in grid for v in row} - {0, AREA_NONE, AREA_ISLAND}  # the island's other areas
@@ -255,7 +256,7 @@ def apply_area(gm: filedb.Tag, cells: dict) -> dict:
             or old not in (AREA_NONE, AREA_ISLAND, *(() if plain else kinds))
             or not (plain or want in kinds)
         ):
-            report["unmatched"].append(tr("area tile {key}", key=name))
+            report["unmatched"].append(tr("islands.area_tile_key", key=name))
             continue
         report["cells"] += int(old != want)
         grid[cell[1]][cell[0]] = want
@@ -301,10 +302,7 @@ def apply_forest(builder, edits: dict) -> dict:
 
 
 def _paint_material_ok(stroke: dict) -> bool:
-    try:
-        return 0 <= int(stroke.get("material", -1)) < 32
-    except (TypeError, ValueError):
-        return False
+    return 0 <= stroke_material(stroke) < 32
 
 
 def apply_paint(builder, edits: dict) -> int:
@@ -377,7 +375,7 @@ def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_sampl
         if herd.get("dropped"):  # painted, but a patch under the minimum is no herd area (island-editor "Herd areas")
             report["unmatched"].append(
                 tr(
-                    "{n} herd tiles in patches under {m} tiles were not kept",
+                    "islands.herd_tiles_patches_under_not",
                     n=herd["dropped"],
                     m=herdareas.HERD_AREA_MIN,
                 )

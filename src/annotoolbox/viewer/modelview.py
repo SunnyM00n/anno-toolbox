@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QImage
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from ..render import rhiview
@@ -130,7 +131,7 @@ class _Controls:
             return
         pos = e.position().toPoint()
         dx, dy = pos.x() - self._press.x(), pos.y() - self._press.y()
-        self._moved = getattr(self, "_moved", 0) + abs(dx) + abs(dy)
+        self._moved += abs(dx) + abs(dy)
         self._press = pos
         if self._button == Qt.MouseButton.LeftButton:
             self.camera.turn(dx, dy)
@@ -167,7 +168,7 @@ class _Controls:
         else:
             super().keyPressEvent(e)
 
-    def image(self):
+    def image(self) -> QImage:
         """The view as a ``QImage``."""
         return self.grabFramebuffer()
 
@@ -244,6 +245,14 @@ class RhiModelView(_Controls, rhiview.RhiView):
             self.renderer = None
             self._pending = self.scene
 
+    def released(self, ctx) -> None:
+        """The device goes away: the renderer's resources are its own, let go while it still stands (the scene is
+        shown again by the next device's first frame)."""
+        if self.renderer is not None:
+            renderer, self.renderer = self.renderer, None
+            self._pending = self.scene
+            renderer.release()
+
     def draw(self, ctx, screen, size: tuple[int, int]) -> None:
         if self.files is None:
             screen.use()
@@ -252,13 +261,13 @@ class RhiModelView(_Controls, rhiview.RhiView):
         self._frame(ctx, screen, size)
 
 
-def make_view(backend: str, parent=None):
+def make_view(backend: str, parent=None) -> ModelView | RhiModelView:
     """The 3D view for ``backend`` (``render.rhiview.BACKENDS``)."""
     return RhiModelView(backend, parent) if rhiview.is_rhi(backend) else ModelView(parent)
 
 
 def rhi_picture(files: ModelFiles, scene: Scene, state: ViewState, size: tuple[int, int], backend: str,
-                wait: float = 30.0):  # fmt: skip
+                wait: float = 30.0) -> QImage | None:  # fmt: skip
     """``scene`` drawn on a QRhi backend without showing a window, framed once the files of the parts ``state`` shows
     are in, as a ``QImage`` once two frames after the framing found nothing loading (the offscreen pictures and the
     tests; a ``QApplication`` must exist). Raises ``RuntimeError`` when a frame failed."""

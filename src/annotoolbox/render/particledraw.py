@@ -231,6 +231,7 @@ class ParticleLayer:
     def release(self) -> None:
         if self.drawer is not None:
             self.drawer.release()
+            self.drawer = None  # made anew by a later draw: its program is gone
 
 
 class ParticleDrawer:

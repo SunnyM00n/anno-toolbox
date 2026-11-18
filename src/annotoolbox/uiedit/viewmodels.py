@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..infra.buildcache import write_atomic
+from ..infra.i18n import tr
 
 STUBS = "data/script/types/generated/rdui/gameobjects/"
 _CLASS = re.compile(r"^---@class (\S+)", re.M)
@@ -137,14 +138,27 @@ class ScriptList:
         return [f for f in self.functions if f.kind == "readout"]
 
 
+def read_kept(path: Path | None, part: str) -> dict:
+    """A JSON file the editor keeps in the project, as its dictionary ({} without a file); ``ValueError`` (``OSError``)
+    when it is not one whose ``part`` is a dictionary: a file changed by hand, or cut short."""
+    if path is None or not Path(path).is_file():
+        return {}
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get(part, {}), dict):
+        raise ValueError(f"no dictionary of {part}")
+    return data
+
+
 class FieldNames:
-    """The names a user gave field ids (``id -> "Class.Field"``): the ids are the program's, the names the stubs'."""
+    """The names a user gave field ids (``id -> "Class.Field"``): the ids are the program's, the names the stubs'.
+    A file that does not read leaves ``error`` (the sentence for the person) and no ``path``: it is not written over."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path, self.names = path, {}
-        if path is not None and Path(path).is_file():
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            self.names = {int(k, 16): v for k, v in data.get("names", {}).items()}
+        self.path, self.names, self.error = path, {}, ""
+        try:
+            self.names = {int(k, 16): str(v) for k, v in read_kept(path, "names").get("names", {}).items()}
+        except (OSError, ValueError) as exc:
+            self.path, self.error = None, tr("common.path_not_read_error", path=path, error=exc)
 
     def set(self, uid: int, name: str) -> None:
         if name:
@@ -167,21 +181,27 @@ class Samples:
     """Sample values by key (``<file>/<property id>/<field id>...`` in hex): what the preview shows where the game
     would give a value. ``seen`` collects the keys the last preview read; ``generated`` the keys whose value is a
     placeholder the preview made up (``placeholders``), ``seeded`` those a file's own preview data gave; a value set
-    by hand replaces either. ``on_read`` and ``on_change`` tell the preview's kept results (``layout.Context``)."""
+    by hand replaces either. ``on_read`` and ``on_change`` tell the preview's kept results (``layout.Context``). A
+    file that does not read leaves ``error`` and no ``path``, as ``FieldNames``."""
 
     def __init__(self, path: Path | None = None) -> None:
-        self.path, self.values, self.seen = path, {}, {}
+        self.path, self.values, self.seen, self.error = path, {}, {}, ""
         self.generated: set[str] = set()
         self.seeded: set[str] = set()
         self.fill = True  # make up a placeholder where a value is missing
         self.on_read: Callable[[str], None] | None = None  # a key (or a ``prefix/`` for ``keys_under``) was read
         self.on_change: Callable[[str, bool], None] | None = None  # a key's value changed (True: made up)
         self._given: tuple[int, list[str]] | None = None  # (how many are given, those keys sorted): ``blank``
-        if path is not None and Path(path).is_file():
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            self.values = data.get("values", {})
-            self.generated = set(data.get("generated", [])) & set(self.values)
-            self.seeded = set(data.get("seeded", [])) & set(self.values)
+        self.from_game: dict[str, str] = {}  # keys the game's data filled (not kept): where from (``gamedata``)
+        self.distinct: Callable[[str], bool] | None = None  # a key the game's data fills apart from any other
+        try:
+            data = read_kept(path, "values")
+            generated, seeded = (set(map(str, data.get(k) or [])) for k in ("generated", "seeded"))
+        except (OSError, ValueError, TypeError) as exc:
+            self.path, self.error = None, tr("common.path_not_read_error", path=path, error=exc)
+            return
+        self.values = data.get("values", {})
+        self.generated, self.seeded = generated & set(self.values), seeded & set(self.values)
 
     @staticmethod
     def key(owner: str, ids) -> str:
@@ -207,6 +227,8 @@ class Samples:
         so it reads the same under any such key (the preview shares the work, ``layout.Placer.canon``)."""
         if self.on_read is not None:
             self.on_read(key + "/")
+        if self.distinct is not None and self.distinct(key):
+            return False
         sizes = len(self.values) - len(self.generated)  # a placeholder made adds to both: the given keys stay
         if self._given is None or self._given[0] != sizes:
             self._given = (sizes, sorted(k for k in self.values if k not in self.generated))

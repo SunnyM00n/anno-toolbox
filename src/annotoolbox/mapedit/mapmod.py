@@ -49,7 +49,7 @@ def _session_files(doc: MapDoc, target: str) -> dict[str, bytes]:
 
 def _check_new(choice: Choice) -> None:
     if not _NAME.match(choice.name) or not choice.guid:
-        raise ValueError(tr("a new map needs a name of lower-case letters, digits and _ and a GUID"))
+        raise ValueError(tr("maps.new_map_needs_name_lower"))
 
 
 def map_files(doc: MapDoc, choice: Choice | None = None) -> dict[str, bytes]:
@@ -84,9 +84,9 @@ def variant_files(
     ``guids`` per level, or over a vanilla ``_medium`` map and its two siblings. Returns the files and each level's
     findings."""
     if not doc.is_template:
-        raise ValueError(tr("difficulties are map templates of 117 and 1800"))
+        raise ValueError(tr("maps.difficulties_map_templates_117_1800"))
     if not choice.as_new and doc.grown is not None:
-        raise ValueError(tr("a grown map's difficulties are written as new maps"))
+        raise ValueError(tr("maps.grown_maps_difficulties_written_new"))
     files: dict[str, bytes] = {}
     findings: dict[str, list[rules.Finding]] = {}
     ops = []
@@ -105,9 +105,7 @@ def variant_files(
             continue
         path = doc.path if level.key == "medium" else variants.sibling(doc.path, level.key)
         if not path or not doc.tree.exists(path):
-            raise ValueError(
-                tr("{path} has no vanilla easy and hard maps beside it: write them as new maps", path=doc.path)
-            )
+            raise ValueError(tr("maps.no_vanilla_easy_hard_maps", path=doc.path))
         files[path] = t.render()
     if ops:
         files[pool.ASSET_FILES[doc.game]] = modxml.modops(ops, COMMENT).encode("utf-8")
@@ -120,7 +118,7 @@ def new_asset_op(doc: MapDoc, choice: Choice, a7t: str, island_size: str = "") -
     enlarged variant, ``island_size`` when given; after the vanilla asset."""
     asset = doc.maps.asset_of(doc.path)
     if asset is None:
-        raise ValueError(tr("{path} has no MapTemplate asset to copy for a new map", path=doc.path))
+        raise ValueError(tr("maps.no_maptemplate_asset_copy_new", path=doc.path))
     text = doc.grown.asset_text if doc.grown and doc.grown.asset_text else asset.text
     if doc.is_enlarged():
         own = grow.horizon_list(text, grow.ENLARGED_HORIZONS)
@@ -165,18 +163,18 @@ def guid_problem(guid: int, project_range: tuple[int, int], taken: set[int], kep
     """Why a new map may not take ``guid`` ("" when it may): outside the range, another asset's or another map's."""
     lo, hi = project_range
     if not lo <= guid <= hi:
-        return tr("the GUID {guid} lies outside the project's range {lo}-{hi}", guid=guid, lo=lo, hi=hi)
+        return tr("maps.guid_lies_outside_projects_range", guid=guid, lo=lo, hi=hi)
     if guid in taken:
-        return tr("the GUID {guid} belongs to another asset of the project", guid=guid)
+        return tr("maps.guid_belongs_another_asset_project", guid=guid)
     other = next((n for n, g in kept.items() if g == guid and n != name), "")
-    return tr("the GUID {guid} belongs to the new map {name}", guid=guid, name=other) if other else ""
+    return tr("maps.guid_belongs_new_map", guid=guid, name=other) if other else ""
 
 
 def read_guids(folder: Path) -> dict[str, int]:
     path = folder / GUIDS
     try:
         return {str(k): int(v) for k, v in json.loads(path.read_text(encoding="utf-8")).items()}
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):  # no file, or one that is no list of GUIDs
         return {}
 
 
@@ -198,6 +196,6 @@ def write_mod(folder: Path, files: dict[str, bytes], mod_id: str, title: str, re
         dest = out / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
-    info = modxml.modinfo(mod_id, "Map", title, tr("A map written by the map editor."), requires_new_game=True)
+    info = modxml.modinfo(mod_id, "Map", title, tr("maps.map_written_editor"), requires_new_game=True)
     (out / "modinfo.json").write_text(info, encoding="utf-8", newline="\n")
     return out

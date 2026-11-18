@@ -78,7 +78,7 @@ def _all_claims() -> list[tuple[int, int]]:
 
 
 def _free_aligned(size: int, safe: tuple[int, int], taken) -> list[tuple[int, int]]:
-    first, last = -(-safe[0] // size), safe[1] // size
+    first, last = -(-safe[0] // size), (safe[1] + 1) // size  # the last block may end on the range's last GUID
     blocks = ((n * size, n * size + size - 1) for n in range(first, last))
     return [b for b in blocks if not _claimed(taken, b)]
 
@@ -100,7 +100,7 @@ def public_choices(game: str) -> list[PublicChoice]:
     if not info.get("safe"):
         for a, b in free_blocks(game):
             source = tr(
-                "measured {date}: no community registry and no declared range for this game; free above the game's own GUIDs",
+                "common.measured_no_community_registry_declared",
                 date=data()["vanilla"]["measured"],
             )
             out.append(PublicChoice(f"free-{a}", f"{number(a)} - {number(b)}", (a, b), source, ""))
@@ -111,27 +111,25 @@ def public_choices(game: str) -> list[PublicChoice]:
         out.append(
             PublicChoice(
                 PERSONAL_ID,
-                tr("Personal use: {span}", span=f"{number(a)} - {number(b)}"),
+                tr("common.personal_use_span", span=f"{number(a)} - {number(b)}"),
                 (a, b),
                 f"{registry['text']}, {registry['url']}",
-                tr(
-                    "declared for people who do not publish a mod; every such person may use it, so it is not for a mod you share"
-                ),
+                tr("common.declared_people_not_publish_mod"),
             )
         )
     for a, b in free_blocks(game):
         out.append(
             PublicChoice(
                 f"free-{a}",
-                tr("Free block: {span}", span=f"{number(a)} - {number(b)}"),
+                tr("common.free_block_span", span=f"{number(a)} - {number(b)}"),
                 (a, b),
                 tr(
-                    "free in {registry}, read {date}; {url}",
+                    "common.free_registry_read_date_url",
                     registry=registry["text"],
                     date=data()["retrieved"],
                     url=registry["url"],
                 ),
-                tr("free when read, not yours until you claim it: {how}", how=info["claim"]),
+                tr("common.free_when_read_not_yours", how=info["claim"]),
                 info["claim_url"],
             )
         )
@@ -148,8 +146,8 @@ def own_reserve(settings) -> tuple[int, int]:
     registry row, the community's personal-use range and the games' own GUIDs, made once and kept in the settings
     (``settings.own_reserve``; the caller saves them). Every own range of every project comes from it."""
     held = tuple(getattr(settings, "own_reserve", None) or ())
-    if len(held) == 2:
-        return held[0], held[1]
+    if len(held) == 2 and all(type(v) is int for v in held) and 0 < held[0] < held[1] <= MAX_GUID:
+        return held[0], held[1]  # anything else (a settings file edited by hand) is made anew
     safe = tuple(game_data("anno117")["safe"])
     made = secrets.choice(_free_aligned(RESERVE_SIZE, safe, _all_claims()))
     settings.own_reserve = list(made)
@@ -165,7 +163,7 @@ def own_range(settings, taken: dict[str, tuple[int, int]] | None = None) -> tupl
         block = (a, a + OWN_SIZE - 1)
         if not _claimed(used, block):
             return block
-    raise ValueError(tr("the own reserve is used up by your other projects: type a range or pick a public one"))
+    raise ValueError(tr("common.own_reserve_used_up_your"))
 
 
 def resolve(
@@ -196,14 +194,14 @@ def check(
     and their ranges; ``vanilla``: the game's own GUIDs when known exactly (else the measured runs are used)."""
     lo, hi = rng
     if not 0 < lo <= hi <= MAX_GUID:
-        return [Problem(ERROR, tr("{lo}-{hi} is not a range of positive 32-bit numbers, first to last", lo=lo, hi=hi))]
+        return [Problem(ERROR, tr("common.not_range_positive_32_bit", lo=lo, hi=hi))]
     out: list[Problem] = []
     if _claimed(vanilla_runs(game), rng) and (vanilla is None or any(lo <= g <= hi for g in vanilla)):
         out.append(
             Problem(
                 ERROR,
                 tr(
-                    "the game itself uses GUIDs in {span}: a new asset would replace one of its own",
+                    "common.game_itself_uses_guids_new",
                     span=f"{number(lo)}-{number(hi)}",
                 ),
             )
@@ -214,7 +212,7 @@ def check(
             Problem(
                 WARNING,
                 tr(
-                    "outside the range Ubisoft keeps for mods ({span}): a game update may use these numbers",
+                    "common.outside_range_ubisoft_keeps_mods",
                     span=f"{number(safe[0])} - {number(safe[1])}",
                 ),
             )
@@ -226,7 +224,7 @@ def check(
                 Problem(
                     WARNING,
                     tr(
-                        "overlaps the range of your project {name} ({span})",
+                        "common.overlaps_range_your_project",
                         name=name,
                         span=f"{number(other[0])}-{number(other[1])}",
                     ),
@@ -239,15 +237,13 @@ def _registry_clash(a: int, b: int, who: str, kind: str) -> str:
     span = f"{number(a)}-{number(b)}"
     if kind == "personal":
         return tr(
-            "overlaps the community's personal-use range ({span}), shared by everyone who does not publish: "
-            "fine for yourself, not for a mod you share",
+            "common.overlaps_communitys_personal_use_range",
             span=span,
         )
     if kind == "reserved":
-        return tr("overlaps a range the registry reserves for special cases ({span})", span=span)
+        return tr("common.overlaps_range_registry_reserves_special", span=span)
     return tr(
-        "overlaps the range {span} that the registry gives to {who}: both mods would use the same GUIDs "
-        "and break each other's savegames",
+        "common.overlaps_range_registry_gives_both",
         span=span,
         who=who,
     )

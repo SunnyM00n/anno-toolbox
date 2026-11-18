@@ -11,7 +11,6 @@ the game: docs/tool-suite.md "The viewer", "Drawn as the game draws".
 from __future__ import annotations
 
 import math
-import threading
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -194,7 +193,7 @@ class ModelRenderer(ModelLights, ModelPoses):
         self._rest_joints = ctx.texture((4, 1), 4, np.identity(4, "f4").tobytes(), dtype="f4")  # a skin not posed yet
         self.state = ViewState()
         self._lights = (0, b"", b"", b"")
-        self._lock = threading.Lock()
+        self._game_drew = False  # the game's pass drew the frame before (its ground, effects and decals stand)
         self.game_pass = make_pass(self)
         self.cloths = ClothPlayer()
 
@@ -202,7 +201,7 @@ class ModelRenderer(ModelLights, ModelPoses):
     def show(self, scene: Scene) -> None:
         """Draw this scene from now on; its files start loading."""
         self.release_scene()
-        self.scene, self.box = scene, None
+        self.scene, self.box, self._game_drew = scene, None, False
         self.failed = {}  # what this scene fails to load: the textures that failed before are tried again
         self.textures = {k: v for k, v in self.textures.items() if v is not None}
         self.by_node = {part.node: (k, part) for k, part in enumerate(scene.parts)}
@@ -220,7 +219,7 @@ class ModelRenderer(ModelLights, ModelPoses):
     def _ask(self, key: str, work):
         found = self.loader.get(key, work)
         if isinstance(found, Exception):
-            self.say(tr("{name}: {kind}: {error}", name=key.split(":", 1)[-1], kind=type(found).__name__, error=found))
+            self.say(tr("viewer.name_kind_error", name=key.split(":", 1)[-1], kind=type(found).__name__, error=found))
             return None
         return found
 
@@ -372,7 +371,7 @@ class ModelRenderer(ModelLights, ModelPoses):
         self._sky(view_proj, lt, eye)
         ctx.enable(ctx.DEPTH_TEST)
         ctx.wireframe = state.wireframe
-        game_ground = state.look == SHADERS and bool(getattr(self.game_pass, "ground", None))
+        game_ground = state.look == SHADERS and bool(self._by_game("ground", None))  # as of the frame before
         if state.ground and self.box is not None and not game_ground:  # else in the game's G-buffer (gameground)
             self._draw_ground(frame)
         see_through = (WATER_SHADER, DECAL_SHADER) if state.look == SHADERS else (WATER_SHADER,)
@@ -409,6 +408,7 @@ class ModelRenderer(ModelLights, ModelPoses):
     def _game_shaders(self, opaque: list, target, size, camera, lt: dict) -> list:
         """The groups the game's own shaders draw, drawn (``gamepass``); what is left for our plain look: all of them
         while the shaders compile or when the pass cannot draw, a group that failed, a kind the pass leaves."""
+        self._game_drew = False
         why = self.game_pass.why_not()
         if why:
             self.say(why)
@@ -425,9 +425,15 @@ class ModelRenderer(ModelLights, ModelPoses):
         ground = ground_place(*self.box) if self.state.ground and self.box is not None else None
         rest = self.game_pass.draw(opaque, target, size, camera, light, sky, ground)
         if rest is None:
-            self.say(tr("compiling the game's shaders (once: they are kept in the build cache)"))
+            self.say(tr("viewer.compiling_games_shaders_once_they"))
             return opaque
+        self._game_drew = True
         return rest
+
+    def _by_game(self, name: str, default):
+        """What the game's pass says it drew itself (its ``ground``, ``drawn_effects``, ``drawn_decals``): only of a
+        frame it drew. A pass that failed or waits keeps what it said last, and the view's own would stay away."""
+        return getattr(self.game_pass, name, default) if self._game_drew else default
 
     @staticmethod
     def _is_water(drawn) -> bool:
@@ -475,7 +481,7 @@ class ModelRenderer(ModelLights, ModelPoses):
         what is drawn so far, without writing depth."""
         if self.scene is None or not self.scene.decals:
             return
-        by_game = getattr(self.game_pass, "drawn_decals", set()) if state.look == SHADERS else set()
+        by_game = self._by_game("drawn_decals", set()) if state.look == SHADERS else set()
         ctx, target = self.ctx, self._targets["msaa"]
         ctx.enable(ctx.BLEND)
         ctx.blend_func = ctx.SRC_ALPHA, ctx.ONE_MINUS_SRC_ALPHA
@@ -661,7 +667,7 @@ class ModelRenderer(ModelLights, ModelPoses):
 
     def _draw_particles(self, state: ViewState, view, view_proj, eye) -> None:
         items = []
-        by_game = getattr(self.game_pass, "drawn_effects", set()) if state.look == SHADERS else set()
+        by_game = self._by_game("drawn_effects", set()) if state.look == SHADERS else set()
         for e in self.scene.effects if self.scene else []:
             if not state.shows(e) or e.file in by_game:  # by_game: drawn by the game's own particle shader
                 continue
@@ -700,15 +706,19 @@ class ModelRenderer(ModelLights, ModelPoses):
         vbo.release()
 
     # cleanup
+    @staticmethod
+    def _release_item(item: dict) -> None:
+        for vao in item["vaos"].values():
+            vao.release()
+        if item.get("joints") is not None:
+            item["joints"].release()
+        item["vbo"].release()
+        item["ibo"].release()
+
     def release_scene(self) -> None:
         for items in [*self.items.values(), list(self._decals.values())]:
             for item in items:
-                for vao in item["vaos"].values():
-                    vao.release()
-                if item.get("joints") is not None:
-                    item["joints"].release()
-                item["vbo"].release()
-                item["ibo"].release()
+                self._release_item(item)
         self.items, self._decals = {}, {}
         self.game_pass.release_scene()
         self.loader.close()
@@ -730,3 +740,10 @@ class ModelRenderer(ModelLights, ModelPoses):
             if tex is not None:
                 tex.release()
         self.textures = {}
+        if self._ground is not None:  # what the renderer made for itself: a view makes a new one per game opened
+            self._release_item(self._ground)
+        own = (self._dummy, self._dummy_3d, self._dummy_shadow, self._rest_joints, self.inst)
+        for held in (*(self._shadow or ()), *own, *self.fullscreen.values(), *self.prog.values()):
+            held.release()
+        self._ground = self._shadow = None
+        self.fullscreen, self.prog = {}, {}

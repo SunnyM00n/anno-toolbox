@@ -16,7 +16,12 @@ from ..infra.i18n import N_
 from .cull import LodRules
 
 GAMES = ("anno117", "anno1800")  # the games with a quality setting; every other game draws at ``ULTRA``
-PRESETS = {"low": N_("Low"), "medium": N_("Medium"), "high": N_("High"), "ultra": N_("Ultra")}
+PRESETS = {
+    "low": N_("common.low"),
+    "medium": N_("islands.medium"),
+    "high": N_("common.high"),
+    "ultra": N_("common.ultra"),
+}
 CUSTOM = "custom"
 DEFAULT = "medium"
 SETTINGS_FILE = {"anno117": "data/base/config/engine/enginesettings/default.xml",

@@ -121,7 +121,7 @@ def covered(data: bytes) -> frozenset[int]:
             return frozenset().union(*(_font_cmap(data, o) for o in offsets))
         return frozenset(_font_cmap(data, 0))
     except (struct.error, IndexError) as exc:
-        raise ValueError(tr("not a font file: {error}", error=exc)) from exc
+        raise ValueError(tr("texts.not_font_file", error=exc)) from exc
 
 
 def drawn(text: str) -> set[str]:
@@ -203,7 +203,7 @@ class FontCheck:
                 if missing:
                     out[ch] = (", ".join(missing), len(missing) < len(chains))
             elif not any(code in self.cover(p) for p in found.others):
-                out[ch] = (tr("any font"), False)
+                out[ch] = (tr("texts.any_font"), False)
         return out
 
     def unsupported(self, language: str, text: str, style: str | tuple[str, ...] = "") -> list[Problem]:
@@ -217,7 +217,7 @@ class FontCheck:
                     Problem(
                         HINT,
                         "glyph",
-                        tr("{char} is not in the fonts of {fonts}: other styles draw it", char=shown, fonts=names),
+                        tr("texts.not_fonts_other_styles_draw", char=shown, fonts=names),
                     )
                 )
             else:
@@ -226,7 +226,7 @@ class FontCheck:
                         WARNING,
                         "glyph",
                         tr(
-                            "{char} is in none of the fonts the game draws it with: it shows as the default character",
+                            "texts.none_fonts_game_draws_shows",
                             char=shown,
                         ),
                     )

@@ -1,6 +1,7 @@
 """Work off the window's thread for every app of the suite: ``Background.run(work, callback)`` runs ``work`` on a
 thread and calls ``callback`` with its result (or the exception it raised) back on the window's thread.
-``long_lived()`` wraps work that builds what the window keeps (an opened island).
+``long_lived()`` wraps work that builds what the window keeps (an opened island). A job that takes long gets a
+``JobTalk``: its progress on the window's thread, and a stop that ends it at its next report (``Stopped``).
 """
 
 from __future__ import annotations
@@ -39,6 +40,38 @@ def release_long_lived() -> None:
     gc.unfreeze()
 
 
+class Stopped(Exception):
+    """The person stopped the job: ``JobTalk.say`` raises it on the job's thread."""
+
+
+class JobTalk(QObject):
+    """What a long job and its window say to each other. The job calls ``say(text)`` from its thread: the text
+    reaches the window's thread as ``said``, and once ``stop()`` was called the call raises ``Stopped`` instead, so
+    every report is a place where the job can end. The job must leave nothing half done there."""
+
+    said = Signal(str)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._stop = threading.Event()
+
+    def say(self, text: str = "") -> None:
+        if self._stop.is_set():
+            raise Stopped
+        if text:
+            try:
+                self.said.emit(text)
+            except RuntimeError:  # the window closed while the job ran
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+
 class Background(QObject):
     """Runs work off the window's thread and hands the result back on it."""
 
@@ -69,6 +102,10 @@ class Background(QObject):
             thread = threading.Thread(target=go, daemon=True)
             self._threads = [t for t in self._threads if t.is_alive()] + [thread]
             thread.start()
+
+    def busy(self) -> bool:
+        """Whether work still runs (its callback is lost when the owner is deleted before it ends)."""
+        return any(t.is_alive() for t in self._threads)
 
     def join(self, timeout: float = 10.0) -> None:
         """Wait for the running work (a test; the callbacks still need the event loop)."""

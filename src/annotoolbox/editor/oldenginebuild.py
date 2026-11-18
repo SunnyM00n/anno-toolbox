@@ -97,7 +97,7 @@ def _types(tree, log: Callable[[str], None]) -> dict:
     try:
         return read_types(tree)
     except (KeyError, FileNotFoundError, OSError) as exc:
-        log(tr("no asset file ({error}): placed objects are left out", error=exc))
+        log(tr("islands.no_asset_file_placed_objects", error=exc))
         return {}
 
 
@@ -114,7 +114,7 @@ def archives_1404(
         if winner is None or winner.parent not in last:
             raise ValueError(
                 tr(
-                    "{path} is read from {archive}, which is not a data archive of the game",
+                    "islands.read_not_data_archive_game",
                     path=path,
                     archive=tree.archive_file(path),
                 )
@@ -125,7 +125,7 @@ def archives_1404(
     for target, extra in targets.items():
         islands = [p for p in written if p in extra]
         out[target.relative_to(install).as_posix()] = _rewritten(replace(target), extra, islands, stamp)
-        log(tr("{name} of {folder}: {n} files", name=target.name, folder=target.parent.name, n=len(extra)))
+        log(tr("islands.name_folder_n_files", name=target.name, folder=target.parent.name, n=len(extra)))
     return out
 
 
@@ -150,7 +150,7 @@ def edited_1701(tree, edits_dir: Path, log: Callable[[str], None] = print) -> tu
         source = edits.get("source")
         entry = tree.entry_of(source) if source else None
         if entry is None:
-            log(tr("{name}: no source island, skipped", name=path.name))
+            log(tr("islands.no_source_island_skipped", name=path.name))
             continue
         isl = isd1701.load(tree, source)
         report = isc_edit.apply(isl, edits, shapes)
@@ -159,7 +159,7 @@ def edited_1701(tree, edits_dir: Path, log: Callable[[str], None] = print) -> tu
         written.append(entry.path)
         log(f"{source}: " + count_line(report))
         for miss in report["unmatched"]:
-            log(tr("  not found: {name}", name=miss))
+            log(tr("islands.not_found_name", name=miss))
     return files, written
 
 
@@ -189,14 +189,14 @@ def install_archives(
         backup = backup_dir / backup_name(game_key, target)
         if target.is_file() and not is_ours(target):
             gamebackups.keep(target, backup)
-            log(tr("kept the game's {file} as {backup}", file=rel, backup=backup))
+            log(tr("islands.kept_games_file_backup", file=rel, backup=backup))
         elif target.is_file() and game_key != "anno1701" and not backup.is_file():
             raise gamebackups.no_copy(target, backup)
     out = []
     for rel, data in archives.items():
         target = install / rel
         write_atomic(target, data)
-        log(tr("wrote {target}", target=target))
+        log(tr("islands.wrote_target", target=target))
         out.append(target)
     return out
 
@@ -215,14 +215,14 @@ def restore(game_key: str, install: Path, backup_dir: Path, log: Callable[[str],
             if not backup.is_file():
                 raise FileNotFoundError(
                     tr(
-                        "no copy of the game's {file} at {backup}: verify the files in the launcher",
+                        "islands.no_copy_games_verify_files",
                         file=target.name,
                         backup=backup,
                     )
                 )
             copy_atomic(backup, target)
-        log(tr("restored {target}", target=target))
+        log(tr("islands.restored_target", target=target))
         done = True
     if not done:
-        log(tr("nothing of the editor's is installed"))
+        log(tr("islands.nothing_editors_installed"))
     return done

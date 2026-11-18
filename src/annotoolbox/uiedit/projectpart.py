@@ -1,8 +1,9 @@
 """The UI editor's share of a project's mod (``suite.project.Part``): the changed and new UI files of the project's
 game, kept whole under ``ui-edits/<game>/<game path>``, and the check that every file they name exists.
 
-``PART`` is what ``suite.apps.parts`` lists; ``save_file`` and ``EDITS.saved_files`` are the window's; ``check`` runs the
-reference check (``mod.phxrefs``) on what the project holds. docs/tool-suite.md section 20, "Writing".
+``UI_PART`` is what ``suite.apps.parts`` lists (``PART`` and the Flash editor's ``flashui.projectpart``);
+``save_file`` and ``EDITS.saved_files`` are the window's; ``check`` runs the reference check (``mod.phxrefs``) on
+what the project holds. docs/tool-suite.md section 20, "Writing".
 """
 
 from __future__ import annotations
@@ -13,10 +14,31 @@ from pathlib import Path
 from ..formats import phoenix
 from ..infra.i18n import N_
 from ..mod import phxrefs
-from ..suite.project import UI_EDITS, EditsFolder, Project
+from ..suite.project import UI_EDITS, EditsFolder, Part, Project
 
 EDITS = EditsFolder(UI_EDITS, ("anno117", "anno1800", "anno1404", "anno1701"))
-PART = EDITS.part("ui", N_("UI"), "UI")
+PART = EDITS.part("ui", N_("common.ui"), "UI")
+
+
+def _has_work(project: Project) -> bool:
+    from ..flashui import projectpart as flash
+
+    return PART.has_work(project) or flash.PART.has_work(project)
+
+
+def _render(project: Project, settings, log: Callable[[str], None]) -> dict[str, bytes]:
+    from ..flashui import projectpart as flash
+
+    files: dict[str, bytes] = {}
+    for part in (flash.PART, PART):  # each holds work for its own games only
+        if part.has_work(project):
+            files |= part.render(project, settings, log)
+    return files
+
+
+UI_PART = Part(
+    "ui", N_("common.ui"), _has_work, _render
+)  # the UI app's: the Phoenix files and the Flash movies' (``flashui``)
 
 
 def sidecar(project: Project, game: str, name: str) -> Path:

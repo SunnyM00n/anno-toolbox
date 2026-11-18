@@ -383,6 +383,37 @@ def test_the_manager_warns_while_the_game_runs_and_removes_a_mod(tmp_path, mods)
     assert done.folder == mods / "fresh" and "fresh" in m.scan().installed_ids()
 
 
+def test_an_install_that_is_stopped_leaves_no_half_copied_mod(tmp_path, mods):
+    class Stop(Exception):
+        pass
+
+    src = make_mod(tmp_path / "src", "big")
+    (src / "data" / "deep").mkdir(parents=True)
+    (src / "data" / "deep" / "x.xml").write_text("<x/>", encoding="utf-8")
+    looks: list[str] = []
+
+    def progress(text: str) -> None:
+        looks.append(text)
+        if len(looks) == 3:  # the mod's name, its folder, then a folder inside it: the copy is under way
+            raise Stop
+
+    before, placed, bin_ = sorted(p.name for p in mods.iterdir()), [], Bin()
+    with pytest.raises(Stop):
+        install.install_path(src, mods, 8, bin_, progress, placed)
+    assert placed == [] and sorted(p.name for p in mods.iterdir()) == before and looks[1:] == ["", ""]
+    del looks[:3]
+    [done] = install.install_path(src, mods, 8, bin_, looks.append, placed)
+    assert placed == [done] and (mods / "big" / "data" / "deep" / "x.xml").is_file() and "big" in looks[0]
+
+    packed = tmp_path / "big.zip"
+    shutil.make_archive(str(packed.with_suffix("")), "zip", tmp_path / "src")
+    shutil.rmtree(mods / "big")
+    looks.clear()
+    with pytest.raises(Stop):  # stopped while it is unpacked
+        install.install_path(packed, mods, 8, bin_, lambda t: (_ for _ in ()).throw(Stop) if looks else looks.append(t))
+    assert sorted(p.name for p in mods.iterdir()) == before and "big.zip" in looks[0]
+
+
 def test_the_deep_check_of_the_manager_runs_without_an_install(tmp_path, mods):
     make_patch(mods / "alpha", '<ModOp Type="merge" GUID="1" Path="/Values"><Values/></ModOp>')
     m = manager.for_settings(settings_for(tmp_path, mods), "anno117")
@@ -420,3 +451,24 @@ def test_a_change_is_announced_once_to_the_live_link(tmp_path, mods):
     finally:
         livelink.reset()
     assert "Shift+F3" in m.set_mod("default", "gamma", False)  # no game connected: the manual route
+
+
+@pytest.mark.parametrize(
+    ("language", "labels", "lint"),
+    [
+        ("en", ["Ubisoft's examples", "game", "Documents", "mod.io", "extra"], "lint alpha"),
+        ("de", ["Beispiele von Ubisoft", "Spiel", "Dokumente", "mod.io", "zusätzlich"], "prüfe alpha"),
+    ],
+)
+def test_the_roots_labels_and_the_progress_lines_follow_the_interface_language(tmp_path, mods, language, labels, lint):
+    from annotoolbox.infra import i18n
+
+    i18n.use(language)
+    found = loader_roots("anno117", tmp_path / "g", tmp_path / "docs", tmp_path / "pub", [tmp_path / "more"])
+    assert [catalog.root_label(r) for r in found] == labels
+    make_patch(mods / "alpha", '<ModOp Type="merge" GUID="1" Path="/Values"><Values/></ModOp>')
+    m = manager.for_settings(settings_for(tmp_path, mods), "anno117")
+    m.scan()
+    said = []
+    m.deep_check("default", said.append)
+    assert lint in said

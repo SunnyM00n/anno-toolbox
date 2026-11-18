@@ -10,8 +10,9 @@ a tile). docs/rdm-gltf.md "Granny models".
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -30,19 +31,53 @@ from ..models.tangents import frames
 STATIC, SKINNED = "P3f_N3f_T2f", "P3f_N3f_T2f_I4b_W4b"  # the RDM layouts a Granny mesh becomes
 
 
+@dataclass(frozen=True)
+class RecordOptions:
+    """What ``granny_to_rdm`` makes beyond the glTF export's needs: ``colours`` the vertex colours as a ``C4c``
+    element of an unskinned mesh (bytes B, G, R, A, as 2070 stores them), ``skin`` the skin elements' names (a
+    second and later ``I4b`` or ``W4b`` hold zeros: 2205's 16-bone layout), ``turn`` the model turned half a turn
+    about y (x and z negated; a proper rotation, so the skins stay exact)."""
+
+    colours: bool = False
+    skin: str = "I4b_W4b"
+    turn: bool = False
+
+
 # Granny to RDM
 
+_HALF_TURN = np.diag([-1.0, 1.0, -1.0, 1.0])  # x and z negated: a rotation, the winding stays
 
-def _rdm_mesh(m, skin, scale: float = 1.0) -> tuple[Mesh, list[str]]:
+
+def _turned(m):
+    """A Granny mesh with its positions and normals turned half a turn about y."""
+    flip = lambda v: (-v[0], v[1], -v[2])  # noqa: E731
+    return replace(m, positions=[flip(p) for p in m.positions], normals=[flip(n) for n in m.normals])
+
+
+def _row(elements, p, n, uv, colour, joints, weights) -> bytes:
+    """One vertex: the value each element takes by its usage (the first ``I4b`` and ``W4b`` the skin's, later ones zero)."""
+    seen: Counter[int] = Counter()
+    out = []
+    for e in elements:
+        slot, seen[e.usage] = seen[e.usage], seen[e.usage] + 1
+        value = {0: p, 1: n, 4: uv, 5: colour}.get(e.usage)
+        if e.usage in (6, 7):
+            value = (joints if e.usage == 7 else weights) if slot == 0 else (0, 0, 0, 0)
+        out.append(encode(e, value))
+    return b"".join(out)
+
+
+def _rdm_mesh(m, skin, scale: float = 1.0, opts: RecordOptions = RecordOptions()) -> tuple[Mesh, list[str]]:  # noqa: B008
     """A Granny mesh (``grannyglb.GrannyMesh``) as an RDM mesh record of float vertices, skinned by ``skin``, and
     its material names in the order its submeshes number them."""
-    elements = parse(SKINNED if skin is not None else STATIC)
+    coloured = opts.colours and skin is None and m.colors is not None
+    layout = SKINNED.replace("I4b_W4b", opts.skin) if skin is not None else STATIC + ("_C4c" if coloured else "")
+    elements = parse(layout)
     rows, positions = [], [tuple(c / scale for c in p) for p in m.positions]
     for k, (p, n, uv) in enumerate(zip(positions, m.normals, m.uvs, strict=True)):
-        values = [p, n, uv]
-        if skin is not None:
-            values += [skin[1][k], weight_bytes(skin[2][k])]
-        rows.append(b"".join(encode(e, v) for e, v in zip(elements, values, strict=True)))
+        colour = bytes(round(min(max(m.colors[k][c], 0.0), 1.0) * 255) for c in (2, 1, 0, 3)) if coloured else None
+        joints, weights = (skin[1][k], weight_bytes(skin[2][k])) if skin is not None else (None, None)
+        rows.append(_row(elements, p, n, uv, colour and tuple(colour), joints, weights))
     indices, submeshes, names = [], [], []
     for name, tris in m.groups:
         if name not in names:
@@ -57,7 +92,28 @@ def _rdm_mesh(m, skin, scale: float = 1.0) -> tuple[Mesh, list[str]]:
     return mesh, names
 
 
-def granny_to_rdm(data: bytes, animations: Sequence[grannyanim.Animation] = (), scale: float = 1.0) -> RdmFile:
+def _turn_rig(out: RdmFile) -> None:
+    """The skeletons and keys of ``out`` for a model turned half a turn about y: a joint's inverse bind keeps its move
+    and turns by the half turn after it (a vertex in bone space stays where it was); a root joint's keys, which
+    are its place in the model, are turned by it, a child's stay as they are."""
+    for sk in out.skeletons:
+        for j in sk.joints:
+            m = rigid(j.rotation, j.position) @ _HALF_TURN
+            j.rotation = qconj(matrix_quat(m[:3, :3]))
+    roots = {j.name for sk in out.skeletons for j in sk.joints if j.parent is None}
+    for a in out.animations:
+        for t in (t for t in a.tracks if t.joint in roots):
+            for k in t.keys:
+                m = _HALF_TURN @ rigid(k.rotation, k.position)
+                k.rotation, k.position = qconj(matrix_quat(m[:3, :3])), tuple(m[:3, 3])
+
+
+def granny_to_rdm(
+    data: bytes,
+    animations: Sequence[grannyanim.Animation] = (),
+    scale: float = 1.0,
+    opts: RecordOptions = RecordOptions(),  # noqa: B008
+) -> RdmFile:
     """A ``.gr2`` as one RDM file: its meshes (float vertices; a skin's bones through its bindings, a rigid mesh as a
     one-bone skin), its skeletons as joints, its own animations and ``animations`` (read from other ``.gr2`` files)
     sampled every time step against the skeleton naming most of their bones; every length divided by ``scale``
@@ -68,7 +124,8 @@ def granny_to_rdm(data: bytes, animations: Sequence[grannyanim.Animation] = (), 
     out = RdmFile(False, root.get("FromFileName") or "", "granny", skeletons=[granny_skeleton(s) for s in skeletons])
     materials: list[str] = []
     for m in meshes_of(root):
-        mesh, names = _rdm_mesh(m, granny_skin(m, skeletons, owners.get(m.name)), scale)
+        m = _turned(m) if opts.turn else m
+        mesh, names = _rdm_mesh(m, granny_skin(m, skeletons, owners.get(m.name)), scale, opts)
         for s in mesh.submeshes:  # the file's material numbers: one list over all its meshes
             name = names[s.material]
             if name not in materials:
@@ -82,6 +139,8 @@ def granny_to_rdm(data: bytes, animations: Sequence[grannyanim.Animation] = (), 
         joint.position = tuple(c / scale for c in joint.position)
     for key in (k for a in out.animations for t in a.tracks for k in t.keys):
         key.position = tuple(c / scale for c in key.position)
+    if opts.turn:
+        _turn_rig(out)
     return out
 
 

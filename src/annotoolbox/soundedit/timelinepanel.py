@@ -28,7 +28,7 @@ from ..infra.i18n import N_, tr
 from ..suite.widgets import ROLE, read_only_table
 from . import olddoc
 
-COLUMNS = (N_("sequence"), N_("length (ms)"), N_("at (ms)"), N_("sound"))
+COLUMNS = (N_("viewer.sequence"), N_("viewer.length_ms"), N_("viewer.at_ms"), N_("viewer.sound"))
 SHOWN = 300  # files listed at once: the filter narrows the thousands a game ships
 
 
@@ -38,12 +38,16 @@ class TimelinePanel(QWidget):
         self.say, self.changed = say, changed or (lambda: None)
         self.doc: olddoc.OldSoundDoc | None = None
         self.paths: list[str] = []
-        self.filter = QLineEdit(placeholderText=tr("filter: part of a path"))
+        self.filter = QLineEdit(placeholderText=tr("sound.filter_part_path"))
         self.files = QListWidget()
         self.table = read_only_table(COLUMNS)
         self.table.setEditTriggers(QTableWidget.EditTrigger.AllEditTriggers)  # the cells flagged editable take it
         buttons = QHBoxLayout()
-        for text, call in ((N_("Apply"), self.apply), (N_("Add a sound..."), self.add), (N_("Remove"), self.remove)):
+        for text, call in (
+            (N_("common.apply"), self.apply),
+            (N_("sound.add_sound_dots"), self.add),
+            (N_("common.remove"), self.remove),
+        ):
             button = QPushButton(tr(text))
             button.clicked.connect(call)
             buttons.addWidget(button)
@@ -110,9 +114,9 @@ class TimelinePanel(QWidget):
         try:
             self.doc.edit_timeline(self.path, edit)
         except olddoc.OldEditError as exc:
-            return self.say(tr("cannot: {error}", error=exc))
+            return self.say(tr("sound.cannot_error", error=exc))
         self.refresh()
-        self.say(done + " " + tr("(Ctrl+Z undoes it)"))
+        self.say(done + " " + tr("sound.ctrl_plus_z_undoes"))
         self.changed()
 
     def apply(self) -> None:
@@ -124,7 +128,7 @@ class TimelinePanel(QWidget):
             rows = [(self.table.item(r, 0).data(ROLE), [int(self.table.item(r, c).text() or -1) for c in (1, 2, 3)])
                     for r in range(self.table.rowCount())]  # fmt: skip
         except (olddoc.OldEditError, ValueError):
-            return self.say(tr("a length, a time and a sound are whole numbers"))
+            return self.say(tr("sound.length_time_sound_whole_numbers"))
 
         def changes(timeline: sndtimeline.Timeline) -> sndtimeline.Timeline:
             for (sequence, index), (length, at, sound) in rows:
@@ -137,28 +141,28 @@ class TimelinePanel(QWidget):
                     timeline = sndtimeline.move(timeline, sequence, index, at, sound)
             return timeline
 
-        self._edit(changes, tr("changed the timeline."))
+        self._edit(changes, tr("sound.changed_timeline"))
 
     def add(self) -> None:
         sequence = self._selected()[0]
         if sequence is None:
-            return self.say(tr("pick a row of the sequence first"))
+            return self.say(tr("sound.pick_row_sequence_first"))
         sound, ok = QInputDialog.getInt(
-            self, tr("Add a sound..."), tr("The sound's id (sounddatabase.xml)"), 1, 0, 2**31 - 1
+            self, tr("sound.add_sound_dots"), tr("sound.sounds_id_sounddatabase_xml"), 1, 0, 2**31 - 1
         )
         if not ok:
             return
         at, ok = QInputDialog.getInt(
-            self, tr("Add a sound..."), tr("At (ms; -1: through the whole sequence)"), 0, -1, 2**31 - 1
+            self, tr("sound.add_sound_dots"), tr("sound.ms_1_through_whole_sequence"), 0, -1, 2**31 - 1
         )
         if ok:
-            self._edit(lambda tl: sndtimeline.place(tl, sequence, sound, at), tr("placed sound {id}.", id=sound))
+            self._edit(lambda tl: sndtimeline.place(tl, sequence, sound, at), tr("sound.placed_sound_id", id=sound))
 
     def remove(self) -> None:
         sequence, index = self._selected()
         if sequence is None or index < 0:
-            return self.say(tr("pick the row of a placement first"))
-        self._edit(lambda tl: sndtimeline.unplace(tl, sequence, index), tr("removed the placement."))
+            return self.say(tr("sound.pick_row_placement_first"))
+        self._edit(lambda tl: sndtimeline.unplace(tl, sequence, index), tr("sound.removed_placement"))
 
     def _selected(self) -> tuple[int | None, int]:
         item = self.table.item(self.table.currentRow(), 0) if self.table.currentRow() >= 0 else None

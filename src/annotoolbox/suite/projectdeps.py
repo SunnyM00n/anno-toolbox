@@ -35,7 +35,7 @@ def validate(mod_id: str, dependencies: dict, bundle: list) -> None:
     if unknown:
         raise ValueError(
             tr(
-                "dependency kinds are {kinds}, not {unknown}",
+                "common.dependency_kinds_not",
                 kinds=", ".join(DEPENDENCY_KINDS),
                 unknown=", ".join(unknown),
             )
@@ -43,13 +43,11 @@ def validate(mod_id: str, dependencies: dict, bundle: list) -> None:
     for kind, ids in clean(dependencies).items():
         for i in ids:
             if not (ID_FORMAT.match(i) or (kind == "LoadAfter" and i == LATE)):
-                raise ValueError(
-                    tr("{kind}: {id} is no ModID (lower-case letters, digits and dashes)", kind=kind, id=repr(i))
-                )
+                raise ValueError(tr("common.no_modid_lower_case_letters", kind=kind, id=repr(i)))
             if i == mod_id:
-                raise ValueError(tr("{kind}: a mod cannot name itself ({id})", kind=kind, id=i))
+                raise ValueError(tr("common.mod_cannot_name_itself", kind=kind, id=i))
     if not all(isinstance(b, str) and b.strip() for b in bundle or []):
-        raise ValueError(tr("the bundle lists mod folders"))
+        raise ValueError(tr("common.bundle_lists_mod_folders"))
 
 
 def modinfo_fields(dependencies: dict) -> tuple[dict[str, list[str]], tuple[str, ...]]:
@@ -71,13 +69,11 @@ def copy_bundle(project_folder: Path, bundle: list[str], out: Path) -> list[str]
     for folder in bundle_folders(project_folder, bundle):
         mod, why = read_mod(folder)
         if mod is None:
-            problems.append(
-                tr("bundle {folder}: {why}: the loader would not take it as a mod", folder=folder.name, why=why)
-            )
+            problems.append(tr("common.bundle_loader_not_take_mod", folder=folder.name, why=why))
             continue
         target = Path(out) / folder.name
         if target.exists():
-            problems.append(tr("bundle {folder}: another file or mod of the build has this name", folder=folder.name))
+            problems.append(tr("common.bundle_another_file_mod_build", folder=folder.name))
             continue
         shutil.copytree(folder, target)
     return problems
@@ -90,7 +86,7 @@ def bundle_problems(mod_id: str, out: Path, mods_dir: Path | None, game: str = "
     if built is None:
         return []
     out_problems: list[str] = []
-    seen: dict[str, str] = {mod_id: tr("the project")}
+    seen: dict[str, str] = {mod_id: tr("common.the_project")}
     installed = {m.mod_id: m for m in find_mods([mods_dir], GAME_NUMBER.get(game))[0]} if mods_dir else {}
     stack = list(built.nested)
     while stack:
@@ -99,19 +95,18 @@ def bundle_problems(mod_id: str, out: Path, mods_dir: Path | None, game: str = "
         if m.mod_id in seen:
             out_problems.append(
                 tr(
-                    "bundle {folder}: ModID {id} is also {other}: the loader keeps one, silently",
+                    "common.bundle_modid_also_loader_keeps",
                     folder=m.folder.name,
                     id=m.mod_id,
                     other=seen[m.mod_id],
                 )
             )
-        seen[m.mod_id] = tr("bundle {folder}", folder=m.folder.name)
+        seen[m.mod_id] = tr("common.bundle_folder", folder=m.folder.name)
         old = installed.get(m.mod_id)
         if old is not None and old.version != m.version:
             out_problems.append(
                 tr(
-                    "bundle {folder}: {id} {version} is also installed as {installed}: "
-                    "the loader keeps the higher version for both",
+                    "common.bundle_also_installed_loader_keeps",
                     folder=m.folder.name,
                     id=m.mod_id,
                     version=m.version,

@@ -10,17 +10,17 @@ island-editor "Other games".
 from __future__ import annotations
 
 import json
-import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 from ....formats import a7mread
 from ....infra.i18n import tr
 from ....islands import islandedits, islandinfo, surfmap
+from ....modloader import modswap
 from ....suite import modcheck
 from ... import groundedit, objectclones, templatedonors
 from ...assetmodels import ASSETS_1800, AssetModels
-from .edit117 import Edited, clear, ground, write_files, write_gamedata, write_info
+from .edit117 import Edited, clear, ground, staged_mod, write_files, write_gamedata, write_info
 from .reader import DEFAULT_MATERIAL_SET, IslandFile1800
 
 EDIT_PREFIX = "1800_"  # edit files of 1800 islands: island-edits/1800_<island>.json
@@ -81,42 +81,34 @@ def build(
     mod_name: str,
     log: Callable[[str], None] = print,
     others: dict | None = None,
+    trash: modswap.Trash = modswap.recycle,
 ) -> list[str]:
     """Write every 1800 island with an edit file into the mod ``out``, in place of the original (the mod loader
     lays a mod's ``data`` folder over the game's); ``others``: the other games' files, for their materials in a
-    palette. Returns the islands written (game paths)."""
-    if not out.is_absolute() or out.name != mod_id:  # a folder that is removed: only ever the mod's own
-        raise ValueError(
-            tr(
-                "refusing to rebuild {out}: not an absolute path ending in the mod id {mod_id}",
-                out=out,
-                mod_id=repr(mod_id),
-            )
-        )
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    palette. Returns the islands written (game paths). The mod is written beside ``out`` and swapped in
+    (``edit117.staged_mod``; the old copy to ``trash``): a build that fails leaves the last one as it was."""
     written, assets_xml = [], None
-    for path in sorted(edits_dir.glob(f"{EDIT_PREFIX}*.json")):
-        edits = islandedits.load(path)
-        source = edits.get("source")
-        if not source:
-            log(tr("{name}: no source island, skipped", name=path.name))
-            continue
-        if assets_xml is None and any(a.get("guid") for a in edits.get("added_objects", [])):
-            try:
-                assets_xml = files.read(ASSETS)
-            except (KeyError, FileNotFoundError):
-                assets_xml = b""
-        done = apply(files, source, edits, assets_xml or None, others)
-        (out / source).parent.mkdir(parents=True, exist_ok=True)
-        (out / source).write_bytes(done.a7m)
-        write_info(out, source, done)
-        write_gamedata(out, source, done.gamedata)
-        write_files(out, done.files)
-        written.append(source)
-        log(tr("{source}: {report}", source=source, report=done.report))
-    (out / "modinfo.json").write_text(_modinfo(mod_id, mod_name), encoding="utf-8", newline="\n")
+    with staged_mod(out, mod_id, trash, log) as stage:
+        for path in sorted(edits_dir.glob(f"{EDIT_PREFIX}*.json")):
+            edits = islandedits.load(path)
+            source = edits.get("source")
+            if not source:
+                log(tr("islands.no_source_island_skipped", name=path.name))
+                continue
+            if assets_xml is None and any(a.get("guid") for a in edits.get("added_objects", [])):
+                try:
+                    assets_xml = files.read(ASSETS)
+                except (KeyError, FileNotFoundError):
+                    assets_xml = b""
+            done = apply(files, source, edits, assets_xml or None, others)
+            (stage / source).parent.mkdir(parents=True, exist_ok=True)
+            (stage / source).write_bytes(done.a7m)
+            write_info(stage, source, done)
+            write_gamedata(stage, source, done.gamedata)
+            write_files(stage, done.files)
+            written.append(source)
+            log(tr("islands.source_report", source=source, report=done.report))
+        (stage / "modinfo.json").write_text(_modinfo(mod_id, mod_name), encoding="utf-8", newline="\n")
     for problem in modcheck.check(out, modcheck.readable(files)):
-        log(tr("mod check: {problem}", problem=problem))
+        log(tr("islands.mod_check_problem", problem=problem))
     return written

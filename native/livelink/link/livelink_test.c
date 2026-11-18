@@ -154,10 +154,6 @@ static void test_requests(void) {
           !strcmp(r.proof, "cd"));
     CHECK(parse("{\"id\":6,\"type\":\"reload.scenes\",\"args\":{\"mod\":\"m\",\"states\":[\"MainTitle\",\"Game\"],\"paths\":[\"data/ui/a\"]}}", &r, err) == 1 &&
           r.nnames == 2 && !strcmp(r.names[1], "Game") && ll_kind_of_request(r.type) == LL_KIND_SCENES);
-    CHECK(parse("{\"id\":6,\"type\":\"ui.dump\",\"args\":{\"states\":[\"HUD\"]}}", &r, err) == 1 && r.nnames == 1 &&
-          ll_kind_of_request(r.type) == LL_KIND_UIDUMP);
-    CHECK(parse("{\"id\":6,\"type\":\"ui.dump\",\"args\":{}}", &r, err) == 1 && r.nnames == 0);
-    CHECK(parse("{\"id\":6,\"type\":\"ui.dump\",\"args\":{\"states\":[\"a b\"]}}", &r, err) == 0);
     CHECK(parse("[1]", &r, err) == 0 && parse("{", &r, err) == 0 && parse("{\"id\":1}", &r, err) == -1);
     CHECK(ll_path_ok("data/a/b_c-d.1.rdm") && !ll_path_ok("./a") && !ll_path_ok("a/") && !ll_path_ok(""));
 }
@@ -200,6 +196,11 @@ static void test_data(void) {
     CHECK(ll_welcome_json(out, sizeof out, "anno117", "392218104", "lib 1", LL_KIND_ASSETS | LL_KIND_MODELS | LL_KIND_SELECT, ids, folders, 1, "ab") > 0);
     CHECK(!strcmp(out, "{\"game\":\"anno117\",\"build\":\"392218104\",\"library\":\"lib 1\",\"protocol\":1,\"kinds\":[\"assets\",\"models\"],"
                        "\"mods\":[{\"id\":\"m1\",\"folder\":\"C:/mods/m1\"}],\"proof\":\"ab\"}")); /* select is no reload kind */
+    CHECK(ll_welcome_json(out, sizeof out, "anno117", "1", "lib 1", LL_KIND_DEBUG, ids, folders, 0, "ab") > 0 &&
+          strstr(out, "\"kinds\":[\"debug\"]"));
+    CHECK(ll_welcome_json(out, sizeof out, "anno117", "1", "lib 1", LL_KIND_VALUES | LL_KIND_FOLLOW, ids, folders, 0, "ab") > 0 &&
+          strstr(out, "\"kinds\":[\"values\",\"follow\"]"));
+    CHECK(ll_topic_bit("ui.scene") == LL_TOPIC_SCENE && !strcmp(ll_topic_name(LL_TOPIC_SCENE), "ui.scene"));
     CHECK(ll_selection_json(out, sizeof out, 4711, 180023, "5000") > 0 && !strcmp(out, "{\"objects\":[{\"id\":4711,\"guid\":180023,\"session\":\"5000\"}]}"));
     CHECK(ll_selection_json(out, sizeof out, -1, 0, "") > 0 && !strcmp(out, "{\"objects\":[]}"));
     strcpy(fields[0], "Building/BuildCost"), strcpy(fields[1], "Text");

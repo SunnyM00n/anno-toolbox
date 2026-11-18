@@ -131,7 +131,7 @@ def test_a_widget_of_these_games_is_placed_by_117s_anchor_and_modes():
     fields.set_value(label, "KeepAspectRatio", True)
     assert fields.anchor_fields(label) == {"AnchorPoint": 5, "XRepositioning": 0, "YRepositioning": 0,
                                            "WidthResizing": 1, "HeightResizing": 0, "AspectRatio": 1}  # fmt: skip
-    assert [fields.alignment_index(v) for v in (0, 1, 2, 3, 256, 512, 768)] == [0, 1, 2, 3, 1, 2, 3]
+    assert [fields.alignment_index(v) for v in (0, 1, 2, 3, 7)] == [0, 1, 2, 3, 0]
     shipped = phoenixedit.new_object(schema, "41a404e5")
     fields.set_value(shipped, "AnchorPoint", 8)
     assert fields.anchor_fields(shipped)["AnchorPoint"] == 8  # 117's own fields as they are

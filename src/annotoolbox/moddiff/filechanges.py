@@ -44,7 +44,7 @@ def read_source(source: str | tuple[str, str]) -> bytes:
     if bar and archive.lower().endswith(".zip"):
         with zipfile.ZipFile(archive) as z:
             return z.read(member)
-    return Path(source).read_bytes()
+    return Path(archive).read_bytes()
 
 
 def is_content(rel: str) -> bool:

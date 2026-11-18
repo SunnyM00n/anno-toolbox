@@ -82,6 +82,8 @@ class SrgbMips:
             pipe.setShaderStage(QRhiShaderStage(QRhiShaderStage.Type.Compute, self.shader))
             pipe.setShaderResourceBindings(srb)
             if not pipe.create():
+                for r in (pipe, srb, sampler, params, scratch):  # never recorded: nothing else lets them go
+                    r.destroy()
                 raise RuntimeError("the backend refused the sRGB level pass")
             self.pipeline = pipe
 

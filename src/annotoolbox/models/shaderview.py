@@ -11,19 +11,24 @@ text comes from ``formats.fxeffect`` / ``fxlink``, the switches from ``shaderwar
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..formats import fxeffect, fxlink, rdmglb, rdmread
 from ..infra import buildcache, dxc
 from ..render import gamedraw, gamelight, gamepost, gameshader, gamesky, shadowfit
-from ..sources.assetdb import number
+from ..sources.assetdb import decimal, number
 from . import configtree, ddsdecode, fileresolve, shadercache, shaderdefines
 
 NAMESPACE = "game-shaders"
-VERSION = 18  # bump when what a cached compile holds changes (or the rewrite of gameshader.adapt)
+VERSION = 19  # bump when what a cached variant record holds changes (or the rewrite of gameshader.adapt)
+SHADER_VERSION = 1  # bump when what a cached shader holds changes (its bytecode and reflection)
+MEMO = 8192  # the variants and shaders a source keeps at hand (the rest is read from the build cache again) [ours]
 # the texture streaming's feedback buffer stays out: QRhi refused the pipeline with it (tool-suite 21)
 PASSTHROUGH = ("DISABLE_TEXTURE_FEEDBACK",)
 # the techniques a model's draws take part in, by the engine's names: the G-buffer (ModelDeferred, Deferred,
@@ -103,15 +108,10 @@ def material_defaults(fxm_text: str) -> dict[str, object]:
 def config_value(name: str, default, values: dict[str, str]):
     """A field's value in the config (``cDiffuseColor.r`` .. for a colour), else its default."""
     if isinstance(default, list) and len(default) == 4 and f"{name}.r" in values:
-        return [float(values.get(f"{name}.{k}", d)) for k, d in zip("rgba", default, strict=True)]
+        return [decimal(values.get(f"{name}.{k}"), d) for k, d in zip("rgba", default, strict=True)]
     if isinstance(default, list) and f"{name}.x" in values:
-        return [float(values.get(f"{name}.{k}", d)) for k, d in zip("xyzw", default, strict=False)]
-    if name in values:
-        try:
-            return float(values[name])
-        except ValueError:
-            return default
-    return default
+        return [decimal(values.get(f"{name}.{k}"), d) for k, d in zip("xyzw", default, strict=False)]
+    return decimal(values[name], default) if name in values else default
 
 
 def _fxm_file(ref: str) -> str:
@@ -167,9 +167,14 @@ class _Files:
         return own(prefix) if own is not None else self.files.under(prefix)
 
 
+class _Missing(LookupError):
+    """A compiled shader the build cache no longer holds (its variant is compiled again)."""
+
+
 class ShaderSource:
     """The install's shaders for drawing: the graphics set, the material descriptions and the compiles made, shared
-    by every draw of a view (thread-safe: the compiler runs one compile at a time)."""
+    by every draw of a view and every view of a session (``shared``). Thread-safe: each thread compiles with its own
+    instance of the compiler, and a variant or shader asked for by several threads at once is made once."""
 
     def __init__(self, files, compiler: dxc.Dxc, frame_instances: bool = False) -> None:
         self.files, self.compiler = _Files(files), compiler
@@ -181,27 +186,90 @@ class ShaderSource:
         self._install = shadercache.overlay_reader(None, self.files)
         self._texts: dict[str, bytes | None] = {}  # the sources read so far: every variant includes the same files
         self._bodies: dict[str, str] = {}
+        self._digests: dict[str, tuple[str, bool]] = {}  # path -> its text's digest, whether it reads the frame's
         self.descriptions = shadercache.material_fields(None, self.files)
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # the tables below
+        self._serial = threading.Lock()  # a compiler without instances per thread (a test's): one call at a time
+        self._memo: dict = {}  # a variant's or shader's key -> the Future of what it compiles to (``_once``)
+        self._local = threading.local()  # ``passing`` on this thread
+        self._build: str | None = None  # the game build the manifests are kept under (``_record``)
+
+    @contextmanager
+    def passing(self):
+        """What this thread compiles is not kept at hand, unless another thread asked for it meanwhile: the start-up
+        stage's pre-warm fills the build cache, not the session's memory (an island opened meanwhile still waits for
+        the same compile instead of making it again)."""
+        self._local.passing = True
+        try:
+            yield
+        finally:
+            self._local.passing = False
 
     def _read(self, path: str) -> bytes | None:
         if path not in self._texts:
             self._texts[path] = self._install(path)
         return self._texts[path]
 
+    def _call(self, method: str, *args, **kw):
+        """A call of this thread's compiler (``Dxc.for_thread``)."""
+        for_thread = getattr(self.compiler, "for_thread", None)
+        if for_thread is not None:
+            return getattr(for_thread(), method)(*args, **kw)
+        with self._serial:
+            return getattr(self.compiler, method)(*args, **kw)
+
+    def _once(self, key, make):
+        """``make()`` run once for every thread that asks for ``key`` (the others wait for it) and kept (``MEMO``);
+        a failure is not kept, asked again it runs again, except an effect without the pass (its answer)."""
+        with self._lock:
+            got = self._memo.get(key)
+            mine = got is None
+            if mine:
+                while len(self._memo) >= MEMO:  # the oldest go; asked again, they are read from the build cache
+                    del self._memo[next(iter(self._memo))]
+                got = self._memo[key] = Future()
+            else:
+                got.wanted = True  # another thread waits for it: kept even when made ``passing``
+        if mine:
+            passing = getattr(getattr(self, "_local", None), "passing", False)
+            try:
+                got.set_result(make())
+            except BaseException as exc:
+                if not isinstance(exc, NoGBufferPass):
+                    with self._lock:
+                        self._memo.pop(key, None)
+                got.set_exception(exc)
+            if passing and not got.exception():
+                with self._lock:
+                    if not getattr(got, "wanted", False) and self._memo.get(key) is got:
+                        del self._memo[key]
+        return got.result()
+
     def source(self, path: str, defines: list[tuple[str, str]]) -> str:
         """``fxeffect.effect_source`` of a variant: the file's text with its includes is made once, the variant's
         defines go in front of it."""
         if path not in self._bodies:
-            self._bodies[path] = fxeffect.effect_source(self._read, path, [], self.descriptions)
+            self._bodies.setdefault(path, fxeffect.effect_source(self._read, path, [], self.descriptions))
         head = '#line 1 "<defines>"' + chr(10)
         return self._bodies[path].replace(head, head + fxeffect.define_lines(defines), 1)
 
+    def _digest(self, path: str) -> tuple[str, bool]:
+        """The digest of an effect's text with its includes, and whether it reads the frame's instance buffers
+        (``_frame``), made once per file."""
+        found = self._digests.get(path)
+        if found is None:  # once, whichever threads ask first: each would read and join the same files
+
+            def make() -> tuple[str, bool]:
+                text = self.source(path, [])
+                return buildcache.digest(text), self._frame(text)
+
+            found = self._digests.setdefault(path, self._once(("digest", path), make))
+        return found
+
     def _compile_all(self, path: str, source: str, what: str) -> dict[str, bytes]:
         """Preprocess, pick the pass shaders ``what`` names (``gbuffer``, or ``<technique>/<function>``), adapt
-        and compile each: the files the build cache keeps."""
-        with self._lock:
-            text, _messages = self.compiler.preprocess(source, ["-HV", "2021"], name=path)
+        and compile each (``_compiled``): the stages' record the build cache keeps for the variant."""
+        text, _messages = self._call("preprocess", source, ["-HV", "2021"], name=path)
         found = fxeffect.split_effect(text)
         if what in TECHNIQUES:
             try:
@@ -214,58 +282,113 @@ class ShaderSource:
             tech, call = [(t, c) for t, c in fxeffect.shader_calls(found)
                           if t.name == technique and c.function == function][int(nth or 0)]  # fmt: skip
             calls = [call]
-        files, info = {}, []
-        for k, call in enumerate(calls):
-            hlsl, entry = fxlink.Program(found.hlsl).entry_source(call, (*tech.passthrough, *PASSTHROUGH))
-            adapted = gameshader.adapt(hlsl, entry, vertex=call.stage == "vs", frame=self._frame(source))
-            with self._lock:
-                done = self.compiler.compile(adapted.hlsl, shaderdefines.compile_args(entry, call.profile), name=path)
-            if not done.ok:
-                raise RuntimeError(f"{call.function}: {done.messages[:2000]}")
-            files[f"{k}.dxil"] = done.object
+        program, frame = fxlink.Program(found.hlsl), self._digest(path)[1]
+        info = []
+        for call in calls:
+            hlsl, entry = program.entry_source(call, (*tech.passthrough, *PASSTHROUGH))
+            adapted = gameshader.adapt(hlsl, entry, vertex=call.stage == "vs", frame=frame)
+            key = self._compiled(adapted.hlsl, shaderdefines.compile_args(entry, call.profile), path, call.function)
             inputs = [[i.name, i.type, i.semantic, i.location] for i in adapted.inputs]
-            info.append({"entry": entry, "inputs": inputs, "types": gameshader.declared_types(adapted.hlsl)})
-        files["stages.json"] = json.dumps({"stages": info, "state": found.state_of(tech)}).encode()
-        return files
+            info.append({"entry": entry, "inputs": inputs, "types": gameshader.declared_types(adapted.hlsl),
+                         "shader": key})  # fmt: skip
+        return {"stages.json": json.dumps({"stages": info, "state": found.state_of(tech)}).encode()}
+
+    def shader_key(self, hlsl: str, args: list[str], name: str) -> str:
+        """The build cache's key of one compile: exactly what the compiler is handed (the text after every rewrite,
+        with the variant's defines in it, the arguments, the file name it reports errors against) and the compiler's
+        version; nothing of the machine or the run, so a later start and another island find it."""
+        return buildcache.digest(SHADER_VERSION, self.compiler.version(), name, *args, hlsl)
+
+    def _compiled(self, hlsl: str, args: list[str], name: str, function: str = "") -> str:
+        """``hlsl`` compiled with ``args`` once (two variants whose shader comes out as the same text share the
+        compile) and kept in the build cache with its reflection; its key (``shader_key``)."""
+        key = self.shader_key(hlsl, args, name)
+
+        def make() -> tuple[bytes, object]:
+            try:
+                return self._kept_shader(key)
+            except _Missing:
+                pass
+            done = self._call("compile", hlsl, args, name=name)
+            if not done.ok:
+                raise RuntimeError(f"{function or name}: {done.messages[:2000]}")
+            reflection = self._call("reflect", done.object)
+            buildcache.put_files(NAMESPACE, key, {"dxil": done.object, "reflection": dxc.reflection_json(reflection)})
+            return done.object, reflection
+
+        self._once(("shader", key), make)
+        return key
+
+    def _kept_shader(self, key: str) -> tuple[bytes, object]:
+        """A compiled shader and its reflection from the build cache; ``_Missing`` when it holds none."""
+        kept = buildcache.get_files(NAMESPACE, key)
+        if kept is None:
+            raise _Missing(key)
+        return kept["dxil"], dxc.reflection_of_json(kept["reflection"])
 
     def _frame(self, source: str) -> bool:
         """Whether an effect's text is compiled with the frame's instance buffers (it reads instances at all)."""
         return self.frame_instances and gameshader.FRAME_INSTANCES[0] in source
 
-    def _key(self, path: str, switches: tuple, what: str) -> tuple[str, str]:
-        """An effect variant's text and the build cache's key of its compiled pass shaders ``what``."""
-        source = self.source(path, [*self.graphics, *switches])
-        return source, buildcache.digest(VERSION, self.compiler.version(), what, source,
-                                         *(("frame",) * self._frame(source)))  # fmt: skip
+    def _key(self, path: str, switches: tuple, what: str) -> str:
+        """The build cache's key of an effect variant's compiled pass shaders ``what``: the effect's text with its
+        includes (by its digest), the variant's defines, the compiler and the rewrite (``VERSION``)."""
+        digest, frame = self._digest(path)
+        defines = fxeffect.define_lines([*self.graphics, *switches])
+        return buildcache.digest(VERSION, self.compiler.version(), what, digest, defines, *(("frame",) * frame))
 
     def cached(self, stages: dict[str, tuple[str, str, str]]) -> bool:
         """Whether every shader of a ``STAGES`` set is compiled in the build cache already (a later start: reading
         them takes seconds; a first start compiles them for minutes)."""
         for path, technique, function in stages.values():
-            _source, key = self._key(path, self.shipped_switches(path), f"{technique}/{function}")
+            key = self._key(path, self.shipped_switches(path), f"{technique}/{function}")
             if buildcache.get_files(NAMESPACE, key) is None:
                 return False
         return True
 
     def pass_stages(self, path: str, switches: tuple, what: str) -> list[gamedraw.Stage]:
         """The pass shaders ``what`` names of an effect variant, compiled once and kept in the build cache under the
-        effect's whole text (``NoGBufferPass`` for an effect without a G-buffer pass)."""
-        source, key = self._key(path, switches, what)
+        effect's text and the variant's defines (``NoGBufferPass`` for an effect without a G-buffer pass)."""
+        key = self._key(path, switches, what)
+        return list(self._once(("variant", key), lambda: self._variant(path, switches, what, key)))
+
+    def _variant(self, path: str, switches: tuple, what: str, key: str) -> tuple[gamedraw.Stage, ...]:
+        """A variant's stages: its record from the build cache (or compiled), each shader read or compiled once."""
         kept = buildcache.get_files(NAMESPACE, key)
-        if kept is None:
-            kept = self._compile_all(path, source, what)
-            buildcache.put_files(NAMESPACE, key, kept)
-        info = json.loads(kept["stages.json"])
-        if "error" in info:
-            raise NoGBufferPass(info["error"])
+        for attempt in range(2):
+            if kept is None:
+                kept = self._compile_all(path, self.source(path, [*self.graphics, *switches]), what)
+                buildcache.put_files(NAMESPACE, key, kept)
+            info = json.loads(kept["stages.json"])
+            self._record(path, what, [key, *(s["shader"] for s in info.get("stages", []))])
+            if "error" in info:
+                raise NoGBufferPass(info["error"])
+            try:
+                shaders = [self._once(("shader", s["shader"]), lambda s=s: self._kept_shader(s["shader"]))
+                           for s in info["stages"]]  # fmt: skip
+                break
+            except _Missing:  # the cache let a shader of the record go: the variant compiles again
+                if attempt:
+                    raise
+                kept = None
         out = []
-        for k, stage in enumerate(info["stages"]):
-            blob = kept[f"{k}.dxil"]
-            with self._lock:
-                reflection = self.compiler.reflect(blob)
+        for stage, (blob, reflection) in zip(info["stages"], shaders, strict=True):
             inputs = [gameshader.Input(*i) for i in stage["inputs"]]
             out.append(gamedraw.Stage(blob, stage["entry"], reflection, inputs, stage["types"], info.get("state", {})))
-        return out
+        return tuple(out)
+
+    def _record(self, path: str, what: str, keys: list[str]) -> None:
+        """The entries a variant wrote or read, in the manifest of its phase and game build (``render.shaderclean``:
+        what a phase drawn natively no longer needs can go)."""
+        from ..render import shaderclean
+        from . import shadernative
+
+        if getattr(self, "_build", None) is None:
+            try:
+                self._build = shadernative.build_id(self.game) if getattr(self.game, "prefix", None) else ""
+            except Exception:  # an install whose shipped cache does not read: no manifest, nothing offered later
+                self._build = ""
+        shaderclean.record(self._build, shaderclean.phase_of(path, what), keys)
 
     def stages(self, stem: str, values: dict[str, str], role: str = "gbuffer"):
         """The vertex and pixel shader of the effect ``stem``'s technique for ``role`` (``TECHNIQUES``) for a
@@ -345,18 +468,9 @@ class ShaderSource:
     def own_stage(self, hlsl: str, entry: str, profile: str = "cs_6_2") -> gamedraw.Stage:
         """A shader of ours (a step the view needs that no game shader does), compiled once by the game's compiler
         and kept in the build cache."""
-        key = buildcache.digest(VERSION, self.compiler.version(), "own", entry, profile, hlsl)
-        kept = buildcache.get_files(NAMESPACE, key)
-        if kept is None:
-            with self._lock:
-                done = self.compiler.compile(hlsl, shaderdefines.compile_args(entry, profile), name=entry)
-            if not done.ok:
-                raise RuntimeError(f"{entry}: {done.messages[:2000]}")
-            kept = {"0.dxil": done.object}
-            buildcache.put_files(NAMESPACE, key, kept)
-        with self._lock:
-            reflection = self.compiler.reflect(kept["0.dxil"])
-        return gamedraw.Stage(kept["0.dxil"], entry, reflection, [], gameshader.declared_types(hlsl))
+        key = self._compiled(hlsl, shaderdefines.compile_args(entry, profile), entry)
+        blob, reflection = self._once(("shader", key), lambda: self._kept_shader(key))
+        return gamedraw.Stage(blob, entry, reflection, [], gameshader.declared_types(hlsl))
 
     def shadow_fit(self) -> dict[str, gamedraw.Stage]:
         """The compute shaders of the sun's cascade analysis (``shadowfit.STAGES``)."""
@@ -384,7 +498,28 @@ class ShaderSource:
         carry the constants the engine passes (``DEFERRED_SHADING_TILE_SIZE_X`` = 16 ...)."""
         info = self.game.info(Path(effect).stem)
         paths = self.game.by_file.get(info.vanilla_hash, []) if info else []
-        return shadercache.read_switches(self.files.read(sorted(paths)[0]))[1] if paths else ()
+        return self.game.switches(sorted(paths)[0])[1] if paths else ()
+
+
+_shared: dict[tuple, ShaderSource] = {}
+_shared_lock = threading.Lock()
+SHARED = 2  # sources a session keeps (an install's, and a second one's while it switches) [ours]
+
+
+def shared(files, compiler: dxc.Dxc, frame_instances: bool = False) -> ShaderSource:
+    """The session's source for an install's files, compiler and kind of draw: another island or another rendering
+    quality finds what the first compiled or read already (the read texts, the variants, the shaders). An install's
+    tree is known by its folder: the start-up stage's tree and the view's share one source."""
+    folder = getattr(files, "folder", None)
+    where = os.path.normcase(os.path.abspath(folder)) if folder is not None else id(files)
+    key = (where, str(getattr(compiler, "folder", "")), frame_instances)
+    with _shared_lock:
+        found = _shared.get(key)
+        if found is None or (folder is None and found.files.files is not files):
+            while len(_shared) >= SHARED:
+                del _shared[next(iter(_shared))]
+            found = _shared[key] = ShaderSource(files, compiler, frame_instances)
+        return found
 
 
 first_values = configtree.first_values  # a MATERIAL node's fields by name, the first winning

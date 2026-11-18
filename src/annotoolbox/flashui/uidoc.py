@@ -80,13 +80,13 @@ class MovieDoc:
 
     def tree(self) -> Node:
         root = Node("movie", self.path.rsplit("/", 1)[-1])
-        root.children.append(self._timeline(0, self.movie.tags, tr("Stage"), set()))
+        root.children.append(self._timeline(0, self.movie.tags, tr("ui.stage"), set()))
         groups = (
-            (tr("Images"), self._images()),
-            (tr("Fonts"), [Node("font", f"{f.font_id}: {f.name} ({f.file})", (f.font_id,)) for f in feuedit.fonts(self.movie)]),
-            (tr("Texts"), [Node("text", _text_label(t), (t.char_id,)) for t in feuedit.texts(self.movie)]),
-            (tr("Classes"), self._symbols()),
-            (tr("Code"), self._code()),
+            (tr("ui.images"), self._images()),
+            (tr("common.fonts"), [Node("font", f"{f.font_id}: {f.name} ({f.file})", (f.font_id,)) for f in feuedit.fonts(self.movie)]),
+            (tr("ui.texts"), [Node("text", _text_label(t), (t.char_id,)) for t in feuedit.texts(self.movie)]),
+            (tr("ui.classes"), self._symbols()),
+            (tr("ui.code"), self._code()),
         )  # fmt: skip
         root.children += [Node("group", f"{name} ({len(items)})", (), items) for name, items in groups if items]
         return root
@@ -108,10 +108,10 @@ class MovieDoc:
 
     def _place_label(self, p: feuread.Placement) -> str:
         what = self.defs.get(p.char_id)
-        kind = what.name if what is not None else (tr("change") if p.char_id is None else tr("missing"))
+        kind = what.name if what is not None else (tr("ui.change") if p.char_id is None else tr("ui.missing"))
         name = f'"{p.name}" ' if p.name else ""
         which = f"{name}{kind} {p.char_id if p.char_id is not None else ''}".rstrip()
-        return tr("{what} at depth {depth}", what=which, depth=p.depth)
+        return tr("ui.what_at_depth", what=which, depth=p.depth)
 
     def _images(self) -> list[Node]:
         out = []
@@ -135,7 +135,7 @@ class MovieDoc:
             abc = feuread.read_abc(tag)
             strings = feuabc.strings(abc.abc)
             label = tr(
-                "code block {block}: {size} bytes, {strings} strings",
+                "ui.code_block_bytes_strings",
                 block=block,
                 size=number(len(abc.abc)),
                 strings=number(len(strings)),
@@ -199,4 +199,4 @@ class MovieDoc:
 
 def _text_label(t: feuread.EditText) -> str:
     text = (t.text or "").replace("\n", " ").replace("\r", " ")
-    return f"{t.char_id}: {text[:40] or tr('(empty)')}" + (f" [{t.variable}]" if t.variable else "")
+    return f"{t.char_id}: {text[:40] or tr('ui.empty')}" + (f" [{t.variable}]" if t.variable else "")

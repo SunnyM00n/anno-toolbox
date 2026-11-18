@@ -1,6 +1,6 @@
 """The live link's engine side against the suite's client over the real named pipe, the engine stubbed (build.cmd test).
 
-    python pipe_run.py <livelink_pipe_test.exe>
+    python pipe_run.py <livelink_pipe_test.exe> [anno1800 | anno2205]
 
 livelink_pipe_test.c is mod_livelink.c with stand-ins for the library's services and the engine's calls; each scenario
 starts it with a user folder of its own, switches the stand-ins with files there and asks through the client: the
@@ -34,9 +34,10 @@ def check(condition: bool, what: str) -> None:
 class Game:
     """One run of the stand-in game: its stdout lines, its user folder, its link."""
 
-    def __init__(self, exe: str, flags: tuple[str, ...] = ()) -> None:
+    def __init__(self, exe: str, flags: tuple[str, ...] = (), game: str = "") -> None:
         self.dir = tempfile.TemporaryDirectory(prefix="livelink-pipe-")
         self.user = Path(self.dir.name)
+        self.name = game
         for name in flags:
             (self.user / name).write_text("", encoding="ascii")
         self.lines: list[str] = []
@@ -49,7 +50,7 @@ class Game:
         while time.monotonic() < deadline and not any(line.startswith("READY") for line in self.lines):
             time.sleep(0.05)
         check(any(line.startswith("READY") for line in self.lines), "the stand-in game starts and opens its pipe")
-        self.link = linkclient.connect_game(self.user)
+        self.link = linkclient.connect_game(self.user, game=game)
         check(self.link is not None and self.link.connected, "the client finds the game through its session file")
 
     def _read(self) -> None:
@@ -77,8 +78,8 @@ class Game:
         self.dir.cleanup()
 
 
-def run(exe: str, scenario, flags: tuple[str, ...] = ()) -> None:
-    game = Game(exe, flags)
+def run(exe: str, scenario, flags: tuple[str, ...] = (), game: str = "") -> None:
+    game = Game(exe, flags, game)
     try:
         if game.link is not None:
             scenario(game, game.link)
@@ -325,19 +326,150 @@ def debug_commands_wait_for_a_quiet_game(game, link) -> None:
 def modules_are_listed_and_switched(game, link) -> None:
     listing = link.modules_list()
     names = [m.get("name") for m in listing.data.get("modules", [])]
-    check(listing.ok and names == ["trees", "farm_growth", "ui_dump"], f"the module list ({listing})")
+    check(listing.ok and names == ["trees", "farm_growth", "probe"], f"the module list ({listing})")
     first = listing.data["modules"][0] if names else {}
     check(first.get("class") == "experimental" and first.get("switchable") is False, f"class and switch ({first})")
-    done = link.modules_set("ui_dump", False)
-    check(done.status == livelink.DONE and done.data == {"module": "ui_dump", "on": False}, f"switched off ({done})")
+    done = link.modules_set("probe", False)
+    check(done.status == livelink.DONE and done.data == {"module": "probe", "on": False}, f"switched off ({done})")
     refused = link.modules_set("trees", False)
     check(refused.status == livelink.REFUSED and "cannot be switched" in refused.message, f"refused ({refused})")
     check(link.modules_set("nothing", True).status == livelink.REFUSED, "an unknown module is refused")
 
 
 def modules_are_refused_in_multiplayer(game, link) -> None:
-    reply = link._transmit(Sent("modules.set", {"module": "ui_dump", "on": False}))
+    reply = link._transmit(Sent("modules.set", {"module": "probe", "on": False}))
     check(reply.status == livelink.REFUSED and "multiplayer" in reply.message, f"refused in multiplayer ({reply})")
+
+
+PANEL_FILE = "23222120-2524-2726-2829-2a2b2c2d2e2f"  # the widget file the stand-in's panel places
+ANSWERED = {"guid", "crc", "name", "visible", "text", "image", "values"}  # all a widget of ui.values may hold
+
+
+def live_values_of_the_open_file(game, link) -> None:
+    check(link.supports(livelink.VALUES), "the welcome names the live values")
+    scene = link.ui_values(["HUD"])
+    widgets = (scene.data.get("scenes") or [{}])[0].get("widgets", [])
+    check(scene.ok and [w.get("name") for w in widgets] == ["Title", "Panel"], f"the scene's own widgets ({scene})")
+    check(widgets[0].get("text") == "Hello" and widgets[1].get("values") == {"7": 2.5}, f"what they show {widgets}")
+    placed = link.ui_values(["HUD", "Pause"], file=PANEL_FILE)
+    widgets = (placed.data.get("scenes") or [{}])[0].get("widgets", [])
+    check(placed.ok and placed.data.get("file") == PANEL_FILE, f"the widget file's widgets ({placed})")
+    check([w.get("name") for w in widgets] == ["Amount", "Icon"], f"only the file's own widgets {widgets}")
+    check(widgets[1].get("visible") is False and widgets[1].get("image") == "icon_wood", f"a hidden image {widgets}")
+    check(all(set(w) <= ANSWERED for w in widgets), "nothing but the shown values")
+    check(link.ui_values(["Pause"]).status == livelink.SKIPPED, "a state whose scene is not open is skipped")
+    check(link.ui_values(["Nothing"]).status == livelink.SKIPPED, "a name that is no state is skipped")
+    other = link.ui_values(["HUD"], file="00000000-0000-0000-0000-000000000000")
+    check(other.status == livelink.SKIPPED and "not placed" in other.message, f"a file the scene lacks ({other})")
+    for args in ({"states": ["HUD"], "file": "not-a-guid"}, {"file": PANEL_FILE}):
+        reply = link._transmit(Sent("ui.values", args))
+        check(not reply.ok, f"the game refuses {args} ({reply})")
+    asked = [line for line in game.lines if line.startswith("VALUES ")]
+    check(asked == ["VALUES HUD"] * 2 + ["VALUES Pause"] * 2 + ["VALUES Nothing", "VALUES HUD"], f"walked {asked}")
+
+
+def live_values_need_the_build_and_a_quiet_game(game, link) -> None:
+    check(not link.supports(livelink.VALUES), "no live values when the widget classes do not match")
+    reply = link._transmit(Sent("ui.values", {"states": ["HUD"]}))
+    check(reply.status == livelink.UNAVAILABLE, f"unavailable on that build ({reply})")
+    game.flag("novalues.txt", False)
+    game.flag("loading.txt")
+    reply = link._transmit(Sent("ui.values", {"states": ["HUD"]}))
+    check(reply.status == livelink.BUSY, f"busy while a session loads ({reply})")
+    check(not any(line.startswith("VALUES ") for line in game.lines), "no scene was walked")
+
+
+def live_values_are_refused_in_multiplayer(game, link) -> None:
+    reply = link.ui_values(["HUD"])
+    check(reply.status == livelink.REFUSED and "multiplayer" in reply.message, f"refused in multiplayer ({reply})")
+
+
+SCENE_KEYS = {"change", "state", "scene", "parent", "depth", "order", "window"}  # all a ui.scene event may hold
+
+
+def open_scenes(game, *rows: str) -> None:
+    """The stand-in's open scenes ("id depth name parent"), written whole so that the game never reads half."""
+    part = game.user / "scenes.part"
+    part.write_text("".join(f"{row}\n" for row in rows), encoding="ascii")
+    part.replace(game.user / "scenes.txt")
+
+
+def wait_for(seen: list, n: int, seconds: float = 3.0) -> list:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and len(seen) < n:
+        time.sleep(0.05)
+    return list(seen)
+
+
+def following_the_open_scenes(game, link) -> None:
+    check(link.supports(livelink.FOLLOW), "the welcome names following")
+    seen: list = []
+    link.on(livelink.SCENE, seen.append)
+    open_scenes(game, "10 5 ConstructionMenu HUD", "6 2 Blur Game")
+    time.sleep(0.4)
+    check(seen == [], "no event before the subscription")
+    check(link.subscribe([livelink.SCENE]).ok, "the topic is taken")
+    first = wait_for(seen, 2)
+    check([(e.get("change"), e.get("state"), e.get("order")) for e in first] == [("opened", "Blur", 1), ("opened", "ConstructionMenu", 2)],
+          f"every open scene, parents first ({first})")  # fmt: skip
+    check(bool(first) and first[-1].get("scene") == "constructionmenuscene" and first[-1].get("parent") == "HUD",
+          f"its scene file and parent ({first})")  # fmt: skip
+    check(all(set(e) <= SCENE_KEYS for e in first), "nothing but the scene's names")
+    open_scenes(game, "10 5 ConstructionMenu HUD", "6 2 Blur Game", "51 5 HUDGovernorsBar HUD")
+    later = wait_for(seen, 3)[2:]
+    check([(e.get("change"), e.get("order")) for e in later] == [("opened", 3)], f"opened later, on top ({later})")
+    open_scenes(game, "6 2 Blur Game", "51 5 HUDGovernorsBar HUD")
+    gone = wait_for(seen, 4)[3:]
+    check([(e.get("change"), e.get("state"), e.get("order")) for e in gone] == [("closed", "ConstructionMenu", 2)],
+          f"closed, with its opening's number ({gone})")  # fmt: skip
+    check(link.unsubscribe([livelink.SCENE]).ok, "unsubscribed")
+    open_scenes(game)
+    time.sleep(0.6)
+    check(len(seen) == 4, f"no event after the unsubscribe ({seen[4:]})")
+    open_scenes(game, "6 2 Blur Game")
+    link.subscribe([livelink.SCENE])
+    again = wait_for(seen, 5)[4:]
+    check(
+        [(e.get("change"), e.get("state")) for e in again] == [("opened", "Blur")], f"resubscribed: all again ({again})"
+    )
+    check(any("follow: 1 scene(s) open" in line for line in game.lines), "the log says what was open")
+
+
+def following_needs_the_build(game, link) -> None:
+    check(not link.supports(livelink.FOLLOW), "no following when the widget classes do not match")
+    seen: list = []
+    link.on(livelink.SCENE, seen.append)
+    open_scenes(game, "6 2 Blur Game")
+    check(link.subscribe([livelink.SCENE]).ok, "the topic is still taken")
+    time.sleep(0.6)
+    check(seen == [], "but no event comes")
+
+
+def a_game_without_an_engine_side(game, link) -> None:
+    """Anno 1800 and 2205 today (game.h, G_HAS_ENGINE 0): the link answers the handshake and ping with the game's own
+    id and no reload kind, and everything else "unavailable"."""
+    check(link.status().game == game.name, f"the welcome names the game ({link.status().game})")
+    check(link.capabilities() == frozenset(), f"no kind of reload ({sorted(link.capabilities())})")
+    check(link.welcome.get("kinds") == [] and link.welcome.get("mods") == [], f"an empty welcome ({link.welcome})")
+    check(link._transmit(Sent("ping", {})).ok, "ping is answered")
+    check(link.subscribe([livelink.SELECTION]).ok, "subscribing is answered")
+    for name, args in (
+        ("files.changed", {"paths": ["data/a.xml"]}),
+        ("reload.assets", {}),
+        ("reload.texts", {}),
+        ("reload.session", {}),
+        ("select", {"guid": 1}),
+        ("jump", {"object": 1}),
+        ("read", {"guid": 1, "fields": ["Building/BuildCost"]}),
+        ("ui.values", {"states": ["HUD"]}),
+        ("modules.list", {}),
+    ):
+        reply = link._transmit(Sent(name, args))
+        check(
+            reply.status == livelink.UNAVAILABLE and "not served" in reply.message,
+            f"{name} is unavailable ({reply.status}: {reply.message})",
+        )
+    check(not any(line.startswith("STATE") for line in game.lines), "no engine call was made")
 
 
 def main() -> int:
@@ -345,6 +477,10 @@ def main() -> int:
         print("pipe_run: skipped (the pipe is a Windows one)")
         return 0
     exe = sys.argv[1]
+    if len(sys.argv) > 2:  # the game's edition: only what a game with no engine side does
+        run(exe, a_game_without_an_engine_side, game=sys.argv[2])
+        print("pipe_run: ok" if not failures else f"pipe_run: {len(failures)} check(s) failed")
+        return 1 if failures else 0
     run(exe, confirmed_on_the_engines_end_line)
     run(exe, dropped_without_a_line, ("drop.txt",))
     run(exe, busy_while_saving_and_loading)
@@ -363,6 +499,11 @@ def main() -> int:
     run(exe, debug_commands_wait_for_a_quiet_game, ("commands.txt",))
     run(exe, modules_are_listed_and_switched, ("commands.txt",))
     run(exe, modules_are_refused_in_multiplayer, ("commands.txt", "humans.txt"))
+    run(exe, live_values_of_the_open_file)
+    run(exe, live_values_need_the_build_and_a_quiet_game, ("novalues.txt",))
+    run(exe, live_values_are_refused_in_multiplayer, ("humans.txt",))
+    run(exe, following_the_open_scenes)
+    run(exe, following_needs_the_build, ("novalues.txt",))
     print("pipe_run: ok" if not failures else f"pipe_run: {len(failures)} check(s) failed")
     return 1 if failures else 0
 

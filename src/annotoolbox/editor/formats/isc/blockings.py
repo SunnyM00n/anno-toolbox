@@ -64,21 +64,27 @@ def _cell_entries(header: Node) -> list[tuple[int, int]]:
     return out
 
 
+def set_list(node: Node, items: list[Node]) -> None:
+    """Make ``items`` the elements of the list ``node`` in its generation's form: ``i`` each, or numbered
+    ``i0000``... with ``arraysize`` counting them (what else the node holds stays in front)."""
+    old = {id(c) for c in list_items(node)}
+    size = node.find("arraysize")
+    for n, item in enumerate(items):
+        item.name = f"i{n:04d}" if size is not None else "i"
+    node.children = [c for c in node.children if id(c) not in old] + items
+    if size is not None:
+        size.text = str(len(items))
+
+
 def _set_items(node: Node, cells: list[tuple[int, int]], make) -> None:
     """The list ``node`` holding ``cells``: each item a copy of the first old one (or fresh) set by ``make(item, cell)``."""
     old = list_items(node)
-    keep = [c for c in node.children if c not in old]
-    numbered = node.find("arraysize") is not None
     items = []
-    for n, cell in enumerate(cells):
+    for cell in cells:
         item = copy.deepcopy(old[0]) if old else Node("i")
-        item.name = f"i{n:04d}" if numbered else "i"
         make(item, cell)
         items.append(item)
-    node.children = keep + items
-    size = node.find("arraysize")
-    if size is not None:
-        size.text = str(len(items))
+    set_list(node, items)
 
 
 def _make_tile(item: Node, cell: tuple[int, int]) -> None:

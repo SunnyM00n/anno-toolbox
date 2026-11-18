@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from ...assetedit.icons import IconSource
 from ...infra.i18n import alternatives, tr
+from ...sources import icons2070
 from .. import footprints, placeables, placedrules, snapping
 from ..editchange import yaw_quat
 from ..editsession import game_of
@@ -126,9 +127,9 @@ class PlaceTool:
             v.apply_hidden()
             name = v.pick.get("name", "")
             v.status.emit(
-                tr("placed {name} with: {problems}", name=name, problems="; ".join(problems))
+                tr("islands.placed_name_with_problems", name=name, problems="; ".join(problems))
                 if problems
-                else tr("placed {name}", name=name)
+                else tr("islands.placed_name", name=name)
             )
 
     def overlay(self) -> list:
@@ -160,7 +161,7 @@ class _DropFilter(QObject):
             try:
                 pick = tool.panel.pick_now(guid)
             except (OSError, KeyError, ValueError) as exc:  # an exception must not leave an event filter
-                view.status.emit(tr("cannot place asset {guid}: {error}", guid=guid, error=exc))
+                view.status.emit(tr("islands.cannot_place_asset", guid=guid, error=exc))
                 return False
             if pick is None:
                 return False
@@ -207,13 +208,15 @@ class PlaceablesPanel(QWidget):
         self._icons = None
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
-        self.search = QLineEdit(placeholderText=tr("search: name, GUID or template"))
-        self.buildings = QCheckBox(tr("Buildings only"), checked=True)
+        self.search = QLineEdit(placeholderText=tr("islands.search_name_guid_template"))
+        self.buildings = QCheckBox(tr("islands.buildings_only"), checked=True)
         top.addWidget(self.search, 1)
         top.addWidget(self.buildings)
         layout.addLayout(top)
         self.tree = _Tree()
-        self.tree.setHeaderLabels([tr("Asset"), "GUID", tr("Template")])  # i18n: ok (GUID is the game's term)
+        self.tree.setHeaderLabels(
+            [tr("common.asset"), "GUID", tr("common.template")]
+        )  # i18n: ok (GUID is the game's term)
         self.tree.setColumnWidth(0, 230)
         self.tree.setIconSize(QPixmap(ICON_SIZE, ICON_SIZE).size())
         self.tree.setDragEnabled(True)
@@ -221,7 +224,7 @@ class PlaceablesPanel(QWidget):
         self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.preview.setWordWrap(True)
         layout.addWidget(self.preview)
-        self.count = QLabel(tr("reading the game's assets…"))
+        self.count = QLabel(tr("islands.reading_games_assets"))
         layout.addWidget(self.count)
         self.search.textChanged.connect(self.fill)
         self.buildings.toggled.connect(self.fill)
@@ -230,13 +233,13 @@ class PlaceablesPanel(QWidget):
         if "place" in doc.modes["tools"] and not doc.session.readonly:
             doc.background.run(lambda: doc.editor.placeables(), self._loaded)  # an editor without a list says so
         else:
-            self.count.setText(tr("this island takes no new objects"))
+            self.count.setText(tr("islands.island_takes_no_new_objects"))
 
     def _loaded(self, result) -> None:
         if not self.doc.alive:
             return
         if isinstance(result, Exception):
-            self.count.setText(tr("no asset list: {error}", error=f"{type(result).__name__}: {result}"))
+            self.count.setText(tr("islands.no_asset_list", error=f"{type(result).__name__}: {result}"))
             return
         self.rows, self.by_guid = list(result), {r.guid: r for r in result}
         terrain = self.doc.session.island.setdefault("terrain", {})  # the rules' ground per asset (placedrules)
@@ -244,6 +247,30 @@ class PlaceablesPanel(QWidget):
         self.doc.session.island["buildings"] = sorted(str(r.guid) for r in self.rows if r.building)
         self._icons = IconSource(self.doc.editor.read_game)
         self.fill()
+        self.doc.background.run(self._read_icon_data, self._icon_data)  # atlas games: icons.xml, off the thread
+
+    def _read_icon_data(self):
+        """The game's icon atlases and GUID -> tile table (the games that keep icons in ``icons.xml``)."""
+        read = self.doc.editor.read_game
+
+        def exists(path: str) -> bool:
+            try:
+                read(path)
+            except (KeyError, FileNotFoundError, OSError):
+                return False
+            return True
+
+        return icons2070.load_icon_data(read, exists)
+
+    def _icon_data(self, result) -> None:
+        if not self.doc.alive or isinstance(result, Exception) or self._icons is None or not result[0]:
+            return
+        self._icons.use_atlases(*result)
+        self.fill()
+
+    def _key(self, row: placeables.Placeable) -> str:
+        """Where the row's icon is: the file its asset names, else its tile of the game's icon atlas; "" for none."""
+        return self._icons.key_for(row.guid, row.icon) if self._icons is not None else ""
 
     def fill(self) -> None:
         self.tree.clear()
@@ -259,25 +286,25 @@ class PlaceablesPanel(QWidget):
                 item.setToolTip(
                     0,
                     tr(
-                        "{name}\n{cfg}\n{n} variation(s); stands on {ground}",
+                        "islands.tip.name_cfg_n_variations_stands",
                         name=r.name,
                         cfg=r.cfg,
                         n=r.variations,
                         ground=_ground(r),
                     ),
                 )
-                if budget and r.icon and self._icons is not None and (query or len(groups) == 1):
+                if budget and self._key(r) and (query or len(groups) == 1):
                     self._set_icon(item, r)
                     budget -= 1
+                elif not self._key(r):
+                    item.setToolTip(0, f"{item.toolTip(0)}\n{tr('islands.no_icon_in_games_files')}")
                 top.addChild(item)
                 shown += 1
             top.setExpanded(query and len(groups) <= 12)
-        self.count.setText(
-            tr("{found} of {total} in {groups} groups", found=len(found), total=len(self.rows), groups=len(groups))
-        )
+        self.count.setText(tr("islands.found_total_groups", found=len(found), total=len(self.rows), groups=len(groups)))
 
     def _set_icon(self, item: QTreeWidgetItem, row: placeables.Placeable) -> None:
-        image = self._icons.image(row.icon)
+        image = self._icons.image(self._key(row))
         if image is None:
             return
         item.setIcon(0, QIcon(QPixmap.fromImage(image.scaled(ICON_SIZE, ICON_SIZE, Qt.AspectRatioMode.KeepAspectRatio,
@@ -288,19 +315,19 @@ class PlaceablesPanel(QWidget):
         if row is None:
             item.setExpanded(not item.isExpanded())
             return
-        if self._icons is not None and row.icon and item.icon(0).isNull():
+        if self._key(row) and item.icon(0).isNull():
             self._set_icon(item, row)
         self._show(row)
         self.choose(row.guid)
 
     def _show(self, row: placeables.Placeable) -> None:
-        image = self._icons.image(row.icon) if self._icons is not None and row.icon else None
+        image = self._icons.image(self._key(row)) if self._key(row) else None
         if image is not None:
             self.preview.setPixmap(
                 QPixmap.fromImage(image.scaledToHeight(64, Qt.TransformationMode.SmoothTransformation))
             )
         else:
-            self.preview.setText(tr("{name}: the model shows under the cursor", name=row.name))
+            self.preview.setText(tr("islands.model_shows_under_cursor", name=row.name))
 
     def guid_of(self, cfg: str) -> int | None:
         """The asset whose first model is ``cfg`` (the viewer's model handed over), None when no listed asset has it."""
@@ -312,21 +339,19 @@ class PlaceablesPanel(QWidget):
         row = self.by_guid.get(int(guid))
         if row is None:
             return (
-                tr("the asset list is still being read")
-                if not self.rows
-                else tr("asset {guid} has no model to place", guid=guid)
+                tr("islands.asset_list_still_read") if not self.rows else tr("islands.asset_no_model_place", guid=guid)
             )
         doc = self.doc
-        doc.say(tr("preparing {name}…", name=row.name))
+        doc.say(tr("islands.preparing_name", name=row.name))
 
         def done(result):
             if not doc.alive:
                 return
             if isinstance(result, Exception):
-                doc.say(tr("cannot place {name}: {error}", name=row.name, error=result))
+                doc.say(tr("islands.cannot_place_name_error", name=row.name, error=result))
                 return
             doc.view.set_pick(result)
-            doc.say(tr("place {name}: click on the island ([ and ] turn it, Shift: off the grid)", name=row.name))
+            doc.say(tr("islands.place_click_island_turn_shift", name=row.name))
 
         doc.background.run(lambda: self.pick_now(row.guid), done)
         return ""
@@ -345,4 +370,4 @@ class PlaceablesPanel(QWidget):
 
 
 def _ground(row: placeables.Placeable) -> str:
-    return alternatives(row.terrain) if row.terrain else tr("any ground")
+    return alternatives(row.terrain) if row.terrain else tr("islands.any_ground")

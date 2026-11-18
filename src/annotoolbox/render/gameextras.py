@@ -17,14 +17,14 @@ from . import eyeadapt, gameatmosphere, gameclouds, gameinland, gameocean, gamep
 
 JOB = "game-frame-extra:{}"
 # what each part says when it does not compile
-N_WATER = N_("the game's water copies: {reason}")
-N_OCEAN = N_("the game's ocean simulation: {reason}")
-N_ATMOSPHERE = N_("the game's visible sky and haze: {reason}")
-N_CLOUDS = N_("the game's clouds: {reason}")
-N_POST = N_("the game's post chain: {reason}")
-N_EYE = N_("the game's eye adaptation: {reason}")
-N_SEA = N_("the game's sea: {reason}")
-N_INLAND = N_("the game's rivers and lakes: {reason}")
+N_WATER = N_("islands.games_water_copies")
+N_OCEAN = N_("islands.games_ocean_simulation")
+N_ATMOSPHERE = N_("islands.games_visible_sky_haze")
+N_CLOUDS = N_("islands.games_clouds_reason")
+N_POST = N_("islands.games_post_chain")
+N_EYE = N_("islands.games_eye_adaptation")
+N_SEA = N_("islands.games_sea_reason")
+N_INLAND = N_("common.games_rivers_lakes")
 
 
 class FrameExtras:
@@ -51,7 +51,13 @@ class FrameExtras:
             self.say(tr(said, reason=f"{type(result).__name__}: {result}"[:300]))
             self.made[key] = False
             return None
-        part = self.made[key] = make(result)
+        try:
+            part = make(result)
+        except Exception as exc:  # the device refused it: said once, not raised again in every frame
+            self.say(tr(said, reason=f"{type(exc).__name__}: {exc}"[:300]))
+            self.made[key] = False
+            return None
+        self.made[key] = part
         if getattr(part, "error", ""):
             self.say(tr(said, reason=part.error[:300]))
         return part

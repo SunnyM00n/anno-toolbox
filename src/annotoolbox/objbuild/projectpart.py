@@ -12,4 +12,4 @@ from ..infra.i18n import N_
 from ..suite.project import ALL_GAMES, EditsFolder
 
 EDITS = EditsFolder("object-edits", ALL_GAMES)  # the builder's work in a project (the viewer's imports are model-edits)
-PART = EDITS.part("objects", N_("Object builder"), "object builder")
+PART = EDITS.part("objects", N_("objects.object_builder"), "object builder")

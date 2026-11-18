@@ -211,7 +211,7 @@ class UiDoc:
         for n in [self.root, *elements.groups_of(self.root).values()]:
             if any(o is el.node for o in phoenixedit.objects(n, "WidgetInstances")):
                 return n
-        raise KeyError(tr("{name} is not in this file's instance lists", name=el.name))
+        raise KeyError(tr("ui.not_files_instance_lists", name=el.name))
 
     def remove(self, el: elements.Element) -> int:
         """Take an instance out, with the bindings that name it; returns how many bindings went."""
@@ -266,7 +266,7 @@ class UiDoc:
         for f in self.schema.get(f"{track['type']:08x}", {}).get("fields", []):
             if f["name"] == "Track" and f.get("elem"):
                 return f["elem"]
-        raise KeyError(tr("{type} holds no keys", type=track["schema_type"]))
+        raise KeyError(tr("ui.holds_no_keys", type=track["schema_type"]))
 
     def _write_key(self, track: dict, key: dict, time: float | None, value, interpolator: int | None) -> None:
         if time is not None:

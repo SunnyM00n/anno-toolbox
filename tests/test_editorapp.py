@@ -27,6 +27,33 @@ def test_settings_round_trip_and_problems(tmp_path):
     assert any("Anno 117" in p for p in problems) and any("Anno 2070" in p for p in problems)
 
 
+def test_a_stopped_job_ends_at_its_next_log_line_and_a_step_that_must_run_whole_is_not_cut():
+    import threading
+
+    from annotoolbox.infra.i18n import tr
+
+    held, release = threading.Event(), threading.Event()
+
+    def long(job):
+        job.log("first")
+        held.set()
+        assert release.wait(30)
+        job.note("the step that runs whole")  # a stop does not cut it short
+        job.log("second")  # it ends here
+        return "never"
+
+    stopped = editorapp.Job("long", long)
+    assert held.wait(30)
+    stopped.stop()
+    release.set()
+    assert stopped.wait(30) and stopped.state == "stopped" and stopped.result is None
+    assert stopped.lines == ["first", "the step that runs whole", tr("islands.job_stopped", name="long")]
+    ok = editorapp.Job("ok", lambda job: job.log("step") or 7)
+    assert ok.wait(30)
+    ok.stop()  # a job that has ended stays as it ended
+    assert ok.state == "done" and ok.result == 7
+
+
 def test_a_job_keeps_its_log_and_its_failure():
     ok = editorapp.Job("ok", lambda job: job.log("step") or 7)
     bad = editorapp.Job("bad", lambda job: 1 / 0)
@@ -276,3 +303,21 @@ def test_a_port_reads_the_games_in_its_job_not_on_the_callers_thread(tmp_path, m
     job._thread.join(10)
     assert seen and seen[0] is not threading.main_thread() and job.state == "failed"
     assert job.lines[0].startswith("opening")
+
+
+def test_a_log_line_written_while_the_status_is_read_is_not_skipped():
+    """The window asks for the lines from ``next`` on: a line the job wrote between the read of the lines and the
+    count of them was never shown."""
+
+    class Racing(list):
+        def __getitem__(self, key):
+            got = super().__getitem__(key)
+            if isinstance(key, slice) and len(self) == 1:
+                self.append("late")  # the job's thread, between the two reads
+            return got
+
+    job = editorapp.Job("ok", lambda job: None)
+    job._thread.join(5)
+    job.lines = Racing(["first"])
+    status = job.status(0)
+    assert status["lines"] == ["first"] and job.status(status["next"])["lines"] == ["late"]

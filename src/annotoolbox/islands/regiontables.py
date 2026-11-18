@@ -178,6 +178,17 @@ def material_table(
     return table
 
 
+def with_unlisted(table: dict[int, int], dst_text: str) -> dict[int, int]:
+    """``table`` with every ID its source set does not list (a map may hold one: 1800's ``colony03_a02_02`` lays its
+    deep sea bed in ID 31, which ``arctic_01`` lacks) sent where the underwater family goes: kept as it is, the ID
+    names nothing or another material in the target set (island-regions "Between Anno 117 and Anno 1800")."""
+    dst = [m for m in set_materials(dst_text) if m.id < ID_LIMIT]
+    if not dst:
+        return dict(table)
+    sea = _candidates("underwater", dst)[0].id
+    return {i: table.get(i, sea) for i in range(ID_LIMIT)}
+
+
 def prop_kind(path: str) -> tuple[str, str]:
     """A prop file's kind: the game's prop layer word and the first shape word of its path."""
     low = norm(path)

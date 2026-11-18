@@ -1,9 +1,9 @@
-"""The layout rules of a group: a stack's order, spacing, margin and cross-axis alignment, and a background layout
-that stretches the first child round the others.
+"""The layout rules of a group: a stack's order, spacing and cross-axis alignment, and a background layout that
+stretches the first child round the others (checked against the game's own layout: layout.md).
 
 ``read_rule(comps, overrides)`` is the rule of a group instance (None: its children keep their own places);
-``arrange(rule, slots)`` moves the slots, one per child in drawing order, to where the rule puts them.
-docs/ui/117/layout.md "Layout components"; the cross-axis alignment and the background are inferred there.
+``arrange(rule, slots)`` moves the slots, one per child in the file's order, to where the rule puts them.
+docs/ui/117/layout.md "Layout components" says what was settled against the game and what stays open.
 """
 
 from __future__ import annotations
@@ -57,7 +57,8 @@ def components(node: dict) -> dict[str, int]:
     return out
 
 
-def _vector(value, default: tuple) -> tuple:
+def vector(value, default: tuple) -> tuple:
+    """``value`` as a vector of floats as long as ``default`` (a missing or unusable part from ``default``)."""
     parts = list(value) if isinstance(value, (tuple, list)) else []
     return tuple(
         float(parts[i]) if i < len(parts) and isinstance(parts[i], (int, float)) else float(d)
@@ -76,16 +77,16 @@ def read_rule(comps: dict[str, int], overrides: dict) -> Rule | None:
         rule.vertical = overrides.get((stack, STACK_ORIENTATION)) == VERTICAL
         rule.space = float(overrides.get((stack, STACK_SPACE), 0) or 0)
         rule.inverted = bool(overrides.get((stack, STACK_INVERT)))
-        rule.margin = _vector(overrides.get((stack, STACK_MARGIN)), (0.0,) * 4)
+        rule.margin = vector(overrides.get((stack, STACK_MARGIN)), (0.0,) * 4)
         rule.align = int(overrides.get((stack, STACK_ALIGN), BEGIN) or BEGIN)
     if BACKGROUND in comps:
-        rule.background = _vector(overrides.get((comps[BACKGROUND], BACKGROUND_MARGIN)), (0.0,) * 4)
+        rule.background = vector(overrides.get((comps[BACKGROUND], BACKGROUND_MARGIN)), (0.0,) * 4)
     return rule
 
 
 def read_child(comps: dict[str, int], overrides: dict) -> tuple[tuple[float, float, float, float], int]:
     """A child's padding and its alignment override (``INHERITED``: the group's)."""
-    pad = _vector(overrides.get((comps[PADDING], PADDING_VALUE)), (0.0,) * 4) if PADDING in comps else (0.0,) * 4
+    pad = vector(overrides.get((comps[PADDING], PADDING_VALUE)), (0.0,) * 4) if PADDING in comps else (0.0,) * 4
     align = int(overrides.get((comps[ALIGN], ALIGN_VALUE), INHERITED) or INHERITED) if ALIGN in comps else INHERITED
     return pad, align
 
@@ -98,14 +99,15 @@ def _shift(slot: Slot, dx: float, dy: float) -> None:
 
 
 def _across(rule: Rule, slot: Slot, extent: float) -> float:
-    """Where the child's cross-axis edge goes, from the group's cross-axis start: its alignment inside ``extent``."""
+    """Where the child's cross-axis edge goes, from the group's cross-axis start: its alignment inside ``extent``.
+    The margin does not move the children (it grows the group's box); a middle centres the child with its paddings."""
     v = rule.vertical
-    begin = rule.margin[0 if v else 1]
+    begin = 0.0
     pad_begin, pad_end = (slot.pad[0], slot.pad[2]) if v else (slot.pad[1], slot.pad[3])
     length = (slot.rect[2] - slot.rect[0]) if v else (slot.rect[3] - slot.rect[1])
     align = rule.align if slot.align in (INHERITED, 0) else slot.align
     if align == MIDDLE:
-        return begin + (extent - length) / 2
+        return begin + (extent - length - pad_begin - pad_end) / 2 + pad_begin
     if align == END:
         return begin + extent - length - pad_end
     return begin + pad_begin
@@ -127,8 +129,8 @@ def _stack(rule: Rule, flow: list[Slot]) -> None:
         ((s.rect[2] - s.rect[0] + s.pad[0] + s.pad[2]) if v else (s.rect[3] - s.rect[1] + s.pad[1] + s.pad[3]))
         for s in flow
     ) if flow else 0.0  # fmt: skip
-    cursor = rule.margin[1] if v else rule.margin[0]
-    for s in reversed(flow) if rule.inverted else flow:
+    cursor = 0.0
+    for s in flow if rule.inverted else reversed(flow):  # the game lays the last child of the file out first
         x0, y0, x1, y1 = s.rect
         cursor += s.pad[1] if v else s.pad[0]
         across = _across(rule, s, extent)

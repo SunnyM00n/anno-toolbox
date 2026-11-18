@@ -76,9 +76,7 @@ def read_props(obj: HircObject, version: int) -> PropBlock:
         start = r.pos
         props, ranged = bnkgraph.read_prop_lists(r)
     except (ValueError, struct.error) as exc:
-        raise PropError(
-            tr("{type_name} {id}: the node base does not read ({exc})", type_name=obj.type_name, id=obj.id, exc=exc)
-        ) from exc
+        raise PropError(tr("sound.node_base_not_read", type_name=obj.type_name, id=obj.id, exc=exc)) from exc
     return PropBlock(start, r.pos, props, ranged)
 
 

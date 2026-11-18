@@ -24,10 +24,17 @@ FOREST_TABLES = "forest_tables"  # the numbered trees stored beside an island a 
 APPS = "suite_apps"  # an app of the suite's window beyond the built-in ones (``extspecs.AppSpec``)
 ISLAND_CONVERSIONS = "island_ports"  # targets of "Port to region / game" beyond the generation
 SAVE_EDITS = "save_edits"  # more values of a save the Saves app's Edit tab offers (``extspecs.SaveEdit``)
+CONVERSIONS = "conversions"  # more entries of the Converter app beyond its own (``extspecs.Conversion``)
+CONVERTER_PAGES = "converter_pages"  # a page of the Converter app beside its entries (``extspecs.ConverterPage``)
+
+UI_COMPARE = (
+    "ui_compare"  # a panel of the UI editor that holds other values against the preview (``extspecs.UiCompare``)
+)
+LINK_KINDS = "link_kinds"  # more kinds a game's welcome may list for the live link (a name each)
 
 EXTENSIONS = ""
 
-NOT_IN_EDITION = N_("not available in this edition")  # shown through tr()
+NOT_IN_EDITION = N_("common.not_available_edition")  # shown through tr()
 
 _cache: dict[str, object | None] = {}
 _points: dict[str, dict[str, object]] = {}

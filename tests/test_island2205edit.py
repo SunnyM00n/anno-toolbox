@@ -276,3 +276,19 @@ def test_an_index_that_is_ours_without_the_games_copy_is_refused_and_an_old_copy
     old.write_bytes(_index())
     assert a7m_edit2205.original_index(game, old) == _index() and not old.exists()  # moved in
     assert a7m_edit2205.uninstall(game) and (game / "maindata/file.db").read_bytes() == _index()
+
+
+def test_a_prop_that_stores_no_rotation_or_scale_gets_them_when_an_edit_sets_them():
+    isl = _session2205()
+    tree = isl.prop_tags()[0]
+    tree.children = [c for c in tree.children if c.name not in ("Rotation", "Scale")]
+    report = a7m_edit2205.apply(isl, _edits(props={KEY_TREE: {"rotation": [0, 1, 0, 0], "scale": 2.0}}))
+    assert report["props changed"] == 1 and report["members"] == ["rd3d.data"]
+    assert (isl.props()[0]["rotation"], isl.props()[0]["scale"]) == ([0.0, 1.0, 0.0, 0.0], [2.0, 2.0, 2.0])
+
+
+def test_a_scene_without_an_object_manager_takes_prop_edits_and_lists_object_edits():
+    isl = _session2205()
+    isl.gm.children = [c for c in isl.gm.children if c.name != "GameObjectManager"]
+    report = a7m_edit2205.apply(isl, _edits(objects={KEY_FREE: {"deleted": True}}, props={KEY_ROCK: {"deleted": True}}))
+    assert report["unmatched"] == [KEY_FREE] and report["props deleted"] == 1

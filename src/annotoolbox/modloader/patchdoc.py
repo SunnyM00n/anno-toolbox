@@ -138,7 +138,9 @@ class PatchDoc:
     def descendants(self, ctx: ET.Element, tag: str | None, needles: tuple[bytes, ...] = ()) -> list[ET.Element]:
         """The elements below ``ctx`` named ``tag`` (any with None) in document order; with ``needles`` the lazy
         assets that lack one of them stay unread and are left out (they cannot hold a match)."""
-        if self.lazy and self.asset_of(ctx) is None:
+        if ctx in self.lazy:
+            self.materialize(ctx)
+        elif self.lazy and self.asset_of(ctx) is None:
             if needles:
                 self.materialize_with(needles)
             else:
@@ -210,6 +212,13 @@ class PatchDoc:
         self._starts.append((start, len(self.data)))
         self._by_start[start] = asset
         self.notes[asset] = note
+
+    def _forget_lazy(self, el: ET.Element) -> None:
+        """A removed element's bytes are not read again (a search by GUID would find the asset that is gone)."""
+        span = self.lazy.pop(el, None)
+        if span is not None:
+            self._by_start.pop(span[0], None)
+            self.notes.pop(el, None)
 
     def peek(self, el: ET.Element) -> ET.Element:
         """``el`` itself, or for a lazy asset a copy read from its bytes (the document is not changed)."""
@@ -346,6 +355,7 @@ class PatchDoc:
         parent.remove(el)
         for node in [el, *el.iter("Asset")]:
             self._unindex(node)
+            self._forget_lazy(node)
         for guid in el.iter("GUID"):
             self._std_drop(guid)
         self.changed(parent, own=False, tags={el.tag})

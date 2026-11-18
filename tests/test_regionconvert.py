@@ -381,9 +381,8 @@ def test_installed_117_island_carried_into_1800_reads_back():
     done = islandconvert.convert(src, dst, islandconvert.Request("anno117", path, "anno1800:moderate"), colours=False)
     isl = IslandFile1800(done.a7m, done.info)
     back = a7m_edit117.IslandFile(src.read(path), src.read(path[:-4] + ".a7minfo"))
-    assert isl.size == back.size
-    heights = isl.gm.path("TerrainManager/HeightMap/HeightMap").data
-    assert heights == back.gm.path("TerrainManager/HeightMap/HeightMap").data
+    # the Old World's 256-tile islands are not in its pool (no RandomIsland asset): a larger donor carries it
+    assert isl.size > back.size and done.report["embedded"]["place"][2] == back.size
     assert placed_props(isl.rd) and not [p for p in placed_props(isl.rd) if p.startswith("data/base/")]
     assert done.report["objects kept"] > 0 and "<IslandRegion>Moderate</IslandRegion>" in done.asset
 

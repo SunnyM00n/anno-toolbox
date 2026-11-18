@@ -11,6 +11,7 @@
 #include "debug_logic.h"
 #include "livelink.h"
 #include "livereload.h"
+#include "livevalues_logic.h"
 #include "luacmd.h"
 #include "targets.h"
 
@@ -85,7 +86,7 @@ const HlibEdition *hlib_edition(void) { return &g_edition; }
 static HlibModuleState g_mods[] = {
     {"trees", HLIB_EXPERIMENTAL, 1, 0, HLIB_SIM, "it cannot be switched while the game runs"},
     {"farm_growth", HLIB_EXPERIMENTAL, 0, 1, HLIB_SIM, ""},
-    {"ui_dump", HLIB_DEV, 1, 1, HLIB_PRESENT, ""},
+    {"probe", HLIB_DEV, 1, 1, HLIB_PRESENT, ""},
 };
 int hlib_module_count(void) { return 3; }
 int hlib_module_state(int i, HlibModuleState *out) {
@@ -162,13 +163,91 @@ int hlib_live_reload_results(uint32_t batch, HlibReloadResult *out, int cap, int
     if (pending) *pending = 0;
     return 0;
 }
-int hlib_ui_dump_install_quiet(void) { return 0; }
-int hlib_ui_dump_now(void *ui, const int *ids, int n, char (*files)[160], int cap) {
-    (void)ui, (void)ids, (void)n, (void)files, (void)cap;
-    return -1;
-}
 void hlib_scenes_reloaded(void) {}
 int hlib_lua_run_ok(void) { return 1; }
+
+/* The live widget values' engine side: an open state HUD whose scene holds a title and a panel (an instance of the
+   widget file 23222120-...) with a label and a hidden image, a closed state Pause; the walk and the answer are the real
+   ones (livevalues_logic.c). novalues.txt: the build's widget classes do not match. */
+typedef struct VNode {
+    LvIdentity id;
+    LvShown shown;
+    const struct VNode *kids[3];
+    int nkids;
+} VNode;
+static VNode v_scene, v_title, v_panel, v_amount, v_icon;
+static int v_identify(void *ctx, const void *w, LvIdentity *out) {
+    (void)ctx;
+    *out = ((const VNode *)w)->id;
+    return 1;
+}
+static void v_shown(void *ctx, const void *w, const LvIdentity *id, LvShown *out) {
+    (void)ctx, (void)id;
+    *out = ((const VNode *)w)->shown;
+}
+static int v_children(void *ctx, const void *w, const void **out, int cap, int *cut) {
+    const VNode *n = (const VNode *)w;
+    (void)ctx, (void)cut;
+    for (int i = 0; i < n->nkids && i < cap; i++) out[i] = n->kids[i];
+    return n->nkids < cap ? n->nkids : cap;
+}
+static void v_node(VNode *n, int seed, const char *name, int tmpl) {
+    memset(n, 0, sizeof *n);
+    for (int i = 0; i < 16; i++) n->id.guid[i] = (uint8_t)(seed * 16 + i), n->id.tmpl[i] = (uint8_t)(tmpl * 16 + i);
+    n->id.has_guid = n->id.has_crc = n->id.visible = 1, n->id.has_tmpl = tmpl != 0, n->id.name_crc = 0x100u + (uint32_t)seed;
+    snprintf(n->id.name, sizeof n->id.name, "%s", name), n->id.has_name = 1;
+}
+static void v_build(void) {
+    v_node(&v_scene, 1, "scene", 1), v_node(&v_title, 3, "Title", 0), v_node(&v_panel, 4, "Panel", 2);
+    v_node(&v_amount, 5, "Amount", 0), v_node(&v_icon, 6, "Icon", 0);
+    snprintf(v_title.shown.text, LV_TEXT, "Hello"), v_title.shown.has_text = 1;
+    v_panel.shown.values[0] = (LvValue){7, LV_NUMBER, 2.5, ""}, v_panel.shown.nvalues = 1;
+    snprintf(v_amount.shown.text, LV_TEXT, "1,234 t"), v_amount.shown.has_text = 1;
+    snprintf(v_icon.shown.image, LV_TEXT, "icon_wood"), v_icon.shown.has_image = 1, v_icon.id.visible = 0;
+    v_scene.kids[0] = &v_title, v_scene.kids[1] = &v_panel, v_scene.nkids = 2;
+    v_panel.kids[0] = &v_amount, v_panel.kids[1] = &v_icon, v_panel.nkids = 2;
+}
+const int *hlib_live_link_values_targets(int *n) {
+    *n = 0;
+    return NULL;
+}
+int hlib_live_link_values_ready(void) { return !flag("novalues.txt"); }
+int hlib_live_link_values_now(void *ui, char (*states)[64], int n, const uint8_t *file, char *data, size_t cap,
+                              int *unknown, int *open) {
+    static const LvReader reader = {v_identify, v_shown, v_children, NULL};
+    LvBuf b;
+    LvStats st;
+    (void)ui;
+    *unknown = *open = 0;
+    if (!hlib_live_link_values_ready()) return -1;
+    v_build();
+    lv_buf_init(&b, data, cap);
+    lv_open(&b, file);
+    for (int i = 0; i < n; i++) {
+        say("VALUES", states[i]);
+        if (!strcmp(states[i], "HUD")) (*open)++, lv_scene(&b, states[i], file, &reader, &v_scene, &st);
+        else if (strcmp(states[i], "Pause")) (*unknown)++;
+    }
+    lv_close(&b);
+    return b.scenes;
+}
+/* The open scenes for ui.scene: one line "id depth name parent" each in scenes.txt, which the run rewrites to open
+   and close scenes; none: no scene open. */
+int hlib_live_link_scenes_now(void *ui, LsOpen *out, int cap) {
+    char path[MAX_PATH], line[256];
+    FILE *f;
+    int n = 0;
+    (void)ui;
+    hlib_user_path(path, "scenes.txt");
+    if ((f = fopen(path, "r")) == NULL) return 0;
+    while (n < cap && fgets(line, sizeof line, f)) {
+        LsOpen *o = &out[n];
+        memset(o, 0, sizeof *o);
+        if (sscanf(line, "%d %d %63s %63s", &o->id, &o->depth, o->name, o->parent) >= 3) n++;
+    }
+    fclose(f);
+    return n;
+}
 
 /* The game's Lua runner: Mods:LoadMods() writes the loader's pass line at once and, a moment later, the engine's own
    two lines into the game's log (what the frame sync does a frame or more after the pass); ExecuteFilter() only the

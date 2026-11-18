@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from annotoolbox.sources.overlay import SourceTree, classify_archive, normalize
 
 
@@ -31,18 +33,45 @@ def test_normalize_studio_paths():
     assert normalize(studio) == "d:/projects/anno8/game/data/graphics/x.cfg"
 
 
-def test_the_tools_folder_follows_localappdata_and_the_cache_lives_in_it(tmp_path: Path, monkeypatch):
+def test_the_tools_folders_follow_localappdata_or_the_xdg_folders_and_the_cache_lives_in_them(
+    tmp_path: Path, monkeypatch
+):
     from annotoolbox import paths
     from annotoolbox.sources.overlay import cache_base
 
     monkeypatch.delenv("ANNO2070_CACHE", raising=False)
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    assert paths.local_data_dir() == tmp_path / "anno-toolbox"
-    assert cache_base() == tmp_path / "anno-toolbox" / "cache"
-    monkeypatch.delenv("LOCALAPPDATA")
+    app = "anno-toolbox"
+    if paths.os.name == "nt":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert paths.local_data_dir() == paths.config_dir() == tmp_path / app
+        assert cache_base() == paths.cache_dir() == tmp_path / app / "cache"
+        monkeypatch.delenv("LOCALAPPDATA")
+        monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
+        assert paths.local_data_dir() == tmp_path / "AppData/Local" / app
+        return
+    for variable, folder in (("XDG_DATA_HOME", "data"), ("XDG_CONFIG_HOME", "config"), ("XDG_CACHE_HOME", "cache")):
+        monkeypatch.setenv(variable, str(tmp_path / folder))
+    assert paths.local_data_dir() == tmp_path / "data" / app
+    assert paths.config_dir() == tmp_path / "config" / app
+    assert cache_base() == paths.cache_dir() == tmp_path / "cache" / app
+    for variable in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.setenv(variable, "relative/path")  # the spec ignores a relative one
     monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path))
-    expected = "AppData/Local" if paths.os.name == "nt" else ".local/share"
-    assert paths.local_data_dir() == tmp_path / expected / "anno-toolbox"
+    assert paths.local_data_dir() == tmp_path / ".local/share" / app
+    assert paths.config_dir() == tmp_path / ".config" / app
+    assert paths.cache_dir() == tmp_path / ".cache" / app
+
+
+def test_the_documents_folder_on_linux_comes_from_the_user_dirs_file(tmp_path: Path, monkeypatch):
+    from annotoolbox import paths
+
+    if paths.os.name == "nt":
+        pytest.skip("Windows asks the shell for its Documents folder")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(paths.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    assert paths.documents_dir() == tmp_path / "home" / "Documents"
+    (tmp_path / "user-dirs.dirs").write_text('# x\nXDG_DOCUMENTS_DIR="$HOME/Dokumente"\n', encoding="utf-8")
+    assert paths.documents_dir() == tmp_path / "home" / "Dokumente"
 
 
 def test_patch_overrides_base(source_root: Path):

@@ -32,8 +32,40 @@ def test_constructed_objects_match_the_shipped_encodings():
 
 def test_a_layout_version_drops_its_missing_fields():
     full = phoenixedit.new_object(SCHEMA, "41a404e5")
-    old = phoenixedit.new_object(SCHEMA, "41a404e5", versions={"41a404e5": "960a9a6c-30e7-1df3-afce-ab4cf76e5ce7"})
-    assert old["n"] == full["n"] - 1  # without ActiveAreaType, as 974 of the shipped labels
+    current = phoenixedit.new_object(SCHEMA, "41a404e5", versions={"41a404e5": "960a9a6c-30e7-1df3-afce-ab4cf76e5ce7"})
+    old = phoenixedit.new_object(SCHEMA, "41a404e5", versions={"41a404e5": "bfb3caf6-84c9-00d8-9cb3-a4835c6cb92e"})
+    assert current["n"] == full["n"] and old["n"] == full["n"] - 1  # 74 shipped labels lack BaselineY
+    assert not phoenixedit.has_field(old, "BaselineY") and phoenixedit.has_field(old, "ActiveAreaType")
+
+
+LABEL_GUID = uuid.UUID("12345678-0000-4000-8000-00000000abcd")
+# A shipped label's fields from AllowResize on (the main menu's "Text": AlignmentX and AlignmentY Center, a plane of
+# 260 x 32, Visible, DisplayedContent, Visible, DisplayedContent), its style GUID replaced
+LABEL_TAIL = (
+    "01" "00000000" "016cc997c6" + LABEL_GUID.bytes_le.hex() + "01000000" "00" "01000000" "0000803f" "00000000"
+    "00000000" "00000000" "00008243" "00000042" "05000000" "01000000" "04000000" "01000000" + "00" * 36
+)  # fmt: skip
+
+
+def test_a_label_stores_its_fields_in_the_order_the_game_reads_them():
+    # TextSizingFactor (flags 0x2080) is set at run time and not stored, so each name meets its own value (layout.md
+    # "What the game's dumps show": 557 labels of the game's dumps against their files)
+    assert all(f["name"] != "TextSizingFactor" for _, f in phoenix.stored_fields(SCHEMA, "41a404e5"))
+    label = phoenixedit.new_object(SCHEMA, "41a404e5", guid=uuid.uuid4().bytes_le)
+    for name, value in (("AllowResize", True), ("AlignmentX", 1), ("AlignmentY", 1), ("TextPlane", (260.0, 32.0)),
+                        ("HorizontalOverflow", 5), ("HorizontalSizing", 1), ("VerticalOverflow", 4),
+                        ("VerticalSizing", 1)):  # fmt: skip
+        phoenixedit.set_field(label, name, value)
+    phoenixedit.set_text_style(label, str(LABEL_GUID))
+    assert phoenixwrite.encode_object(label).hex().endswith(LABEL_TAIL)
+    root, wf = _file_with(label)
+    wf.finish("test")
+    again = phoenixread.load(phoenixwrite.write_file(SCHEMA, "WI", root, VERSIONS), SCHEMA)
+    (read,) = [n for n in phoenixedit.walk(again.root) if n.get("schema_type") == "41a404e5"]
+    assert phoenixedit.get_ref(read, "TextStyle") == str(LABEL_GUID)
+    raw = {e["field"]["name"]: e["raw"] for e in read["fields"] if e["record"] == "41a404e5"}
+    assert raw["LineSpacing"] == struct.pack("<f", 1.0) and raw["ResizeAnchor"] == bytes(4)  # the defaults
+    assert raw["TextPlane"] == struct.pack("<2f", 260.0, 32.0) and raw["VerticalOverflow"] == bytes([4, 0, 0, 0])
 
 
 def test_layout_versions_prefer_the_newest_used():

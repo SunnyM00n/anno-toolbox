@@ -43,7 +43,7 @@ def test_a_path_is_sorted_into_its_kind_and_every_kind_offers_the_stored_file_fi
     for path, kind in expected.items():
         assert kinds.kind_of(path) == kind, path
     for kind in kinds.KINDS:
-        assert kinds.formats_for(kind)[0] == kinds.Format("raw", "As stored", "", True)
+        assert kinds.formats_for(kind)[0] == kinds.Format("raw", "common.as_stored", "", True)
     assert [f.key for f in kinds.formats_for("texture")] == ["raw", "png", "png16", "exr", "hdr"]
 
 

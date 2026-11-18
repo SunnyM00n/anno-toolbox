@@ -23,10 +23,10 @@ class _Mouse:
         return self._y
 
 
-def _controls(ray, tilt: bool = False) -> GizmoControls:
+def _controls(ray) -> GizmoControls:
     c = GizmoControls()
     c.ray = lambda _pos: ray
-    c.gizmo = SimpleNamespace(tilt=tilt, mode="translate")
+    c.gizmo = SimpleNamespace(tilt=False, mode="translate")
     return c
 
 
@@ -55,12 +55,14 @@ def test_a_drag_over_the_ground_plane_moves_on_it_and_a_ray_that_misses_it_moves
 
 def test_a_drag_round_the_vertical_ring_turns_by_the_angle_swept_and_a_tilt_turns_about_the_models_axis():
     handle = {"axis": 1, "dir": np.array([0, 1.0, 0])}
-    st = {"handle": handle, "center": np.zeros(3), "anchor": np.array([1.0, 0, 0]), "quat": np.array([0, 0, 0, 1.0])}
+    st = {"handle": handle, "center": np.zeros(3), "anchor": np.array([1.0, 0, 0]), "quat": np.array([0, 0, 0, 1.0]),
+          "tilt": False}  # fmt: skip
     _none, turned, _ = _controls((np.array([0.0, 3, 1]), np.array([0, -1.0, 0])))._drag_turn(st, None)
     assert list(turned) == pytest.approx([0, -math.sin(math.pi / 4), 0, math.cos(math.pi / 4)])  # a quarter turn back
     tilt = {"axis": 0, "dir": np.array([1.0, 0, 0])}
-    st = {"handle": tilt, "center": np.zeros(3), "anchor": np.array([0, 1.0, 0]), "quat": np.array([0, 0, 0, 1.0])}
-    _none, tilted, _ = _controls((np.array([3.0, 0, 1]), np.array([-1.0, 0, 0])), tilt=True)._drag_turn(st, None)
+    st = {"handle": tilt, "center": np.zeros(3), "anchor": np.array([0, 1.0, 0]), "quat": np.array([0, 0, 0, 1.0]),
+          "tilt": True}  # fmt: skip
+    _none, tilted, _ = _controls((np.array([3.0, 0, 1]), np.array([-1.0, 0, 0])))._drag_turn(st, None)
     assert abs(tilted[0]) == pytest.approx(math.sin(math.pi / 4)) and tilted[1] == tilted[2] == 0
 
 
@@ -69,6 +71,31 @@ def test_a_scale_drag_follows_the_handles_screen_direction_and_a_prop_stretches_
     assert _controls(None)._drag_scale(st, _Mouse(10, 0)) == (None, None, 2.0)
     assert _controls(None)._drag_scale(st, _Mouse(-40, 0))[2] == pytest.approx(0.05)  # never to nothing
     assert _controls(None)._drag_scale({**st, "scale": [1.0, 2.0, 3.0]}, _Mouse(10, 0)) == (None, None, [1.0, 4.0, 3.0])
+
+
+def test_a_drag_stays_its_handles_kind_when_a_key_changes_the_gizmo_meanwhile():
+    """R during a move over the ground looked for the scale handle's screen line and raised; the undo step was named
+    after the key, not the drag."""
+    ended = []
+    c = _controls((np.array([4.0, 6, 1]), np.array([0, -1.0, 0])))
+    c.tool, c.water_sel = "select", None
+    c.selected = SimpleNamespace(shown=True, kind="object", position=[1.0, 2, 1], rotation=[0, 0, 0, 1.0], scale=1.0)
+    c.session = SimpleNamespace(
+        readonly=False,
+        begin_transform=lambda entries: [(e, None) for e in entries],
+        set_transform=lambda e, position=None, rotation=None, scale=None: setattr(e, "position", position),
+        end_transform=lambda start, label: ended.append(label),
+    )
+    c.group = SimpleNamespace(moving=lambda e: [e], place=lambda p, e: p, follow=lambda start, p: None)
+    c.to_view = c.from_view = lambda p: np.asarray(p, float)
+    c.selectionChanged = SimpleNamespace(emit=lambda e: None)
+    c.update = lambda: None
+    c._start_gizmo({"axis": "plane", "dir": np.array([0, 1.0, 0])}, _Mouse(0, 0))
+    c.gizmo.mode = "scale"  # the key R
+    c._drag_gizmo(_Mouse(5, 5))
+    assert list(c.selected.position) == pytest.approx([1.0, 2, 1])  # the ray has not moved: still a move, by nothing
+    c._end_gizmo(c._drag)
+    assert ended == ["move"]
 
 
 def test_the_views_key_table_follows_the_camera_mode_the_tool_and_the_selection():

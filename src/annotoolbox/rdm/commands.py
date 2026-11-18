@@ -1,5 +1,5 @@
 """The RDM toolchain's commands: ``inspect``, ``diff``, ``export``, ``import``, ``validate``, ``relayout``, ``layouts``,
-``granny`` (a glTF as a Granny ``.gr2`` for 1404 and 1701).
+``granny`` (a glTF as a Granny ``.gr2`` for 1404 and 1701), ``from-granny`` (a ``.gr2`` as ``.rdm`` files).
 
 ``register(sub)`` adds them to a parser (``anno-toolbox rdm ...``, and the Toolbox's ``rdm`` group); ``main`` is
 the command line of the toolchain on its own. Every command takes files and folders (searched recursively); the
@@ -24,6 +24,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     _validate(sub)
     _relayout(sub)
     _granny(sub)
+    _from_granny(sub)
     sp = sub.add_parser("layouts", help="list the vertex layouts the games ship and what uses them")
     sp.set_defaults(func=cmd_layouts)
 
@@ -48,6 +49,31 @@ def _granny(sub) -> None:
     )
     gr.add_argument("--force", action="store_true", help="overwrite a file that exists")
     gr.set_defaults(func=cmd_granny)
+
+
+def _from_granny(sub) -> None:
+    sp = sub.add_parser(
+        "from-granny",
+        help="Granny .gr2 (Anno 1404, 1701) straight to .rdm for 2070, 2205, 1800 or 117: meshes, skins, animations",
+    )
+    _paths(sp, ".gr2")
+    _common_out(sp)
+    sp.add_argument("--to", required=True, choices=("anno2070", "anno2205", "anno1800", "anno117"), help="the game")
+    sp.add_argument(
+        "--anims",
+        type=Path,
+        default=None,
+        help="a folder of .gr2 files: each animation whose tracks name only bones of the model is written as a file",
+    )
+    sp.add_argument(
+        "--axes",
+        choices=("same", "turn"),
+        default="same",
+        help="same: both games are y up, back = -z (default); turn: half a turn about y",
+    )
+    sp.add_argument("--source", choices=("anno1404", "anno1701"), default=None, help="default: read off the file")
+    sp.add_argument("--scale", type=float, default=0.0, help="divide every length by this (default: the tiles' ratio)")
+    sp.set_defaults(func=cmd_from_granny)
 
 
 def _paths(sp: argparse.ArgumentParser, what: str) -> None:
@@ -378,6 +404,25 @@ def cmd_granny(args: argparse.Namespace) -> int:
         path.write_bytes(content.replace(b"\n", b"\r\n") if path != out else content)  # the games' text files: CRLF
         print(f"wrote {path} ({len(content)} bytes)")
     return 0
+
+
+def cmd_from_granny(args: argparse.Namespace) -> int:
+    from . import batch, grannyrdm
+
+    opts = grannyrdm.Options(args.to, args.source or "", args.scale, args.axes)
+    folder = sorted(args.anims.rglob("*.gr2")) if args.anims else []
+    read: dict[Path, bytes] = {}
+
+    def work(job: batch.Job):
+        data = job.source.read_bytes()
+        extra = grannyrdm.animation_files(
+            ((p.stem, read.setdefault(p, p.read_bytes())) for p in folder if p != job.source),
+            grannyrdm.bone_names(data),
+        )
+        made = grannyrdm.convert(data, job.target.stem, opts, extra)
+        return {job.target.parent / name: body for name, body in made.files.items()}, made.notes
+
+    return _run(batch.jobs(args.inputs, args.out, (".gr2",), ".rdm"), work, args.force)
 
 
 def cmd_layouts(_args: argparse.Namespace) -> int:

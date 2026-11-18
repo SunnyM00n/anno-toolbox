@@ -73,6 +73,24 @@ def test_the_window_names_the_extra_to_install_when_the_gui_libraries_are_missin
     assert "[gui]" in done.stderr and "pip install" in done.stderr
 
 
+def test_the_installed_console_program_started_bare_prints_its_help(monkeypatch, capsys):
+    assert toolbox.console_program("C:/x/anno-toolbox.exe", frozen=True)
+    assert not toolbox.console_program("C:/x/AnnoToolbox.exe", frozen=True)  # the window program opens the window
+    assert not toolbox.console_program("/opt/x/anno-toolbox", frozen=False)  # a source checkout's command too
+    monkeypatch.setattr(toolbox, "console_program", lambda: True)
+    monkeypatch.setattr(toolbox, "run_window", lambda argv: pytest.fail("a bare console start opened the window"))
+    assert toolbox.main([]) == 0 and "rdm" in capsys.readouterr().out
+
+
+def test_the_window_programs_name_is_the_installers():
+    from annotoolbox.paths import REPO_ROOT
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import installer_bundle
+
+    assert installer_bundle.PROGRAM == toolbox.WINDOW_PROGRAM
+
+
 def test_the_groups_are_the_toolboxs_sub_commands(capsys):
     parser = toolbox.group_parser()
     args = parser.parse_args(["rdm", "validate", "model.rdm"])
@@ -120,6 +138,41 @@ def test_an_uncaught_error_of_the_windowed_program_is_logged_and_shown(tmp_path,
     worker.start()
     worker.join()
     assert len(list((tmp_path / "logs").iterdir())) == 2 and len(shown) == 1  # a thread's error: logged only
+
+
+def test_the_programs_log_lines_go_into_a_capped_file_and_old_error_reports_go(tmp_path, monkeypatch):
+    import logging
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for n in range(5):
+        (logs / f"error-2026111{n}-000000-000000.log").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(toolbox, "LOG_BYTES", 2000)
+    monkeypatch.setattr(toolbox, "ERRORS_KEPT", 2)
+    ours, theirs = logging.getLogger("annotoolbox.suite.linkclient"), logging.getLogger("some.library")
+    try:
+        handler = toolbox.start_log(logs)
+        assert toolbox.start_log(logs) is handler and logging.getLogger().handlers.count(handler) == 1
+        ours.info("live link lost: %s", "closed")
+        theirs.info("chatter")
+        theirs.warning("a library's warning")
+        text = (logs / toolbox.LOG_FILE).read_text("utf-8")
+        assert "INFO annotoolbox.suite.linkclient: live link lost: closed" in text
+        assert "a library's warning" in text and "chatter" not in text
+        for n in range(200):
+            ours.warning("line %03d of a long run", n)
+    finally:
+        toolbox.stop_log()
+    kept = sorted(p.name for p in logs.iterdir())
+    assert kept == [f"error-2026111{n}-000000-000000.log" for n in (3, 4)] + [
+        toolbox.LOG_FILE, f"{toolbox.LOG_FILE}.1", f"{toolbox.LOG_FILE}.2"
+    ]  # fmt: skip
+    assert all((logs / name).stat().st_size <= 2000 for name in kept)
+    assert "line 199" in (logs / toolbox.LOG_FILE).read_text("utf-8")  # the newest lines are the ones kept
+    assert toolbox.start_log(tmp_path / "file" / "x") is not None  # a new folder is made
+    toolbox.stop_log()
+    (tmp_path / "taken").write_text("", encoding="utf-8")
+    assert toolbox.start_log(tmp_path / "taken") is None  # no folder to write: the program starts without a log
 
 
 def test_an_error_is_one_line_and_exit_one(tmp_path, capsys):

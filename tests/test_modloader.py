@@ -1,5 +1,6 @@
 """The mod loader reproduced outside the game (``modloader``): XPath, every ModOp type and attribute, conditions,
-variables and options, includes, what is reported, and the mods' folders, profile and order; on synthetic files."""
+variables and options, includes, what is reported, the mods' folders, profile and order, and where 1800's loader
+differs from 117's (``docs/engine-modloader.md`` "Anno 1800's loader"); on synthetic files."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import pytest
 from tests.fakes import asset_list, fake_mod
 
 from annotoolbox.modloader import engine, mods
+from annotoolbox.modloader.mods import Mod, Variables
 from annotoolbox.modloader.patchdoc import PatchDoc, canonical
 from annotoolbox.modloader.xpath import XPathError, evaluate, format_number, select
 
@@ -313,3 +315,122 @@ def test_two_active_profile_lines_the_last_one_names_the_profile(tmp_path):
     assert mods.active_profile(tmp_path) == tmp_path / "profiles" / "default.txt"
     (tmp_path / "profile.txt").write_text("ActiveProfile \n")
     assert mods.active_profile(tmp_path) is None
+
+
+@pytest.mark.parametrize("raw", [b'{"ModID": "caf\xe9"}', '{"ModID": "x"}'.encode("utf-16")])
+def test_a_modinfo_that_is_not_utf8_is_a_skipped_folder_not_a_crash(tmp_path, raw):
+    fake_mod(tmp_path, "good", {})
+    (tmp_path / "bad").mkdir()
+    (tmp_path / "bad" / "modinfo.json").write_bytes(raw)
+    (tmp_path / "active-options.jsonc").write_bytes(raw)
+    found, notes = mods.find_mods([tmp_path], 8)  # one unreadable modinfo must not stop the scan
+    assert [m.mod_id for m in found] == ["good"] and any("bad" in n and "not JSON" in n for n in notes)
+    assert mods.read_options(tmp_path) == {}
+
+
+# where the two games' loaders differ
+
+
+def apply_as(ops: str, game: str, doc: PatchDoc | None = None, keep=None):
+    doc = doc or PatchDoc.load(asset_list().encode())
+    mod = Mod(Path("."), {}, "probe")
+    session = engine.Session(lambda _p: None, docs={"patch.xml": doc}, game=game, keep=keep)
+    session.apply_file(mod, "patch.xml", f"<ModOps>{ops}</ModOps>".encode(), Variables([mod]))
+    return doc, session.events
+
+
+def price_of(doc: PatchDoc) -> str:
+    return doc.string(select(doc, "Values/Product/Price", doc.assets("1001")[0])[0])
+
+
+SHORT = '<ModOp GUID="1001" Merge="Product"><Price>77</Price></ModOp>'
+LONG = '<ModOp Type="merge" GUID="1001" Path="/Values/Product"><Price>77</Price></ModOp>'
+
+
+def test_the_short_form_is_read_by_117_and_ignored_by_1800():
+    doc, events = apply_as(SHORT, engine.GAME_117)
+    assert price_of(doc) == "77" and not [e for e in events if e.level == engine.WARNING]
+    doc, events = apply_as(SHORT, engine.GAME_1800)
+    assert price_of(doc) == "12"  # nothing happened
+    assert [e.code for e in events if e.level == engine.WARNING] == ["feature", "notype"]
+    assert price_of(apply_as(LONG, engine.GAME_1800)[0]) == "77"  # the long form is shared
+
+
+def test_1800_ignores_property_and_a_bare_asset_and_reads_the_type_in_any_case():
+    new = "<Asset><Template>Good</Template><Values><Standard><GUID>5</GUID></Standard></Values></Asset>"
+    doc, events = apply_as(new, engine.GAME_1800)
+    assert doc.assets("5") == [] and [e.code for e in events] == ["feature"]
+    assert apply_as(new, engine.GAME_117)[0].assets("5")
+    cased = LONG.replace('"merge"', '"Merge"')
+    assert price_of(apply_as(cased, engine.GAME_117)[0]) == "12"  # 117: an unknown type, said
+    assert price_of(apply_as(cased, engine.GAME_1800)[0]) == "77"
+    prop = '<ModOp Type="merge" GUID="1001" Property="Product" Path="/Values/Product"><Price>77</Price></ModOp>'
+    assert [e.code for e in apply_as(prop, engine.GAME_1800)[1]] == ["feature"]
+
+
+@pytest.mark.parametrize(
+    ("repeat", "expected", "game"), [(1, 2, engine.GAME_117), (9, 4, engine.GAME_117), (9, 2, engine.GAME_1800)]
+)
+def test_a_group_repeats_while_its_condition_holds_up_to_maxrepeat(repeat, expected, game):
+    ops = '<ModOp GUID="2001" Type="add" Path="/Values/Building/BuildCost"><Item><Amount>1</Amount></Item></ModOp>'
+    counted = "count(//Asset[Values/Standard/GUID='2001']/Values/Building/BuildCost/Item) &lt; 4"
+    doc, _events = apply_as(f'<Group Condition="{counted}" MaxRepeat="{repeat}">{ops}</Group>', game)
+    assert len(select(doc, "Values/Building/BuildCost/Item", doc.assets("2001")[0])) == expected
+
+
+def test_assets_a_session_keeps_as_bytes_read_like_the_others():
+    add = '<ModOp Type="addNextSibling" GUID="1002"><Asset><Template>Good</Template><Values><Standard><GUID>7</GUID><Name>Ore</Name></Standard></Values></Asset></ModOp>'
+    notes = []
+    frozen, _events = apply_as(
+        add, engine.GAME_117, keep=lambda d, el: notes.append(el.findtext("Values/Standard/Name")) or "n"
+    )
+    plain, _events = apply_as(add, engine.GAME_117)
+    (ore,) = frozen.assets("7")
+    assert notes == ["Ore"] and frozen.is_lazy(ore) and frozen.notes[ore] == "n" and len(ore) == 0
+    assert frozen.peek(ore).findtext("Values/Standard/Name") == "Ore" and frozen.is_lazy(ore)  # read, not kept
+    again = apply_as('<ModOp GUID="7" Merge="Standard"><Name>Iron</Name></ModOp>', engine.GAME_117, frozen)[0]
+    assert not again.is_lazy(ore) and ore not in again.notes  # an operation looked in
+    plain_after = apply_as('<ModOp GUID="7" Merge="Standard"><Name>Iron</Name></ModOp>', engine.GAME_117, plain)[0]
+    assert canonical(again.roots[0]) == canonical(plain_after.roots[0])
+    # a search that must look into every asset finds the kept ones too
+    third, _e = apply_as(add, engine.GAME_117, keep=lambda d, el: None)
+    assert [n.text for n in select(third, "//Values[Standard/GUID='7']/Standard/Name", None)] == ["Ore"]
+
+
+def test_a_path_below_an_unread_asset_reads_it_first():
+    doc = lazy_doc()
+    path = "/AssetList/Groups/Group/Assets/Asset[1]//Name"  # no ``//`` before the asset: nothing reads it on the way
+    names = [n.text for n in select(doc, path, None)]
+    assert names == [n.text for n in select(doc_of(), path, None)] and "Wood" in names
+
+
+def test_a_removed_unread_asset_is_not_found_again_by_its_guid():
+    doc, plain = lazy_doc(), doc_of()
+    for d in (doc, plain):
+        run(d, '<ModOp Type="remove" GUID="2001" />')
+    assert select(doc, "//Asset[Values/Standard/GUID='2001']", None) == []
+    assert doc.to_bytes() == plain.to_bytes()
+
+
+def test_a_key_test_on_a_tag_that_only_ends_like_the_guid_path_is_not_read_from_the_guid_index():
+    doc = doc_of("<R><A><MyStandard><GUID>5</GUID></MyStandard></A><A><Standard><GUID>5</GUID></Standard></A></R>")
+    assert len(select(doc, "//A[MyStandard/GUID='5']", None)) == 1
+
+
+@pytest.mark.parametrize("expr", ["count()", "contains('a')", "substring('a')", "translate('a', 'b')", "count('a')"])
+def test_a_function_with_the_wrong_arguments_is_an_xpath_error(expr):
+    with pytest.raises(XPathError):
+        evaluate(doc_of(), expr, None)
+    events = run(doc_of(), f'<ModOp Type="remove" Path="//Asset[{expr}]" />')
+    assert [e.code for e in events] == ["xpath", "nomatch"]
+
+
+def test_a_game_file_that_is_no_xml_is_one_event_and_the_run_goes_on():
+    files = {"data/bad.xml": b"<A><B></A>", "data/good.xml": b"<A><B>1</B></A>"}
+    session = engine.Session(files.get)
+    mod = Mod(Path("."), {}, "m")
+    remove = b'<ModOps><ModOp Type="remove" Path="/A/B" /></ModOps>'
+    for rel in ("data/bad.xml", "data/bad.xml", "data/good.xml"):
+        session.apply_file(mod, rel, remove, Variables([mod]))
+    assert [(e.code, e.file) for e in session.events] == [("badbase", "data/bad.xml")] * 2
+    assert "data/bad.xml" in session.events[0].message and session.applied["m"] == 1

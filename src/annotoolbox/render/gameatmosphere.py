@@ -10,6 +10,7 @@ stand-ins: docs/rendering/frame-117-viewer.md sections 8, 11 and 12.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -81,7 +82,8 @@ class Atmosphere(ComputeChain):
     def set_fog(self, raw: bytes, size: float) -> None:
         """The island's fog map (``rd3d`` ``Fog`` bytes, ``fog_layers``) over its ``size``: the fog from the next run;
         b"": none."""
-        self._fog_layers = fog_layers(raw) if raw else None
+        layers = fog_layers(raw) if raw else None
+        self._fog_layers = layers if layers is not None and layers.size else None  # too short for a texel: none
         self.fog_size = float(size)
         if self.fog is not None:
             self.fog.destroy()
@@ -204,6 +206,6 @@ def fog_layers(raw: bytes) -> np.ndarray:
     """An island's fog map (``rd3d`` ``Fog``: per texel of 4 x 4 tiles, rows along z, 8 bytes: ground density and its
     height factor, sea-level density and its height factor, the colour and the type) as the shader's two layers
     ([2, n, n, 4] bytes), x turned over into the view's mirrored axes."""
-    n = round((len(raw) // 8) ** 0.5)
+    n = math.isqrt(len(raw) // 8)  # a map cut short: its whole rows
     texels = np.frombuffer(raw[: n * n * 8], np.uint8).reshape(n, n, 2, 4)[:, ::-1]
     return np.ascontiguousarray(texels.transpose(2, 0, 1, 3))

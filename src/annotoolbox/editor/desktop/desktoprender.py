@@ -20,7 +20,7 @@ from ...render import shaders as S
 from ...render.camera import OrbitCamera, gl, look_at, ortho
 from ...render.cull import CellTable, InstanceCells, LodCamera, TerrainChunks, frustum_planes, reach
 from ...render.light import light, srgb_hex
-from ...render.loader import Loader
+from ...render.loader import VIEW_WORKERS, Loader
 from ...render.modellibrary import BANNER_SHADER, WATER_SHADER, ModelLibrary, bounds, instance_matrices
 from ...render.particledraw import ParticleLayer
 from ...render.quality import Quality, lod_rules, remakes
@@ -102,7 +102,7 @@ class Renderer(GroundDraw, FramePasses, Picking):
         self.particles = ParticleLayer(ctx, self.library, self._all_batches, self._gpu_texture)
         self.decals = DecalLayer(ctx)
         self._ground_version = 0  # counts the terrain's changes (the decals are laid again)
-        self.loader = Loader()
+        self.loader = Loader(VIEW_WORKERS)  # the game shaders compile side by side
         self.batches: dict[tuple, Batch] = {}
         self.textures: dict = {}
         self.meshes: dict = {}

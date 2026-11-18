@@ -80,7 +80,7 @@ def check(changes: dict, known: dict[str, list[str]], grid: int | None = None) -
         if f not in FIELDS:
             out.append(
                 tr(
-                    "{field} is not a field of the island's registration (one of {names})",
+                    "islands.not_field_islands_registration_one",
                     field=f,
                     names=", ".join(FIELDS),
                 )
@@ -91,7 +91,7 @@ def check(changes: dict, known: dict[str, list[str]], grid: int | None = None) -
         if odd:
             out.append(
                 tr(
-                    "{field} {values}: no island of the game uses it ({known} do)",
+                    "islands.no_island_game_uses",
                     field=f,
                     values=", ".join(odd),
                     known=", ".join(known[f]),
@@ -99,13 +99,13 @@ def check(changes: dict, known: dict[str, list[str]], grid: int | None = None) -
             )
     size = changes.get("IslandPlaceholderSize")
     if grid is not None and size is not None and size != slot_size(grid):
-        want = slot_size(grid) or tr("untagged")
+        want = slot_size(grid) or tr("islands.untagged")
         out.append(
             tr(
-                "a {grid}-tile island sits in {want} slots; {size} slots expect another size",
+                "islands.tile_island_sits_slots_expect",
                 grid=grid,
                 want=want,
-                size=size or tr("untagged"),
+                size=size or tr("islands.untagged"),
             )
         )
     return out

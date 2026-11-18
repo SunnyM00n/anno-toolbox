@@ -78,6 +78,10 @@ def find(game: str, documents: Path | None = None) -> list[SaveRef]:
     return sorted(found.values(), key=lambda r: (-r.mtime, str(r.path)))
 
 
-def game_of(path: Path) -> str:
-    """The game a save file is of, by its extension (1404 and 1701 also write ``.sww``: the caller says)."""
-    return EXTENSIONS.get(Path(path).suffix.lower(), "")
+def game_of(path: Path, shown: str = "") -> str:
+    """The game a save file is of, by its extension; ``shown`` (the game the caller has open) wins where it writes
+    that extension too (1404 and 1701 also write ``.sww``) and for an extension no game is known by."""
+    suffix = Path(path).suffix.lower()
+    if shown in LOCATIONS and any(p.lower().endswith(suffix) for p in LOCATIONS[shown].patterns):
+        return shown
+    return EXTENSIONS.get(suffix, shown)

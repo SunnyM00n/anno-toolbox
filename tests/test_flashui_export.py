@@ -9,7 +9,7 @@ from annotoolbox.flashui import __main__ as flashui_main
 from annotoolbox.flashui import uiexport
 from annotoolbox.flashui.uidoc import MovieDoc
 from annotoolbox.flashui.uiproject import Project
-from annotoolbox.formats import feuassets, imagewrite
+from annotoolbox.formats import feuassets, feuread, imagewrite
 from annotoolbox.othergames import ui2205
 from fakes import FakeFiles
 from test_feu import ICON, PICTURE
@@ -65,6 +65,21 @@ def test_a_picture_without_a_png_comes_from_its_texture_and_a_missing_one_is_lis
     assert uiexport.png_size((tmp_path / done[0].name).read_bytes()) == (4, 2)
 
 
+def test_an_icon_placed_outside_its_atlas_is_listed_and_no_name_leaves_the_folder(tmp_path: Path):
+    files = export_files()
+    atlas = feuassets.Atlas(files["data/ui/blobs/icons.bfd"])
+    entry = atlas.entries[0]
+    atlas.entries[0] = feuassets.AtlasEntry(entry.name, entry.width, entry.height, (*entry.matrix[:4], -60.0, -60.0))
+    files["data/ui/blobs/icons.bfd"] = atlas.write()  # at 3, 3 of a 4 x 4 atlas: a 2 x 2 icon does not fit
+    ex = exporter(files)
+    done = ex.export(ex.atlas_items(), tmp_path / "out")  # it raised out of the export: no index, no word
+    assert len(done) == 1 and done[0].status.startswith("failed:") and "outside the 4 x 4 atlas" in done[0].status
+    assert (tmp_path / "out" / "index.csv").is_file()
+    assert uiexport.safe_name("..\\../c:/x/./y.png") == "c_/x/y.png"
+    stray = feuread.ExternalImage(0, 0, 0, "..\\..\\..\\outside.png", 0, 0)
+    assert ex.item_for(stray).name == "outside.png"
+
+
 def test_the_shared_pictures_name_the_movies_that_use_them_and_the_atlas_is_cut_by_its_entries(tmp_path: Path):
     ex = exporter(export_files())
     shared = {i.name: i for i in ex.shared_items()}
@@ -106,6 +121,7 @@ def test_the_window_offers_the_export_and_writes_one_picture(tmp_path: Path, mon
 
     QApplication.instance() or QApplication([])
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "settings"))
+    monkeypatch.setattr(EditorWindow, "sync", True)  # the folder indexed on the test's thread
     window = EditorWindow(str(make_game(tmp_path, export_files())), str(tmp_path / "edits.json"))
     window.movies.setCurrentRow(0)
     images = window.tree.topLevelItem(0).child(1)

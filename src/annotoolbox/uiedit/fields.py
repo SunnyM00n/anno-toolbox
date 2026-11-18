@@ -171,7 +171,7 @@ def _schema_field(node: dict, field: str) -> dict:
     for _rec, f in node["layout"]:
         if field in (f["name"], f["hash"]):
             return f
-    raise KeyError(tr("{field} is not a field of {type}", field=field, type=node["schema_type"]))
+    raise KeyError(tr("ui.field_not_type", field=field, type=node["schema_type"]))
 
 
 # Colours: ColorType (a palette asset, the palette entry's id, the plain RGB)
@@ -221,10 +221,9 @@ def anchor_fields(node: dict) -> dict[str, int]:
 
 
 def alignment_index(value) -> int:
-    """A label's ``AlignmentX`` as 0 left, 1 centre, 2 right, 3 justify: 117 stores 0 / 256 / 512 / 768, the History
-    Editions 0 to 3."""
+    """A label's ``AlignmentX`` as 0 left, 1 centre, 2 right, 3 justify (117 and the History Editions store these)."""
     v = int(value or 0)
-    return {256: 1, 512: 2, 768: 3}.get(v, v if v in (1, 2, 3) else 0)
+    return v if v in (1, 2, 3) else 0
 
 
 # Enum value names the editor shows (docs/ui/117/layout.md, widget-types.md; the Widget Library's enums)
@@ -245,9 +244,11 @@ ENUMS: dict[str, dict[int, str]] = {
     "HeightResizing": _names("Proportional Fixed FixedToParent"),
     "HorizontalOverflow": _names("DeprecatedAutosize Wrap ClipPixel ClipCharacter Ellipsis Visible"),
     "VerticalOverflow": _names("DeprecatedAutosize Ellipsis ClipPixel ClipLine Visible"),
-    "HorizontalSizing": _names("TextPlane DisplayedContent Largest Smallest Unnamed4"),
-    "VerticalSizing": _names("TextPlane DisplayedContent Largest Smallest Unnamed4"),
-    "AlignmentX": {0: "Left", 256: "Center", 512: "Right", 768: "Justify", 1: "Center", 2: "Right", 3: "Justify"},
+    "HorizontalSizing": _names("TextPlane DisplayedContent Largest Smallest"),  # TextBoxSizing
+    "VerticalSizing": _names("TextPlane DisplayedContent Largest Smallest"),
+    "AlignmentX": _names("Left Center Right Justify"),
+    "AlignmentY": _names("Top Center Baseline Bottom"),
+    "ActiveAreaType": _names("TextPlane DisplayedContent"),
     "HorizontalAnchorConstraint": _names("Left Right Center"),  # the History Editions' widgets
     "VerticalAnchorConstraint": _names("Top Bottom Center"),
     "HorizontalAnchorMetrics": _names("Proportional Fixed FixedToParent"),

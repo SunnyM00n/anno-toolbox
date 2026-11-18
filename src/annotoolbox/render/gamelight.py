@@ -116,6 +116,7 @@ class DeferredShading(ComputeStage):
         self._sh: tuple = ()
         self.cube_log2 = math.log2(CUBE_SIZE)
         self._clusters = None
+        self._replaced: list = []  # the texture ``_replace`` last took out, destroyed with the next
         super().__init__(rhi, stage, stand_in=self._stand, raw=B.bufferLoad, address="CLAMP")
 
     def _texture(self, batch, size, fmt, levels=None, flags=None, layers: int = 1):
@@ -165,10 +166,22 @@ class DeferredShading(ComputeStage):
         if sh == self._sh and "cube" in self.fixed:
             return
         flags = QRhiTexture.Flag.CubeMap | QRhiTexture.Flag.MipMapped
-        self.fixed["cube"] = self._texture(batch, (CUBE_SIZE, CUBE_SIZE), F.RGBA16F, sky_cube(sh), flags)
+        self._replace("cube", self._texture(batch, (CUBE_SIZE, CUBE_SIZE), F.RGBA16F, sky_cube(sh), flags))
         batch.uploadStaticBuffer(self._raw("cLightBuffer"), gamesky.light_bytes(sky.sh, sky.sun_diffuse))
         self._sh = sh
         self.res.invalidate()
+
+    def _replace(self, name: str, tex):
+        """``tex`` as the shading's own ``name`` from now on. The one it replaces goes with the next replacement (a
+        binding set of this frame may still hold it): kept for good, every change of the light left a cube behind."""
+        for old in self._replaced:
+            old.destroy()
+        old = self.fixed.get(name)
+        self._replaced = [old] if old is not None else []
+        if old is not None:
+            self.res.keep = [r for r in self.res.keep if r is not old]
+        self.fixed[name] = tex
+        return tex
 
     def _raw(self, name: str):
         """A raw buffer the shading fills itself, at its full size (the cells; 2048 point lights; a zeroed one for
@@ -191,7 +204,7 @@ class DeferredShading(ComputeStage):
             batch.uploadStaticBuffer(self._raw("cPointLights"), points)
             index = self.fixed.get("cLightIndexTex")
             if index is None or index.pixelSize().width() != clusters.indices.shape[1]:
-                self.fixed["cLightIndexTex"] = index = self._texture(batch, clusters.indices.shape[::-1], F.R32UI)
+                index = self._replace("cLightIndexTex", self._texture(batch, clusters.indices.shape[::-1], F.R32UI))
                 self.res.invalidate()  # rebinds with the new table
             batch.uploadTexture(index, QRhiTextureUploadDescription(QRhiTextureUploadEntry(
                 0, 0, QRhiTextureSubresourceUploadDescription(clusters.indices.tobytes()))))  # fmt: skip
@@ -246,5 +259,7 @@ class DeferredShading(ComputeStage):
 
     def release(self) -> None:
         super().release()
-        self.fixed = {}
+        for old in self._replaced:
+            old.destroy()
+        self.fixed, self._replaced = {}, []
         self._sh, self._clusters = (), None

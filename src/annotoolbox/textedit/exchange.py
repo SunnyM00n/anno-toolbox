@@ -50,7 +50,7 @@ class Applied:
 
     def line(self) -> str:
         return tr(
-            "{applied} applied, {unchanged} unchanged, {empty} without a translation, {unknown} unknown ids, {added} added, {problems} with problems",
+            "texts.applied_unchanged_without_translation",
             applied=self.applied, unchanged=self.unchanged, empty=self.empty, unknown=len(self.unknown),
             added=self.added, problems=self.problems,
         )  # fmt: skip
@@ -76,17 +76,17 @@ def write(fmt: str, rows: list[Row], game: str, source: str, target: str) -> byt
         return write_xliff(rows, game, source, target)
     if fmt == "po":
         return write_po(rows, game, source, target)
-    raise ValueError(tr("unknown format {fmt}", fmt=fmt))
+    raise ValueError(tr("texts.unknown_format_fmt", fmt=fmt))
 
 
 def read(fmt: str, data: bytes) -> list[Row]:
     readers = {"csv": read_csv, "xliff": read_xliff, "po": read_po}
     if fmt not in readers:
-        raise ValueError(tr("unknown format {fmt}", fmt=fmt))
+        raise ValueError(tr("texts.unknown_format_fmt", fmt=fmt))
     try:
         return readers[fmt](data)
     except (ET.ParseError, csv.Error, UnicodeError) as exc:
-        raise ValueError(tr("not a readable {fmt} file: {error}", fmt=fmt, error=exc)) from exc
+        raise ValueError(tr("texts.not_readable_file", fmt=fmt, error=exc)) from exc
 
 
 def format_of(path: str) -> str:
@@ -94,7 +94,7 @@ def format_of(path: str) -> str:
     suffix = path.lower().rsplit(".", 1)[-1]
     found = {"csv": "csv", "xlf": "xliff", "xliff": "xliff", "po": "po"}.get(suffix)
     if found is None:
-        raise ValueError(tr("{path}: not a CSV, XLIFF or PO file", path=path))
+        raise ValueError(tr("texts.not_csv_xliff_po_file", path=path))
     return found
 
 
@@ -115,7 +115,7 @@ def read_csv(data: bytes) -> list[Row]:
     reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=max(",;\t", key=head.count))
     reader.fieldnames = [name.strip().lower() for name in reader.fieldnames or []]
     if "id" not in reader.fieldnames or "target" not in reader.fieldnames:
-        raise ValueError(tr("the CSV needs the columns id and target"))
+        raise ValueError(tr("texts.csv_needs_columns_id_target"))
     return [
         Row((r.get("id") or "").strip(), r.get("source") or "", r.get("target") or "", r.get("file") or "",
             r.get("group") or "")  # the status column is for the reader: a translator who edited a row made it current
@@ -267,7 +267,7 @@ def apply(doc: TextDoc, rows: list[Row], add_new: bool = False) -> Applied:
             )
             items.append((doc.target, row.id, target, written_against))
             result.applied += 1
-    doc.edit_many(items, tr("import {count} texts", count=len(items)))
+    doc.edit_many(items, tr("texts.import_count_texts", count=len(items)))
     result.problems = sum(
         1 for lang, key, *_ in items if lang == doc.target and any(p.severity != checks.HINT for p in doc.problems(key))
     )

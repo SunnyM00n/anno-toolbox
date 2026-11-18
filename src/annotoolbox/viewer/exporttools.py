@@ -39,7 +39,7 @@ class ExportTools(QObject):
         super().__init__(window)
         self.window = window
         self.inspect = InspectPanel()
-        dock = QDockWidget(tr("Inspect"), window, objectName="viewerInspect")
+        dock = QDockWidget(tr("viewer.inspect"), window, objectName="viewerInspect")
         dock.setWidget(self.inspect)
         window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
         window.docks["Inspect"] = dock
@@ -49,10 +49,10 @@ class ExportTools(QObject):
 
     def add_actions(self, file_menu) -> None:
         file_menu.addSeparator()
-        file_menu.addAction(tr("&Export..."), self.export_open, QKeySequence("Ctrl+E"))
-        file_menu.addAction(tr("Export the &selection or folder..."), self.export_selection)
-        file_menu.addAction(tr("Export the files the &filter shows..."), self.export_filter)
-        file_menu.addAction(tr("&Import a model (glTF to .rdm)..."), self.import_model)
+        file_menu.addAction(tr("viewer.export"), self.export_open, QKeySequence("Ctrl+E"))
+        file_menu.addAction(tr("viewer.export_selection_folder"), self.export_selection)
+        file_menu.addAction(tr("viewer.export_files_filter_shows_dots"), self.export_filter)
+        file_menu.addAction(tr("viewer.import_model_gltf_rdm"), self.import_model)
 
     # which files
     def open_file(self) -> list[str]:
@@ -80,18 +80,18 @@ class ExportTools(QObject):
 
     # the actions
     def export_open(self) -> None:
-        self.export_paths(self.open_file(), tr("Export the open file"))
+        self.export_paths(self.open_file(), tr("viewer.export_open_file"))
 
     def export_selection(self) -> None:
-        self.export_paths(self.selection(), tr("Export the selection"))
+        self.export_paths(self.selection(), tr("viewer.export_selection"))
 
     def export_filter(self) -> None:
-        self.export_paths(self.filtered(), tr("Export the files the filter shows"))
+        self.export_paths(self.filtered(), tr("viewer.export_files_filter_shows"))
 
     def export_paths(self, paths: list[str], title: str) -> bool:
         """Ask for the forms and the folder, then export ``paths`` of the open game; False when nothing was started."""
         if self.window.tree is None or not paths:
-            self.window.statusBar().showMessage(tr("Open a game and pick a file, a folder or a filter first"), 8000)
+            self.window.statusBar().showMessage(tr("viewer.open_game_pick_file_folder"), 8000)
             return False
         if len(paths) > BIG_EXPORT and not self._confirm_many(len(paths)):
             return False
@@ -108,8 +108,8 @@ class ExportTools(QObject):
     def _confirm_many(self, count: int) -> bool:
         answer = QMessageBox.question(
             self.window,
-            tr("Export"),
-            tr("{count} files match. Export them all?", count=number(count)),
+            tr("common.export"),
+            tr("viewer.files_match_export_all", count=number(count)),
             defaultButton=QMessageBox.StandardButton.No,
         )
         return answer == QMessageBox.StandardButton.Yes
@@ -127,4 +127,4 @@ class ExportTools(QObject):
         if path.lower().endswith(".rdm") and tree is not None:
             self.inspect.show_rdm(path, tree.read(path))
         else:
-            self.inspect.clear(tr("The Inspect panel lists the elements of an .rdm (a mesh or an animation file)."))
+            self.inspect.clear(tr("viewer.inspect_panel_lists_elements_rdm"))

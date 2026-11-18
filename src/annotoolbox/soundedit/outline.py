@@ -37,7 +37,7 @@ def _tree(doc: BankDoc, obj: HircObject, seen: set[int]) -> Row:
     row = Row(obj.id, title_of(doc, obj))
     seen.add(obj.id)
     for child in node.children if node is not None else []:
-        if child not in seen and any(o.id == child for o in doc.bank.hirc):
+        if child not in seen and doc.kind_of(child):  # by the index: a walk of the list per child froze big banks
             row.children.append(_tree(doc, doc.obj(child), seen))
     return row
 
@@ -53,9 +53,9 @@ def outline(doc: BankDoc) -> dict[str, list[Row]]:
             roots.append(_tree(doc, o, seen))
     rest = [_tree(doc, o, seen) for o in doc.bank.hirc if o.id in doc.graph and o.id not in seen]
     music = [Row(o.id, title_of(doc, o)) for o in doc.bank.hirc if o.type in MUSIC]
-    out = {N_("Events"): events, N_("Sounds and containers"): roots + rest, N_("Music"): music}
+    out = {N_("common.events"): events, N_("sound.sounds_containers"): roots + rest, N_("common.music"): music}
     if groups := groupedits.group_rows(doc):  # the Init bank's state manager
-        out[N_("Groups")] = [Row(ident, title) for ident, title in groups]
+        out[N_("assets.groups")] = [Row(ident, title) for ident, title in groups]
     return out
 
 
@@ -66,9 +66,9 @@ def music_lines(doc: BankDoc, obj: HircObject) -> list[str]:
     try:
         if obj.type == bnkmusic.MUSIC_SEGMENT:
             seg = bnkmusic.parse_segment(obj)
-            return [tr("{length} ms long, {count} markers", length=round(seg.duration, 1), count=len(seg.markers))] + [
+            return [tr("sound.ms_long_markers", length=round(seg.duration, 1), count=len(seg.markers))] + [
                 tr(
-                    "marker {name} ({id}) at {position} ms",
+                    "sound.marker_name_id_position_ms",
                     name=musicedits.cue_name(m),
                     id=m.id,
                     position=round(m.position, 1),
@@ -78,7 +78,7 @@ def music_lines(doc: BankDoc, obj: HircObject) -> list[str]:
         if obj.type == bnkmusic.MUSIC_TRACK:
             return [
                 tr(
-                    "plays media {media} from {play_at} ms, trims {begin} and {end} ms, clip {clip} ms",
+                    "sound.plays_media_ms_trims_clip",
                     media=i.source_id & 0xFFFFFFFF,
                     play_at=round(i.play_at, 1),
                     begin=round(i.begin_trim, 1),
@@ -98,16 +98,16 @@ def music_lines(doc: BankDoc, obj: HircObject) -> list[str]:
 
 def _graph_lines(doc: BankDoc, node: bnkgraph.Node) -> list[str]:
     """Parent, children, source and switch group of an object the bank's graph has."""
-    parent, count = node.parent or tr("none"), len(node.children)
+    parent, count = node.parent or tr("common.none"), len(node.children)
     if node.exact:
-        lines = [tr("parent {parent}; {count} children", parent=parent, count=count)]
+        lines = [tr("sound.parent_count_children", parent=parent, count=count)]
     else:
-        lines = [tr("parent {parent}; {count} children (not read exactly)", parent=parent, count=count)]
+        lines = [tr("sound.parent_children_not_read_exactly", parent=parent, count=count)]
     if node.source is not None:
         s = node.source
         lines.append(
             tr(
-                "{plugin}, {stream}, media {media}, {size} bytes",
+                "sound.plugin_stream_media_size_bytes",
                 plugin=PLUGINS.get(s.plugin, hex(s.plugin)),
                 stream=STREAMS.get(s.stream, s.stream),
                 media=s.media,
@@ -118,14 +118,14 @@ def _graph_lines(doc: BankDoc, node: bnkgraph.Node) -> list[str]:
         group = doc.info.group_label(node.switch.group)
         start = doc.info.group_label(node.switch.group, node.switch.default)
         if node.switch.state_group:
-            lines.append(tr("state group {group}, starts at {start}", group=group, start=start))
+            lines.append(tr("sound.state_group_starts", group=group, start=start))
         else:
-            lines.append(tr("switch group {group}, starts at {start}", group=group, start=start))
+            lines.append(tr("sound.switch_group_starts", group=group, start=start))
     return lines
 
 
 def _event_lines(doc: BankDoc, obj: HircObject) -> list[str]:
-    return [tr("actions {actions}", actions=bnkgraph.read_event(obj, doc.version))]
+    return [tr("sound.actions", actions=bnkgraph.read_event(obj, doc.version))]
 
 
 def _action_lines(doc: BankDoc, obj: HircObject) -> list[str]:
@@ -133,14 +133,14 @@ def _action_lines(doc: BankDoc, obj: HircObject) -> list[str]:
     kind = f"{a.kind:#06x}"
     if a.at:
         text = tr(
-            "action {kind}, target {target}, group {group} value {value}",
+            "sound.action_target_group_value",
             kind=kind,
             target=a.target,
             group=a.group,
             value=a.value,
         )
         return [text]
-    return [tr("action {kind}, target {target}", kind=kind, target=a.target)]
+    return [tr("sound.action_kind_target", kind=kind, target=a.target)]
 
 
 def _property_lines(doc: BankDoc, obj: HircObject) -> list[str]:
@@ -150,7 +150,7 @@ def _property_lines(doc: BankDoc, obj: HircObject) -> list[str]:
         return []
     lines = [f"{nodebase.name_of(doc.version, p)}: {struct.unpack('<f', v)[0]:g}" for p, v in block.props.items()]
     return lines + [
-        tr("{name} random: {range}", name=nodebase.name_of(doc.version, p), range=struct.unpack("<ff", v))
+        tr("sound.name_random_range", name=nodebase.name_of(doc.version, p), range=struct.unpack("<ff", v))
         for p, v in block.ranged.items()
     ]
 
@@ -160,7 +160,7 @@ KIND_LINES = {bnkgraph.EVENT: _event_lines, bnkgraph.ACTION: _action_lines}  # w
 
 def describe(doc: BankDoc, obj_id: int) -> list[str]:
     """The facts of one object: kind, parent, children, source, what its kind adds, curves, properties."""
-    if not any(o.id == obj_id for o in doc.bank.hirc) and (group := groupedits.group_lines(doc, obj_id)):
+    if not doc.kind_of(obj_id) and (group := groupedits.group_lines(doc, obj_id)):
         return group
     obj = doc.obj(obj_id)
     lines = [f"{obj.type_name} {obj.id}"]
@@ -171,6 +171,6 @@ def describe(doc: BankDoc, obj_id: int) -> list[str]:
         lines += KIND_LINES[obj.type](doc, obj)
     lines += music_lines(doc, obj)
     lines += [
-        tr("{label}: {count} points", label=r.label, count=len(r.points)) for r in curveedits.curve_refs(doc, obj_id)
+        tr("sound.label_count_points", label=r.label, count=len(r.points)) for r in curveedits.curve_refs(doc, obj_id)
     ]
     return lines + _property_lines(doc, obj)

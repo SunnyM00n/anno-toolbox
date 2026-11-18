@@ -97,7 +97,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
     for _, img in feuedit.images(feuread.read(raw)):
         data = ui.image(img.path)
         if data is not None:
-            target = out / "pictures" / ui2205.image_path(img.path)[len(ui2205.UI) :]
+            target = out / "pictures" / uiexport.safe_name(ui2205.image_path(img.path)[len(ui2205.UI) :])
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             count += 1

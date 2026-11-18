@@ -76,31 +76,31 @@ def add_from(effect: EffectDoc, donor: EffectDoc, k: int) -> cfgdoc.Edit | str:
     """The edit that appends a copy of ``donor``'s emitter ``k`` (another file of the game, or the effect itself) at
     the end of ``effect``, or why that cannot be."""
     if not effect.editable:
-        return tr("this file is read only (it does not read back byte for byte)")
+        return tr("objects.file_read_only_not_back")
     if donor.syntax != effect.syntax or not 0 <= k < count(donor):
-        return tr("this effect has no emitter to copy")
+        return tr("particles.effect_no_emitter_copy")
     if effect.syntax == XML and count(effect):
         return _add_xml(effect, _xml_emitters(donor)[k])
     if effect.syntax == BRACE and _brace_top(effect) is not None:
         return _add_brace(effect, _brace_top(donor).groups()[k])
-    return tr("this effect has no emitter to copy")
+    return tr("particles.effect_no_emitter_copy")
 
 
 def remove(effect: EffectDoc, k: int) -> cfgdoc.Edit | str:
     """The edit that removes emitter ``k`` (an effect keeps one at least), or why that cannot be. 2070's and 1404's
     later emitters take the tag of the one before (``Effect0`` ... stay without a gap, as every file of the games)."""
     if not effect.editable:
-        return tr("this file is read only (it does not read back byte for byte)")
+        return tr("objects.file_read_only_not_back")
     if not 0 <= k < count(effect):
-        return tr("this effect has no such emitter")
+        return tr("particles.effect_no_such_emitter")
     if count(effect) == 1:
-        return tr("an effect keeps one emitter at least")
+        return tr("particles.effect_keeps_one_emitter_least")
     if effect.syntax == XML:
         return _remove_xml(effect, k)
     group = _brace_top(effect).groups()[k]
     gone = {id(line) for line in group.lines()}
     lines = [line for line in effect.doc.lines if id(line) not in gone]
-    return curves.swap(effect.doc.lines, lines, tr("remove the emitter {name}", name=group.name))
+    return curves.swap(effect.doc.lines, lines, tr("particles.remove_emitter_name", name=group.name))
 
 
 def _remove_xml(effect: EffectDoc, k: int) -> cfgdoc.Edit:
@@ -119,7 +119,7 @@ def _remove_xml(effect: EffectDoc, k: int) -> cfgdoc.Edit:
             e.name = old
         root.children.insert(at, node)
 
-    return cfgdoc.Edit(tr("remove the emitter {name}", name=cfgdoc.shown(node.value("Name", ""))), do, undo)
+    return cfgdoc.Edit(tr("particles.remove_emitter_name", name=cfgdoc.shown(node.value("Name", ""))), do, undo)
 
 
 @dataclass(frozen=True)
@@ -186,7 +186,7 @@ def _add_xml(effect: EffectDoc, template) -> cfgdoc.Edit:
             leaf.text = _zero_like(leaf.text)
     at = next(i for i, c in enumerate(root.children) if c is emitters[-1]) + 1
     return cfgdoc.insert(
-        root, at, [new], tr("add an emitter like {name}", name=cfgdoc.shown(template.value("Name", "")))
+        root, at, [new], tr("particles.add_emitter_like", name=cfgdoc.shown(template.value("Name", "")))
     )
 
 
@@ -205,7 +205,7 @@ def _add_brace(effect: EffectDoc, template: Group) -> cfgdoc.Edit:
         made[id(entry.line)].text = efc1701edit.field_text(entry, values)
     at = doc.index(top.close)
     lines = [*doc.lines[:at], *(made[id(line)] for line in template.lines()), *doc.lines[at:]]
-    return curves.swap(doc.lines, lines, tr("add an emitter like {name}", name=template.name))
+    return curves.swap(doc.lines, lines, tr("particles.add_emitter_like", name=template.name))
 
 
 def _unquoted(values: list[str]) -> str:

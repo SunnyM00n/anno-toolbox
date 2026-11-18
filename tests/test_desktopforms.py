@@ -126,3 +126,37 @@ def test_the_slot_list_dialog_shows_listed_standing_and_what_the_generator_keeps
     said = []
     desktopslots.show(SimpleNamespace(doc=SimpleNamespace(session=EditSession(edit_island())), say=said.append))
     assert said == ["this island lists no slots"]
+
+
+@pytest.mark.parametrize(
+    "field, value, touched",
+    [
+        (islandprops.Field("clime", "Clime", "int", 0, 1), 3, 0),
+        (islandprops.Field("start_coast", "Coast", "angle", 0, 360), -90.0, 0.0),
+        (islandprops.Field("active_rect", "Rect", "rect"), [-8, 0, 5000, 24], [0, 0, 4096, 25]),
+        (
+            islandprops.Field("IslandType", "Type", "choices", choices=("Normal", "Starter")),
+            "Mod;Normal",
+            "Normal;Starter",
+        ),
+    ],
+)
+def test_a_value_the_field_cannot_show_stays_the_islands_until_the_field_is_changed(qt, field, value, touched):
+    """OK without a change wrote the widget's nearest value (the number clamped into the field's range, the list
+    without the entry that is no choice) as an edit of the island."""
+    editor = desktopforms.FieldEditor(field, value)
+    assert editor.get() == value
+    if field.kind == "rect":
+        editor.parts[3].setValue(25)
+    elif field.kind == "choices":
+        editor.parts[1].setChecked(True)
+    elif field.kind == "angle":
+        editor.parts[0].setValue(0.0)
+        editor.has_value.setChecked(False)
+        editor.has_value.setChecked(True)
+        assert editor.get() == value  # back to what it showed: still the island's
+        editor.parts[0].setValue(12.5)
+        touched = 12.5
+    else:
+        editor.parts[0].setValue(0)
+    assert editor.get() == touched

@@ -285,7 +285,7 @@ class Objects1800(GameObjects):
         if isinstance(got, Exception):
             self.parts[key] = got
             if not isinstance(got, NoPass):
-                self.r._message(tr("{mesh}: the game's shader: {reason}", mesh=part["mesh"],
+                self.r._message(tr("islands.mesh_games_shader_reason", mesh=part["mesh"],
                                    reason=f"{type(got).__name__}: {got}"[:300]))  # fmt: skip
             return got
         if self.device is None:

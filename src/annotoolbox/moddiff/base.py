@@ -72,10 +72,14 @@ class GameBase:
         return asset_facts(self.vanilla_asset(path, guid))
 
     def vanilla_doc(self, path: str) -> PatchDoc | None:
-        """A game file read whole as a document (once): for the files that are not indexed."""
+        """A game file read whole as a document (once): for the files that are not indexed. None for a file the game
+        lacks and for one that is not XML (the run's session says so where a mod patches it)."""
         if path not in self._docs:
             data = self.read_base(path)
-            self._docs[path] = PatchDoc.load(data) if data is not None else None
+            try:
+                self._docs[path] = PatchDoc.load(data) if data is not None else None
+            except ET.ParseError:
+                self._docs[path] = None
         return self._docs[path]
 
     def language_of(self) -> Callable[[str], str | None]:

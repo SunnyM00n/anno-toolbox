@@ -125,7 +125,8 @@ class _Pass:
 class _NativeCommands:
     """The command buffer as a native pass sees it: the recorder learns which kind of pass it began (one that fails
     is ended by that kind, one that never began is not ended: QRhi has no check and would fall over) and drops the
-    batch a begin took over from its open ones."""
+    batch a begin or a ``resourceUpdate`` took over from its open ones (released again at the frame's end, QRhi's
+    pool counted it free twice)."""
 
     def __init__(self, cb, recorder: Recorder) -> None:
         self._cb, self._rec = cb, recorder
@@ -133,10 +134,18 @@ class _NativeCommands:
     def __getattr__(self, name: str):
         return getattr(self._cb, name)
 
-    def _began(self, kind: str, batch) -> None:
-        self._rec._begun = kind
+    def _taken(self, batch) -> None:
+        """QRhi took ``batch`` over (and lets it go itself): no longer one of the recorder's to release."""
         if batch is not None and any(batch is u for u in self._rec._open_batches):
             self._rec._open_batches = [u for u in self._rec._open_batches if u is not batch]
+
+    def _began(self, kind: str, batch) -> None:
+        self._rec._begun = kind
+        self._taken(batch)
+
+    def resourceUpdate(self, batch) -> None:  # uploads handed on without a pass (QRhiCommandBuffer's name)
+        self._cb.resourceUpdate(batch)
+        self._taken(batch)
 
     def beginPass(self, *args) -> None:  # QRhiCommandBuffer's names
         self._cb.beginPass(*args)
@@ -175,6 +184,8 @@ class Recorder:
         self._reads: list = []
         self._pipelines: dict = {}
         self._srbs: dict = {}
+        self._srb_users: dict[int, set] = {}  # a texture's serial -> the keys of the resource sets that bind it
+        self.released = False  # ``release`` ran: what is let go from now on is destroyed at once
         self._samplers: dict = {}
         self._dummies: dict = {}
         self.errors: list[str] = []
@@ -201,9 +212,32 @@ class Recorder:
             self._pass = None
 
     def later(self, native) -> None:
-        """Destroy a resource after the frame in flight (None is ignored)."""
-        if native is not None:
+        """Destroy a resource after the frame in flight (None is ignored; at once after ``release``: no frame
+        follows that would)."""
+        if native is None:
+            return
+        if self.released:
+            native.destroy()
+        else:
             self._doomed.append(native)
+
+    def release(self) -> None:
+        """Destroy what the device made for its view and what waits to be destroyed, now: the view's QRhi goes away
+        (the widget moved to another window, its window closes), and with it no frame is in flight. A renderer
+        releases its own resources before or after: after, each is destroyed as it is let go."""
+        self.released = True
+        self._passes, self._pending, self._pass, self._reads = [], [], None, []
+        pipelines = [p for p in self._pipelines.values() if p is not None]
+        for native in (*self._dying, *self._doomed, *self._srbs.values(), *pipelines, *self._samplers.values()):
+            native.destroy()
+        self._dying, self._doomed, self._srbs, self._srb_users, self._pipelines, self._samplers = [], [], {}, {}, {}, {}
+        for tex in self._dummies.values():
+            tex.release()
+        self._dummies = {}
+        if self.screen is not None:  # its colour is the view's own
+            self.screen.release()
+            self.screen.depth_attachment.release()
+            self.screen = None
 
     def _upload(self, resource, fn) -> None:
         """An upload before the draws that follow it: a pass that already reads ``resource`` ends first."""
@@ -470,17 +504,32 @@ class Recorder:
             srb.setBindings(bindings)
             srb.create()
             self._srbs[key] = srb
+            for t, _sampler in key[2]:
+                self._srb_users.setdefault(t, set()).add(key)
         return srb
 
     def forget(self, serial: int) -> None:
-        """Drop the resource sets that bind the texture ``serial`` (it was released or made again)."""
-        for key in [k for k in self._srbs if any(s == serial for s, _ in k[2])]:
-            self.later(self._srbs.pop(key))
+        """Drop the resource sets that bind the texture ``serial`` (it was released or made again): looked up by
+        the texture, not searched for (an island's hundreds of maps let go against thousands of sets held the
+        window for seconds)."""
+        for key in self._srb_users.pop(serial, ()):
+            self._drop_srb(key)
+
+    def _drop_srb(self, key: tuple) -> None:
+        srb = self._srbs.pop(key, None)
+        if srb is not None:
+            self.later(srb)
+        for t, _sampler in key[2]:
+            users = self._srb_users.get(t)
+            if users is not None:
+                users.discard(key)
+                if not users:
+                    del self._srb_users[t]
 
     def forget_program(self, serial: int) -> None:
         """Drop the pipelines and resource sets of a program that was released (its serial is never given again)."""
         for key in [k for k in self._srbs if k[0] == serial]:
-            self.later(self._srbs.pop(key))
+            self._drop_srb(key)
         for key in [k for k in self._pipelines if k[0] == serial]:
             self.later(self._pipelines.pop(key))
 

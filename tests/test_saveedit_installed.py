@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from tests.fakes import INSTALL_VARS
 
+from annotoolbox.infra.i18n import tr
 from annotoolbox.saveedit import container, edits, locations, nodes, records, summary
 
 LIMIT = 3  # saves per game: the newest, the oldest, the largest
@@ -32,7 +33,7 @@ def test_every_save_found_opens_and_is_summarised(game: str):
     for ref in chosen(game):
         save = container.open_file(ref.path, game)
         s = summary.summarize(save)
-        assert s.sections and s.sections[-1].title == "Parts"
+        assert s.sections and tr(s.sections[-1].title) == "Parts"
         assert all(not p.error for p in save.parts), [p.error for p in save.parts]
         assert nodes.roots(save) and nodes.roots(save)[0].children() is not None
         if game in edits.EDITABLE:

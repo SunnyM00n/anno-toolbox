@@ -24,12 +24,15 @@ ASSETS, TEXTS, SCENES, AMBIENT = "assets", "texts", "scenes", "ambient"
 MODELS, EFFECTS, BANKS, SESSION = "models", "effects", "banks", "session"
 KINDS = (ASSETS, TEXTS, SCENES, AMBIENT, MODELS, EFFECTS, BANKS, SESSION)
 DEBUG = "debug"  # not a reload: a game that takes the debug commands says so in its welcome (live_link_commands=1)
-CAPABILITIES = (*KINDS, DEBUG)
+VALUES = "values"  # not a reload: a game that answers ``ui.values`` (the live widget values) says so in its welcome
+FOLLOW = "follow"  # not a reload: a game that sends the ``ui.scene`` event says so in its welcome
+CAPABILITIES = (*KINDS, DEBUG, VALUES, FOLLOW)  # what a welcome may list; ``features.LINK_KINDS`` adds more
 
 # The events of the game and the topics ``subscribe`` takes for them.
 SELECTION, EDIT_REQUEST, RELOAD, SESSION_EVENT, LOG = "selection", "edit.request", "reload", "session", "log"
+SCENE = "ui.scene"  # a UI scene opened or closed (docs/live-link.md section 18); also its topic
 STALLED = "stalled"  # the game drew no UI frame for a long while after an asset request (always sent, no topic)
-EVENTS = (SELECTION, EDIT_REQUEST, RELOAD, SESSION_EVENT, LOG, STALLED)
+EVENTS = (SELECTION, EDIT_REQUEST, RELOAD, SESSION_EVENT, LOG, SCENE, STALLED)
 
 # The answers (``Reply.status``).
 OK, DONE, SKIPPED, BUSY, UNAVAILABLE, REFUSED, NOT_CONNECTED = (
@@ -38,28 +41,46 @@ OK, DONE, SKIPPED, BUSY, UNAVAILABLE, REFUSED, NOT_CONNECTED = (
 
 # What a modder does without the link, per kind (docs/live-link.md sections 1 and 6).
 MANUAL = {
-    ASSETS: N_("press Shift+F3 in the game (with the hot reload mod enabled)"),
-    TEXTS: N_("press Shift+F3 in the game (with the hot reload mod enabled)"),
-    SCENES: N_("restart the game"),
-    AMBIENT: N_("restart the game"),
-    MODELS: N_("restart the game, or switch on live_reload in the helper library and press Ctrl+Shift+R"),
-    EFFECTS: N_("restart the game, or switch on live_reload in the helper library and press Ctrl+Shift+R"),
-    BANKS: N_("restart the game"),
-    SESSION: N_("save the game and load it again"),
+    ASSETS: N_("common.press_shift_plus_f3_game"),
+    TEXTS: N_("common.press_shift_plus_f3_game"),
+    SCENES: N_("common.restart_game"),
+    AMBIENT: N_("common.restart_game"),
+    MODELS: N_("common.restart_game_switch_live_reload"),
+    EFFECTS: N_("common.restart_game_switch_live_reload"),
+    BANKS: N_("common.restart_game"),
+    SESSION: N_("common.save_game_load_again"),
+}
+# The manual route of the other games (``manual``): Anno 1800 has the mod list at its title screen, Anno 2205 a data
+# reload a key can be bound to (neither is tried in the game yet); everything else is a restart or a save and load.
+_ASSETS_1800, _ASSETS_2205 = N_("common.manual_1800_mod_list"), N_("common.manual_2205_data_reload")
+_RESTART, _RELOAD_SAVE = N_("common.restart_game"), N_("common.save_game_load_again")
+MANUAL_OTHER = {
+    "anno1800": {ASSETS: _ASSETS_1800, TEXTS: _ASSETS_1800},
+    "anno2205": {ASSETS: _ASSETS_2205, TEXTS: _ASSETS_2205},
 }
 # What an asset reload cannot do and what makes it safer (docs/live-link.md section 5, "Asset reloads").
-STALE_NOTE = N_("objects already placed keep the data from before the reload: save and load the game for a clean state")
-PAUSE_NOTE = N_(
-    "in a session the game is paused for the reload and set going again; outside a session, pause it by hand: the mod"
-    " pass rebuilds the mod file map while the game streams"
-)
-DEBUG_OFF = N_("this game takes no debug commands: set live_link_commands=1 in the helper library's settings")
-TEXTURE_NOTE = N_(
-    "a changed texture shows after Shift+F3 once something that uses it is placed again; a changed file at a path"
-    " the game already loaded needs a restart"
-)
+STALE_NOTE = N_("common.objects_already_placed_keep_data")
+PAUSE_NOTE = N_("common.session_game_paused_reload_set")
+DEBUG_OFF = N_("common.game_takes_no_debug_commands")
+VALUES_OFF = N_("common.game_gives_no_live_values")
+TEXTURE_NOTE = N_("common.changed_texture_shows_after_shift")
 
 _SAFE = re.compile(r"[A-Za-z0-9_./-]+")
+
+
+def game_name(game: str) -> str:
+    """The name the suite shows for a game key (``anno1800``: "Anno 1800"); the key itself for one it does not know."""
+    from ..othergames import installs
+
+    record = installs.GAMES.get(game)
+    return record.name if record else game
+
+
+def manual(kind: str, game: str = "") -> str:
+    """What a modder does by hand for the reload ``kind`` in ``game`` (none: Anno 117), in the interface language."""
+    if game in MANUAL_OTHER:
+        return tr(MANUAL_OTHER[game].get(kind) or (_RELOAD_SAVE if kind == SESSION else _RESTART))
+    return tr(MANUAL.get(kind, _RESTART))
 
 
 @dataclass(frozen=True)
@@ -101,8 +122,13 @@ class LinkStatus:
     @property
     def text(self) -> str:
         if not self.connected:
-            return tr("game link: not connected")
-        text = tr("game link: {game} {build}", game=self.game, build=self.build).rstrip()
+            return tr("common.game_link_not_connected")
+        name = game_name(self.game)
+        text = (
+            tr("common.game_link_linked_build", game=name, build=self.build)
+            if self.build
+            else tr("common.game_link_linked", game=name)
+        )
         return f"{text} - {self.note}" if self.note else text
 
 
@@ -111,7 +137,7 @@ def check_paths(paths: Iterable[str]) -> str:
     before anything is sent: docs/live-link.md section 5)."""
     for path in paths:
         if not _SAFE.fullmatch(path) or path.startswith(("/", "./")) or ".." in path.split("/") or ":" in path:
-            return tr("not a path inside the mod's folder: {path}", path=repr(path))
+            return tr("common.not_path_inside_mods_folder", path=repr(path))
     return ""
 
 
@@ -167,7 +193,7 @@ class LiveLink:
         if kind == BANKS and paths and "banks" not in args:  # a bank is named, not placed: its file's name is its name
             names = sorted({PurePosixPath(p).stem for p in paths if p.lower().endswith(".bnk")})
             if not names:
-                return Reply(REFUSED, tr("a sound file reloads with its bank: name the bank's .bnk file"))
+                return Reply(REFUSED, tr("common.sound_file_reloads_bank_name"))
             args = {**args, "banks": names}
             paths = []
             body = {**args, **({"mod": mod} if mod else {})}
@@ -190,6 +216,18 @@ class LiveLink:
         fields = list(fields)
         return self._request("read", _given(guid=guid, object=object, fields=fields), fields)
 
+    def ui_values(self, states: Iterable[str], file: str = "") -> Reply:
+        """What the widgets of an open UI scene show now (docs/live-link.md section 17): of the UI ``states`` whose
+        scene is open, the widgets of the widget file whose GUID is ``file`` (none: the scene file's own widgets).
+        ``Reply.data["scenes"]`` holds per scene its ``state`` and ``widgets``, each with ``guid``, ``crc``, ``name``,
+        ``visible`` and, where it shows one, ``text``, ``image`` and ``values`` (its own properties by UniqueId)."""
+        states = list(states)
+        if not states:
+            return Reply(REFUSED, tr("common.no_ui_state_shows_file"))
+        if self.connected and not self.supports(VALUES):
+            return Reply(UNAVAILABLE, tr(VALUES_OFF))
+        return self._request("ui.values", _given(states=states, file=file or None))
+
     def debug_list(self) -> Reply:
         """Which debug commands the game binds right now (``data["commands"]``: id to ``available`` and ``state``) and
         the cheats it registers itself (``data["cheats"]``). docs/debug-palette.md."""
@@ -202,7 +240,7 @@ class LiveLink:
 
         found = debugcommands.commands(self.status().game or debugcommands.GAME).get(command)
         if found is None:
-            return Reply(REFUSED, tr("{command} is not a debug command of the catalogue", command=command))
+            return Reply(REFUSED, tr("common.not_debug_command_catalogue", command=command))
         typed, why = debugcommands.check_values(found, dict(values or {}))
         if why:
             return Reply(REFUSED, why)
@@ -225,12 +263,6 @@ class LiveLink:
         if self.connected and not self.supports(DEBUG):
             return Reply(UNAVAILABLE, tr(DEBUG_OFF))
         return self._request(name, args)
-
-    def ui_dump(self, states: Iterable[str] = ()) -> Reply:
-        """The game writes the live widget tree of the open scenes of the UI ``states`` (none: every open scene) to
-        its ``log/ui-dump`` folder; the file names come back in ``Reply.data["files"]``."""
-        states = list(states)
-        return self._request("ui.dump", {"states": states} if states else {})
 
     def subscribe(self, topics: Iterable[str]) -> Reply:
         return self._request("subscribe", {"topics": list(topics)})
@@ -261,18 +293,18 @@ class LiveLink:
         if not self.connected:
             self.sent.append(Sent(name, args))
             log.info("live link not connected: would send %s %s", name, args)
-            return Reply(NOT_CONNECTED, tr(MANUAL[kind]) if kind in MANUAL else tr("the game link is not connected"))
+            how = manual(kind, target_game()) if kind in MANUAL else tr("common.game_link_not_connected_lower")
+            return Reply(NOT_CONNECTED, how)
         if kind and not self.supports(kind):
-            return Reply(
-                UNAVAILABLE, tr("this game build cannot reload {kind}: {how}", kind=kind, how=tr(MANUAL[kind]))
-            )
+            how = manual(kind, self.status().game)
+            return Reply(UNAVAILABLE, tr("common.game_build_cannot_reload", kind=kind, how=how))
         self.sent.append(Sent(name, args))
         return self._transmit(Sent(name, args))
 
     def _transmit(self, request: Sent) -> Reply:
         """EXTENSION POINT (the transport, later): send ``request`` over the pipe after the handshake, return the
         game's answer as a ``Reply``. Called only when connected and the kind is supported."""
-        return Reply(UNAVAILABLE, tr("no transport"))
+        return Reply(UNAVAILABLE, tr("common.no_transport"))
 
 
 class NotConnected(LiveLink):
@@ -313,6 +345,17 @@ def use(link: LiveLink) -> LiveLink:
     _state["dispatch"].append(link.on_status(lambda status: _dispatch("status", status)))
     _dispatch("status", link.status())
     return link
+
+
+def set_target_game(game: str) -> None:
+    """The game the suite works on now (a project's): it picks the words of the manual route while none is linked."""
+    _state["game"] = game
+
+
+def target_game() -> str:
+    """The linked game, else the one the suite works on (``set_target_game``), else "" (Anno 117's words)."""
+    status = current().status()
+    return status.game if status.connected else _state.get("game", "")
 
 
 def reset() -> LiveLink:

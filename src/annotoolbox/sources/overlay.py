@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..formats.rda import RdaArchive
-from ..paths import local_data_dir
+from ..paths import cache_dir
 
 _ARCHIVE_RE = re.compile(
     r"""^(?:
@@ -114,9 +114,9 @@ def normalize(rel: str | Path, *, lower: bool = True, studio: bool = False) -> s
 
 
 def cache_base() -> Path:
-    """The cache folder (``CACHE_ENV_VAR``, else under ``%LOCALAPPDATA%``)."""
+    """The cache folder (``CACHE_ENV_VAR``, else the tool's cache folder)."""
     env = os.environ.get(CACHE_ENV_VAR)
-    return Path(env) if env else local_data_dir() / "cache"
+    return Path(env) if env else cache_dir()
 
 
 def default_cache_dir(root: Path) -> Path:

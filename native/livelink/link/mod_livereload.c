@@ -13,8 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TRIGGER_FILE "mods/live-reload.txt"
-#define LOADER_LOG "mods/mod-loader.log"
+#define TRIGGER_FILE G_TRIGGER_FILE
+#define LOADER_LOG G_LOADER_LOG
 #define CHANGES_MAX 4096
 #define MODS_RETRY_MS 2000
 #define RESULTS_MAX 512

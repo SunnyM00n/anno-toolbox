@@ -145,3 +145,29 @@ def test_clouds_in_the_sky_of_the_install():
     assert got["off"] == 0  # the clear sky
     assert got["on"] > 20  # the Roman weather map's clouds over the model
     assert got["cloudy_light"] != got["clear_light"]  # the clouds went into the sky's light (AddReflectedClouds)
+
+
+def test_the_scroll_of_a_long_view_adds_up_only_the_steps_since_its_last_whole_block(monkeypatch):
+    """Every frame added every step since the view's start again: slower with each hour it stayed open."""
+    wind = gc.Wind(angle=0.7, strength=1.3)
+
+    def plain(seconds: float) -> np.ndarray:  # the engine's sum, step by step
+        steps = np.arange(0.0, seconds, gc.STEP)
+        dt = np.diff(np.append(steps, seconds))
+        return (gc.wind_drift(steps, wind)[1] * dt[:, None]).sum(0)
+
+    monkeypatch.setattr(gc, "BLOCK", 64)
+    gc._blocks.cache_clear()
+    gc.scroll.cache_clear()
+    for seconds in (0.0, 0.01, 64 * gc.STEP, 2.5, 7.123, 300.0):
+        got = gc.scroll(seconds, wind)
+        want = np.fmod(plain(seconds), gc.WEATHERMAP_SCALE) / gc.WEATHERMAP_SCALE
+        assert np.allclose(got["cWeatherScroll"], want, rtol=1e-9, atol=1e-12), seconds
+        assert got["cCloudCurlScroll"][1] == pytest.approx(gc.CURL_PACE * seconds)
+    asked = []
+    drift = gc.wind_drift
+    monkeypatch.setattr(gc, "wind_drift", lambda steps, w: (asked.append(len(steps)), drift(steps, w))[1])
+    gc.scroll(300.5, wind)  # its blocks are known: one more at most, and the rest of the last
+    assert sum(asked) <= 2 * 64
+    gc._blocks.cache_clear()
+    gc.scroll.cache_clear()

@@ -258,8 +258,8 @@ def _skeleton_deviations(s) -> list[str]:
 def _weight_deviations(m: Mesh, joints: int) -> list[str]:
     """A skinned mesh's bone indices and weights against the skeleton's joints."""
     who = f"mesh {m.name!r}"
-    idx = next((i for i, e in enumerate(m.elements) if e.usage == 7), None)
-    wgt = next((i for i, e in enumerate(m.elements) if e.usage == 6), None)
+    idx = m.element_at(7)
+    wgt = m.element_at(6)
     if idx is None or wgt is None:
         return [f"{who}: a skinned mesh needs bone indices and weights"]
     out = []

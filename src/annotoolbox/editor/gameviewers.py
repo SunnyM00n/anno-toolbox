@@ -9,6 +9,7 @@ import base64
 import hashlib
 import re
 import threading
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -100,8 +101,9 @@ class Isd1701Viewer(IsdViewer):
     and models are scaled down."""
 
     REPETITION = 1.0  # a 1701 ground texture covers one tile (assumed; the view tiles it once a tile)
-    _ocf_of: dict[int, dict[str, str]] = {}  # per tree: model config -> the text of the .ocf that lists it
-    _configs: dict[int, dict[int, list[str]]] = {}  # per tree: object GUID -> its .mcf variations, read once
+    # the last tree's object configs, read once: (the tree, GUID -> its .mcf variations, model config -> its .ocf's
+    # text). The tree by a weak reference: an id() is given again once a tree is gone (another install folder)
+    _ocf_cache: tuple = (None, {}, {})
 
     def __init__(self, game, tree, source: str, cache: Path, edits: Path | None = None) -> None:
         from ..othergames import isd1701
@@ -133,14 +135,20 @@ class Isd1701Viewer(IsdViewer):
         tree = self.tree2070
         return grannymodels.read_1701(cfg, tree.read_text, tree.exists, 1 / TILE, self.textures_of(cfg))
 
+    def _ocf_tables(self) -> tuple[dict[int, list[str]], dict[str, str]]:
+        """(object GUID -> the ``.mcf`` variations of its ``.ocf``, model config -> the text of the ``.ocf`` that lists
+        it), read once per tree."""
+        tree = self.tree2070
+        cached = Isd1701Viewer._ocf_cache
+        if cached[0] is None or cached[0]() is not tree:
+            texts = {p: tree.read_text(p) for p in tree.iter_paths("data/", suffix=".ocf")}
+            cached = (weakref.ref(tree), grannymodels.object_configs(texts), _ocf_by_config(texts))
+            Isd1701Viewer._ocf_cache = cached
+        return cached[1], cached[2]
+
     def _ocf_models(self) -> dict[int, list[str]]:
-        """Object GUID -> the ``.mcf`` variations of its ``.ocf``, read once per tree."""
-        key = id(self.tree2070)
-        if key not in Isd1701Viewer._configs:
-            texts = {p: self.tree2070.read_text(p) for p in self.tree2070.iter_paths("data/", suffix=".ocf")}
-            Isd1701Viewer._configs = {key: grannymodels.object_configs(texts)}
-            Isd1701Viewer._ocf_of = {key: _ocf_by_config(texts)}
-        return Isd1701Viewer._configs[key]
+        """Object GUID -> the ``.mcf`` variations of its ``.ocf``."""
+        return self._ocf_tables()[0]
 
     def info_footprint(self, cfg: str) -> list:
         """A model's footprint from its ``.info`` file (``info1701.footprint``, with its ``.ocf``'s offsets); empty when
@@ -150,8 +158,7 @@ class Isd1701Viewer(IsdViewer):
         path = footprints.info_path(key)
         if not tree.exists(path):
             return []
-        self._ocf_models()
-        return info1701.footprint(tree.read_text(path), Isd1701Viewer._ocf_of[id(tree)].get(key, ""))
+        return info1701.footprint(tree.read_text(path), self._ocf_tables()[1].get(key, ""))
 
     def _object_cfg(self, guid: int, variation: int | None) -> str:
         """The ``.mcf`` an object draws (its ``.ocf``'s variation), "" for a marker."""

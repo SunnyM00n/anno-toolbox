@@ -16,13 +16,13 @@ from .catalog import ModCard
 from .checks import PROBLEM, Plan
 
 COLUMNS = (
-    N_("Mod"),
-    N_("ModID"),
-    N_("Version"),
-    N_("Category"),
-    N_("Found in"),
-    N_("In the profile"),
-    N_("Problems"),
+    N_("mods.mod"),
+    N_("mods.modid"),
+    N_("common.version"),
+    N_("mods.category"),
+    N_("mods.found_in"),
+    N_("mods.in_the_profile"),
+    N_("mods.problems"),
 )
 CARD = Qt.ItemDataRole.UserRole
 PROBLEM_COLOR = QColor("#c0392b")
@@ -89,15 +89,13 @@ class ModTree(QTreeWidget):
         item = QTreeWidgetItem(parent if nested else self)
         item.setData(0, CARD, card)
         on = state[0] == catalog.ON
-        if nested and card.mod is not None:
-            on = parent.data(0, CARD) is not None and parent.checkState(0) == Qt.CheckState.Checked
         reason = _reason(card, state, nested, parent)
         found = [
             card.name,
             card.mod_id,
             card.version,
             card.category,
-            card.root.label,
+            catalog.root_label(card.root),
             reason,
             self._problems(card, plan, log),
         ]
@@ -130,7 +128,7 @@ class ModTree(QTreeWidget):
         n = len([i for i in (plan.issues_of(card.mod_id) if plan and card.mod_id else []) if i.level == PROBLEM])
         run = log.run_of(card.mod_id) if log and card.mod_id else None
         said = len(run.problems) if run else 0
-        parts = ([tr("{n} to fix", n=n)] if n else []) + ([tr("{n} in the log", n=said)] if said else [])
+        parts = ([tr("mods.n_to_fix", n=n)] if n else []) + ([tr("mods.n_in_the_log", n=said)] if said else [])
         return ", ".join(parts)
 
     def _changed(self, item: QTreeWidgetItem, column: int) -> None:
@@ -144,13 +142,13 @@ def _reason(card: ModCard, state: tuple[str, str], nested: bool, parent) -> str:
     if card.problem:
         return card.problem
     if card.parked:
-        return tr("parked")
+        return tr("mods.parked")
     if card.duplicate_of:
-        return tr("second copy, left out")
+        return tr("mods.second_copy_left_out")
     if nested:
-        return tr("with {id}", id=parent.data(0, CARD).mod_id)
+        return tr("mods.with_id", id=parent.data(0, CARD).mod_id)
     on, how = state
-    word = tr("on") if on == catalog.ON else tr("off")
-    return {catalog.LISTED: word, catalog.NEW: tr("{state} (EnableNewMods)", state=word)}.get(
-        how, tr("{state} (not listed)", state=word)
+    word = tr("mods.on") if on == catalog.ON else tr("mods.off")
+    return {catalog.LISTED: word, catalog.NEW: tr("mods.state_enablenewmods", state=word)}.get(
+        how, tr("mods.state_not_listed", state=word)
     )

@@ -12,7 +12,7 @@ from ..infra.i18n import N_
 from ..suite.project import EditsFolder, Project
 
 EDITS = EditsFolder("map-edits", ("anno117", "anno1800", "anno2070", "anno1404", "anno1701"))
-PART = EDITS.part("maps", N_("Maps"), "Maps")
+PART = EDITS.part("maps", N_("maps.maps"), "Maps")
 REPORTS = "reports"
 
 

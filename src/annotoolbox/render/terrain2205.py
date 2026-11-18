@@ -167,7 +167,7 @@ class Terrain2205(Terrain1800):
             self.wanted.setdefault(key)
             return (how, None, 0)
         self.ready.move_to_end(key)
-        return (how, key, id(self.ready[key]))
+        return (how, key, self.ready[key])
 
     def _values(self, node: Node, layer: int, kind: tuple, tint) -> dict:
         return {**self.island, **node_values(node, self.size, kind[1])}

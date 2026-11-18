@@ -9,31 +9,33 @@ from html import escape
 
 from ..infra.i18n import N_, tr
 from ..modloader.loadlog import ModRun
-from .catalog import LISTED, NEW, ON, ModCard
-from .checks import Issue
+from .catalog import LISTED, NEW, ON, ModCard, root_label
+from .checks import PROBLEM, Issue
 
 SETUP_TEXT = {
-    "RequiresNewGame": N_("needs a new game"),
-    "SafeToRemove": N_("safe to remove from a save"),
-    "Multiplayer": N_("usable in multiplayer"),
-    "Campaign": N_("usable in the campaign"),
+    "RequiresNewGame": N_("mods.needs_new_game"),
+    "SafeToRemove": N_("mods.safe_remove_save"),
+    "Multiplayer": N_("mods.usable_multiplayer"),
+    "Campaign": N_("mods.usable_campaign"),
 }
-HOW = {LISTED: N_("listed in the profile"), NEW: N_("not listed, on through EnableNewMods")}
+HOW = {LISTED: N_("mods.listed_profile"), NEW: N_("mods.not_listed_through_enablenewmods")}
 
 
 def _state_text(card: ModCard, state: tuple[str, str] | None) -> str:
     if card.problem:
-        return tr("not a mod the loader takes: {why}", why=card.problem)
+        return tr("mods.not_mod_loader_takes", why=card.problem)
     if card.parked:
-        return tr("parked: the folder name starts with - or ., the loader skips it")
+        return tr("mods.parked_folder_name_starts_loader")
     if card.duplicate_of:
-        return tr("left out: the loader keeps the copy in {folder}", folder=card.duplicate_of)
+        return tr("mods.left_out_loader_keeps_copy", folder=card.duplicate_of)
     if card.mod is not None and card.mod.parent is not None:
-        return tr("comes with {id}", id=card.mod.top.mod_id)
+        return tr("mods.comes_with_id", id=card.mod.top.mod_id)
     if state is None:
         return ""
     on, how = state
-    return (tr("on") if on == ON else tr("off")) + (f", {tr(HOW[how])}" if how in HOW else ", " + tr("not listed"))
+    return (tr("mods.on") if on == ON else tr("mods.off")) + (
+        f", {tr(HOW[how])}" if how in HOW else ", " + tr("mods.not_listed")
+    )
 
 
 def rows(
@@ -43,28 +45,34 @@ def rows(
     run: ModRun | None = None,
 ) -> list[tuple[str, str]]:
     """The details of ``card``: (label, text), empty texts left out."""
-    out: list[tuple[str, str]] = [(tr("Name"), card.name)]
+    out: list[tuple[str, str]] = [(tr("common.name"), card.name)]
     if card.mod is not None:
         out.append(("ModID", card.mod_id))
-    out += [(tr("Version"), card.version), (tr("Category"), card.category), (tr("Folder"), str(card.folder))]
-    out += [(tr("Found in"), card.root.label), (tr("In the profile"), _state_text(card, state))]
-    out += [(tr("Description"), card.description), (tr("Difficulty"), card.difficulty)]
+    out += [
+        (tr("common.version"), card.version),
+        (tr("mods.category"), card.category),
+        (tr("mods.folder"), str(card.folder)),
+    ]
+    out += [(tr("mods.found_in"), root_label(card.root)), (tr("mods.in_the_profile"), _state_text(card, state))]
+    out += [(tr("mods.description"), card.description), (tr("common.difficulty"), card.difficulty)]
     if card.mod is not None:
-        setup = "; ".join(f"{tr(SETUP_TEXT[k])}: {tr('yes') if v else tr('no')}" for k, v in card.setup.items())
-        out.append((tr("Game setup"), setup))
+        setup = "; ".join(
+            f"{tr(SETUP_TEXT[k])}: {tr('mods.yes') if v else tr('mods.no')}" for k, v in card.setup.items()
+        )
+        out.append((tr("mods.game_setup"), setup))
         out += [(f"{kind}", ", ".join(ids)) for kind, ids in card.dependencies.items()]
         if card.mod.options:
-            out.append((tr("Options"), ", ".join(f"{k} = {v}" for k, v in card.mod.options.items())))
+            out.append((tr("common.options"), ", ".join(f"{k} = {v}" for k, v in card.mod.options.items())))
     if card.children:
-        out.append((tr("Nested mods"), ", ".join(c.mod_id or c.folder.name for c in card.children)))
+        out.append((tr("mods.nested_mods"), ", ".join(c.mod_id or c.folder.name for c in card.children)))
     for issue in issues or ():
-        out.append((tr("Problem") if issue.level == "problem" else tr("Note"), f"{issue.code}: {issue.text}"))
+        out.append((tr("mods.problem") if issue.level == PROBLEM else tr("mods.note"), f"{issue.code}: {issue.text}"))
     if run is not None:
-        said = tr("loaded") if run.loaded else (tr("enabled, not loaded") if run.enabled else "")
+        said = tr("mods.loaded") if run.loaded else (tr("mods.enabled_not_loaded") if run.enabled else "")
         if run.seconds is not None:
-            said += " " + tr("in {seconds} s", seconds=f"{run.seconds:.1f}")
-        out.append((tr("Last start"), said))
-        out += [(tr("Log"), line) for line in run.problems]
+            said += " " + tr("mods.in_seconds_s", seconds=f"{run.seconds:.1f}")
+        out.append((tr("mods.last_start"), said))
+        out += [(tr("common.log"), line) for line in run.problems]
     return [(k, v) for k, v in out if v]
 
 

@@ -24,17 +24,59 @@ def format_data(name: str) -> Traversable:
     return shipped if shipped.is_file() else REPO_ROOT / "docs" / "formats" / name
 
 
+APP_FOLDER = "anno-toolbox"
+
+
+def _xdg(variable: str, fallback: str) -> Path:
+    """An XDG base folder: the variable when it holds an absolute path (the spec ignores a relative one), else
+    ``~/<fallback>``."""
+    value = os.environ.get(variable, "")
+    return Path(value) if value and os.path.isabs(value) else Path.home() / fallback
+
+
 def local_data_dir() -> Path:
-    """The tool's own folder for settings, caches and registries: ``anno-toolbox`` under ``%LOCALAPPDATA%``
-    (``~/AppData/Local`` on Windows without it, ``~/.local/share`` elsewhere)."""
+    """The tool's own folder for registries, logs and install state: ``anno-toolbox`` under ``%LOCALAPPDATA%``
+    (``~/AppData/Local`` on Windows without it); on Linux ``$XDG_DATA_HOME`` (``~/.local/share``)."""
+    if os.name != "nt":
+        return _xdg("XDG_DATA_HOME", ".local/share") / APP_FOLDER
     base = os.environ.get("LOCALAPPDATA")
-    if not base:
-        base = str(Path.home() / ("AppData/Local" if os.name == "nt" else ".local/share"))
-    return Path(base) / "anno-toolbox"
+    return Path(base or Path.home() / "AppData/Local") / APP_FOLDER
+
+
+def config_dir() -> Path:
+    """Where the settings file lives: the data folder on Windows, ``$XDG_CONFIG_HOME`` (``~/.config``) on Linux."""
+    if os.name != "nt":
+        return _xdg("XDG_CONFIG_HOME", ".config") / APP_FOLDER
+    return local_data_dir()
+
+
+def cache_dir() -> Path:
+    """The regenerable build cache: ``cache`` in the data folder on Windows, ``$XDG_CACHE_HOME`` (``~/.cache``) on
+    Linux."""
+    if os.name != "nt":
+        return _xdg("XDG_CACHE_HOME", ".cache") / APP_FOLDER
+    return local_data_dir() / "cache"
+
+
+def _xdg_user_dir(name: str) -> Path | None:
+    """``XDG_<name>_DIR`` from ``user-dirs.dirs`` in the config folder (``$HOME`` in it expanded), None if absent."""
+    try:
+        text = (_xdg("XDG_CONFIG_HOME", ".config") / "user-dirs.dirs").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, _, value = line.strip().partition("=")
+        if key == f"XDG_{name}_DIR" and value:
+            path = value.strip().strip('"').replace("$HOME", str(Path.home()))
+            return Path(path) if os.path.isabs(path) else None
+    return None
 
 
 def documents_dir() -> Path:
-    """The user's Documents folder (moved folders included; ``~/Documents`` where Windows cannot say)."""
+    """The user's Documents folder (moved folders included; ``~/Documents`` where the system cannot say; on Linux
+    ``XDG_DOCUMENTS_DIR`` of ``user-dirs.dirs``)."""
+    if os.name != "nt":
+        return _xdg_user_dir("DOCUMENTS") or Path.home() / "Documents"
     try:
         import ctypes
         from ctypes import wintypes

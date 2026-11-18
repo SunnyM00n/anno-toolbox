@@ -4,6 +4,7 @@ the files a file name value may take, and the form's buttons."""
 from __future__ import annotations
 
 import os
+import xml.etree.ElementTree as ET
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,7 +15,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QLineEdit, QToolButton
 from tests.fakes import asset_game
 
-from annotoolbox.assetedit import picker
+from annotoolbox.assetedit import assetform, picker
 from annotoolbox.assetedit.assetform import AssetForm
 from annotoolbox.assetedit.assetgame import open_game
 from annotoolbox.assetedit.schema import ValueSpec
@@ -73,3 +74,62 @@ def test_the_form_offers_a_picker_beside_a_reference_a_colour_and_a_file_name(qt
 def test_the_hint_lists_the_needed_properties_as_alternatives():
     assert picker.asset_hint(ValueSpec("Ref", "Asset", needed_property="A;B;C")) == "needs: A or B or C"
     assert picker.asset_hint(ValueSpec("Ref", "Asset", needed_property="A;")) == "needs: A"
+
+
+def _list_spec() -> ValueSpec:
+    return ValueSpec("BuildCost", "Vector", items=[ValueSpec("Product", "Asset"), ValueSpec("Amount", "Integer")])
+
+
+def test_a_cell_edit_of_a_list_keeps_what_the_table_does_not_show(qt):
+    """An item's nested block and a value the schema does not know stay when another cell of the list is edited."""
+    block = ET.fromstring(
+        "<BuildCost><Item><Product>1001</Product><Amount>2</Amount><Extra>kept</Extra></Item>"
+        "<Item><Product><Inner>7</Inner></Product><Amount>3</Amount></Item></BuildCost>"
+    )
+    spec, cols = _list_spec(), ["Product", "Amount"]
+    table = assetform._filled_table(["1", "2"], cols, block.findall("Item"))
+    table.item(0, 1).setText("5")
+    table.item(1, 1).setText("")
+    out = assetform._rebuilt_block(spec, ("Building", "BuildCost"), block, table, ["1", "2"], cols)
+    first, second = out.findall("Item")
+    assert first.findtext("Amount") == "5" and first.findtext("Extra") == "kept"
+    assert second.findtext("Product/Inner") == "7" and second.find("Amount") is None  # an emptied cell sets nothing
+    assert block.findtext("Item/Amount") == "2"  # the element the table was filled from is not written to
+
+
+def test_a_list_of_plain_items_is_edited_as_the_items_text(qt):
+    """A list the schema gives no item values: the cell is the item's text, not a child named after the column."""
+    block = ET.fromstring("<Tags><Item>a</Item><Item>b</Item></Tags>")
+    spec, cols = ValueSpec("Tags", "Vector"), [assetform.PLAIN]
+    table = assetform._filled_table(["1", "2"], cols, block.findall("Item"))
+    assert [table.item(r, 0).text() for r in range(2)] == ["a", "b"]
+    table.item(1, 0).setText("c")
+    out = assetform._rebuilt_block(spec, ("Standard", "Tags"), block, table, ["1", "2"], cols)
+    assert ET.tostring(out, encoding="unicode") == "<Tags><Item>a</Item><Item>c</Item></Tags>"
+
+
+def test_text_typed_into_a_field_goes_to_its_own_asset_when_another_is_shown(qt, doc):
+    from PySide6.QtTest import QTest
+
+    form = AssetForm()
+    form.show()
+    form.activateWindow()
+    form.show_asset(doc, 2001)
+    qt.processEvents()
+    name = next(e for e in form.findChildren(QLineEdit) if e.text() == "Hut")
+    name.setFocus()
+    QTest.keyClicks(name, "X")  # typed, the field not left
+    form.show_asset(doc, 2002)  # a jump, a link, a paste: the form is built for another asset
+    qt.processEvents()
+    assert doc.changes.assets[2001].set == {"Standard/Name": "HutX"} and 2002 not in doc.changes.assets
+    form.close()
+
+
+def test_a_read_only_value_cannot_be_typed_beside_its_picker(qt, doc):
+    form = AssetForm()
+    form.show_asset(doc, 2001)
+    for kind in ("Flags", "Asset", "Color", "String"):
+        row = form.field(ValueSpec("Kinds", kind, read_only=True), ("Building", "Kinds"))
+        line = row.findChild(QLineEdit)
+        assert line.isReadOnly() or not line.isEnabled(), kind
+    assert not form.field(ValueSpec("Kinds", "Flags"), ("Building", "Kinds")).findChild(QLineEdit).isReadOnly()

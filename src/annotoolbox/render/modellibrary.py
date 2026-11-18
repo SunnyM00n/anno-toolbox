@@ -187,6 +187,7 @@ class ModelLibrary:
         self._meshes: dict[str, object] = {}  # key -> list of (vertices, indices); [] failed; None loading
         self._textures: dict[str, object] = {}  # key -> (width, height, components, bytes); None loading, False failed
         self.changed = threading.Event()
+        self._closed = False
 
     def request(self, cfgs) -> None:
         for cfg in cfgs:
@@ -196,7 +197,7 @@ class ModelLibrary:
                 if cfg in self._parts:
                     continue
                 self._parts[cfg] = None
-            self.pool.submit(self._resolve, cfg)
+            self._submit(self._resolve, cfg)
 
     def parts(self, cfg: str) -> list | None:
         """The parts once resolved (a failed config: []); None while it is resolving."""
@@ -233,7 +234,7 @@ class ModelLibrary:
         for cfg in resolved:
             was, now = before is None or cfg in before, self.full(cfg)
             if now and not was:
-                self.pool.submit(self._load_full, cfg)
+                self._submit(self._load_full, cfg)
         if cfgs is not None:
             self._forget_unwanted()
         return True
@@ -280,7 +281,7 @@ class ModelLibrary:
                 if placed.file in self._effects:
                     continue
                 self._effects[placed.file] = None
-            self.pool.submit(self._load_effect, placed.file)
+            self._submit(self._load_effect, placed.file)
 
     def effect(self, path: str) -> list | None:
         """The effects of a file: None while it loads, [] when it cannot be read."""
@@ -302,7 +303,7 @@ class ModelLibrary:
         with self._lock:
             if wanted and key not in self._textures:
                 self._textures[key] = None
-                self.pool.submit(self._decode_texture, key, key[2:], key.startswith("n:"))
+                self._submit(self._decode_texture, key, key[2:], key.startswith("n:"))
             return self._textures.get(key)
 
     def textures_pending(self) -> int:
@@ -324,7 +325,19 @@ class ModelLibrary:
         return parts is not None and all(found.get(p["mesh_key"]) is not None for p in parts)
 
     def close(self) -> None:
+        self._closed = True
         self.pool.shutdown(wait=False, cancel_futures=True)
+
+    def _submit(self, work, *args) -> bool:
+        """``work(*args)`` on a worker; nothing once the library is closed (a worker still running, or a view's last
+        frame, asks for more: what it asked for stays loading)."""
+        if self._closed:
+            return False
+        try:
+            self.pool.submit(work, *args)
+        except RuntimeError:  # closed between the check and the call
+            return False
+        return True
 
     # background work
     def _flatten(self, cfg: str, matrix: np.ndarray, depth: int, out: list, fx: list, decals: list,
@@ -417,7 +430,7 @@ class ModelLibrary:
         self.changed.set()
         decals = self.decals(cfg)
         for p in parts:  # the coarser levels after every part's finest: the island shows first
-            self.pool.submit(self._load_levels, p)
+            self._submit(self._load_levels, p)
         for key in [f"d:{x['diffuse']}" for x in (*parts, *decals) if x["diffuse"]] + [
             f"n:{p['normal']}" for p in parts if p["normal"]
         ]:  # the maps last: none is grey when the camera first comes near (``texture`` starts them)

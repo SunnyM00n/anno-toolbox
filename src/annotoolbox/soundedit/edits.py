@@ -29,7 +29,7 @@ MUSIC_FIELDS = ("weight", "loop", "loop_min", "loop_max", "avoid_repeat", "use_w
 def _layout(doc: BankDoc, container: int) -> tuple[HircObject, containers.Layout]:
     obj, node = doc.obj(container), doc.graph.get(container)
     if node is None:
-        raise EditError(tr("{type_name} {container} is not a container", type_name=obj.type_name, container=container))
+        raise EditError(tr("sound.type_name_container_not", type_name=obj.type_name, container=container))
     try:
         return obj, containers.read_layout(obj, node, doc.version)
     except containers.LayoutError as exc:
@@ -47,7 +47,7 @@ def _props(doc: BankDoc, obj_id: int) -> tuple[HircObject, nodebase.PropBlock]:
 # properties
 
 
-@edit(N_("change the settings"))
+@edit(N_("sound.change_settings"))
 def set_props(doc: BankDoc, id: int, props: dict | None = None, ranges: dict | None = None) -> None:
     """Set (or, with None, remove) single properties and random ranges of an object by property id."""
     obj, block = _props(doc, id)
@@ -61,7 +61,7 @@ def set_props(doc: BankDoc, id: int, props: dict | None = None, ranges: dict | N
 # containers
 
 
-@edit(N_("change the random and sequence settings"))
+@edit(N_("sound.change_random_sequence_settings"))
 def set_ranseq(
     doc: BankDoc,
     container: int,
@@ -74,7 +74,7 @@ def set_ranseq(
     it plays its list in order (sequence) and whether the random pick is a shuffle (117's banks)."""
     obj, lay = _layout(doc, container)
     if obj.type != bnkgraph.RANSEQ or bnkgraph.layout(doc.version).child_gap[bnkgraph.RANSEQ] is None:
-        raise EditError(tr("the loop settings are read in the Random/Sequence containers of Anno 117's banks"))
+        raise EditError(tr("sound.loop_settings_read_random_sequence"))
     pay = bytearray(obj.payload)
     base = lay.at - RAN_PARAMS
     for at, value, fmt in (
@@ -88,27 +88,25 @@ def set_ranseq(
     doc.put(HircObject(obj.type, obj.id, bytes(pay)))
 
 
-@edit(N_("change the playlist"))
+@edit(N_("sound.change_playlist"))
 def set_playlist(doc: BankDoc, container: int, entries: list) -> None:
     """A Random/Sequence container's playlist: (child id, weight) entries in order; a child may stand several times."""
     obj, lay = _layout(doc, container)
     if obj.type != bnkgraph.RANSEQ:
-        raise EditError(tr("{type_name} {container} has no playlist", type_name=obj.type_name, container=container))
+        raise EditError(tr("sound.type_name_container_no_playlist", type_name=obj.type_name, container=container))
     pairs = [(int(c), int(w)) for c, w in entries]
     if not pairs or any(c not in lay.children for c, _w in pairs) or any(not 0 <= w < 2**32 for _c, w in pairs):
-        raise EditError(tr("a playlist names children of the container, each with a weight"))
+        raise EditError(tr("sound.playlist_names_children_container_weight"))
     lay.playlist = pairs
     doc.put(containers.render(obj, lay))
 
 
-@edit(N_("change the weight"))
+@edit(N_("sound.change_weight"))
 def set_weight(doc: BankDoc, container: int, child: int, weight: int) -> None:
     """The weight of a child (every entry of it) in a Random/Sequence container's playlist."""
     obj, lay = _layout(doc, container)
     if child not in lay.children or obj.type != bnkgraph.RANSEQ:
-        raise EditError(
-            tr("{child} is not a child of the Random/Sequence container {container}", child=child, container=container)
-        )
+        raise EditError(tr("sound.not_child_random_sequence_container", child=child, container=container))
     set_playlist(doc, container, [(c, weight if c == child else w) for c, w in lay.playlist])
 
 
@@ -119,7 +117,7 @@ def _refuse_cycle(doc: BankDoc, container: int, child: int) -> None:
         if at == child:
             raise EditError(
                 tr(
-                    "{child} is the container {container} or above it: the bank would loop",
+                    "sound.container_above_bank_loop",
                     child=child,
                     container=container,
                 )
@@ -136,7 +134,7 @@ def _own(doc: BankDoc, container: int, child: int) -> HircObject:
     if parent not in (0, container):
         raise EditError(
             tr(
-                "{type_name} {child} hangs under {parent} already: take it out there first",
+                "sound.hangs_under_already_take_out",
                 type_name=obj.type_name,
                 child=child,
                 parent=parent,
@@ -145,12 +143,12 @@ def _own(doc: BankDoc, container: int, child: int) -> HircObject:
     return bnkgraph.with_parent(obj, doc.version, container)
 
 
-@edit(N_("add a child"))
+@edit(N_("sound.add_child"))
 def add_child(doc: BankDoc, container: int, child: int, weight: int = DEFAULT_WEIGHT, value: int | None = None) -> None:
     """Put an object of the bank under a container: its playlist (Random/Sequence), its branch ``value`` (Switch)."""
     obj, lay = _layout(doc, container)
     if child in lay.children:
-        raise EditError(tr("{child} is a child of {container} already", child=child, container=container))
+        raise EditError(tr("sound.child_container_already", child=child, container=container))
     doc.put(_own(doc, container, child))
     lay.children.append(child)
     if obj.type == bnkgraph.RANSEQ:
@@ -159,7 +157,7 @@ def add_child(doc: BankDoc, container: int, child: int, weight: int = DEFAULT_WE
         if value not in lay.table:
             raise EditError(
                 tr(
-                    "the switch container {container} has no value {value}: pick one of its values",
+                    "sound.switch_container_no_value_pick",
                     container=container,
                     value=value,
                 )
@@ -168,14 +166,14 @@ def add_child(doc: BankDoc, container: int, child: int, weight: int = DEFAULT_WE
     doc.put(containers.render(obj, lay))
 
 
-@edit(N_("remove a child"))
+@edit(N_("sound.remove_child"))
 def remove_child(doc: BankDoc, container: int, child: int) -> None:
     """Take a child out of a Random/Sequence or Actor-Mixer container; the object stays in the bank, under none."""
     obj, lay = _layout(doc, container)
     if obj.type == bnkgraph.SWITCH:
-        raise EditError(tr("take a node out of a branch of a switch container instead (set_branch)"))
+        raise EditError(tr("sound.take_node_out_branch_switch"))
     if child not in lay.children:
-        raise EditError(tr("{child} is not a child of {container}", child=child, container=container))
+        raise EditError(tr("sound.child_not_container", child=child, container=container))
     lay.children.remove(child)
     lay.playlist = [(c, w) for c, w in lay.playlist if c != child]
     doc.put(containers.render(obj, lay))
@@ -185,16 +183,14 @@ def remove_child(doc: BankDoc, container: int, child: int) -> None:
 # switch containers
 
 
-@edit(N_("change the switch"))
+@edit(N_("sound.change_switch"))
 def set_switch(
     doc: BankDoc, container: int, default: int | None = None, group: int | None = None, state_group: bool | None = None
 ) -> None:
     """The group a Switch container follows (a switch group, or a state group) and the value it starts with."""
     obj, lay = _layout(doc, container)
     if obj.type != bnkgraph.SWITCH:
-        raise EditError(
-            tr("{type_name} {container} is not a Switch container", type_name=obj.type_name, container=container)
-        )
+        raise EditError(tr("sound.not_switch_container", type_name=obj.type_name, container=container))
     pay = bytearray(obj.payload)
     at = lay.at - SWITCH_HEAD
     if state_group is not None:
@@ -206,19 +202,17 @@ def set_switch(
     doc.put(HircObject(obj.type, obj.id, bytes(pay)))
 
 
-@edit(N_("change a branch"))
+@edit(N_("sound.change_branch"))
 def set_branch(doc: BankDoc, container: int, value: int, nodes: list | None) -> None:
     """The nodes a switch value plays (children of the container; None removes the value's row)."""
     obj, lay = _layout(doc, container)
     if obj.type != bnkgraph.SWITCH:
-        raise EditError(
-            tr("{type_name} {container} is not a Switch container", type_name=obj.type_name, container=container)
-        )
+        raise EditError(tr("sound.not_switch_container", type_name=obj.type_name, container=container))
     if nodes is None:
         lay.table.pop(value, None)
     else:
         if any(n not in lay.children for n in nodes):
-            raise EditError(tr("a branch plays children of the container; add the sound to it first"))
+            raise EditError(tr("sound.branch_plays_children_container_add"))
         lay.table[value] = [int(n) for n in nodes]
     doc.put(containers.render(obj, lay))
 
@@ -242,15 +236,15 @@ def _play_action(doc: BankDoc, action: int, target: int) -> HircObject:
     for o in doc.objects_of(bnkgraph.ACTION):
         if bnkgraph.read_action(o).type == bnkgraph.PLAY:
             return HircObject(o.type, action, o.payload[:2] + struct.pack("<I", target) + o.payload[6:])
-    raise EditError(tr("the bank has no Play action to make a new one from"))
+    raise EditError(tr("sound.bank_no_play_action_make"))
 
 
 def _check_target(doc: BankDoc, target: int) -> None:
     if doc.obj(target).type not in (2, 5, 6, 7, 9, 10, 11, 12, 13):
-        raise EditError(tr("object {target} is not something an event can play", target=target))
+        raise EditError(tr("sound.object_not_something_event_play", target=target))
 
 
-@edit(N_("add an event"))
+@edit(N_("sound.add_event"))
 def add_event(doc: BankDoc, event: int, action: int, target: int) -> None:
     """A new Event that plays ``target`` (a sound, a container or a music object of the bank), with its Play action."""
     _check_target(doc, target)
@@ -258,19 +252,19 @@ def add_event(doc: BankDoc, event: int, action: int, target: int) -> None:
     doc.add(HircObject(bnkgraph.EVENT, event, _event_payload(doc.version, [action])))
 
 
-@edit(N_("change the event's actions"))
+@edit(N_("sound.change_events_actions"))
 def set_event_actions(doc: BankDoc, event: int, actions: list) -> None:
     """The actions an event runs, by id, in order."""
     obj = doc.obj(event)
     if obj.type != bnkgraph.EVENT:
-        raise EditError(tr("object {event} is not an Event", event=event))
+        raise EditError(tr("sound.object_not_event", event=event))
     for a in actions:
         if doc.obj(a).type != bnkgraph.ACTION:
-            raise EditError(tr("object {a} is not an Action", a=a))
+            raise EditError(tr("sound.object_not_action", a=a))
     doc.put(HircObject(obj.type, obj.id, _event_payload(doc.version, [int(a) for a in actions])))
 
 
-@edit(N_("add a play action"))
+@edit(N_("sound.add_play_action"))
 def add_play(doc: BankDoc, event: int, action: int, target: int) -> None:
     """Another Play action on an existing event."""
     _check_target(doc, target)
@@ -279,7 +273,7 @@ def add_play(doc: BankDoc, event: int, action: int, target: int) -> None:
     set_event_actions(doc, event, [*held, action])
 
 
-@edit(N_("change an action"))
+@edit(N_("sound.change_action"))
 def set_action(
     doc: BankDoc, action: int, target: int | None = None, group: int | None = None, value: int | None = None
 ) -> None:
@@ -289,14 +283,14 @@ def set_action(
     pay = bytearray(obj.payload)
     if read.type in (bnkgraph.SET_STATE, bnkgraph.SET_SWITCH):
         if target is not None:
-            raise EditError(tr("a set-switch or set-state action names a group and a value, not a target"))
+            raise EditError(tr("sound.set_switch_state_action_names"))
         struct.pack_into(
             "<II", pay, read.at, read.group if group is None else group, read.value if value is None else value
         )
         struct.pack_into("<I", pay, 2, read.value if value is None else value)  # the target is the value's id again
     else:
         if group is not None or value is not None:
-            raise EditError(tr("only a set-switch or set-state action has a group and a value"))
+            raise EditError(tr("sound.only_set_switch_state_action"))
         if target is not None:
             _check_target(doc, target)
             struct.pack_into("<I", pay, 2, target)
@@ -306,20 +300,18 @@ def set_action(
 # music
 
 
-@edit(N_("change a music node"))
+@edit(N_("sound.change_music_node"))
 def set_music_node(doc: BankDoc, container: int, index: int, fields: dict) -> None:
     """Fields of one entry of a music playlist container (117's banks): weight, loop, loop_min, loop_max,
     avoid_repeat, use_weight, shuffle."""
     obj = doc.obj(container)
     if not bnkgraph.layout(doc.version).music_readable or obj.type != bnkmusic.MUSIC_RANSEQ_CNTR:
-        raise EditError(tr("music playlists are edited in the Music Playlist containers of Anno 117's banks"))
+        raise EditError(tr("sound.music_playlists_edited_playlist"))
     playlist = bnkmusic.parse_playlist(obj)
-    check_index(playlist.nodes, index, tr("playlist entries"))
+    check_index(playlist.nodes, index, tr("sound.playlist_entries"))
     bad = [k for k in fields if k not in MUSIC_FIELDS]
     if bad:
-        raise EditError(
-            tr("a playlist entry has no field {value}: {value2}", value=bad[0], value2=", ".join(MUSIC_FIELDS))
-        )
+        raise EditError(tr("sound.playlist_entry_no_field", value=bad[0], value2=", ".join(MUSIC_FIELDS)))
     for key, value in fields.items():
         setattr(playlist.nodes[index], key, int(value))
     doc.put(bnkmusic.render_playlist(playlist))

@@ -178,8 +178,90 @@ def test_the_deep_check_runs_in_the_background_and_fills_the_problems(win, qt):
     while win.checking and time.time() < deadline:
         qt.processEvents()
         time.sleep(0.01)
-    assert not win.checking and win.check_action.isEnabled()
-    assert ("anno117", "default") in win.deep
+    assert not win.checking and win.check_action.isEnabled() and win.stop_button.isHidden()
+
+
+def test_the_deep_check_says_where_it_is_and_stop_ends_it_before_the_next_mod(win, qt, monkeypatch):
+    import threading
+
+    from annotoolbox.infra.i18n import tr
+
+    release, reached = threading.Event(), []
+
+    def check(_profile, say):
+        say("at alpha")
+        assert release.wait(30)
+        say("at beta")  # the stop ends it here
+        reached.append("beta")
+        return [mw.Issue(mw.PROBLEM, "beta", "op:x", "never reported")]
+
+    monkeypatch.setattr(win.manager, "deep_check", check)
+    win.sync = False
+    win.deep_check()
+    deadline = time.time() + 10
+    while win.statusBar().currentMessage() != "at alpha" and time.time() < deadline:
+        qt.processEvents()
+    assert win.statusBar().currentMessage() == "at alpha" and not win.stop_button.isHidden()
+    win.stop_button.click()
+    assert win.statusBar().currentMessage() == tr("mods.stopping") and not win.stop_button.isEnabled()
+    release.set()
+    wait_for(win, qt, "checking")
+    assert not reached and win.deep == [] and win.stop_button.isHidden() and win.check_action.isEnabled()
+    assert win.statusBar().currentMessage() == tr("mods.check_stopped")
+
+
+def test_the_deep_checks_findings_go_when_the_profile_changes(win, qt, monkeypatch):
+    found = [mw.Issue(mw.PROBLEM, "alpha", "op:x", "matches nothing")]
+    monkeypatch.setattr(win.manager, "deep_check", lambda _profile, _say: list(found))
+
+    def checked() -> bool:
+        win.deep_check()
+        return win.deep == found and found[0] in win.plan.issues
+
+    assert checked()
+    win._mod_toggled("gamma", True)  # the profile's text changed: the findings are of the one before
+    assert win.deep == [] and found[0] not in win.plan.issues
+    assert checked()
+    win._profile_chosen()  # another profile picked
+    assert win.deep == [] and found[0] not in win.plan.issues
+    assert checked()
+    win.rescan()  # the mods folder read again
+    assert win.deep == []
+    stamp = win.deep_stamp
+    win._mod_toggled("gamma", False)
+    win._checked(stamp, list(found))  # a check that ends after the profile changed under it
+    assert win.deep == [] and "again" in win.statusBar().currentMessage()
+
+
+def test_an_install_says_its_steps_and_stop_keeps_what_is_in(win, qt, tmp_path, monkeypatch):
+    import threading
+
+    from annotoolbox.infra.i18n import tr
+
+    pack = tmp_path / "pack"
+    make_mod(pack, "one")
+    make_mod(pack, "two")
+    release, copied, real = threading.Event(), threading.Event(), mw.install.place_folder
+
+    def slow(*args, **kwargs):
+        notes = real(*args, **kwargs)
+        copied.set()
+        assert release.wait(30)  # the first mod is in; the stop comes before the second
+        return notes
+
+    monkeypatch.setattr(mw.install, "place_folder", slow)
+    win.sync = False
+    win._install(pack)
+    deadline = time.time() + 10
+    while "one" not in win.statusBar().currentMessage() and time.time() < deadline:
+        qt.processEvents()
+    assert win.statusBar().currentMessage() == tr("mods.installing_name", name="one") and copied.wait(30)
+    win.stop_job()
+    release.set()
+    wait_for(win, qt, "checking")
+    assert "one" in rows(win) and "two" not in rows(win) and win.stop_button.isHidden()
+    assert win.statusBar().currentMessage() == tr("mods.install_stopped_installed", names="one")
+    assert sorted(p.name for p in win.mods.iterdir() if p.name.startswith(".")) == []  # no staging folder left
 
 
 def test_a_reload_without_the_link_says_how_to_do_it_by_hand(win, monkeypatch):
@@ -297,3 +379,47 @@ def test_removing_a_mod_moves_it_off_the_window_thread(win, qt, monkeypatch):
     win.background.join()
     qt.processEvents()
     assert seen and threading.get_ident() not in seen and "gamma" not in rows(win) and not win.checking
+
+
+def test_a_profile_that_cannot_be_made_active_is_not_reported_as_active(win, monkeypatch):
+    from annotoolbox.modmgr.profiles import ProfileError
+
+    def refuse(_name):
+        raise ProfileError("the file is locked")
+
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(win.manager.store, "set_active", refuse)
+    win.make_active()
+    assert win.statusBar().currentMessage() == "the file is locked"
+
+
+def test_the_active_profile_opens_whatever_case_profile_txt_spells_it_in(win):
+    (win.mods / "profiles" / "aaa.txt").write_text("DisplayName aaa", encoding="utf-8")
+    (win.mods / "profile.txt").write_text("ActiveProfile Default", encoding="utf-8")
+    win.open_game("anno117")
+    assert win.profile == "default" and "(active)" in win.profile_box.currentText()
+
+
+def test_selecting_a_mod_reads_no_file_again(win, monkeypatch):
+    read = []
+    monkeypatch.setattr(win.manager, "log", lambda: read.append("log"))
+    monkeypatch.setattr(win.manager, "read", lambda name: read.append("profile"))
+    for mod_id in ("alpha", "beta", "gamma"):
+        win.tree.setCurrentItem(rows(win)[mod_id])
+        assert mod_id in win.detail.toPlainText()
+    assert read == []  # a refresh read them; a click only shows
+
+
+def test_the_selected_mod_is_imported_as_a_project_and_the_mod_stays(win, tmp_path, monkeypatch, qt):
+    from annotoolbox.suite import project
+
+    shown = []
+    monkeypatch.setattr(mw.QMessageBox, "information", lambda *a, **k: shown.append(a[2]))
+    mod = win.mods / "alpha"
+    before = sorted((p.relative_to(mod).as_posix(), p.read_bytes()) for p in mod.rglob("*") if p.is_file())
+    win.tree.setCurrentItem(rows(win)["alpha"])
+    win.import_selected(tmp_path / "alpha-project")
+    settle(qt)
+    assert project.Project.open(tmp_path / "alpha-project").mod_id == "alpha" and "alpha" in shown[0]
+    assert win.settings.project == str(tmp_path / "alpha-project") and not win.checking
+    assert before == sorted((p.relative_to(mod).as_posix(), p.read_bytes()) for p in mod.rglob("*") if p.is_file())

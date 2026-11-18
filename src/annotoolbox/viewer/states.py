@@ -74,15 +74,30 @@ def bits_read(scene) -> list[int]:
     return [b for b in range(32) if masks >> b & 1]
 
 
+def _covered(spans: list[tuple[float, float]], length: float, back: int, upto: float) -> float:
+    """How much of one pass's first ``upto`` seconds the windows ``spans`` cover, with the ends of the windows that
+    began up to ``back`` passes earlier (a window may outlast its pass)."""
+    cut = sorted((a - m * length, min(b - m * length, upto)) for a, b in spans for m in range(back + 1))
+    total, reach = 0.0, 0.0
+    for a, b in cut:  # the union of the windows
+        a = max(a, reach)
+        if b > a:
+            total += b - a
+            reach = b
+    return total
+
+
 @dataclass(frozen=True)
 class States:
-    """The condition bits on now (``bits``), and the windows (start, end, bits) in view seconds that set them up to
-    now, for the time a mask has been on."""
+    """The condition bits on now (``bits``), and the windows (start, end, bits) of one pass of the sequence in view
+    seconds, for the time a mask has been on; ``length`` is a looped sequence's pass in view seconds (0: played
+    once)."""
 
     bits: int = 0
     windows: tuple[tuple[float, float, int], ...] = field(default_factory=tuple)
     seconds: float = 0.0
     held: int = 0  # the bits the view holds by hand (View > Condition bits), on all along
+    length: float = 0.0
 
     @classmethod
     def of(cls, sequence: Sequence | None, seconds: float, held: int = 0) -> States:
@@ -91,21 +106,14 @@ class States:
             return cls(held, (), seconds, held)
         speed = sequence.speed if sequence.speed > 0 else 1.0
         length = max(sequence.duration_ms / 1000, 0.001) / speed  # one pass in view seconds
-        elements = [(e.start_ms / 1000 / speed, max(e.end_ms, e.start_ms + 1) / 1000 / speed, e.condition)
-                    for track in sequence.tracks for e in track if e.kind == 2 and e.condition]  # fmt: skip
-        passes = int(seconds // length) if sequence.looped else 0
-        windows = []
-        for k in range(passes + 1):
-            for start, end, bits in elements:
-                a, b = start + k * length, end + k * length
-                if a < seconds:
-                    windows.append((a, min(b, seconds), bits))
-        local = seconds - passes * length if sequence.looped else seconds
+        elements = tuple((e.start_ms / 1000 / speed, max(e.end_ms, e.start_ms + 1) / 1000 / speed, e.condition)
+                         for track in sequence.tracks for e in track if e.kind == 2 and e.condition)  # fmt: skip
+        local = seconds - int(seconds // length) * length if sequence.looped else seconds
         now = held
         for start, end, bits in elements:
             if start <= local < end:
                 now |= bits
-        return cls(now, tuple(windows), seconds, held)
+        return cls(now, elements, seconds, held, length if sequence.looped else 0.0)
 
     def shown(self, when: tuple[int, ...]) -> bool:
         """Whether a part shows: each of its masks (its own, its nested files') has a bit on."""
@@ -125,11 +133,15 @@ class States:
         along)."""
         if not mask or mask & self.held:
             return self.seconds
-        spans = sorted((a, b) for a, b, bits in self.windows if bits & mask)
-        total, reach = 0.0, float("-inf")
-        for a, b in spans:  # the union of the windows
-            a = max(a, reach)
-            if b > a:
-                total += b - a
-                reach = b
-        return total
+        spans = [(a, b) for a, b, bits in self.windows if bits & mask]
+        if not spans:
+            return 0.0
+        if self.length <= 0:
+            return _covered(spans, 0.0, 0, self.seconds)
+        # the passes played in full are all alike once the longest window has run out, so they are counted, not listed
+        passes = int(self.seconds // self.length)
+        outlast = max(0, math.ceil(max(b for _a, b in spans) / self.length) - 1)
+        early = min(passes, outlast)
+        total = sum(_covered(spans, self.length, k, self.length) for k in range(early))
+        total += (passes - early) * _covered(spans, self.length, outlast, self.length)
+        return total + _covered(spans, self.length, early, self.seconds - passes * self.length)

@@ -111,6 +111,14 @@ def test_new_changed_and_removed_assets_become_objects_and_rows(game):
     assert any(path.endswith("txt") or "loca" in path for path in out)  # the text goes to a file of the language
 
 
+def test_a_removed_object_takes_its_row_out_of_the_table(game):
+    doc = game.document()
+    doc.remove_asset(4000)
+    out = native.render(doc)
+    assert [o.guid for o in props1701.parse_props(out[game1701.PROPS]).objects] == [1055, 3150]
+    assert out[game1701.TABLE] == TABLE.replace("4000\tHütte\t100\t7,5\r\n", "").encode("latin-1")
+
+
 def test_the_asset_window_shows_the_forms_and_icons_of_1701(game, tmp_path, qt_app=None):
     pytest.importorskip("PySide6")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

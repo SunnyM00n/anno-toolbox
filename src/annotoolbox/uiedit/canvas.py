@@ -17,7 +17,7 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFontMetricsF, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 
-from . import effects, fonts, placeholders, worldfx, worldscene
+from . import effects, fonts, labels, placeholders, worldfx, worldscene
 from .labels import TextStyle
 from .layout import Clip, DrawItem, Frame, Matrix, apply, bounds
 from .pictures import Picture, Pictures
@@ -50,7 +50,7 @@ def qtransform(m: Matrix) -> QTransform:
 def measure(text: str, style: TextStyle, width: float) -> tuple[float, float]:
     """The size a text takes in its font: one line, or wrapped at ``width`` (``fonts.lay_out``)."""
     lines = fonts.lay_out(text or " ", style, width)
-    return (width if style.wrap and width > 0 else lines.width), lines.height
+    return lines.width, lines.height  # a wrapped text is as wide as its widest line (the game's DisplayedSize)
 
 
 class PainterCanvas:
@@ -145,15 +145,16 @@ class PainterCanvas:
         self._begin(item)
         self.p.setTransform(qtransform(item.matrix) * self.base)
         font = fonts.qfont(style)
-        w, h = item.size
+        w, h = (a or b for a, b in zip(style.plane, item.size, strict=True))  # the text aligns in the plane
         laid = fonts.lay_out(item.text, style, w if style.wrap or style.cut else 0.0, h if style.vcut else 0.0)
         metrics = QFontMetricsF(font)
+        top = labels.text_top(style.valign, h, laid.height, metrics.ascent(), laid.first)
         paths = []
         for i, line in enumerate(laid.lines):
-            free = max(0.0, w - metrics.horizontalAdvance(line))
+            free = w - metrics.horizontalAdvance(line)  # below 0 a wider text reaches past the plane (game)
             x = {1: free / 2, 2: free}.get(style.align, 0.0)
             path = QPainterPath()
-            path.addText(QPointF(x, i * laid.line_height + metrics.ascent()), font, line)
+            path.addText(QPointF(x, top + i * laid.line_height + metrics.ascent()), font, line)
             paths.append(path)
         if style.clip and w > 0:
             self.p.setClipRect(QRectF(0, -h, w, laid.height + 2 * h), Qt.ClipOperation.IntersectClip)
@@ -290,7 +291,8 @@ def _mix(a, b):
 
 
 def _stand_in(canvas: Canvas, item: DrawItem, name: str) -> None:
-    """A picture the game names at run time, as a neutral tile with the slot's name (a placeholder)."""
+    """A picture the game names at run time, as a neutral tile with the slot's name, where the game has no icon file
+    to show (``Pictures.sample``; the Checks list says so)."""
     canvas.quad(DrawItem("box", item.matrix, item.size, STAND_IN, item.alpha, 0, clips=item.clips), None)
     style = TextStyle(size=max(6.0, min(14.0, item.size[1] / 3)), color=(30, 30, 30), align=1, wrap=True)
     canvas.text(DrawItem("text", item.matrix, item.size, alpha=item.alpha, text=name, style=style, clips=item.clips))
@@ -315,7 +317,12 @@ def draw(
 def _draw_item(canvas: Canvas, item: DrawItem, pictures: Pictures | None, seconds: float = 0.0,
                world: Scene | None = None, size: tuple[float, float] = (0.0, 0.0)) -> None:  # fmt: skip
     if item.kind == "image" and (item.image_id or "").startswith(placeholders.PICTURE):
-        _stand_in(canvas, item, item.image_id[len(placeholders.PICTURE) :])
+        slot = item.image_id[len(placeholders.PICTURE) :]
+        pic = pictures.sample(slot, item.size) if pictures is not None else None
+        if pic is not None:  # a real icon of the game stands in for the picture the game names at run time
+            canvas.quad(item, with_effects(pic, item.effects, seconds))
+        else:
+            _stand_in(canvas, item, slot)
     elif item.kind == "image":
         pic = pictures.get(item.image, item.image_id, item.size) if pictures is not None else None
         if world is not None and any(k in item.effects for k in effects.WORLD):

@@ -14,12 +14,12 @@ from ..infra.i18n import N_, tr
 from .editchange import Change, copy_json
 
 PRESETS = (
-    (N_("Darker"), (0.7, 0.7, 0.7)),
-    (N_("Lighter"), (1.4, 1.4, 1.4)),
-    (N_("Warmer"), (1.25, 1.0, 0.8)),
-    (N_("Cooler"), (0.8, 1.0, 1.25)),
-    (N_("Greener"), (0.9, 1.2, 0.9)),
-    (N_("Drier"), (1.2, 1.05, 0.8)),
+    (N_("common.darker"), (0.7, 0.7, 0.7)),
+    (N_("common.lighter"), (1.4, 1.4, 1.4)),
+    (N_("common.warmer"), (1.25, 1.0, 0.8)),
+    (N_("common.cooler"), (0.8, 1.0, 1.25)),
+    (N_("common.greener"), (0.9, 1.2, 0.9)),
+    (N_("common.drier"), (1.2, 1.05, 0.8)),
 )  # the factors the albedo is multiplied with at full strength: 1 leaves it
 
 
@@ -73,4 +73,4 @@ class TintEdits:
             s.edits["tint"] = copy_json(strokes)
             s._notify(Change())
 
-        s._push(tr("tint"), lambda: put(before), lambda: put(after))
+        s._push(tr("islands.tint_lower"), lambda: put(before), lambda: put(after))

@@ -94,6 +94,61 @@ def test_a_curve_with_a_number_no_file_can_hold_makes_no_edit(tree2070, tree1701
     assert usable([(0.0, 1.0)], [(1.0, (0.0, 0.5))]) and not usable([(0.0, math.nan)])
 
 
+def test_a_1701_point_keeps_its_tangents_where_the_file_lists_the_points_out_of_x_order():
+    point = "\t\tPoint\n\t\t{{\n\t\t\tp {x} 0.5\n\t\t\ti {i} 0\n\t\t\to {o} 0\n\t\t}}\n"
+    text = "Effect\n{\n\tAlpha\n\t{\n\t\tMinimum 0\n\t\tMaximum 1\n\t\tSingle 0\n"
+    text += point.format(x="0.8", i="-8", o="8") + point.format(x="0.2", i="-2", o="2") + "\t}\n}\n"
+    doc = BraceDoc.read(text.encode("latin-1"))
+    graph = BraceGraph(doc, doc.tree().groups("Effect")[0].groups("Alpha")[0])
+    assert graph.points() == [(0.2, 0.5), (0.8, 0.5)]
+    graph.set_points([(0.25, 0.5), (0.8, 0.5)]).do()  # the point at 0.2 is dragged to 0.25
+    doc.changed()
+    moved = BraceGraph(doc, doc.tree().groups("Effect")[0].groups("Alpha")[0])
+    assert [(p[0], p[2], p[4]) for p in moved.graph().points] == [(0.25, -2.0, 2.0), (0.8, -8.0, 8.0)]
+
+
+class Mouse:
+    """A mouse event at a place of the curve view."""
+
+    def __init__(self, x: float, y: float, right: bool = False) -> None:
+        self.x, self.y, self.right = x, y, right
+
+    def position(self):
+        from PySide6.QtCore import QPointF
+
+        return QPointF(self.x, self.y)
+
+    def button(self):
+        from PySide6.QtCore import Qt
+
+        return Qt.MouseButton.RightButton if self.right else Qt.MouseButton.LeftButton
+
+
+def test_a_1701_colour_stop_is_dragged_and_a_point_removed_in_a_drag_ends_it(qt, tree1701, tree2070):
+    from annotoolbox.particleedit.curveview import MARGIN, CurveView
+
+    view, seen = CurveView(), []
+    view.resize(400, 200)
+    left, width = MARGIN, 400 - 1.5 * MARGIN
+    brace = EffectDoc.open(tree1701, "anno1701", EFC1701)
+    view.set_curve(BraceColors(brace.doc, brace.doc.tree().groups("Effect")[0].groups()[0].groups("Color")[0]))
+    view.stops_edited.connect(seen.append)
+    view.mousePressEvent(Mouse(left, 100))  # the one stop, at time 0
+    view.mouseMoveEvent(Mouse(left + width / 2, 100))
+    view.mouseReleaseEvent(Mouse(left + width / 2, 100))
+    assert [round(t, 3) for t, _c in seen[-1]] == [0.5]
+    view.mouseDoubleClickEvent(Mouse(left + width, 100))
+    assert [round(t, 3) for t, _c in seen[-1]] == [0.5, 1.0]
+    fx = EffectDoc.open(tree2070, "anno2070", EFC)
+    view.set_curve(XmlCurve(fx.doc.root.children[0], "PEP"))
+    view.points = [(0.0, 0.0), (1.0, 100.0)]
+    last = view._to_screen(1.0, 100.0)
+    view.mousePressEvent(Mouse(last.x(), last.y()))
+    view.mousePressEvent(Mouse(last.x(), last.y(), right=True))
+    view.mouseMoveEvent(Mouse(left, 100))  # the point is gone: nothing left to drag
+    assert view.points == [(0.0, 0.0)]
+
+
 def test_a_field_range_is_one_of_the_tables_not_a_guess():
     assert fieldinfo.info("rdp", "Order").limits == fieldinfo.BYTE
     assert fieldinfo.info("xml", "WindDependency").limits == (0.0, 1.0)
@@ -166,6 +221,8 @@ def test_the_tick_tools_keep_to_the_data_and_the_fade_marks_every_particle(tree1
     ends.data = held[:-1]  # a blob that does not hold together
     assert rdptools.fade(doc) is None
     ends.data = held[:-2]
+    assert rdptools.fade(doc) is None
+    ends.data = None  # written as text, not as data
     assert rdptools.fade(doc) is None
 
 

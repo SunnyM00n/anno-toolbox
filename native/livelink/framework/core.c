@@ -55,9 +55,9 @@ static void resolve_documents(void) {
     }
 }
 
-/* <Documents>/Anno 117 - Pax Romana/<rel>; 0 when the path does not fit */
+/* <Documents>/<the game's folder>/<rel> (game.h); 0 when the path does not fit */
 int hlib_user_path(char *out, const char *rel) {
-    static const char dir[] = "/Anno 117 - Pax Romana/";
+    static const char dir[] = G_USER_FOLDER;
     DWORD n;
     if (s_docs_ready) {
         n = (DWORD)lstrlenA(s_docs);
@@ -100,10 +100,10 @@ static HANDLE log_open(const char *path) {
 static void write_log(const char *line, int len) {
     char path[MAX_PATH], old[MAX_PATH];
     LARGE_INTEGER size;
-    if (!hlib_user_path(path, "log/helper-library.log")) return;
+    if (!hlib_user_path(path, G_LOG_FILE)) return;
     HANDLE h = log_open(path);
     if (h == INVALID_HANDLE_VALUE) return;
-    if (GetFileSizeEx(h, &size) && size.QuadPart > LOG_MAX && hlib_user_path(old, "log/helper-library.old.log") &&
+    if (GetFileSizeEx(h, &size) && size.QuadPart > LOG_MAX && hlib_user_path(old, G_LOG_OLD_FILE) &&
         !InterlockedCompareExchange(&s_log_moving, 1, 0)) {
         CloseHandle(h);
         MoveFileExA(path, old, MOVEFILE_REPLACE_EXISTING);
@@ -217,8 +217,8 @@ static int build_matches(void) {
         CloseHandle(h);
     }
     if ((unsigned long long)sz.QuadPart != T_BUILD_FILESIZE) {
-        hlib_logf("guard: file size %lld != expected %llu, library inert", (long long)sz.QuadPart,
-                   (unsigned long long)T_BUILD_FILESIZE);
+        hlib_logf("guard: file size %lld != expected %llu (%s), library inert", (long long)sz.QuadPart,
+                   (unsigned long long)T_BUILD_FILESIZE, G_ID);
         return 0;
     }
     unsigned char *nt = s_base + *(DWORD *)(s_base + 0x3c);
@@ -792,25 +792,28 @@ int hlib_resolve_only(const int *ids, int n) {
     return !left;
 }
 
-/* What a start outside the full mode brings up for any mod, each on its own targets: the UI dump probe (ui_dump=1)
-   and the modders' live link to the suite with its scene, bank, widget, guard and reload reads; who names the start */
-static void tools_start(const char *who, int *link, int *dump) {
-    if (hlib_ui_dump_wanted()) { /* a debug probe the owner switched on: it reads the vanilla scenes too */
-        int n = 0;
-        const int *ids = hlib_ui_dump_targets(&n);
-        hlib_logf("%s: ui_dump=1, the UI dump probe comes up (it writes only when asked)", who);
-        *dump = hlib_resolve_only(ids, n) && hlib_ui_dump_install();
+/* What a start outside the full mode brings up for any mod, each on its own targets: the modders' live link to the
+   suite with its scene, bank, guard and reload reads; who names the start */
+static void tools_start(const char *who, int *link) {
+    if (!G_HAS_ENGINE) { /* a game with no engine side yet (game.h): the pipe and the handshake, nothing to resolve */
+        if (hlib_live_link_wanted()) {
+            hlib_logf("%s: live_link=1, the live link comes up for %s with no engine side (handshake and ping only)", who, G_ID);
+            *link = hlib_live_link_install();
+        }
+        return;
     }
     if (hlib_live_link_wanted()) { /* the modders' link to the suite: any mod, so no full mode needed */
-        int n = 0, sn = 0, bn = 0, dn = 0, gn = 0, rn = 0;
+        int n = 0, sn = 0, bn = 0, gn = 0, rn = 0;
         const int *ids = hlib_live_link_targets(&n), *sids = hlib_live_link_scene_targets(&sn);
-        const int *bids = hlib_live_link_bank_targets(&bn), *dids = hlib_ui_dump_targets(&dn);
+        const int *bids = hlib_live_link_bank_targets(&bn);
         const int *gids = hlib_live_link_guard_targets(&gn), *rids = hlib_live_reload_targets(&rn);
         hlib_logf("%s: live_link=1, the live link comes up (its own targets, then the reload's)", who);
+        int vn = 0;
+        const int *vids = hlib_live_link_values_targets(&vn);
         if (hlib_resolve_only(ids, n)) {
+            hlib_resolve_only(vids, vn); /* the live widget values (ui.values) only when these match */
             hlib_resolve_only(sids, sn); /* the scene reload only when these match */
             hlib_resolve_only(bids, bn); /* the bank reload only when these match */
-            hlib_resolve_only(dids, dn); /* the live widget values through the UI dump's walk */
             hlib_resolve_only(gids, gn); /* the guards: a session switch, a scheduled scenario action, the pause */
             hlib_resolve_only(rids, rn); /* models and effects only when these match too: the link reports what it can serve */
             *link = hlib_live_link_install();
@@ -827,10 +830,10 @@ static void mark_module(const char *name, int up) {
 }
 
 /* The link helper (build.cmd link): never the full mode, no switch button, no script table; the link (on unless
-   live_link=0), the reload beside it (or alone with live_reload=1) and the UI dump probe (ui_dump=1), each on its
-   own targets as the dormant start does. */
+   live_link=0), the reload beside it (or alone with live_reload=1) each on its own targets as the dormant start
+   does. */
 static void link_start(void) {
-    int rn = 0, gn = 0, link = 0, reload = 0, dump = 0;
+    int rn = 0, gn = 0, link = 0, reload = 0;
     const int *rids = hlib_live_reload_targets(&rn), *gids = hlib_live_link_guard_targets(&gn);
     hlib_edition()->register_modules();
     hlib_log("link helper: the live link build (no module of the full library, no switch button, no script table)");
@@ -838,14 +841,13 @@ static void link_start(void) {
         hlib_log("link helper: safe mode, nothing comes up");
         return;
     }
-    tools_start("link helper", &link, &dump);
-    if ((link && hlib_config_int("live_link_models", 1)) || hlib_live_reload_wanted()) {
+    tools_start("link helper", &link);
+    if (G_HAS_ENGINE && ((link && hlib_config_int("live_link_models", 1)) || hlib_live_reload_wanted())) {
         if (!link) hlib_resolve_only(gids, gn); /* the reload alone waits on the link's guards too */
         reload = hlib_resolve_only(rids, rn) && hlib_live_reload_install(); /* the link's own call made it already: its answer */
     }
     mark_module("live_link", link);
     mark_module("live_reload", reload);
-    mark_module("ui_dump", dump);
     if (!link && !reload) hlib_log("link helper: live_link=0 and live_reload off: the game runs as without the library");
     if (cfg_unused_count()) hlib_logf("config: %d key(s) of the ini are not read by the link helper", cfg_unused_count());
 }
@@ -856,7 +858,7 @@ static void link_start(void) {
    ends. */
 static void dormant_start(void) {
     const HlibEdition *ed = hlib_edition();
-    int link = 0, dump = 0;
+    int link = 0;
     char why[256];
     if (ed->link_only) {
         link_start();
@@ -865,7 +867,7 @@ static void dormant_start(void) {
     config_dormant_reason(why, sizeof(why));
     hlib_logf("dormant: %s; no module, no script table: the game runs as without the library", why);
     if (ed->dormant) ed->dormant();
-    tools_start("dormant", &link, &dump);
+    tools_start("dormant", &link);
     int unused = cfg_unused_count();
     if (unused) hlib_logf("config: %d key(s) of the ini are not read in a dormant start", unused);
     for (int s = 0; !config_late_check(s >= 300); s += 2) Sleep(2000);

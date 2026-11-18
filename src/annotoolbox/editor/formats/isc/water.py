@@ -99,8 +99,6 @@ def _rewrite(item: Node, xyz: list[tuple[float, float, float]], widths: list[flo
     width and length along the line set."""
     old = _points(item)
     before = [_position(p) for p in old]
-    poly = item.find("m_Polygon")
-    keep = [c for c in poly.children if c not in old]
     run, rows = 0.0, []
     has_length = any(p_.float("distance") for p_ in old)  # the newer files carry the length; the older ones 0
     for k, p in enumerate(xyz):
@@ -114,7 +112,7 @@ def _rewrite(item: Node, xyz: list[tuple[float, float, float]], widths: list[flo
         if has_length:
             _set_text(node, "distance", run)
         rows.append(node)
-    poly.children = keep + rows
+    isc_blockings.set_list(item.find("m_Polygon"), rows)  # a numbered list counts and names its points
 
 
 def apply(isl: Island1701, edits: dict) -> tuple[dict, list[str]]:
@@ -124,7 +122,7 @@ def apply(isl: Island1701, edits: dict) -> tuple[dict, list[str]]:
     rivers, coasts = line_items(isl.header, "Rivers"), line_items(isl.header, "Coastlines")
     for k, change in sorted(edits.get("rivers", {}).items(), key=lambda kv: str(kv[0])):
         if not str(k).isdigit() or int(k) >= len(rivers) or not groundedit.river_edit_ok(change):
-            stale.append(tr("river {k}", k=k))
+            stale.append(tr("islands.river_k", k=k))
             continue
         xyz = [tuple(float(v) * TILE for v in p) for p in change["points"]]
         before, others = ribbon(rivers[int(k)]), [ribbon(r) for i, r in enumerate(rivers) if i != int(k)]
@@ -136,7 +134,7 @@ def apply(isl: Island1701, edits: dict) -> tuple[dict, list[str]]:
         report["rivers"] += 1
     for k, change in sorted(edits.get("coast", {}).items(), key=lambda kv: str(kv[0])):
         if not str(k).isdigit() or int(k) >= len(coasts) or len(change["points"]) < 2:
-            stale.append(tr("coast line {k}", k=k))
+            stale.append(tr("islands.coast_line_k", k=k))
             continue
         old = [_position(p) for p in _points(coasts[int(k)])]
         level = sum(p[1] for p in old) / len(old)
@@ -154,12 +152,5 @@ def clear(isl: Island1701) -> int:
     for name in ("Rivers", *BLOCKINGS):
         node = isl.header.find(name)
         if node is not None:
-            node.children = [c for c in node.children if not (c.name == "i" or c.name.startswith("i0"))]
-            _reset_count(node)
+            isc_blockings.set_list(node, [])
     return count
-
-
-def _reset_count(node: Node) -> None:
-    size = node.find("arraysize")
-    if size is not None:
-        size.text = "0"

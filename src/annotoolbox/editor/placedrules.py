@@ -25,7 +25,7 @@ CELL = 8  # tiles: the buckets footprints are looked up in
 SERIOUS = ("cannot be read", "no asset")  # reasons that are a defect, not a model that is not there
 SEA = 0.0625  # a tile is land when its ground stands above this (the land bit's rule)
 REACH = 16  # tiles: no footprint reaches further from its object
-GROUND_NAMES = {"land": N_("land"), "coast": N_("the coast"), "water": N_("water")}
+GROUND_NAMES = {"land": N_("islands.land"), "coast": N_("islands.the_coast"), "water": N_("islands.water")}
 
 
 def _edited(session: EditSession, e: Entry) -> bool:
@@ -47,7 +47,7 @@ def unresolved(session: EditSession) -> list[Row]:
     rows = []
     for (why, name), found in sorted(groups.items()):
         level = "warning" if any(word in why for word in SERIOUS) else "info"
-        message = tr("{n} x {name}: drawn as a pin, {why}", n=len(found), name=name, why=assetmodels.describe(why))
+        message = tr("islands.x_drawn_pin", n=len(found), name=name, why=assetmodels.describe(why))
         rows.append((level, message, _place(found[0])))
     return rows
 
@@ -69,8 +69,8 @@ def _turn_problem(rotation, step: str) -> str:
     deg = math.degrees(-footprints.turn_of(rotation)) % 360  # the view turns the other way round
     deg_text = f"{deg:.1f}"
     if step == "eighth":
-        return tr("is turned {deg} degrees: the game turns a building in eighths (45)", deg=deg_text)
-    return tr("is turned {deg} degrees: the game turns a building in quarters (90)", deg=deg_text)
+        return tr("islands.turned_degrees_game_turns_building", deg=deg_text)
+    return tr("islands.turned_degrees_game_turns_building_lower", deg=deg_text)
 
 
 def grid(session: EditSession) -> list[Row]:
@@ -89,17 +89,17 @@ def grid(session: EditSession) -> list[Row]:
         building = known is None or str(e.base.get("guid")) in known
         turned = _turn_problem(e.rotation, step) if building else ""
         if turned:
-            rows.append(("warning", tr("{name} {problem}", name=name, problem=turned), _place(e)))
+            rows.append(("warning", tr("islands.name_problem", name=name, problem=turned), _place(e)))
         elif building and not footprints.on_grid(table[e.cfg], e.position, e.rotation):
-            off = tr("stands off its build grid: its footprint's corners are not on tile corners")
-            rows.append(("warning", tr("{name} {problem}", name=name, problem=off), _place(e)))
+            off = tr("islands.stands_off_build_grid_footprints")
+            rows.append(("warning", tr("islands.name_problem", name=name, problem=off), _place(e)))
         polys = footprints.world(table[e.cfg], e.position, e.rotation)
         kinds = _terrain_of(session, e)
         found = [ground_problem(session, polys, kinds)] + (
             buildground.problems(session, polys) if building and "land" in kinds else []
         )
         for problem in filter(None, found):
-            rows.append(("warning", tr("{name} {problem}", name=name, problem=problem), _place(e)))
+            rows.append(("warning", tr("islands.name_problem", name=name, problem=problem), _place(e)))
     return rows
 
 
@@ -130,7 +130,7 @@ def ground_problem(session: EditSession, polys: list[np.ndarray], kinds: set[str
     if "water" in kinds and not has_land:
         return ""
     names = [tr(GROUND_NAMES[k]) for k in ("land", "coast", "water") if k in kinds]
-    return tr("needs {ground}", ground=alternatives(names))
+    return tr("islands.needs_ground", ground=alternatives(names))
 
 
 def check_place(session: EditSession, polygons, position, rotation, kinds=(), skip: Entry | None = None) -> list[str]:
@@ -143,13 +143,13 @@ def check_place(session: EditSession, polygons, position, rotation, kinds=(), sk
     pts = np.concatenate(polys)
     out = []
     if pts.min() < 0 or pts.max() > session.size:
-        out.append(tr("off the island"))
+        out.append(tr("islands.off_island"))
     ground = ground_problem(session, polys, set(kinds))
     if ground:
         out.append(ground)
     if "land" in kinds:
         out += buildground.problems(session, polys)
-    out += [tr("over {name}", name=name) for name in _overlapping(session, polys, skip)]
+    out += [tr("islands.over_name", name=name) for name in _overlapping(session, polys, skip)]
     return out
 
 
@@ -198,7 +198,7 @@ def overlaps(session: EditSession) -> list[Row]:
                         (
                             "warning",
                             tr(
-                                "{a} and {b} overlap",
+                                "islands.a_and_b_overlap",
                                 a=label_of(ea.base) or ea.cfg,
                                 b=label_of(eb.base) or eb.cfg,
                             ),

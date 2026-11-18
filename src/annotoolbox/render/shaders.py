@@ -338,7 +338,8 @@ FINAL_FS = """
 uniform sampler2D frame; uniform int finish;  // 0 the editor's (three.js ACES), 1 the game's grade, 2 2070's, 3 sRGB
 uniform sampler3D lut; uniform bool hasLut; uniform float exposure; uniform vec4 mood;
 in vec2 vNdc; out vec4 color;
-vec3 srgb(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
+// a post chain may leave a negative value in the frame: pow of it is NaN, a black pixel
+vec3 srgb(vec3 c) { c = max(c, 0.0); return mix(12.92 * c, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 vec3 rrt(vec3 v) { vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }
 vec3 acesThree(vec3 c) {
     const mat3 inM = mat3(vec3(0.59719, 0.07600, 0.02840), vec3(0.35458, 0.90834, 0.13383), vec3(0.04823, 0.01566, 0.83777));

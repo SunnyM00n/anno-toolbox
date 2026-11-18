@@ -36,4 +36,4 @@ def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, 
     return changed
 
 
-PART = Part("ui2205", N_("UI 2205"), has_work, render)
+PART = Part("ui2205", N_("common.ui_2205"), has_work, render)

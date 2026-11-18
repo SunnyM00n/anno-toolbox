@@ -56,8 +56,8 @@ size_t llr_log_from(uint64_t from, char *buf, size_t cap, uint64_t *size);
 int llr_glog_sync(void);               /* the game's own log found and read to its end; 0 none */
 
 /* livelink_requests.c: the requests answered in their frame */
-void llq_start_dump(const LLRequest *r);
 void llq_run_simple(const char *cmd, const char *ok_message);
+void llq_start_values(const LLRequest *r);
 void llq_select_guid(int64_t guid);
 void llq_start_read(const LLRequest *r);
 void llq_start_debug_list(void);

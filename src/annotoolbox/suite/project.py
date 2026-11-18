@@ -11,21 +11,21 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..infra.buildcache import write_atomic
-from ..infra.i18n import tr
+from ..infra.i18n import english, tr
 from ..mod import modlint
 from ..mod.modxml import modinfo
-from ..modloader.mods import GAME_NUMBER, read_mod
+from ..modloader.mods import GAME_NUMBER, MODINFO_NAMES, read_mod
 from ..modloader.modswap import InstallError, Trash, check_folder_name, place_folder, recycle
 from ..othergames import installs
 from ..paths import documents_dir
 from ..sources import gametree
-from . import guidranges, islandguids, linkannounce, modcheck, projectdeps
+from . import buildout, guidranges, importmeta, islandguids, linkannounce, modcheck, projectdeps
+from .buildout import FileRef
 
 FILE = "project.json"
 FORMAT = 1
@@ -71,36 +71,32 @@ class Project:
         try:
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             if data.get("format", FORMAT) > FORMAT:
-                raise ValueError(tr("made by a newer version (format {format})", format=data["format"]))
+                raise ValueError(tr("common.made_newer_version_format", format=data["format"]))
             fields = {k: data[k] for k in cls.__dataclass_fields__ if k in data and k not in ("folder", "defined")}
             fields["guid_range"] = tuple(int(g) for g in data.get("guid_range", DEFAULT_RANGE))
             project = cls(folder, **fields, defined=True)
         except (OSError, ValueError, TypeError, AttributeError) as exc:
-            raise ValueError(tr("the project file {path} does not read: {error}", path=path, error=exc)) from exc
+            raise ValueError(tr("common.project_file_not_read", path=path, error=exc)) from exc
         project.validate()
         return project
 
     def validate(self) -> None:
         lo, hi = self.guid_range
         if not 0 < lo <= hi <= 2**31 - 1:
-            raise ValueError(tr("the GUID range {lo}-{hi} is not a range of positive 32-bit numbers", lo=lo, hi=hi))
+            raise ValueError(tr("common.guid_range_not_positive_32", lo=lo, hi=hi))
         if self.guid_choice not in guidranges.CHOICES:
             raise ValueError(
                 tr(
-                    "the GUID range choice {choice} is none of {choices}",
+                    "common.guid_range_choice_none",
                     choice=repr(self.guid_choice),
                     choices=", ".join(guidranges.CHOICES),
                 )
             )
         if not re.fullmatch(r"[a-z0-9-]+", self.mod_id):
-            raise ValueError(
-                tr("the mod id {mod_id} may hold only a-z, 0-9 and '-' (the loader's rule)", mod_id=repr(self.mod_id))
-            )
+            raise ValueError(tr("common.mod_id_hold_only_z", mod_id=repr(self.mod_id)))
         projectdeps.validate(self.mod_id, self.dependencies, self.bundle)
         if self.game not in ALL_GAMES:
-            raise ValueError(
-                tr("a project makes a mod for {games}, not {game}", games=", ".join(ALL_GAMES), game=repr(self.game))
-            )
+            raise ValueError(tr("common.project_makes_mod_not", games=", ".join(ALL_GAMES), game=repr(self.game)))
 
     def save(self) -> Path:
         self.validate()
@@ -108,8 +104,7 @@ class Project:
         if held:
             raise ValueError(
                 tr(
-                    "islands of this project are numbered already ({guid} lies outside {lo}-{hi}): "
-                    "a savegame holds those numbers, so the range cannot move away from them",
+                    "common.islands_project_numbered_already_lies",
                     guid=held[0],
                     lo=self.guid_range[0],
                     hi=self.guid_range[1],
@@ -214,12 +209,13 @@ def _slug(text: str) -> str:
 @dataclass(frozen=True)
 class Part:
     """One app's share of the mod. ``has_work(project)`` says whether the app holds anything for the project's game;
-    ``render(project, settings, log)`` returns the mod's files by path (the ``modinfo.json`` is the project's)."""
+    ``render(project, settings, log)`` returns the mod's files by path (the ``modinfo.json`` is the project's): the
+    bytes, or a ``FileRef`` for a file to take from where it is (a large mod is never held in memory)."""
 
     key: str
     title: str
     has_work: Callable[[Project], bool]
-    render: Callable[[Project, object, Callable[[str], None]], dict[str, bytes]]
+    render: Callable[[Project, object, Callable[[str], None]], dict[str, bytes | FileRef]]
 
 
 @dataclass(frozen=True)
@@ -250,7 +246,7 @@ class EditsFolder:
         for path in files:
             parts = path.replace("\\", "/").strip("/").split("/")
             if not parts[0] or any(x in ("", ".", "..") or ":" in x for x in parts):
-                raise ValueError(tr("{path} is not a path inside the game's folder: not saved", path=repr(path)))
+                raise ValueError(tr("common.not_path_inside_games_folder", path=repr(path)))
             targets.append(root.joinpath(*parts))
         for dest, data in zip(targets, files.values(), strict=True):
             write_atomic(dest, data)
@@ -266,7 +262,7 @@ class EditsFolder:
         for path in remove:
             if path not in files:
                 (root / path).unlink(missing_ok=True)
-        return linkannounce.announce_files(project.mod_id, sorted(files))
+        return linkannounce.announce_files(project.mod_id, sorted(files), game=game)
 
     def has_work(self, project: Project) -> bool:
         return project.game in self.games and bool(self.saved_files(project))
@@ -301,9 +297,9 @@ class BuildResult:
 
     def lines(self) -> list[str]:
         head = tr(
-            "{files} files from {parts} into {folder}",
+            "common.files_parts_folder",
             files=self.files,
-            parts=", ".join(self.parts) or tr("no part"),
+            parts=", ".join(self.parts) or tr("common.no_part"),
             folder=self.folder,
         )
         return [head, *(f"  {p}" for p in self.problems)]
@@ -313,10 +309,10 @@ class Clash(ValueError):
     """Two parts write one path in ways that cannot be merged."""
 
 
-def merge_files(outputs: list[tuple[str, dict[str, bytes]]]) -> dict[str, bytes]:
+def merge_files(outputs: list[tuple[str, dict[str, bytes | FileRef]]]) -> dict[str, bytes | FileRef]:
     """The parts' files as one mod: a ModOps file two parts write becomes one, the operations in the parts' order;
-    any other path two parts write must have the same bytes."""
-    merged: dict[str, tuple[str, bytes]] = {}
+    any other path two parts write must have the same content (files named by ``FileRef`` are read only here)."""
+    merged: dict[str, tuple[str, bytes | FileRef]] = {}
     clashes = []
     for part, files in outputs:
         for path, data in files.items():
@@ -325,11 +321,11 @@ def merge_files(outputs: list[tuple[str, dict[str, bytes]]]) -> dict[str, bytes]
                 merged[key] = (path, data)
                 continue
             first, old = merged[key]
-            if old == data:
+            if buildout.same(old, data):
                 continue
-            joined = _join_modops(old, data, part)
+            joined = _join_modops(buildout.read(old), buildout.read(data), part)
             if joined is None:
-                clashes.append(tr("{path}: written by two parts, not both ModOps files", path=path))
+                clashes.append(tr("common.written_two_parts_not_both", path=path))
             else:
                 merged[key] = (first, joined)
     if clashes:
@@ -352,49 +348,55 @@ def build(
     log: Callable[[str], None] = print,
     deliveries: dict[str, Delivery] | None = None,
 ) -> BuildResult:
-    """Every part with work into ``project.build_dir`` (emptied first), the ``modinfo.json`` and the checks; for an
-    older game the archives its ``Delivery`` makes of the parts' files."""
+    """Every part with work into ``project.build_dir`` (made to hold exactly the build: ``buildout.sync``), the
+    ``modinfo`` and the checks; for an older game the archives its ``Delivery`` makes of the parts' files."""
     project.validate()
     delivery = None
     if project.game in ARCHIVE_GAMES:
         delivery = (deliveries or {}).get(project.game)
         if delivery is None:
-            raise ValueError(tr("building for {game} is not available in this edition", game=project.game))
+            raise ValueError(tr("common.building_not_available_edition", game=project.game))
     out = project.build_dir
     if out.name != project.mod_id or project.folder not in out.parents:
-        raise ValueError(tr("refusing to rebuild {folder}: not the project's own build folder", folder=out))
+        raise ValueError(tr("common.refusing_rebuild_not_projects_own", folder=out))
     outputs = []
     for part in parts:
         if not part.has_work(project):
             continue
-        log(f"{part.title}: writing")
+        log(f"{english(part.title)}: writing")
         files = part.render(project, settings, log)
-        files.pop("modinfo.json", None)
+        for name in MODINFO_NAMES:  # the project's modinfo is the mod's (below), never a part's
+            files.pop(name, None)
         if files:
-            outputs.append((part.title, files))
+            outputs.append((english(part.title), files))
     merged = merge_files(outputs)
     if delivery is not None:
-        merged = delivery.package(merged, project, settings, log)
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
-    for path, data in sorted(merged.items()):
-        dest = out / path
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        merged = delivery.package({p: buildout.read(d) for p, d in merged.items()}, project, settings, log)
+    else:
+        name, data = _modinfo_file(project, [t for t, _ in outputs])
+        merged[name] = data
+    counts = buildout.sync(out, merged, lambda text: text and log(text))
     if delivery is not None:  # archives in the install's layout; no mod folder to describe or lint
         return BuildResult(out, [t for t, _ in outputs], len(merged))
-    description = project.description or f"Made with {', '.join(t for t, _ in outputs) or 'the suite'}."
-    deps, after = projectdeps.modinfo_fields(project.dependencies)
-    info = modinfo(project.mod_id, project.category, project.name or project.mod_id, description,
-                   version=project.version, dependencies=deps, load_after=after)  # fmt: skip
-    (out / "modinfo.json").write_text(info, encoding="utf-8", newline="\n")
+    log(", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
     mods_dir = mods_folder_of(project.game, settings)
     problems = projectdeps.copy_bundle(project.folder, project.bundle, out)
     problems += projectdeps.bundle_problems(project.mod_id, out, mods_dir, project.game)
     lint = modlint.lint_mod(out, folders=[mods_dir] if mods_dir else None)
     problems += modcheck.check(out) + [f.line() for f in lint.findings]
-    return BuildResult(out, [t for t, _ in outputs], len(merged), problems)
+    return BuildResult(out, [t for t, _ in outputs], len(merged) - 1, problems)
+
+
+def _modinfo_file(project: Project, parts: list[str]) -> tuple[str, bytes]:
+    """The mod's ``modinfo``: an imported mod's own (``importmeta.kept_modinfo``), else one made from the project."""
+    kept = importmeta.kept_modinfo(project)
+    if kept is not None:
+        return kept
+    description = project.description or f"Made with {', '.join(parts) or 'the suite'}."
+    deps, after = projectdeps.modinfo_fields(project.dependencies)
+    info = modinfo(project.mod_id, project.category, project.name or project.mod_id, description,
+                   version=project.version, dependencies=deps, load_after=after)  # fmt: skip
+    return "modinfo.json", info.encode("utf-8")
 
 
 def install_built(
@@ -404,7 +406,7 @@ def install_built(
     if project.game in ARCHIVE_GAMES:
         delivery = (deliveries or {}).get(project.game)
         if delivery is None:
-            raise ValueError(tr("installing for {game} is not available in this edition", game=project.game))
+            raise ValueError(tr("common.installing_not_available_edition", game=project.game))
         return delivery.install(project, settings, log)
     return str(install(project, Path(getattr(settings, MODS_GAME[project.game], "")), log))
 
@@ -423,11 +425,11 @@ def install(project: Project, mods: Path, log: Callable[[str], None] = print, tr
     folder it would replace must hold this project's mod (or nothing), the copy is made beside it first and swapped in,
     and the old one goes to the recycle bin (``modloader.modswap``)."""
     source = project.build_dir
-    if not (source / "modinfo.json").is_file():
-        raise RuntimeError(tr("nothing built yet: build the project first"))
+    if not any((source / name).is_file() for name in MODINFO_NAMES):
+        raise RuntimeError(tr("common.nothing_built_yet_build_project"))
     mods = Path(mods)
     if not str(mods).strip() or not mods.is_absolute():
-        raise RuntimeError(tr("set the game's mods folder to an absolute path first"))
+        raise RuntimeError(tr("common.set_games_mods_folder_absolute"))
     check_folder_name(project.mod_id)
     target = mods / project.mod_id
     if os.path.lexists(target):
@@ -435,9 +437,9 @@ def install(project: Project, mods: Path, log: Callable[[str], None] = print, tr
         if old is None or old.mod_id != project.mod_id:
             raise InstallError(
                 tr(
-                    "the folder {folder} in the mods folder holds another mod ({mod}): not replaced",
+                    "common.folder_mods_holds_another_mod",
                     folder=target.name,
-                    mod=old.mod_id if old else tr("no mod"),
+                    mod=old.mod_id if old else tr("common.no_mod"),
                 )
             )
     before = linkannounce.snapshot(target)
@@ -445,9 +447,9 @@ def install(project: Project, mods: Path, log: Callable[[str], None] = print, tr
         log(note)
     log(
         tr(
-            "installed into {folder} - asset values follow a reload in the game, new islands and assets a new game",
+            "common.installed_asset_values_follow_reload",
             folder=target,
         )
     )
-    log(linkannounce.announce_install(project.mod_id, target, before).text)
+    log(linkannounce.announce_install(project.mod_id, target, before, game=project.game).text)
     return target

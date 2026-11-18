@@ -4,15 +4,19 @@
 ``CharacterId`` is the speaker (the ``OasisCharacterId`` of a ``Portrait`` asset) and whose ``WwiseID`` is an event of the
 voice bank of the audio language. The older games keep ``speech/<speaker>/<text id>.mp3`` per language, 1800 and 2205 an ``AudioText`` asset per
 line (``voicedata``). ``Voices(files, layout)``;
-``voice(key)``, ``speaker_label``, ``clip`` (the bytes a player plays, through ``exporting.banks``).
+``voice(key)``, ``speaker_label``, ``clip`` (the bytes a player plays, through ``exporting.banks``), ``clip_file``
+(the clip as a file of the cache folder).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
+from pathlib import Path
 
 from ..assetedit.gamefiles import GameFiles, Layout
 from ..exporting import banks
+from ..infra.buildcache import write_atomic
 from ..infra.i18n import tr
 from . import lipsync, voicedata
 from .voicedata import Voice
@@ -28,6 +32,7 @@ AUDIO_FOLDERS = {
     "simplified_chinese": "zh_cn",
 }
 FALLBACK_FOLDER = "en_us"
+CLIPS = "sounds"  # the decoded clips of every app that plays one, in the cache folder
 VOICE_FOLDERS = {  # the audio language folders of the games that name a voice bank by a folder
     "anno2205": {"english": "english(us)", "german": "german", "french": "french(france)", "russian": "russian"},
     "anno1800": {},
@@ -108,7 +113,7 @@ class Voices:
         """A speaker by id: the portrait's name, else the id's last digits."""
         if not character:
             return ""
-        return self.characters.get(character) or tr("character {id}", id=tail(character))
+        return self.characters.get(character) or tr("texts.character_id", id=tail(character))
 
     def voice(self, key: str, language: str) -> Voice | None:
         return self.load(language).get(key) if self.available else None
@@ -122,10 +127,20 @@ class Voices:
         """The line spoken as a file a player plays and its suffix; ``banks.Unplayable`` or ``LookupError`` says why not."""
         voice = self.voice(key, language)
         if voice is None:
-            raise LookupError(tr("{id} has no voice line", id=key))
+            raise LookupError(tr("texts.no_voice_line", id=key))
         if voice.path:
             return banks.playable(self.files.read(voice.path), voice.path)
         return self._clip_event(voice, language)
+
+    def clip_file(self, key: str, language: str) -> Path:
+        """The line's clip as a file a media player opens: written once into the cache folder's ``sounds``, named by
+        its content (the temp folder would keep one file per line played, for good). ``OSError`` when it cannot be
+        written."""
+        data, suffix = self.clip(key, language)
+        target = self.files.cache / CLIPS / (hashlib.sha1(data).hexdigest()[:16] + suffix)
+        if not target.is_file():
+            write_atomic(target, data, sync=False)
+        return target
 
     def lip_line(self, key: str, language: str) -> str:
         """The lip file beside a speech file (1404, 1701) as one line: its frames as bars, how many, over how long. Empty
@@ -139,9 +154,7 @@ class Voices:
             return ""
         seconds = lipsync.mp3_seconds(self.files.read(voice.path))
         length = f"{seconds:.1f} s" if seconds else "?"
-        return tr(
-            "Lips: {bars}  {frames} frames in {length}", bars=lips.bars(48), frames=len(lips.levels), length=length
-        )
+        return tr("texts.lips_bars_frames_length", bars=lips.bars(48), frames=len(lips.levels), length=length)
 
     def _bank_path(self, language: str) -> str:
         """The voice bank of an audio language: 117's one file per folder, 2205's only bank of its language folder (a
@@ -161,18 +174,18 @@ class Voices:
     def _clip_event(self, voice: Voice, language: str) -> tuple[bytes, str]:
         path = self._bank_path(language)
         if not path or not voice.event:
-            raise LookupError(tr("this install holds no voice bank with the event of this line"))
+            raise LookupError(tr("texts.install_holds_no_voice_bank"))
         if path not in self._banks:
             self._banks[path] = banks.bank_listing(self.files.read(path))
         listing = self._banks[path]
         sounds = banks.walk_event(listing, voice.event).sounds
         sound = next((s for s in sounds if isinstance(s, banks.BankSound)), None)
         if sound is None:
-            raise LookupError(tr("the bank has no sound for the event {event}", event=voice.event))
+            raise LookupError(tr("texts.bank_no_sound_event", event=voice.event))
         info = banks.read_info(path, self.files.exists, lambda p: self.files.read(p).decode("utf-8", "replace"))
         loose = banks.media_file(path, sound.media, info, self.files.exists)
         if not loose and sound.media not in listing.media:
             name = info.media.get(sound.media, ("", ""))[1] or f"{sound.media}.wem"
-            raise LookupError(tr("the install does not hold the voice file {name}", name=name))
+            raise LookupError(tr("texts.install_not_hold_voice_file", name=name))
         data = self.files.read(loose) if loose else listing.embedded(sound.media)
         return banks.playable(data, "x.wem")

@@ -459,50 +459,6 @@ def test_the_project_keeps_the_files_and_drops_what_an_undo_took_back(tmp_path):
     assert projectpart.PART.render(project, None, lambda _t: None) == {"a/x.a7tinfo": b"3"}
 
 
-def test_the_window_opens_a_map_and_edits_it(tmp_path, monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.mapedit.mapwindow import MapWindow
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = MapWindow(Settings(workspace=str(tmp_path / "ws")))
-    tree = _game(tmp_path / "game")
-    window.tree, window.key, window.maps = tree, "anno117", pool.GameMaps.read(tree, "anno117")
-    window.paths = mapdoc.map_paths(tree, "anno117")
-    window._fill_list()
-    assert window.list.count() == 1
-    window.open_map(STEM + ".a7tinfo", wait=True)
-    window.background.join()
-    QApplication.processEvents()
-    assert window.doc is not None and window.panel.findings.count() >= 1
-    window.view.resize(600, 600)
-    window.view.fit()
-    window.view.select([1])
-    window._apply_element({"x": 320, "z": 320, "size": 2, "type": 1})
-    assert (window.doc.elements[1].x, window.doc.elements[1].size) == (320, 2)
-    window.undo()
-    assert window.doc.elements[1].x == 200
-    window.view.grab()  # paints every kind of element
-    window._run_grow((64, 64, 0, 0), True, wait=True)
-    window.background.join()
-    QApplication.processEvents()
-    assert window.doc.size == (2112, 2112)
-    window.save(wait=True)
-    window.background.join()
-    QApplication.processEvents()
-    kept = projectpart.EDITS.saved_files(window.project(), "anno117")
-    assert {STEM + ".a7tinfo", STEM + ".a7t", STEM + ".a7te"} <= set(kept)
-    window.maps.islands.clear()  # an added island's grid is read off the window's thread before it is placed
-    window._add_fixed(ISLAND, wait=True)
-    QApplication.processEvents()
-    assert window.doc.elements[-1].map_file_path == ISLAND and ISLAND in window.maps.islands
-    window.saved = window.doc.render()
-    window.close()
-
-
 # Faults the audit of 2026-11-13 found, one test each (docs/audit-2026-11.md).
 def test_a_quarter_turn_turns_the_active_area_as_the_game_does():
     from annotoolbox.mapedit import placing
@@ -698,3 +654,51 @@ def test_an_island_picture_loses_the_black_around_the_land_and_the_stripes_below
     clean = pool.clean_picture(picture)
     assert (clean[5:20, 2:6, 3] == 255).all()  # the land stays
     assert (clean[20:, :, 3] == 0).all() and (clean[:5, :, 3] == 0).all()  # stripes and black go
+
+
+# Faults the audit of 2026-11-17 found, one test each (the window's are in test_mapedit_window.py).
+def test_an_island_path_spelled_another_way_is_the_same_island_and_keeps_its_mine_slots(tmp_path):
+    island = fixed(800, 800, ISLAND.replace("/pool/", chr(92) + "Pool" + chr(92)))  # as a hand-made template may
+    slots = [Attrib(template.NONE, struct.pack("<Q", 7)), Attrib(template.NONE, bytes([1]))]
+    island.find("Element").find("MineSlotActivation").children = slots
+    raw = template_bytes(elements=[island, start(10, 10)])
+    doc = mapdoc.MapDoc("anno117", "t.a7tinfo", template.read(raw), raw, pool.GameMaps(game="anno117"), tree=None)
+    doc.set_values(0, {"map_file_path": ISLAND, "island_label": "isle"})  # the panel's text: lower case, slashes
+    assert doc.elements[0].mine_slot_activation == ((7, 1),) and not doc.undos and doc.render() == raw
+    doc.set_values(0, {"map_file_path": ISLAND.replace("i_01", "i_02")})  # another island: its slots are not this one's
+    assert doc.elements[0].mine_slot_activation == ()
+
+
+def test_a_growth_that_fails_leaves_the_map_as_it_was(tmp_path):
+    tree = _game(tmp_path)
+    (tmp_path / (STEM + ".a7t")).write_bytes(b"no archive")
+    doc = mapdoc.open_map(tree, "anno117", STEM + ".a7tinfo", pool.GameMaps.read(tree, "anno117"))
+    before = (doc.size, doc.playable, [(e.x, e.z) for e in doc.elements])
+    with pytest.raises(ValueError, match="not an RDA archive"):
+        doc.grow((64, 64, 0, 0))
+    assert (doc.size, doc.playable, [(e.x, e.z) for e in doc.elements]) == before
+    assert not doc.undos and doc.grown is None and not doc.changed()
+
+
+def test_an_area_set_to_what_it_is_makes_no_undo_step(tmp_path):
+    tree = _game(tmp_path)
+    doc = mapdoc.open_map(tree, "anno117", STEM + ".a7tinfo", pool.GameMaps.read(tree, "anno117"))
+    doc.set_area(size=doc.size, playable=doc.playable, initial=doc.initial)
+    assert not doc.undos
+    doc.set_area(playable=(8, 8, 2000, 2000))
+    assert doc.playable == (8, 8, 2000, 2000) and len(doc.undos) == 1
+    assert doc.undo() and doc.playable != (8, 8, 2000, 2000)
+
+
+@pytest.mark.parametrize("text", ['{"a": null}', "[1, 2]", "not json", '{"a": "x"}'])
+def test_a_guid_list_that_is_none_reads_as_empty(tmp_path, text):
+    (tmp_path / mapmod.GUIDS).write_text(text, encoding="utf-8")
+    assert mapmod.read_guids(tmp_path) == {}
+    mapmod.keep_guid(tmp_path, "a", 5)
+    assert mapmod.read_guids(tmp_path) == {"a": 5}
+
+
+def test_an_island_whose_size_field_is_cut_short_has_no_grid(tmp_path):
+    (tmp_path / "i.a7minfo").write_bytes(filedb.write(Tag("", [Attrib("MapSize", b"\x01\x02")])))
+    (tmp_path / "i.a7m").write_bytes(b"x")
+    assert pool.read_island_info(gametree.loose_tree(tmp_path, "117"), "i.a7m") == pool.IslandInfo()

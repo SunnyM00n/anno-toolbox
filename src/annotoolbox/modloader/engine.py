@@ -51,7 +51,8 @@ class Event:
 
     mod: str
     file: str  # the mod-relative file, with the line
-    code: str  # nomatch, condition, skip, type, notype, child, include, parse, root, nobase, binary, variable, xpath
+    # nomatch, condition, skip, type, notype, child, include, parse, root, nobase, badbase, binary, variable, xpath
+    code: str
     message: str
     level: str = WARNING
     others: tuple[str, ...] = ()  # the other mods a condition asks about
@@ -93,15 +94,21 @@ class Session:
     events: list[Event] = field(default_factory=list)
     applied: Counter = field(default_factory=Counter)  # mod id -> operations applied
     missing: set[str] = field(default_factory=set)
+    unreadable: dict[str, str] = field(default_factory=dict)  # game file that is not XML -> the parser's message
 
     def document(self, game_path: str) -> PatchDoc | None:
+        """The patched document of a game file, read on first use; None for a file the game lacks (``missing``) or
+        one that is not XML (``unreadable``), so the other files of the run are still patched."""
         key = game_path.lower()
-        if key not in self.docs and key not in self.missing:
+        if key not in self.docs and key not in self.missing and key not in self.unreadable:
             data = self.read_base(key)
             if data is None:
                 self.missing.add(key)
                 return None
-            self.docs[key] = PatchDoc.load(data, self.lazy(key) if self.lazy else None)
+            try:
+                self.docs[key] = PatchDoc.load(data, self.lazy(key) if self.lazy else None)
+            except ET.ParseError as exc:
+                self.unreadable[key] = str(exc)
         return self.docs.get(key)
 
     def apply_mod(self, mod: Mod, variables: Variables) -> None:
@@ -120,6 +127,8 @@ class Session:
         if root.tag != "ModOps":
             return say("root", "Doesn't contain ModOps root node")
         doc = self.document(target)
+        if doc is None and target.lower() in self.unreadable:
+            return say("badbase", f"Can't read the file to patch: {target} ({self.unreadable[target.lower()]})")
         if doc is None:
             return say("nobase", f"Can't find file to patch: {target}")
         self._run(root, _File(mod, target, doc, rel, lines, variables), 0)

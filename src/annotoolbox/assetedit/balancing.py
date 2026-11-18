@@ -52,16 +52,16 @@ def import_csv(doc: AssetDocument, text: str) -> list[str]:
     """The table's differing cells as edits (one undo step each); returns what could not be taken."""
     rows = list(csv.reader(io.StringIO(text)))
     if not rows or rows[0][:2] != ["GUID", "Name"]:
-        return [tr("the first row must be GUID, Name and the value paths")]
+        return [tr("assets.first_row_must_guid_name")]
     columns, problems = rows[0][2:], []
     for n, row in enumerate(rows[1:], 2):
         try:
             guid = int(row[0])
         except (ValueError, IndexError):
-            problems.append(tr("row {n}: no GUID", n=n))
+            problems.append(tr("assets.row_no_guid", n=n))
             continue
         if not doc.exists(guid):
-            problems.append(tr("row {n}: no asset {guid}", n=n, guid=guid))
+            problems.append(tr("assets.row_no_asset", n=n, guid=guid))
             continue
         layers = doc.layers(guid)
         for col, value in zip(columns, row[2:], strict=False):

@@ -343,7 +343,14 @@ typedef struct {
     uint8_t  call_off;
 } HlibTarget;
 
+#include "game.h"
+#if defined(HLIB_GAME_1800)
+#include "build1800.h"
+#elif defined(HLIB_GAME_2205)
+#include "build2205.h"
+#else
 #include "build117.h"
+#endif
 
 static const char *const g_target_names[T_COUNT] = {
     [T_CREATE_MAP_INTERNAL] = "T_CREATE_MAP_INTERNAL",

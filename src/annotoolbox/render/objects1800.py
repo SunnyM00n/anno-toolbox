@@ -27,7 +27,7 @@ from ..formats import fxeffect
 from ..models import shaderforward
 from . import cull, frameforward, gamedraw, gamemaps, mipchain
 from . import gameshader as gs
-from .fxcdraw import FxcDraw, SharedBuffers, layout_key
+from .fxcdraw import FxcDraw, SharedBuffers, layout_key, same_objects
 
 CHUNK = 280  # instance words a draw (constants_model.fxh NUM_MODEL_CONSTANTS)
 MATRICES = shaderforward.STRUCTURED_LENGTHS["float4x3"]  # cModelMatrixBuffer as the viewer reads it
@@ -411,7 +411,8 @@ class ObjectDraw(FxcDraw):
             self.attrs, self.fill_stride = lead.attrs, lead.fill_stride
             if self.rows is not None and self.rows.dynamic and not self.own_rows:  # only its slot: the lead's set
                 self.srb = lead.srb
-                if self.slot is not None and id(self.rows.buffers.get(self.slot[0])) not in lead._bound_buffers:
+                rows = self.rows.buffers.get(self.slot[0]) if self.slot is not None else None
+                if self.slot is not None and all(rows is not b for b in lead._bound_buffers):
                     self.pipeline = None  # the lead's set binds a buffer that grew since (sorted before it): next frame
                 return
             if self.srb is lead.srb:  # its own set from now on: the lead's is not its to let go
@@ -421,11 +422,10 @@ class ObjectDraw(FxcDraw):
         if not self.constants:
             self._own_buffers()
         due = self._borrowed(batch)
-        bound = [id(self.buffers[n]) for n in self.program.cbuffers]
+        bound = [self.buffers[n] for n in self.program.cbuffers]
         if self.slot is not None and not self.rows.dynamic:  # bound at its offset: a set per offset
             bound.append(self.slot)
-        wanted = {n: id(textures.get(n)) for (n, k) in self.program.numbers if k == "texture"}
-        if self.srb is None or bound != self._bound_buffers or any(self._bound.get(n) != i for n, i in wanted.items()):
+        if self.srb is None or not same_objects(bound, self._bound_buffers) or self._maps_changed(textures):
             self._make_srb(textures, batch)
             self._bound_buffers = bound
         if lead is None and self.pipeline is None and not self.error:

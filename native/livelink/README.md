@@ -3,7 +3,7 @@
 The link helper is a small `version.dll` for **Anno 117: Pax Romana**. It lets the Anno Toolbox reload a mod's
 files in the running game without a restart: assets and texts, ambient settings, models, model configs, effect
 files (shaders and materials), UI scenes and sound banks. It also sends the object you pick in the game back to the
-Toolbox. The Toolbox works without it. Without the helper you restart the game, or use the game's own reload keys
+Toolbox, and tells the UI editor what an open scene's widgets show (their texts, pictures, visibility and values). The Toolbox works without it. Without the helper you restart the game, or use the game's own reload keys
 for assets and texts.
 
 This is an **unofficial** modding tool. It is not made, endorsed or supported by Ubisoft or the game's developers.
@@ -12,8 +12,15 @@ single player and at your own risk. Keep a copy of your saves.
 
 ## Which game build
 
-The helper supports **one game build**: Anno 117: Pax Romana, update 3.0 (`Anno117.exe` of 392218104 bytes). Every
+The helper supports **one game build** of Anno 117: Pax Romana, update 3.0 (`Anno117.exe` of 392218104 bytes). Every
 number it needs for that build is in `build117.h`. The target ids that name those numbers are in `targets.h`.
+
+There is a build of the helper for each of three games (`game.h` picks the game, `game117.h`, `game1800.h` and
+`game2205.h` name what is fixed to it: its folder under Documents, its pipe and its id). Anno 117 has everything
+described here. For **Anno 1800** (`Anno1800.exe` of 430828056 bytes) and **Anno 2205** (`Anno2205.exe` of 172685744
+bytes) the helper has only the build check and the link's handshake: it names the game to the Toolbox, answers
+`ping`, and answers every other request with `unavailable`. It reads nothing from the game's code, and an
+executable of another size, the subscription builds included, makes it inert.
 
 **The build check.** Windows loads the helper with the game. The helper first forwards the 17 functions of the
 system's own `version.dll`, so the game's version calls behave as before. Then it compares the running executable
@@ -31,6 +38,7 @@ development with C++" workload (MSVC for x64, including `ml64`).
 ```
 build.cmd              the helper: out\version.dll and its map, beside this file
 build.cmd <folder>     the same into <folder>
+build.cmd 1800         the helper for Anno 1800 (out\anno1800); build.cmd 2205 likewise
 build.cmd test         the host tests (no game needed; Python 3.12 or later for the pipe test)
 ```
 
@@ -45,7 +53,7 @@ its `SHA256SUMS` and a build attestation. You can check a downloaded copy with
 1. Take `version.dll` from the release page, or build it yourself.
 2. Copy it into the game's executable folder, the one that holds `Anno117.exe` (`<install folder>\Bin\Win64`).
 3. Start the game as usual, then start the Toolbox. Within a few seconds, the Toolbox's status bar says
-   `game link: anno117 <build>`.
+   `linked to Anno 117 (build <build>)`.
 
 The helper keeps its log in `<Documents>\Anno 117 - Pax Romana\log\helper-library.log`. Its settings are in
 `helper-library.ini` in the same folder. The file is optional, one `key=value` per line:
@@ -54,7 +62,9 @@ The helper keeps its log in `<Documents>\Anno 117 - Pax Romana\log\helper-librar
 |---|---|---|
 | `live_link` | `1` | the link to the Toolbox; `0` switches it off |
 | `live_link_models` | `1` | reload models, model configs and effect files for the link |
-| `live_link_ui` | `1` | the live widget values for the UI editor (`ui.dump`) |
+| `live_link_values` | `1` | the live widget values for the UI editor (`ui.values`: what an open scene's widgets show); `0` switches them off |
+| `live_link_follow` | `1` | tells the UI editor's game mirror which scenes open and close (`ui.scene`); `0` switches it off |
+| `live_link_scene_ms` | `250` | how often the open scenes are looked at while the mirror follows (at least 100) |
 | `live_link_commands` | `0` | `1` enables the Toolbox's debug palette and its module list (single player only) |
 | `live_link_edit_key` | `69` | with Ctrl+Shift, the key that sends the selected object to the Toolbox (69 = E; 0 none) |
 
@@ -79,8 +89,8 @@ delete `helper-library.ini` and `helper-library.log` from the game's `log` folde
 |---|---|
 | `framework/` | the core: the start, the build check, the targets, the guarded calls, logging, the settings, the script binding, the shared engine reads |
 | `link/` | the live link (the pipe, the handshake, the messages, the reloads) and the live reload of models and effect files |
-| `ui/` | the walk of the game's live widget tree, which the UI editor's `ui.dump` reads |
-| `targets.h`, `build117.h` | the target ids and the numbers of the supported build |
+| `targets.h`, `build117.h`, `build1800.h`, `build2205.h` | the target ids and the numbers of each supported build |
+| `game.h`, `game117.h`, `game1800.h`, `game2205.h` | what is fixed to a game, and which one this build is for |
 | `version.def`, `framework/version_stubs.asm` | the 17 forwarded functions of the system's `version.dll` |
 
 The `*_logic.c` files hold everything that can run without the game. The `*_test.c` files test them on the host

@@ -87,7 +87,7 @@ class CurveView(QWidget):
         p.setPen(QPen(self.palette().mid().color(), 1))
         p.drawRect(r)
         if self.model is None:
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, tr("pick a curve, a graph or a colour list in the tree"))
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, tr("particles.pick_curve_graph_colour_list"))
             return
         if self.model.kind == COLORS:
             self._paint_band(p, r)
@@ -180,6 +180,7 @@ class CurveView(QWidget):
         held = self.stops if self.model.kind == COLORS else self.points
         if len(held) > 1:
             del held[k]
+            self._drag = None  # a drag under way holds a place in the list that is another point's now
             self._emit()
 
     def _colour_at(self, t: float) -> tuple:

@@ -16,7 +16,12 @@ from ..infra.i18n import N_
 from . import brushes
 
 MODES = ("noise", "terrace", "ramp", "despike")
-LABELS = {"noise": N_("Noise"), "terrace": N_("Terrace"), "ramp": N_("Ramp"), "despike": N_("Spike removal")}
+LABELS = {
+    "noise": N_("islands.noise"),
+    "terrace": N_("islands.terrace"),
+    "ramp": N_("islands.ramp"),
+    "despike": N_("islands.spike_removal_label"),
+}
 NOISE_SCALE = 3.0  # tiles between the lattice points of the noise
 NOISE_AMPLITUDE = 0.35  # world units one stamp at full strength moves a corner by
 TERRACE_STEP = 1.0  # world units between the terraces

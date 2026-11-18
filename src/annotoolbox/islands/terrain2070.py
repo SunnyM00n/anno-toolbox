@@ -20,7 +20,7 @@ from pathlib import Path
 from ..infra import buildcache
 from ..infra.tools import require_tool, run_tool, tool_id
 from ..models import fileresolve
-from ..models.textures import dds_to_png, png_to_bc7
+from ..models.textures import dds_to_png, encoder_id, png_to_bc7, vector_data
 from ..sources.balancingtext import tag_text
 from ..sources.overlay import SourceTree
 from . import riverbed
@@ -113,6 +113,7 @@ def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
     key = buildcache.digest(
         "material",
         tool_id("texconv"),
+        encoder_id(),
         buildcache.code_version("islands.terrain2070"),
         buildcache.libs_version(),
         tex.diffuse,
@@ -167,7 +168,8 @@ def _render_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
     full = Image.merge("RGBA", (r, g, b, Image.new("L", norm.size, 255)))
     norm_png = work / f"{name}_norm.png"
     full.save(norm_png)
-    png_to_bc7(norm_png, dst / f"{name}_norm_0.dds")
+    with vector_data():
+        png_to_bc7(norm_png, dst / f"{name}_norm_0.dds")
 
     spec = gloss.point(lambda v: max(5, min(90, v * 3)))
     spec_png = work / f"{name}_spec.png"

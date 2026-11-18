@@ -61,12 +61,21 @@ ROMAN_MATERIAL_OF = {
 }
 
 
+def stroke_material(stroke: dict) -> int:
+    """The material ID a painted stroke names; -1 (no material, so the stroke is left out and reported as one of a
+    material outside the set) where a hand-edited file holds none or no number."""
+    try:
+        return int(stroke.get("material", -1))
+    except (TypeError, ValueError, OverflowError):
+        return -1
+
+
 def painted_layers(weights, mats: list[int], strokes: list[dict]):
     """An empty weight layer for each painted material (0-31) the 2070 layers do not use: a set
     material the island had no texture for, or a 117 one the editor added to the island's set."""
     import numpy as np
 
-    new = sorted({int(s.get("material", -1)) for s in strokes} - set(mats))
+    new = sorted({stroke_material(s) for s in strokes} - set(mats))
     new = [m for m in new if 0 <= m < 32]
     if not new:
         return mats, weights
@@ -81,9 +90,9 @@ def paint_strokes(weights, mats: list[int], strokes: list[dict], texels_per_tile
     index = {m: k for k, m in enumerate(mats)}
     skipped: set[int] = set()
     for st in strokes:
-        k = index.get(int(st.get("material", -1)))
+        k = index.get(stroke_material(st))
         if k is None:
-            skipped.add(int(st.get("material", -1)))
+            skipped.add(stroke_material(st))
             continue
         cover = stroke_cover(st, weights.shape[1], texels_per_tile)
         weights *= 1.0 - cover
@@ -227,8 +236,22 @@ def blend_materials(weights, texels_per_tile: int) -> None:
 
     sigma = MATERIAL_BLEND * texels_per_tile
     for k in range(weights.shape[0]):
-        weights[k] = ndimage.gaussian_filter(weights[k], sigma, mode="nearest")
+        if weights[k].any():  # a material the island does not use stays zero: most of the 31 of the set
+            weights[k] = ndimage.gaussian_filter(weights[k], sigma, mode="nearest")
     weights /= np.maximum(weights.sum(axis=0), 1e-6)
+
+
+def top_slots(bw, rows: int):
+    """``np.argsort(-bw, axis=0)[:6]`` worked out ``rows`` block rows at a time: each column sorts alone, so the
+    slots are the same, without the whole map's index array (eight bytes a material and block: 2.3 GB on a 768
+    grid, the island's memory peak; run-state "Memory by need")."""
+    import numpy as np
+
+    _m, nb, nc = bw.shape
+    out = np.empty((min(6, bw.shape[0]), nb, nc), dtype=np.intp)
+    for r0 in range(0, nb, rows):
+        out[:, r0 : r0 + rows] = np.argsort(-bw[:, r0 : r0 + rows], axis=0)[:6]
+    return out
 
 
 class GroundMixin:
@@ -309,7 +332,7 @@ class GroundMixin:
         m, n, _ = w.shape
         nb = n // block
         bw = w.reshape(m, nb, block, nb, block).sum(axis=(2, 4))  # block weights [m, nb, nb]
-        order = np.argsort(-bw, axis=0)[:6]  # [<=6, nb, nb] material slots per block
+        order = top_slots(bw, max(1, ALPHA_BAND_TEXELS // max(1, nb * m)))  # [<=6, nb, nb] material slots per block
         k = order.shape[0]
         ids = np.zeros((nb, nb), dtype=np.uint32)
         mat_ids = np.asarray(mats, dtype=np.uint32)

@@ -64,6 +64,23 @@ def test_the_own_range_is_made_once_outside_everything_and_kept_apart_per_projec
         gr.own_range(s, used)
 
 
+@pytest.mark.parametrize("held", [["a", "b"], [5, 1], [0, 10], [1.5, 2.5], [True, 9], [1, 2**31]])
+def test_a_reserve_the_settings_file_spoils_is_made_anew(held):
+    """A settings file edited by hand: the Project window raised when it took a block from such a reserve."""
+
+    class Fake:
+        own_reserve: list = held
+
+    s = Fake()
+    reserve = gr.own_reserve(s)
+    assert s.own_reserve == list(reserve) != held and gr.own_range(s)[0] == reserve[0]
+
+
+def test_the_free_blocks_reach_the_last_guid_of_the_range():
+    assert gr._free_aligned(10, (5, 39), [(20, 21)]) == [(10, 19), (30, 39)]
+    assert gr._free_aligned(10, (0, 38), []) == [(0, 9), (10, 19), (20, 29)]  # a block cut by the end is none
+
+
 def test_a_typed_range_is_checked_against_the_game_the_registry_and_the_other_projects():
     assert gr.blocking(gr.check("anno117", (5_500_000, 5_500_099)))  # inside a cluster of vanilla GUIDs
     assert gr.blocking(gr.check("anno117", (9, 3)))

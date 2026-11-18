@@ -23,6 +23,7 @@ class BrushTools:
     def __init__(self, view) -> None:
         self.view = view
         self.spray: ObjectBrush | None = None
+        self.tool: str | None = None  # the tool of the stroke under way: a key may change the view's meanwhile
 
     def start(self, hit) -> bool:
         """Begin a stroke of the view's tool; False when it cannot start (and says why in the status bar)."""
@@ -34,7 +35,7 @@ class BrushTools:
             s.begin_height(b["mode"], b["radius"], b["strength"], x, z)
         elif v.tool == "paint":
             if v.paint_material is None:
-                v.status.emit(tr("pick a ground material"))
+                v.status.emit(tr("islands.pick_ground_material"))
                 return False
             s.begin_paint(v.paint_material, b["radius"], b["strength"], x, z)
         elif v.tool == "forest":
@@ -44,7 +45,7 @@ class BrushTools:
         elif v.tool == "active":
             value = self._cell_value()
             if b.get("grid") == "areakind" and value not in s.area.kind_ids:
-                v.status.emit(tr("this island has no area {id}", id=hex(value)))
+                v.status.emit(tr("islands.island_no_area", id=hex(value)))
                 return False
             s.cells(b.get("grid")).begin(value, b["radius"], x, z)
         elif v.tool == "surf":
@@ -54,11 +55,12 @@ class BrushTools:
                 s, v.pick or {}, b["radius"], b["strength"], b.get("spacing", SPACING), seed=next(_SEEDS)
             )
             if not brush.usable:
-                v.status.emit(tr("pick a model in the library to spray"))
+                v.status.emit(tr("islands.pick_model_library_spray"))
                 return False
             self.spray = brush
             brush.begin(x, z)
             v.apply_hidden()
+        self.tool = v.tool
         return True
 
     def _cell_value(self):
@@ -88,18 +90,19 @@ class BrushTools:
         v = self.view
         p = v.from_view(hit)
         x, z = p[0], p[2]
-        if v.tool == "spray":
+        if self.tool == "spray":
             if self.spray is not None and self.spray.to(x, z):
                 v.apply_hidden()
-            return
-        self._follow()[v.tool][0](x, z)
+        elif self.tool is not None:
+            self._follow()[self.tool][0](x, z)
 
     def end(self) -> None:
         v = self.view
-        if v.tool == "spray":
+        tool, self.tool = self.tool, None
+        if tool == "spray":
             if self.spray is not None:
-                v.status.emit(tr("{n} sprayed", n=self.spray.end()))
+                v.status.emit(tr("islands.n_sprayed", n=self.spray.end()))
                 self.spray = None
-        else:
-            self._follow()[v.tool][1]()
+        elif tool is not None:
+            self._follow()[tool][1]()
         v.update()

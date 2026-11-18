@@ -149,26 +149,26 @@ def asset_html(
     base = doc.base_of(guid)
     parts = [
         f"<html><head><style>{STYLE}</style></head><body>",
-        f"<h1>{escape(doc.name(guid) or tr('(no name)'))}</h1>",
+        f"<h1>{escape(doc.name(guid) or tr('assets.no_name'))}</h1>",
         "<p>"
-        + tr("GUID {guid} · template {template}", guid=guid, template=escape(doc.template(guid)))
-        + (" · " + tr("base asset {guid}", guid=base) if base else "")
+        + tr("assets.guid_template", guid=guid, template=escape(doc.template(guid)))
+        + (" · " + tr("assets.base_asset_guid", guid=base) if base else "")
         + f" · {doc.changes.game}</p>",
     ]
     wide = any(r.was is not None for r in rows)
-    headers = [tr("Value"), tr("Now"), tr("From")] + ([tr("Game's")] if wide else [])
+    headers = [tr("common.value"), tr("assets.now"), tr("assets.from")] + ([tr("assets.games")] if wide else [])
     cells = [[r.path, r.value, r.origin] + ([r.was if r.was is not None else ""] if wide else []) for r in rows]
-    parts.append("<h2>" + tr("Values ({n})", n=len(rows)) + "</h2>")
+    parts.append("<h2>" + tr("assets.values_n", n=len(rows)) + "</h2>")
     parts.append(_table(headers, cells, ["own" if r.origin == "own" else "" for r in rows]))
     if game_texts is not None:
         texts = asset_texts(doc, guid, game_texts, doc.changes.texts.get(language))
         parts.append(
-            "<h2>" + tr("Texts in {language} ({n} words)", language=escape(language), n=words_of(texts)) + "</h2>"
+            "<h2>" + tr("assets.texts_language_n_words", language=escape(language), n=words_of(texts)) + "</h2>"
         )
         parts.append(
-            _table([tr("Value"), tr("Text id"), tr("Text")], [list(t) for t in texts])
+            _table([tr("common.value"), tr("assets.text_id"), tr("assets.text")], [list(t) for t in texts])
             if texts
-            else "<p>" + tr("none") + "</p>"
+            else "<p>" + tr("common.none") + "</p>"
         )
     parts.append("</body></html>")
     return "".join(parts)
@@ -178,13 +178,13 @@ def table_html(title: str, columns: list[str], rows: list[tuple[int, str, list[C
     """A balancing table (``balancing.grid``) as a page; a changed cell shows the game's value in brackets."""
     cells = [
         [f"{name} ({guid})"]
-        + [c.text + (" " + tr("[game: {value}]", value=c.was) if c.was is not None else "") for c in row]
+        + [c.text + (" " + tr("assets.game_value_bracketed", value=c.was) if c.was is not None else "") for c in row]
         for guid, name, row in rows
     ]
     return (
         f"<html><head><style>{STYLE}</style></head><body><h1>{escape(title)}</h1>"
-        + _table([tr("Asset"), *columns], cells)
+        + _table([tr("common.asset"), *columns], cells)
         + "<p>"
-        + tr("{n} assets", n=len(rows))
+        + tr("assets.n_assets", n=len(rows))
         + "</p></body></html>"
     )

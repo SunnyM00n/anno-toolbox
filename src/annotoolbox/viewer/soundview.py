@@ -29,9 +29,32 @@ from ..suite.clipplayer import ClipPlayer
 from ..suite.widgets import add_row, read_only_table
 
 COLUMNS = {
-    N_("Sounds"): (N_("sound"), N_("name"), N_("codec"), N_("media"), N_("file")),
-    N_("Events"): (N_("event"), N_("name"), N_("sounds"), N_("read"), N_("choices")),
-    N_("Music"): (N_("track"), N_("segment"), N_("seconds"), N_("media"), N_("file")),
+    "Sounds": (
+        N_("viewer.sound"),
+        N_("common.name_lower"),
+        N_("viewer.codec"),
+        N_("viewer.media"),
+        N_("common.file_lower"),
+    ),
+    "Events": (
+        N_("viewer.event"),
+        N_("common.name_lower"),
+        N_("viewer.sounds_lower"),
+        N_("viewer.read"),
+        N_("viewer.choices"),
+    ),
+    "Music": (
+        N_("viewer.track"),
+        N_("viewer.segment"),
+        N_("viewer.seconds"),
+        N_("viewer.media"),
+        N_("common.file_lower"),
+    ),
+}
+TABLE_TITLES = {
+    "Sounds": N_("viewer.sounds"),
+    "Events": N_("common.events"),
+    "Music": N_("common.music"),
 }
 
 
@@ -54,10 +77,10 @@ class SoundView(QWidget):
         self.table = self.tables["Sounds"]
         self.tabs = QTabWidget()
         for name, table in self.tables.items():
-            self.tabs.tabBar().setTabData(self.tabs.addTab(table, tr(name)), name)
+            self.tabs.tabBar().setTabData(self.tabs.addTab(table, tr(TABLE_TITLES[name])), name)
             table.cellDoubleClicked.connect(lambda _r, _c: self._play_selected())
-        self.play = QPushButton(tr("Play"))
-        self.stop = QPushButton(tr("Stop"))
+        self.play = QPushButton(tr("common.play"))
+        self.stop = QPushButton(tr("viewer.stop"))
         self.status = QLabel()
         bar = QHBoxLayout()
         for w in (self.play, self.stop):
@@ -85,8 +108,7 @@ class SoundView(QWidget):
         kinds = ", ".join(f"{n} {k}" for k, n in sorted(listing.objects.items(), key=lambda kv: -kv[1]))
         self.summary.setText(
             tr(
-                "{name}: bank version {version}, id {id}; {sounds} sounds, {media} embedded media, "
-                "{events} events ({named} named). Objects: {objects}",
+                "viewer.bank_version_id_sounds_embedded",
                 name=info.name or path,
                 version=listing.version,
                 id=listing.bank_id,
@@ -100,7 +122,7 @@ class SoundView(QWidget):
         self._fill_sounds(path, listing, info, files)
         self._fill_events(listing, info)
         self._fill_music(path, listing, info, files)
-        self.status.setText(tr("double-click a row, or select it and press Play"))
+        self.status.setText(tr("viewer.double_click_row_select_press"))
 
     def _clip_of(self, path: str, media: int, stream: str, info, files) -> tuple[str, tuple[str, bytes]]:
         """(where the media is, (name, bytes or b"" to read the file)) of one media id."""
@@ -109,9 +131,9 @@ class SoundView(QWidget):
         if streamed:  # the whole clip; a bank holds only its first part (the prefetch)
             return streamed, (streamed, b"")
         if media in listing.media:
-            where = tr("in the bank (its start only)") if stream != "embedded" else tr("in the bank")
+            where = tr("viewer.bank_start_only") if stream != "embedded" else tr("viewer.in_the_bank")
             return where, (f"{media}.wem", listing.embedded(media))
-        return tr("not found"), ("", b"")
+        return tr("viewer.not_found"), ("", b"")
 
     def _fill_sounds(self, path: str, listing, info, files) -> None:
         table = self.tables["Sounds"]
@@ -139,7 +161,9 @@ class SoundView(QWidget):
         for track in banks.music_tracks(listing):
             for media, stream in track.sources or ((0, ""),):
                 where, clip = (
-                    self._clip_of(path, media, stream, info, files) if media else (tr("no source read"), ("", b""))
+                    self._clip_of(path, media, stream, info, files)
+                    if media
+                    else (tr("viewer.no_source_read"), ("", b""))
                 )
                 add_row(table, [str(track.id), str(track.segment or ""), f"{track.seconds:.1f}" if track.seconds else "",
                                   f"{media} ({stream})" if media else "", where])  # fmt: skip
@@ -175,17 +199,21 @@ class SoundView(QWidget):
         walk = banks.walk_event(self.listing, self.event_rows[row], self.choices)
         for group, found in walk.groups.items():
             box = QComboBox()
-            box.addItem(tr("(every value)"), None)
+            box.addItem(tr("viewer.every_value"), None)
             for value in found.values:
                 name = self.info.group_label(group, value)
-                box.addItem(tr("{value} (start)", value=name) if value == found.default else name, value)
+                box.addItem(tr("viewer.value_start", value=name) if value == found.default else name, value)
             box.setCurrentIndex(max(0, box.findData(self.choices.get(group))))
             box.currentIndexChanged.connect(lambda _i, g=group, b=box: self._pick(row, g, b.currentData()))
             group_name = self.info.group_label(group)
-            label = tr("state {name}", name=group_name) if found.state_group else tr("switch {name}", name=group_name)
+            label = (
+                tr("viewer.state_name", name=group_name)
+                if found.state_group
+                else tr("viewer.switch_name", name=group_name)
+            )
             self.choice_form.addRow(label, box)
         sets = [f"{self.info.group_label(a.group)} = {self.info.group_label(a.group, a.value)}" for a in walk.sets]
-        self.choice_note.setText(tr("the event sets: {sets}", sets=", ".join(sets)) if sets else "")
+        self.choice_note.setText(tr("viewer.event_sets", sets=", ".join(sets)) if sets else "")
 
     def _pick(self, row: int, group: int, value: int | None) -> None:
         if value is None:
@@ -221,7 +249,7 @@ class SoundView(QWidget):
             clips, exact = self.event_clips(self.event_rows[row])
             table = self.tables["Events"]
             table.item(row, 2).setText(str(len(clips)))
-            table.item(row, 3).setText(tr("exactly") if exact else tr("partly guessed"))
+            table.item(row, 3).setText(tr("viewer.exactly") if exact else tr("viewer.partly_guessed"))
             table.item(row, 4).setText(
                 ", ".join(
                     f"{self.info.group_label(g)} = {self.info.group_label(g, v)}" for g, v in self.choices.items()
@@ -240,13 +268,13 @@ class SoundView(QWidget):
         if data:
             self.play_clip(name, data)
         else:
-            self.status.setText(tr("nothing to play: the media file is not in the game's files"))
+            self.status.setText(tr("viewer.nothing_play_media_file_not"))
 
     def play_clip(self, name: str, data: bytes) -> None:
         """Decode a clip into the cache and play it; the status says why when it cannot."""
         why = self._player.play(name, data, self.cache / "sounds" if self.cache is not None else None)
-        self.status.setText(why or tr("playing {name}", name=name))
+        self.status.setText(why or tr("viewer.playing_name", name=name))
 
     def _stop(self) -> None:
         self._player.stop()
-        self.status.setText(tr("stopped"))
+        self.status.setText(tr("viewer.stopped"))

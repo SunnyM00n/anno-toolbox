@@ -305,12 +305,21 @@ def qt():
     return QApplication.instance() or QApplication([])
 
 
-def test_the_window_edits_an_object(qt, game, tmp_path):
+def window_on(tree, tmp_path, path: str = ""):
+    """The object builder's window on a game's files, ``path`` opened in it."""
     from annotoolbox.objbuild.objwindow import ObjectWindow
     from annotoolbox.suite.settings import Settings
 
     window = ObjectWindow(Settings(workspace=str(tmp_path / "ws")), None)
-    window.set_tree(game)
+    if tree is not None:
+        window.set_tree(tree)
+    if path:
+        assert window.open_path(path)
+    return window
+
+
+def test_the_window_edits_an_object(qt, game, tmp_path):
+    window = window_on(game, tmp_path)
     assert window.open_path(HOUSE) and window.scene.config == SHARED
     titles = [window.objects.topLevelItem(k).text(0) for k in range(window.objects.topLevelItemCount())]
     assert titles[0].startswith("Config") and len(titles) == 3
@@ -365,10 +374,7 @@ def test_a_typed_value_cannot_break_the_config_or_hold_nan(kind, value, refused)
 
 
 def test_the_view_switches_turn_on_again(qt, game, tmp_path):
-    from annotoolbox.objbuild.objwindow import ObjectWindow
-    from annotoolbox.suite.settings import Settings
-
-    window = ObjectWindow(Settings(workspace=str(tmp_path / "ws")), None)
+    window = window_on(None, tmp_path)
     shadows = window.toggles["shadows"]
     shadows.trigger()
     assert window.view.state.shadows is False
@@ -509,11 +515,7 @@ def test_a_read_only_file_opens_no_picker_and_a_number_still_types(qt, monkeypat
 
 
 def test_the_window_makes_a_colour_one_undo_step(qt, game, tmp_path):
-    from annotoolbox.objbuild.objwindow import ObjectWindow
-    from annotoolbox.suite.settings import Settings
-
-    window = ObjectWindow(Settings(workspace=str(tmp_path / "ws")), None)
-    window.set_tree(game)
+    window = window_on(game, tmp_path)
     assert (
         window.props.game == "anno117"
         and window.props.source_names
@@ -562,3 +564,82 @@ def test_a_1701_object_config_gives_the_objects_origin_to_its_cells():
     assert obj.origin == pytest.approx((0.5, 0.0))
     area = shapes.info_shapes(obj.doc("ifo"), obj.origin)[0]
     assert min(p[0] for p in area.points) == pytest.approx(-0.5)
+
+
+def test_a_save_the_project_cannot_take_is_said_and_stays_unsaved(qt, game, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from annotoolbox.suite.project import EditsFolder
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("no room")
+
+    said = []
+    monkeypatch.setattr(EditsFolder, "save_announced", refuse)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: said.append(text))
+    window = window_on(game, tmp_path, HOUSE)
+    window.objects.select("cfg", "Models/0")
+    window.duplicate_part()
+    window.write(writeback.Plan("replace", {HOUSE: b"x"}))
+    assert "no room" in said[0] and window.obj.undo.dirty
+    window.obj.undo.mark_clean()
+    window.close()
+
+
+def test_a_part_from_a_file_that_is_no_config_is_said_not_raised(qt, game, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    from annotoolbox.models.cfgdoc import Doc
+
+    def unreadable(_data, path):
+        raise ValueError(f"{path} is no config")
+
+    window = window_on(game, tmp_path, HOUSE)
+    window.objects.select("cfg", "Models/0")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_a, **_k: (HOUSE, True))
+    monkeypatch.setattr(Doc, "read", unreadable)
+    window.add_from_file()
+    assert "is no config" in window.statusBar().currentMessage() and not window.obj.undo.dirty
+    window.close()
+
+
+def test_a_part_from_a_path_the_game_lacks_is_said(qt, game, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog
+
+    window = window_on(game, tmp_path, HOUSE)
+    window.objects.select("cfg", "Models/0")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_a, **_k: ("data/mistyped.cfg", True))
+    window.add_from_file()
+    assert "data/mistyped.cfg" in window.statusBar().currentMessage()
+    window.close()
+
+
+def test_a_picture_that_is_not_written_is_said(qt, game, tmp_path, monkeypatch):
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QFileDialog
+
+    window = window_on(game, tmp_path, HOUSE)
+    monkeypatch.setattr(window.view, "image", lambda: QImage(4, 4, QImage.Format.Format_RGB32), raising=False)
+    target = tmp_path / "no such folder" / "house.png"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(target), ""))
+    window._save_picture()
+    assert "house.png" in window.statusBar().currentMessage() and not target.exists()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(tmp_path / "house.png"), ""))
+    window._save_picture()
+    assert (tmp_path / "house.png").is_file()
+    window.close()
+
+
+def test_the_shared_copy_stays_ticked_when_the_reopen_is_declined(qt, game, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window = window_on(game, tmp_path, HOUSE)
+    window.objects.select("cfg", "Models/0")
+    window.duplicate_part()
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a, **_k: QMessageBox.StandardButton.Cancel)
+    window.shared_action.trigger()  # Save / Discard / Cancel: Cancel keeps the edits and the tick
+    assert window.shared_action.isChecked() and window.obj.undo.dirty and window.options().shared
+    monkeypatch.setattr(QMessageBox, "question", lambda *_a, **_k: QMessageBox.StandardButton.Discard)
+    window.shared_action.trigger()
+    assert not window.shared_action.isChecked() and not window.obj.undo.dirty
+    window.close()

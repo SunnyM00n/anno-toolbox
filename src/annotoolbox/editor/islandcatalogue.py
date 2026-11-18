@@ -26,15 +26,11 @@ BUILDABLE = (
 )  # the games whose edits a build reads
 NATIVE = ("anno117", "anno2070")  # the editor's own games (the rest are "other games": ``gameviewers``)
 BUILD_NOTES = {
-    "anno1404": N_(
-        " · edits are built into the last data archive of the folder the island comes from (the game's own is kept)"
-    ),
-    "anno1701": N_(" · edits are built into a new data archive whose files are newer than the originals"),
-    "anno2205": N_(
-        " · edits are built into an archive and the game's file index (Build & install needs the folder to patch)"
-    ),
+    "anno1404": N_("islands.edits_built_last_data_archive"),
+    "anno1701": N_("islands.edits_built_new_data_archive"),
+    "anno2205": N_("islands.edits_built_archive_games_file"),
 }
-BUILD_NOTE_DEFAULT = N_(" · edits are built into a mod that replaces the island")
+BUILD_NOTE_DEFAULT = N_("islands.edits_built_mod_replaces_island")
 ISLANDS_2070 = "data/levels/islands/normal/"  # the islands the list names by their stem (the others by path)
 RELEASE_ORDER = ("anno117", "anno1800", "anno2205", "anno2070", "anno1404", "anno1701")  # newest first: the tabs
 POOL = "data/anno2070/islands/pool"  # where a built island lies in the mod
@@ -118,7 +114,7 @@ class IslandCatalogue:
                 ) as exc:  # damaged, or ours without a backup: listed, with why
                     entry["problem"] = str(exc)
             elif folder:
-                entry["problem"] = tr("no {exe} in the folder", exe=game.exes[0])
+                entry["problem"] = tr("islands.no_exe_folder", exe=game.exes[0])
             out[key] = entry
         return out
 
@@ -177,9 +173,9 @@ class IslandCatalogue:
         out |= self._catalogue_117_2070(data)
         for key, g in data["games"].items():
             edited = self._edited(installs.GAMES[key].edit_prefix)
-            note = tr("engine {engine} ({family})", engine=g["engine"], family=g["family"])
+            note = tr("islands.engine_family", engine=g["engine"], family=g["family"])
             if g.get("problem") or not g["folder"]:
-                note += " · " + (g.get("problem") or tr("not found: set its folder"))
+                note += " · " + (g.get("problem") or tr("islands.not_found_set_folder"))
             buildable = key in BUILDABLE
             out[key] = {
                 "name": g["name"],
@@ -191,7 +187,7 @@ class IslandCatalogue:
                 + (
                     tr(BUILD_NOTES.get(key, BUILD_NOTE_DEFAULT))
                     if buildable
-                    else tr(" · edits are kept in edit files; they cannot be built into a mod for this game yet")
+                    else tr("islands.edits_kept_edit_files_they")
                 ),
             }
         out = {k: out[k] for k in sorted(out, key=lambda k: RELEASE_ORDER.index(k) if k in RELEASE_ORDER else 99)}
@@ -220,7 +216,11 @@ class IslandCatalogue:
         """The editor's own games' entries (the wanted ones); a game that is not installed says so in its note."""
         out = {}
         built = [
-            {**b, "source_game": "anno2070", "source": tr("new island") if b["name"].startswith("new") else b["name"]}
+            {
+                **b,
+                "source_game": "anno2070",
+                "source": tr("islands.new_island") if b["name"].startswith("new") else b["name"],
+            }
             for b in data["built"]
         ]
         if self.wants("anno117"):
@@ -240,7 +240,7 @@ class IslandCatalogue:
                 "edited": data["edited2070"],
                 "converted": [],
                 "buildable": True,
-                "note": tr("edits are built into Anno 2070's patch9.rda") + (f" · {missing}" if missing else ""),
+                "note": tr("islands.edits_built_anno_2070s_patch9") + (f" · {missing}" if missing else ""),
             }
         return out
 

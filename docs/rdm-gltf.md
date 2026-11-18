@@ -6,13 +6,14 @@ is described in [`formats/rdm.md`](formats/rdm.md).
 
 ## Install and run
 
-The toolchain is part of the Toolbox. Both installs have it: the light one needs no window library, the full one adds
-the windows.
+The toolchain is part of the Toolbox. The installed program ([`installer.md`](installer.md)) has it as
+`anno-toolbox.exe rdm ...` and `anno-toolbox.exe export`. A developer's checkout has it too, light (no window
+library) or full (with the windows):
 
 ```bash
-pip install anno-toolbox           # light: the standard library only; `anno-toolbox rdm ...` and `export`
-pip install "anno-toolbox[textures]"   # numpy: a PNG copy of a DDS texture in an export (BC1 to BC7, BC6H)
-pip install "anno-toolbox[gui]"        # the full Toolbox: the windows (the viewer exports and imports models)
+pip install -e .                  # light: the standard library only; `anno-toolbox rdm ...` and `export`
+pip install -e ".[textures]"      # numpy: a PNG copy of a DDS texture in an export (BC1 to BC7, BC6H)
+pip install -e ".[gui]"           # the full Toolbox: the windows (the viewer exports and imports models)
 ```
 
 In the viewer:
@@ -181,6 +182,60 @@ written. No written file has been placed in either game yet ([`formats/granny.md
 
 Note: the runtime check was made on 2026-11-13.
 
+### Granny to RDM (Anno 1404, 1701 into 2070, 2205, 1800, 117)
+
+```
+anno-toolbox rdm from-granny <file.gr2 | folder> -o out/ --to anno2070|anno2205|anno1800|anno117
+                                [--anims <folder>] [--axes same|turn] [--source anno1404|anno1701] [--scale F] [--force]
+```
+
+The `.gr2` becomes the RDM records the glTF export already makes (`rdm/grannygltf.py`) and goes straight to the RDM
+writer in the target game's layouts (`rdm/grannyrdm.py`), with no glTF between, so nothing is quantised twice. The
+Toolbox's Export (and the viewer's File > Export) has it as **.gr2 to .rdm** with a game choice. The container is the
+same in all four games; what differs is the layouts each game ships (`rdm layouts`; read off the installs, 2026-11-17):
+
+| Game | Static | Vertex colours | Cloth | Skin |
+|---|---|---|---|---|
+| 2070 | `P4h_N4b_G4b_B4b_T2h` | `+ C4c` | `P3f_T2f_C4c` | `+ I4b_W4b`, word 3 (4 where a vertex weighs four) |
+| 117 | the same | `+ C4b` | `P3f_N3f_G3f_B3f_T2f_C4c` | as 2070 |
+| 1800 | the same | none shipped: left out, said | as 117 | `+ I4b` (word 1), or with two bones a vertex the 16-bone layout `+ I4b x4 + W4b x4` (word 16) |
+| 2205 | the same | none shipped | none shipped: written as a plain mesh, said | as 1800 |
+
+What is carried: meshes with their material groups (the file's material names, in the order of first use), the
+normals, the first UV set, the tangent frame (Granny's own is not read: it is made from the triangles and UVs around
+Granny's normals, stored negated as the games store it), vertex colours (bytes B, G, R, A as 2070 stores them; not
+carried when every vertex is white), skin weights and bone numbers through the mesh's bindings (a rigid mesh on one
+bone), the skeletons as joints, and every animation as an animation file of its own, sampled at its time step: the
+file's own as `<name>_anim.rdm`, and each `.gr2` of `--anims` whose tracks mostly (75 %) name the model's bones as
+`<its name>.rdm`. A clip is made for the model's biggest skeleton and the levels of detail lack some bones; the missing
+tracks are left out. A mesh whose colours pin some vertices and not all is a cloth ([`formats/granny.md`](formats/granny.md), "Cloth pins") and is
+written as `<name>_cloth.rdm`. A file with animations, or with bone numbers on its vertices, is written as a skin;
+otherwise as a static mesh (a rigid mesh's bone is then not needed: its vertices are in the model already).
+
+The rules applied:
+
+- **Units.** 1701 counts 32 units a tile and 1404 one, both RDM games count one a tile (2070 and 117: engine-placement;
+  1800 and 2205 taken as the same, **[I]** not checked). Every length (vertices, joints' moves, keys' moves) is divided
+  by the source's tile; the source is read off the file's art tool info (39.37 units a metre: 1701). `--scale`
+  overrides the factor.
+- **Axes.** All of them are y up and back = -z, and a Granny mesh keeps its winding: over 148 converted 1404 and 139
+  1701 meshes the median share of triangles that run counter-clockwise against their normals is 1.00, as in 117's
+  own files. `--axes turn` turns the model half a turn about y (a rotation, so skins and keys stay exact: a vertex in
+  bone space is where it was).
+- **Boxes and names.** The stored box is the box of the half-float positions as written, so it holds every vertex
+  drawn. Mesh, joint and material names are the source's.
+
+Checked, 2026-11-17: on the synthetic writer (`tests/test_granny_rdm.py`: a mesh, a skin with weights and an
+animation, the units, the half turn, the 16-bone layout, colours and cloth, the command and the export, read back with
+our reader: vertices, weights and joints equal within the half-float and byte quantisation), and on the installs: 213
+files of 1404 and 203 of 1701 (every 25th and 18th) converted for all four games and read back. For 117, every output
+held to 117's conventions (`rdm validate`, the layouts read off the install): no deviation but two source files whose
+meshes share a name, and a median tangent frame agreement of 1.00. Not converted (error with a reason, 2 of 203 in
+1701): a file whose skeletons share a joint name (a rider and its horse), which 117 would merge into one skin that
+names its joints one way. No converted file was placed in a game. Not done: the model config that names the `.rdm`
+(a 117 config needs its material blocks and the textures converted; the `.rdm` holds names only), and cloth's
+simulation settings.
+
 ## Compared with rdm4
 
 [rdm4](https://github.com/lukts30/rdm4) is the community's earlier tool (Rust, MIT). The table lists every feature
@@ -203,7 +258,7 @@ its README and issue tracker describe, and where the toolchain stands:
 | `-v` verbosity | every note is printed: what was dropped, computed or could not be kept | - |
 | games 2070, 2205, 1800 | the same and Anno 117; both byte orders (rdm4 issue 144) | read over every shipped file (above) |
 | Explorer context menu (`.reg`) | **not provided**: a Python command; a context-menu entry is a later convenience | - |
-| a prebuilt `.exe` | the Toolbox's installer ([`installer.md`](installer.md)) carries the commands as `anno-toolbox.exe rdm ...`; or `pip install` | - |
+| a prebuilt `.exe` | the Toolbox's installer ([`installer.md`](installer.md)) carries the commands as `anno-toolbox.exe rdm ...` | - |
 
 The next table lists what rdm4's files were measured to carry that the source did not (tainting), and what the
 toolchain does instead:

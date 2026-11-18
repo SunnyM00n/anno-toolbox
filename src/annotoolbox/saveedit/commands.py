@@ -6,6 +6,10 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..formats.savegame117 import Save
 
 
 def register(sub: argparse._SubParsersAction) -> None:
@@ -52,12 +56,12 @@ def _player_options(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--save-name", help="the save's own name (meta.a7s)")
 
 
-def _player_changes(args: argparse.Namespace) -> dict:
+def _player_changes(args: argparse.Namespace) -> dict[str, str | int]:
     changes = {k: getattr(args, k) for k in ("name", "profile_name", "color", "logo", "portrait")}
     return {k: v for k, v in changes.items() if v is not None}
 
 
-def _edited_save(save, args: argparse.Namespace):
+def _edited_save(save: Save, args: argparse.Namespace) -> Save:
     from ..formats import savegame117
 
     changes = _player_changes(args)
@@ -86,7 +90,7 @@ def cmd_save_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def _with_money(save, args: argparse.Namespace):
+def _with_money(save: Save, args: argparse.Namespace) -> Save:
     from ..formats import savegame117
 
     if args.money is None and args.add_money is None:

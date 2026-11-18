@@ -36,7 +36,9 @@ class Finding:
 
     def __str__(self) -> str:
         where = f"{self.guid} {self.path}".strip() if self.guid is not None else self.path
-        severity = {ERROR: tr("error"), WARNING: tr("warning")}.get(self.severity, self.severity)
+        severity = {ERROR: tr("common.error_lower"), WARNING: tr("common.warning_lower")}.get(
+            self.severity, self.severity
+        )
         return f"{severity}: {where}: {self.message}"
 
 
@@ -47,22 +49,20 @@ def _asset_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | N
     if not (spec.kind == "asset" and spec.type == "Asset" and text not in ("", "0")):
         return None
     if not text.lstrip("-").isdigit():
-        return [(tr("{text!r} is no GUID", text=text), ERROR)]
+        return [(tr("assets.text_no_guid", text=text), ERROR)]
     if not doc.exists(int(text)):
-        return [(tr("no asset {text}", text=text), ERROR)]
+        return [(tr("assets.no_asset_text", text=text), ERROR)]
     ref, out = int(text), []
     have = set(doc.layers(ref).property_names())
     needs = [n for n in spec.needed_property.split(";") if n]  # any one of them
     if needs and not set(needs) & have:
-        out.append(
-            (tr("asset {ref} has no {needs}, which this value needs", ref=ref, needs=alternatives(needs)), ERROR)
-        )
+        out.append((tr("assets.asset_no_value_needs", ref=ref, needs=alternatives(needs)), ERROR))
     if spec.allowed_templates and doc.template(ref) not in spec.allowed_templates:
         allowed = ", ".join(spec.allowed_templates)
         out.append(
             (
                 tr(
-                    "asset {ref} is a {template}, not one of {allowed}",
+                    "assets.asset_not_one",
                     ref=ref,
                     template=doc.template(ref),
                     allowed=allowed,
@@ -73,14 +73,14 @@ def _asset_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | N
     allowed = set(spec.allowed_properties)
     if allowed and not allowed & have:
         names = ", ".join(spec.allowed_properties)
-        out.append((tr("asset {ref} has none of the properties {names}", ref=ref, names=names), WARNING))
+        out.append((tr("assets.asset_none_properties", ref=ref, names=names), WARNING))
     return out
 
 
 def _choice_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | None:
     data_set = doc.schema.data_sets.get(spec.data_set)
     if spec.kind == "choice" and data_set and text and text not in data_set.names:
-        return [(tr("{text!r} is not in the data set {data_set}", text=text, data_set=spec.data_set), ERROR)]
+        return [(tr("assets.text_not_in_data_set", text=text, data_set=spec.data_set), ERROR)]
     return None
 
 
@@ -91,7 +91,7 @@ def _flags_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | N
     unknown = [f for f in text.split(";") if f and f not in data_set.names]
     if not unknown:
         return []
-    return [(tr("{names} not in the data set {data_set}", names=", ".join(unknown), data_set=spec.data_set), ERROR)]
+    return [(tr("assets.names_not_in_data_set", names=", ".join(unknown), data_set=spec.data_set), ERROR)]
 
 
 def _number_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | None:
@@ -100,24 +100,24 @@ def _number_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | 
     try:
         number = float(text)
     except ValueError:
-        return [(tr("{text!r} is no number", text=text), ERROR)]
+        return [(tr("assets.text_no_number", text=text), ERROR)]
     out = []
     if spec.minimum is not None and number < spec.minimum:
-        out.append((tr("{text} is below the minimum {minimum:g}", text=text, minimum=spec.minimum), ERROR))
+        out.append((tr("assets.text_below_minimum", text=text, minimum=spec.minimum), ERROR))
     if spec.maximum is not None and number > spec.maximum:
-        out.append((tr("{text} is above the maximum {maximum:g}", text=text, maximum=spec.maximum), ERROR))
+        out.append((tr("assets.text_above_maximum", text=text, maximum=spec.maximum), ERROR))
     return out
 
 
 def _bool_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | None:
     if spec.kind == "bool" and text and text not in BOOLS:
-        return [(tr("{text!r} is no boolean", text=text), ERROR)]
+        return [(tr("assets.text_no_boolean", text=text), ERROR)]
     return None
 
 
 def _id_value(doc: AssetDocument, spec: ValueSpec, text: str) -> Problems | None:
     if spec.type in ID_TYPES and text not in ("", "0") and not _int64(text):
-        message = tr("{text!r} is no id: a {type} value is a whole number of 64 bits", text=text, type=spec.type)
+        message = tr("assets.no_id_value_whole_number", text=text, type=spec.type)
         return [(message, ERROR)]
     return None
 
@@ -154,7 +154,7 @@ def _variables(doc: AssetDocument, guid: int, leaf_texts: dict[tuple[str, ...], 
                         guid,
                         at,
                         WARNING,
-                        tr("marked as a variable but its Value {value!r} is no variable name", value=value),
+                        tr("assets.marked_variable_value_no_name", value=value),
                     )
                 )
     return out
@@ -170,7 +170,7 @@ def check_asset(doc: AssetDocument, guid: int, only: list[str] | None = None) ->
     prefixes = tuple(p.split("/") for p in only) if only is not None else None
     for prop in values:
         if prop.tag not in doc.schema.properties and (prefixes is None or any(p[0] == prop.tag for p in prefixes)):
-            out.append(Finding(guid, prop.tag, WARNING, tr("a property the schema does not know: the game drops it")))
+            out.append(Finding(guid, prop.tag, WARNING, tr("assets.property_schema_not_know_game")))
     leaf_texts = dict(leaves(values))
     out += _variables(doc, guid, leaf_texts)
     template = doc.template(guid)
@@ -180,7 +180,7 @@ def check_asset(doc: AssetDocument, guid: int, only: list[str] | None = None) ->
                 guid,
                 "Template",
                 WARNING,
-                tr("the template {template!r} is not in the game's templates (removed?)", template=template),
+                tr("assets.template_not_games_templates_removed", template=template),
             )
         )
     for path, text in leaves(values):
@@ -192,9 +192,7 @@ def check_asset(doc: AssetDocument, guid: int, only: list[str] | None = None) ->
         if spec is not None:
             out += _value(doc, guid, path, text, spec)
         elif not doc.schema.known(path):
-            out.append(
-                Finding(guid, "/".join(path), WARNING, tr("a value the schema does not know: the game drops it"))
-            )
+            out.append(Finding(guid, "/".join(path), WARNING, tr("assets.value_schema_not_know_game")))
     return out
 
 
@@ -209,17 +207,15 @@ def check(doc: AssetDocument, guids: list[int] | None = None) -> list[Finding]:
             out += check_asset(doc, guid, only)
     for guid, record in c.new.items():
         if record.base is not None and not doc.exists(record.base):
-            out.append(
-                Finding(guid, "BaseAssetGUID", ERROR, tr("the base asset {base} does not exist", base=record.base))
-            )
+            out.append(Finding(guid, "BaseAssetGUID", ERROR, tr("assets.base_asset_not_exist", base=record.base)))
         if record.base is None and record.copy_of is None and record.template not in doc.schema.templates:
-            out.append(Finding(guid, "Template", ERROR, tr("no template {template!r}", template=record.template)))
+            out.append(Finding(guid, "Template", ERROR, tr("assets.no_template_lower", template=record.template)))
         if guid in doc.index.by_guid:
-            out.append(Finding(guid, "", ERROR, tr("the game already has an asset with this GUID")))
+            out.append(Finding(guid, "", ERROR, tr("assets.game_already_asset_guid")))
         lo, hi = c.guid_range
         group = doc.group_range(record.anchor)
         if not record.xml and not lo <= guid <= hi and not (group and group[0] <= guid <= group[1]):
-            out.append(Finding(guid, "", WARNING, tr("outside the change set's GUID range {lo}-{hi}", lo=lo, hi=hi)))
+            out.append(Finding(guid, "", WARNING, tr("assets.outside_change_sets_guid_range", lo=lo, hi=hi)))
     for guid in c.removed:
         users = [u for u in doc.index.references(guid) if u not in c.removed]
         if users:
@@ -229,7 +225,7 @@ def check(doc: AssetDocument, guids: list[int] | None = None) -> list[Finding]:
                     guid,
                     "",
                     WARNING,
-                    tr("removed, but {n} assets still name it ({shown})", n=len(users), shown=shown),
+                    tr("assets.removed_assets_still_name", n=len(users), shown=shown),
                 )
             )
     return out
@@ -252,7 +248,7 @@ def clashes(doc: AssetDocument, mods: Path) -> list[Finding]:
                     found,
                     "",
                     ERROR,
-                    tr("the mod {mod} uses this GUID too", mod=path.relative_to(mods).parts[0]),
+                    tr("assets.mod_uses_guid_too", mod=path.relative_to(mods).parts[0]),
                 )
             )
     return out

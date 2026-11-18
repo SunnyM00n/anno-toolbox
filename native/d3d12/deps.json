@@ -1,0 +1,18 @@
+{
+  "version": "0.1.0",
+  "nanobind": "2.9.2",
+  "sources": {
+    "nvrhi": {
+      "url": "https://github.com/NVIDIA-RTX/NVRHI",
+      "commit": "bf0bbd9b666a7297492beb1999a4ddc0dfded143",
+      "date": "2026-10-28",
+      "licence": "MIT"
+    },
+    "directx-headers": {
+      "url": "https://github.com/microsoft/DirectX-Headers",
+      "commit": "d873b344dc540898868697245f100c2a67fe68d9",
+      "tag": "v1.717.0-preview",
+      "licence": "MIT"
+    }
+  }
+}

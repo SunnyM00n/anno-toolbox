@@ -173,7 +173,7 @@ class AssetDocument:
                 return
             target.text = text
             return self.set_block(
-                guid, block, el, label=tr("{name} = {value}", name=path.rsplit("/", 1)[-1], value=text)
+                guid, block, el, label=tr("assets.name_eq_value", name=path.rsplit("/", 1)[-1], value=text)
             )
 
         def mutate(c: AssetChange) -> None:
@@ -181,7 +181,7 @@ class AssetDocument:
             if path in c.reset:
                 c.reset.remove(path)
 
-        self._change_edit(guid, tr("{name} = {value}", name=path.rsplit("/", 1)[-1], value=text), mutate)
+        self._change_edit(guid, tr("assets.name_eq_value", name=path.rsplit("/", 1)[-1], value=text), mutate)
 
     def reset_value(self, guid: int, path: str) -> None:
         """Back to what the asset inherits: the edit dropped and, where the game's file sets it, its own value too."""
@@ -196,7 +196,7 @@ class AssetDocument:
             if own is not None and path not in c.reset:
                 c.reset.append(path)
 
-        self._change_edit(guid, tr("reset {name}", name=path.rsplit("/", 1)[-1]), mutate)
+        self._change_edit(guid, tr("assets.reset_name", name=path.rsplit("/", 1)[-1]), mutate)
 
     def set_block(self, guid: int, path: str, element: ET.Element, label: str = "") -> None:
         """Replace a whole block (a list, an array, an inline asset) at ``path``; values set below it fold in."""
@@ -208,7 +208,7 @@ class AssetDocument:
             if path in c.reset:
                 c.reset.remove(path)
 
-        self._change_edit(guid, label or tr("{name} changed", name=path.rsplit("/", 1)[-1]), mutate)
+        self._change_edit(guid, label or tr("assets.name_changed", name=path.rsplit("/", 1)[-1]), mutate)
 
     def _block_of(self, guid: int, path: str) -> str | None:
         c = self.changes.assets.get(guid)
@@ -232,7 +232,7 @@ class AssetDocument:
         record = NewAsset(template, name, base, copy_of, anchor if anchor in self.index.by_guid else None)
         if copy_of is not None and not template:
             record.template = self.template(copy_of)
-        self._edit(None, tr("new {name}", name=name), lambda: self.changes.new.__setitem__(guid, record),
+        self._edit(None, tr("assets.new_name_lower", name=name), lambda: self.changes.new.__setitem__(guid, record),
                    lambda: self.changes.new.pop(guid, None))  # fmt: skip
         return guid
 
@@ -257,7 +257,7 @@ class AssetDocument:
         def put(anchor_to, place_to):
             record.anchor, record.place = anchor_to, place_to
 
-        self._edit(guid, tr("move {name}", name=record.name), lambda: put(anchor, place), lambda: put(*old))
+        self._edit(guid, tr("assets.move_name", name=record.name), lambda: put(anchor, place), lambda: put(*old))
 
     def paste(self, guids: list[int], anchor: int, cut: bool = False) -> list[int]:
         """Copies of ``guids`` beside ``anchor``, in its group, each with a GUID of the group's range. ``cut``: a
@@ -284,10 +284,10 @@ class AssetDocument:
                 if change is not None:
                     self.changes.assets[guid] = change
 
-            return self._edit(None, tr("delete {name}", name=record.name), lambda: self._drop_new(guid), undo)
+            return self._edit(None, tr("assets.delete_name", name=record.name), lambda: self._drop_new(guid), undo)
         if guid in self.changes.removed:
             return
-        self._edit(None, tr("delete {name}", name=self.name(guid)), lambda: self.changes.removed.append(guid),
+        self._edit(None, tr("assets.delete_name", name=self.name(guid)), lambda: self.changes.removed.append(guid),
                    lambda: self.changes.removed.remove(guid))  # fmt: skip
 
     def _drop_new(self, guid: int) -> None:
@@ -297,7 +297,7 @@ class AssetDocument:
     def rename(self, guid: int, name: str) -> None:
         if guid in self.changes.new:
             record, old = self.changes.new[guid], self.changes.new[guid].name
-            return self._edit(guid, tr("rename to {name}", name=name), lambda: setattr(record, "name", name),
+            return self._edit(guid, tr("assets.rename_to_name", name=name), lambda: setattr(record, "name", name),
                               lambda: setattr(record, "name", old))  # fmt: skip
         self.set_value(guid, "Standard/Name", name)
 
@@ -309,7 +309,7 @@ class AssetDocument:
         def put(value):
             c.guid_range, c.guid_choice, c.guid_source = value
 
-        self._edit(None, tr("GUID range"), lambda: put((tuple(span), choice, source)), lambda: put(old))
+        self._edit(None, tr("common.guid_range"), lambda: put((tuple(span), choice, source)), lambda: put(old))
 
     def set_icon(self, guid: int, file_id: int, index: int, position: int = 0) -> None:
         """The asset's icon number ``position`` (0: the first) is tile ``index`` of atlas ``file_id`` (written to
@@ -327,7 +327,7 @@ class AssetDocument:
             else:
                 icons[guid] = copy.deepcopy(old)
 
-        self._edit(guid, tr("icon of {guid}", guid=guid), do, undo)
+        self._edit(guid, tr("assets.icon_of_guid", guid=guid), do, undo)
 
     def set_text(self, language: str, text_id: str, text: str) -> None:
         texts = self.changes.texts.setdefault(language, {})
@@ -339,7 +339,7 @@ class AssetDocument:
             else:
                 texts[text_id] = old
 
-        self._edit(None, tr("text {id}", id=text_id), lambda: texts.__setitem__(text_id, text), undo)
+        self._edit(None, tr("assets.text_id_lower", id=text_id), lambda: texts.__setitem__(text_id, text), undo)
 
     # the file
     def save(self, path: Path | None = None) -> Path:

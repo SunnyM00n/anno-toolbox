@@ -21,6 +21,62 @@ NODE_TILES = 16  # the tiles a level-0 node (and its page) covers; each level do
 GAMMA = 2.2  # the shader's exponent: tint = (2 rgb) ^ GAMMA
 MAX_FACTOR = 4.0  # (2 * 1) ^ 2.2 is 4.59: the factors a page can hold stay below it
 MIN_COVER = 1e-3  # a texel a stroke covers less than this keeps its bytes
+NEUTRAL_BLOCK = bytes.fromhex("1084108400000000")  # one BC1 block, both colours grey 128: no tint (vanilla 125-132)
+
+
+def neutral(raw: bytes) -> bytes:
+    """A tint page or a far tint picture's blocks (``raw``: a DDS file, else bare BC1 blocks) all grey: no tint."""
+    header = (148 if raw[84:88] == b"DX10" else 128) if raw[:4] == b"DDS " else 0
+    return raw[:header] + NEUTRAL_BLOCK * ((len(raw) - header) // 8)
+
+
+def far_picture(rd) -> np.ndarray | None:
+    """An island's far tint picture (rd3d ``TintMapLevels/BaseTextureData``: ``width`` blocks across, BC1) as stored
+    bytes ``(h, w, 3)``, None without one."""
+    node = rd.path("Terrain/TintMapLevels/BaseTextureData")
+    if node is None or node.find("map") is None:
+        return None
+    w, h = node.find("width").u32(), node.find("height").u32()
+    blocks = np.frombuffer(node.find("map").data, np.uint8).reshape(-1, 8)
+    return bc1encode.from_blocks(bc1encode.decode_blocks(blocks), h * 4, w * 4)
+
+
+def land_spread(stored: np.ndarray, land: np.ndarray) -> tuple[float, float] | None:
+    """The mean and spread of the stored luminance byte over the land texels of a tint picture (``land``: a mask of
+    its shape), None without land."""
+    y = stored[..., 1][land].astype(np.float64)
+    return (float(y.mean()), float(y.std())) if y.size else None
+
+
+def fit_blocks(raw: bytes, src: tuple[float, float], dst: tuple[float, float]) -> bytes:
+    """BC1 blocks (``raw``: a DDS file or bare blocks) whose tint keeps its pattern in another range: the luminance
+    byte moved from ``src``'s mean to ``dst``'s and its spread narrowed to ``dst``'s (never widened), the chroma's
+    distance from grey narrowed alike. The map is affine, so it is applied to each block's two end colours and
+    every texel between them follows; a block whose end colours change order is turned back (BC1's mode)."""
+    header = (148 if raw[84:88] == b"DX10" else 128) if raw[:4] == b"DDS " else 0
+    blocks = np.frombuffer(raw, np.uint8, (len(raw) - header) // 8 * 8, header).reshape(-1, 8).copy()
+    k = min(1.0, dst[1] / src[1]) if src[1] > 0 else 1.0
+    words = blocks[:, :4].view("<u2").astype(np.int64)  # the two end colours, 565 (r Cb, g Y, b Cr)
+    rgb = np.stack([(words >> 11) & 31, (words >> 5) & 63, words & 31], -1).astype(np.float64)
+    rgb *= np.array([255 / 31, 255 / 63, 255 / 31])
+    rgb[..., 1] = dst[0] + (rgb[..., 1] - src[0]) * k
+    rgb[..., 0::2] = 128 + (rgb[..., 0::2] - 128) * k
+    q = np.clip(np.rint(rgb * np.array([31 / 255, 63 / 255, 31 / 255])), 0, [31, 63, 31]).astype(np.int64)
+    new = (q[..., 0] << 11) | (q[..., 1] << 5) | q[..., 2]
+    four = words[:, 0] > words[:, 1]  # the four-colour mode, as it was
+    flip = four & (new[:, 0] < new[:, 1])
+    new[flip] = new[flip][:, ::-1]
+    bits = blocks[:, 4:].view("<u4").copy()
+    bits[flip] ^= np.uint32(0x55555555)  # index 0 <-> 1 and 2 <-> 3: the same colours with the ends swapped
+    same = four & (new[:, 0] == new[:, 1])
+    bits[same] = 0  # one colour: the three-colour mode would read index 3 as black
+    three = ~four & (new[:, 0] > new[:, 1])  # a three-colour block kept in its mode: ends swapped, 0 <-> 1 only
+    new[three] = new[three][:, ::-1]
+    low = ~(bits[three] >> np.uint32(1)) & np.uint32(0x55555555)
+    bits[three] ^= low
+    blocks[:, :4] = new.astype("<u2").view(np.uint8).reshape(-1, 4)
+    blocks[:, 4:] = bits.view(np.uint8).reshape(-1, 4)
+    return raw[:header] + blocks.tobytes() + raw[header + blocks.size :]
 
 
 def to_rgb(stored: np.ndarray) -> np.ndarray:
@@ -123,5 +179,5 @@ def apply(read, names: list[str], strokes: list[dict]) -> tuple[dict[str, bytes]
         data = lay_page(read(name), level, px, pz, [st for _, st in mine])
         if data is not None:
             out[name] = data
-    unmatched = [tr("tint stroke {k}", k=k) for k in range(len(strokes)) if k not in laid]
+    unmatched = [tr("common.tint_stroke_k", k=k) for k in range(len(strokes)) if k not in laid]
     return out, {"pages": len(out), "strokes": len(laid), "unmatched": unmatched}

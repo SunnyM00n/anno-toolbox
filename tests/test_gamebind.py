@@ -207,3 +207,60 @@ def test_a_chain_reports_the_first_error_and_releases_the_pipelines_owners_last(
     assert chain.error == "refused"
     chain.release()
     assert log == [("release", False), ("release", True)]
+
+
+def test_an_input_made_anew_rebinds_though_python_gives_the_old_ones_id_again(rhi):
+    """A resized target is let go and made again: the new one often lies where the old one lay, with its ``id``. The
+    binding set holds what it was made with, so no other object can have that id while it is compared."""
+    res, batch = resources(rhi), Batch()
+
+    def texture():
+        tex = rhi.newTexture(gamedraw.F.RGBA16F, gamedraw.QSize(1, 1), 1, gamedraw.QRhiTexture.Flag(0))
+        tex.create()
+        return tex
+
+    for _ in range(16):  # each the only reference: without the hold the next one took its place and its id
+        assert res.rebind(batch, {"cTex": texture()})
+    held = res._held
+    assert len(held) == 1 and not res.rebind(batch, {"cTex": held[0]})
+    res.release()
+    assert res._held == ()
+
+
+def test_a_draws_binding_set_knows_its_textures_and_buffers_by_the_objects(rhi):
+    """``fxcdraw.FxcDraw`` rebinds when a texture or buffer of a name is another object, not when its id differs."""
+    from types import SimpleNamespace
+
+    from annotoolbox.render import fxcdraw
+
+    stage = SimpleNamespace(samplers={}, types={})
+    key = ("cTex", "texture")
+    program = SimpleNamespace(
+        vs=stage, ps=stage, numbers={key: 0}, stages={key: B.StageFlag.FragmentStage}, cbuffers={}
+    )
+    draw = fxcdraw.FxcDraw(SimpleNamespace(rhi=rhi, later=lambda r: None), program, None, None, None)
+    a, b = (rhi.newTexture(gamedraw.F.RGBA8, gamedraw.QSize(1, 1)) for _ in range(2))
+    assert len(draw._bindings({"cTex": a}, None)) == 1 and draw._bound["cTex"] is a
+    assert not draw._maps_changed({"cTex": a}) and draw._maps_changed({"cTex": b}) and draw._maps_changed({})
+    assert fxcdraw.same_objects([a, ("cb", 256)], [a, ("cb", 256)])
+    assert not fxcdraw.same_objects([a, ("cb", 256)], [b, ("cb", 256)])
+    assert not fxcdraw.same_objects([a, ("cb", 256)], [a, ("cb", 512)]) and not fxcdraw.same_objects([a], [a, a])
+
+
+def test_a_three_component_srgb_texture_is_srgb_on_the_device_too(rhi):
+    """OpenGL's ``SRGB8`` (the island view's ground albedo, a model's map without alpha) was made linear on QRhi:
+    its colours read undecoded, too bright against the OpenGL device's."""
+    from annotoolbox.render import rhidevice
+
+    ctx = rhidevice.RhiContext(rhi)
+    grey = bytes([128, 128, 128]) * 16
+    rgb, rgba = ctx.texture((4, 4), 3, grey, internal_format=0x8C41), ctx.texture((4, 4), 4, internal_format=0x8C43)
+    plain = ctx.texture((4, 4), 3, grey)
+    flag = gamedraw.QRhiTexture.Flag.sRGB
+    assert rgb.srgb and rgba.srgb and not plain.srgb
+    assert rgb.native.flags() & flag and not plain.native.flags() & flag
+    assert rgb.native.format() == gamedraw.F.RGBA8  # padded to four: the only 8-bit sRGB format
+    ctx.decode_srgb = True  # QRhi's OpenGL samples sRGB undecoded: decoded on the way in, kept as half floats
+    decoded = ctx.texture((4, 4), 3, grey, internal_format=0x8C41)
+    assert decoded.dtype == "f2" and not decoded.srgb
+    ctx.release()

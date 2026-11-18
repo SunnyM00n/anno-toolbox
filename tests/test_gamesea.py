@@ -125,3 +125,12 @@ def test_the_coast_waves_follow_where_the_view_looks_at_the_sea():
     far = gameshader.look_at(np.array([0.0, 100.0, 0.0]), np.array([0.0, 99.0, 100.0])) @ gameframe.LEFT_HANDED
     got = gamesea.waves_centre(SimpleNamespace(eye=np.array([0.0, 100.0, 0.0]), view=far), 256.0)
     assert got[1] <= 256.0 / 3 + 1e-6  # a glancing look: no farther than a third of the side
+
+
+def test_a_water_map_cut_short_reads_its_whole_rows_and_an_empty_one_open_sea():
+    """The side was rounded: a map a few texels short asked for more bytes than it has and raised."""
+    short = bytes(range(60))  # 15 texels: 3 x 3 and a rest (rounded: 4 x 4, 64 bytes)
+    rg, ba = gamesea.info_maps(short)
+    assert rg.shape == (3, 3, 2) and ba.shape == (3, 3, 2)
+    assert gamesea.flow_map(bytes(8)).shape == (2, 2, 4)  # too small for a ring: open sea
+    assert (gamesea.flow_map(bytes(8))[..., 2] == gamesea.NO_FLOW[2]).all()

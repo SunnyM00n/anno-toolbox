@@ -55,8 +55,8 @@ def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, 
             written = a7m_edit117.build(*args, guids=numbering)
         else:
             written = a7m_edit1800.build(*args)
-        log(tr("islands: {n} written", n=len(written)))
+        log(tr("islands.islands_n_written", n=len(written)))
         return {p.relative_to(out).as_posix(): p.read_bytes() for p in sorted(out.rglob("*")) if p.is_file()}
 
 
-PART = Part("islands", N_("Islands"), has_work, render)
+PART = Part("islands", N_("common.islands"), has_work, render)

@@ -25,6 +25,7 @@ from ..modloader.resolve import Resolution, resolve, resolve_profile
 from . import assetdiff
 from .assetgame import TEXT_KEYS, Game
 from .changeset import Carried, ChangeSet, NewAsset
+from .gamefiles import Layout
 from .xmltree import to_text
 
 SHOWN = 12  # lines of each kind the summary shows
@@ -35,7 +36,7 @@ class Imported:
     changes: ChangeSet
     mods: list[Mod]
     events: list[Event] = field(default_factory=list)
-    forms: Counter = field(default_factory=Counter)  # changed assets by the form they took (``assetdiff``)
+    forms: Counter[str] = field(default_factory=Counter)  # changed assets by the form they took (``assetdiff``)
     added: list[int] = field(default_factory=list)
     changed: list[int] = field(default_factory=list)
     removed: list[int] = field(default_factory=list)
@@ -59,16 +60,16 @@ class Imported:
 
     def lines(self) -> list[str]:
         out = [
-            tr("archive {name}", name=self.archive)
+            tr("assets.archive_name", name=self.archive)
             if self.archive
             else tr(
-                "{n} mod(s): {list}",
+                "assets.n_mods_list",
                 n=len(self.mods),
                 list=", ".join(f"{m.mod_id} {m.version}".strip() for m in self.mods),
             ),
             *(self.resolution.lines() if self.resolution else []),
             tr(
-                "assets: {added} added, {changed} changed, {removed} removed; {values} values; forms: {forms}",
+                "assets.assets_added_changed_removed_values",
                 added=len(self.added),
                 changed=len(self.changed),
                 removed=len(self.removed),
@@ -76,27 +77,27 @@ class Imported:
                 forms=", ".join(f"{n} {k}" for k, n in sorted(self.forms.items())),
             ),
             tr(
-                "texts: {list}",
-                list=", ".join(f"{lang} {n}" for lang, n in sorted(self.texts.items())) or tr("none"),
+                "assets.texts_list",
+                list=", ".join(f"{lang} {n}" for lang, n in sorted(self.texts.items())) or tr("common.none"),
             ),
-            tr("carried files (written with the mod as they are): {n}", n=len(self.carried)),
+            tr("assets.carried_files_written_mod_they", n=len(self.carried)),
         ]
         sections = (
-            (N_("operations that matched nothing or that the loader drops"), [e.line() for e in self.dropped]),
-            (N_("conditions on other mods (the import took this branch)"), [e.line() for e in self.conditional]),
-            (N_("changed by more than one mod (the change set keeps the end result)"), self._overrides()),
-            (N_("what the change set cannot hold"), self.lost),
+            (N_("assets.operations_matched_nothing_loader_drops"), [e.line() for e in self.dropped]),
+            (N_("assets.conditions_other_mods_import_took"), [e.line() for e in self.conditional]),
+            (N_("assets.changed_more_one_mod_change"), self._overrides()),
+            (N_("assets.what_change_set_cannot_hold"), self.lost),
         )
         for title, rows in sections:
             if rows:
                 out.append(f"{tr(title)}: {len(rows)}")
                 out += [f"  {r}" for r in rows[:SHOWN]] + (
-                    ["  " + tr("... and {n} more", n=len(rows) - SHOWN)] if len(rows) > SHOWN else []
+                    ["  " + tr("assets.and_n_more", n=len(rows) - SHOWN)] if len(rows) > SHOWN else []
                 )
         return out
 
     def _overrides(self) -> list[str]:
-        return [f"{g}: {f' {tr("then")} '.join(ms)}" for g, ms in sorted(self.overridden.items()) if len(ms) > 1]
+        return [f"{g}: {f' {tr("assets.then")} '.join(ms)}" for g, ms in sorted(self.overridden.items()) if len(ms) > 1]
 
 
 def import_folder(
@@ -126,7 +127,9 @@ def _own_mods(primary: Mod) -> list[Mod]:
     return out
 
 
-def import_profile(game: Game, profile: Path, folders: list[Path], progress=None) -> Imported:
+def import_profile(
+    game: Game, profile: Path, folders: list[Path], progress: Callable[[str], None] | None = None
+) -> Imported:
     """The mods ``profile`` switches on, found in ``folders`` (the loader's), with their nested mods, in the loader's
     order."""
     found, notes = modlist.find_mods(folders, GAME_NUMBER.get(game.layout.key))
@@ -136,7 +139,7 @@ def import_profile(game: Game, profile: Path, folders: list[Path], progress=None
     if not res.order:
         raise ValueError(
             tr(
-                "the profile {profile} switches on no mod found in {folders}",
+                "assets.profile_switches_no_mod_found",
                 profile=profile,
                 folders=", ".join(map(str, folders)),
             )
@@ -151,7 +154,7 @@ def import_mods(
     game: Game,
     mods: list[Mod],
     variables: Variables,
-    progress=None,
+    progress: Callable[[str], None] | None = None,
     resolution: Resolution | None = None,
     primary: Mod | None = None,
 ) -> Imported:
@@ -181,9 +184,9 @@ def import_mods(
     result.overridden = {g: ms for g, ms in run.touched.items() if g in changes.assets}
     if len(mods) > 1:
         result.lost.append(
-            tr("{n} mods in one change set: it takes the identity of {id}", n=len(mods), id=last.mod_id)
+            tr("assets.mods_one_change_set_takes", n=len(mods), id=last.mod_id)
             if primary
-            else tr("{n} mods in one change set: it takes the identity of the last, {id}", n=len(mods), id=last.mod_id)
+            else tr("assets.mods_one_change_set_takes_identity", n=len(mods), id=last.mod_id)
         )
     return result
 
@@ -223,7 +226,7 @@ def _leave_out_required(run: _Run, own: set[str], result: Imported) -> None:
     if foreign:
         result.lost.append(
             tr(
-                "{n} asset(s) only a required mod ({mods}) changes are left to it: the built mod requires it instead",
+                "assets.assets_only_required_mod_changes",
                 n=len(foreign),
                 mods=", ".join(changes.requires),
             )
@@ -271,7 +274,7 @@ def _new_assets(doc: PatchDoc, known: set[int], result: Imported) -> None:
         for k, (asset, guid) in enumerate(zip(row, guids, strict=True)):
             if guid is not None and guid not in known:
                 if guid in seen:
-                    result.lost.append(tr("asset {guid} was added twice; the change set keeps the first", guid=guid))
+                    result.lost.append(tr("assets.asset_added_twice_change_set", guid=guid))
                 else:
                     seen.add(guid)
                     anchor, place = (prev, "after") if prev is not None else (after_known[k + 1], "before")
@@ -281,9 +284,7 @@ def _new_assets(doc: PatchDoc, known: set[int], result: Imported) -> None:
 
 def _add_new(result: Imported, guid: int, asset: ET.Element, anchor: int | None, place: str) -> None:
     if anchor is None:
-        result.lost.append(
-            tr("asset {guid} stands alone in its list: written to the asset file's default group", guid=guid)
-        )
+        result.lost.append(tr("assets.asset_stands_alone_list_written", guid=guid))
     base = (asset.findtext("BaseAssetGUID") or "").strip()
     template = (asset.findtext("Template") or "").strip()
     name = (asset.findtext("Values/Standard/Name") or "").strip()
@@ -302,6 +303,16 @@ def _num(doc: PatchDoc, asset: ET.Element | None) -> int | None:
     return int(text) if text.strip().isdigit() else None
 
 
+def load_or_report(data: bytes, path: str, result: Imported) -> PatchDoc | None:
+    """The file ``path`` as a document; one that is not valid XML is one finding of ``result`` and None, so the rest
+    of the import goes on."""
+    try:
+        return PatchDoc.load(data)
+    except ET.ParseError as exc:
+        result.lost.append(tr("assets.file_not_valid_xml_left_out", path=path, error=str(exc)))
+        return None
+
+
 def _texts(game: Game, session: Session, result: Imported) -> None:
     pattern = game.layout.texts
     if not pattern:
@@ -315,8 +326,10 @@ def _texts(game: Game, session: Session, result: Imported) -> None:
         if language == "metadata":
             continue
         base = session.read_base(path)
-        vanilla = PatchDoc.load(base).roots[0] if base else None
-        changed, lost = assetdiff.text_changes(vanilla, doc.roots[0], key)
+        vanilla = load_or_report(base, path, result) if base else None
+        if base and vanilla is None:
+            continue  # against no game file every text would count as changed
+        changed, lost = assetdiff.text_changes(vanilla.roots[0] if vanilla else None, doc.roots[0], key)
         if changed:
             result.changes.texts[language] = changed
             result.texts[language] = len(changed)
@@ -337,7 +350,7 @@ def _carry(game: Game, mods: list[Mod], result: Imported) -> None:
             if low in seen:
                 result.lost.append(
                     tr(
-                        "{path}: both {first} and {second} have it; the build keeps {second}'s",
+                        "assets.both_build_keeps_s",
                         path=rel,
                         first=seen[low],
                         second=mod.mod_id,
@@ -349,7 +362,7 @@ def _carry(game: Game, mods: list[Mod], result: Imported) -> None:
         result.changes.carry.append(Carried(str(mod.folder), sorted(owned)))
 
 
-def _text_paths(layout, result: Imported) -> list[str]:
+def _text_paths(layout: Layout, result: Imported) -> list[str]:
     """The language files the change set writes: those it holds texts for, and those the mods patch."""
     if not layout.texts:
         return []

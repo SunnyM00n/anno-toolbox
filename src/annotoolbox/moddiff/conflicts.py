@@ -13,19 +13,24 @@ from .model import (
     ADDED,
     ASSET,
     BLOCK,
+    BYTES,
     CHANGED,
     CONFLICT,
     DUPLICATE,
     FILE,
     GONE,
+    LATE_PHASE,
+    LOAD_AFTER,
+    NAME_ORDER,
+    ORDER,
     OVERLAP,
     REMOVED,
+    SET_VALUE,
     VALUE,
+    VALUES,
     Conflict,
     Target,
 )
-
-LATE_PHASE, LOAD_AFTER, NAME_ORDER, ORDER = "late phase", "LoadAfter", "name order", "order"
 
 
 def find_conflicts(steps: list[ModEffect]) -> list[Conflict]:
@@ -71,7 +76,7 @@ def _of_target(ident: tuple[str, str], users: list[tuple[ModEffect, Target | Non
     out: list[Conflict] = []
     added = [(s, t) for s, t in real if t.kind == ADDED]
     if len(added) > 1:
-        out.append(_make(DUPLICATE, CONFLICT, head, "", [s for s, _t in added], ["added"] * len(added)))
+        out.append(_make(DUPLICATE, CONFLICT, head, "", [s for s, _t in added], [ADDED] * len(added)))
     removed = [(s, t) for s, t in real if t.kind == REMOVED]
     if removed and len(removed) < len(users):
         who = [s for s, _t in users]
@@ -83,8 +88,8 @@ def _of_target(ident: tuple[str, str], users: list[tuple[ModEffect, Target | Non
 
 def _what(target: Target | None) -> str:
     if target is None:
-        return "set a value"
-    return {ADDED: "added", REMOVED: "removed"}.get(target.kind, f"{len(target.changes)} value(s)")
+        return SET_VALUE
+    return target.kind if target.kind in (ADDED, REMOVED) else f"{len(target.changes)} {VALUES}"
 
 
 def _paths(step: ModEffect, target: Target | None, ident: tuple[str, str]) -> dict[str, str | None]:
@@ -118,7 +123,7 @@ def _of_values(head: Target, users: list[tuple[ModEffect, Target | None]]) -> li
                     out.append(_make(BLOCK, CONFLICT, head, outer, [s for s, _a in order], [a for _s, a in order]))
     if not out and len(changing) > 1:
         mods = [s for s, _t in changing]
-        counts = [f"{len(t.changes)} value(s)" for _s, t in changing]
+        counts = [f"{len(t.changes)} {VALUES}" for _s, t in changing]
         out.append(_make(ASSET, OVERLAP, head, "", mods, counts))
     return out
 
@@ -145,6 +150,6 @@ def _of_files(steps: list[ModEffect]) -> list[Conflict]:
             same = len({d for _s, _n, d in who}) == 1 and bool(who[0][2])  # one content: nothing is lost
             out.append(
                 Conflict(FILE, OVERLAP if same else CONFLICT, path, "", "", "", tuple(s.mod_id for s in steps_),
-                         tuple(f"{n} bytes" for _s, n, _d in who), steps_[-1].mod_id, decided_by(steps_[:-1], steps_[-1]))
+                         tuple(f"{n} {BYTES}" for _s, n, _d in who), steps_[-1].mod_id, decided_by(steps_[:-1], steps_[-1]))
             )  # fmt: skip
     return out

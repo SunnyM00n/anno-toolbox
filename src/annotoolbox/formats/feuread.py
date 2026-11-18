@@ -364,11 +364,14 @@ class Placement:
     head: bytes  # the bytes before the matrix (flags, depth, class name, character id)
     matrix_raw: bytes  # the matrix as stored, empty when there is none
     tail: bytes  # everything after the matrix
+    clip_depth: int = 0  # the last depth a mask placement covers (flag 0x40)
+    blend: int = 0  # PlaceObject3's blend mode (flag 0x0200), 0 when none or when filters come first
 
 
 # fmt: off
 PLACE_MOVE, PLACE_HAS_CHAR, PLACE_HAS_MATRIX, PLACE_HAS_CXFORM = 0x01, 0x02, 0x04, 0x08
 PLACE_HAS_RATIO, PLACE_HAS_NAME, PLACE_HAS_CLIP_DEPTH, PLACE_HAS_ACTIONS = 0x10, 0x20, 0x40, 0x80
+PLACE3_HAS_FILTERS, PLACE3_HAS_BLEND = 0x0100, 0x0200  # PlaceObject3's second byte
 PLACE3_HAS_CLASS_NAME = 0x0800  # PlaceObject3's second byte, bit 3 (in the high byte here)
 # fmt: on
 
@@ -399,9 +402,15 @@ def read_placement(tag: Tag) -> Placement:
         pos += 2
     if flags & PLACE_HAS_NAME:
         name, pos = cstr(body, pos)
+    clip = blend = 0
+    if flags & PLACE_HAS_CLIP_DEPTH:
+        clip = struct.unpack_from("<H", body, pos)[0]
+        pos += 2
+    if flags & PLACE3_HAS_BLEND and not flags & PLACE3_HAS_FILTERS and pos < len(body):
+        blend = body[pos]
     return Placement(
         tag.code, flags, depth, char, class_name, matrix, name, body[:head_end], body[head_end:matrix_end],
-        body[matrix_end:],
+        body[matrix_end:], clip, blend,
     )  # fmt: skip
 
 

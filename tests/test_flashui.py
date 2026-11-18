@@ -174,7 +174,9 @@ def test_the_preview_draws_the_stage_and_a_sprite_offscreen():
     assert 6 <= sprite.width() <= 12 and sprite.height() >= 2
 
 
-def test_the_window_opens_a_game_a_movie_and_edits_it(tmp_path: Path):
+@pytest.fixture
+def editor(tmp_path: Path, monkeypatch):
+    """``editor(game folder or "")``: the Flash page's window offscreen, its settings under ``tmp_path``."""
     pytest.importorskip("PySide6")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QSettings
@@ -184,8 +186,21 @@ def test_the_window_opens_a_game_a_movie_and_edits_it(tmp_path: Path):
 
     QApplication.instance() or QApplication([])
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "settings"))  # not the user's
-    game = make_game(tmp_path, ui_files())
-    window = EditorWindow(str(game), str(tmp_path / "edits.json"))
+    monkeypatch.setattr(EditorWindow, "sync", True)  # the folder indexed on the test's thread
+    made = []
+
+    def make(game: str = ""):
+        made.append(EditorWindow(game, str(tmp_path / "edits.json") if game else None, last_game=bool(game)))
+        return made[-1]
+
+    yield make
+    for window in made:
+        window.project.saved = window.project.to_json()  # closing asks about unsaved edits otherwise
+        window.close()
+
+
+def test_the_window_opens_a_game_a_movie_and_edits_it(tmp_path: Path, editor):
+    window = editor(str(make_game(tmp_path, ui_files())))
     assert window.movies.count() == 1
     window.movies.setCurrentRow(0)
     assert window.tree.topLevelItem(0).text(0) == "test_menu.feu"
@@ -199,20 +214,12 @@ def test_the_window_opens_a_game_a_movie_and_edits_it(tmp_path: Path):
     window.undo()
     window.save()
     assert Project.load(tmp_path / "edits.json").edits == {}  # the undone edit is not saved
-    window.close()
 
 
-def test_the_window_asks_before_unsaved_edits_are_dropped(tmp_path: Path, monkeypatch):
-    pytest.importorskip("PySide6")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtCore import QSettings
-    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+def test_the_window_asks_before_unsaved_edits_are_dropped(tmp_path: Path, monkeypatch, editor):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-    from annotoolbox.flashui.uiwindow import EditorWindow
-
-    QApplication.instance() or QApplication([])
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "settings"))
-    window = EditorWindow(str(make_game(tmp_path, ui_files())), str(tmp_path / "edits.json"))
+    window = editor(str(make_game(tmp_path, ui_files())))
     window.movies.setCurrentRow(0)
     window._edit("text", 5, {"text": "Hallo"})
     assert window.project.unsaved
@@ -229,17 +236,10 @@ def test_the_window_asks_before_unsaved_edits_are_dropped(tmp_path: Path, monkey
     assert Project.load(tmp_path / "edits.json").edits  # kept on the way out
 
 
-def test_a_cancelled_build_folder_is_not_kept_and_can_be_chosen_again(tmp_path: Path, monkeypatch):
-    pytest.importorskip("PySide6")
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtCore import QSettings
-    from PySide6.QtWidgets import QApplication, QFileDialog
+def test_a_cancelled_build_folder_is_not_kept_and_can_be_chosen_again(tmp_path: Path, monkeypatch, editor):
+    from PySide6.QtWidgets import QFileDialog
 
-    from annotoolbox.flashui.uiwindow import EditorWindow
-
-    QApplication.instance() or QApplication([])
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "settings"))
-    window = EditorWindow(last_game=False)
+    window = editor()
     window.settings.setValue("out", ".")  # what a cancelled dialog of an earlier version kept
     answers = [""]
     monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_a, **_k: answers[0])
@@ -252,7 +252,68 @@ def test_a_cancelled_build_folder_is_not_kept_and_can_be_chosen_again(tmp_path: 
         window.choose_out() == (tmp_path / "other").resolve()
         and window._out()[0].parent == (tmp_path / "other").resolve()
     )
-    window.close()
+
+
+def test_a_movie_that_does_not_read_is_said_and_another_game_folder_shows_nothing_of_the_one_before(tmp_path, editor):
+    broken = "data/ui/broken_menu.feu"
+    window = editor(str(make_game(tmp_path / "a", ui_files() | {broken: b"not a movie"})))
+    assert window.movies.count() == 2
+    window.open_movie(MOVIE)
+    window._atlas_pictures["data/ui/blobs/icons.png"] = object()  # cut from this folder's atlas
+    assert window.doc is not None and window.tree.topLevelItemCount() == 1
+    window.open_movie(broken)
+    assert window.doc is None and window.tree.topLevelItemCount() == 0 and broken in window.statusBar().currentMessage()
+    window.open_movie(MOVIE)
+    assert window.open_game(str(make_game(tmp_path / "b", ui_files())))
+    assert window.doc is None and window.node is None and window._atlas_pictures == {}
+    assert window.tree.topLevelItemCount() == 0 and not window.undo_action.isEnabled()
+
+
+def test_a_game_folder_is_indexed_off_the_window_thread_and_the_one_asked_for_last_opens(tmp_path, monkeypatch, editor):
+    import threading
+
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.othergames import ui2205
+
+    window = editor("")
+    monkeypatch.setattr(type(window), "sync", False)
+    release, readers = threading.Event(), []
+    real = ui2205.UiFiles.movies
+
+    def slow(self):
+        readers.append(threading.current_thread())
+        assert release.wait(30)
+        return real(self)
+
+    monkeypatch.setattr(ui2205.UiFiles, "movies", slow)
+    first, second = make_game(tmp_path / "a", ui_files()), make_game(tmp_path / "b", ui_files())
+    assert window.open_game(str(first)) and window.open_game(str(second))
+    assert window.ui is None and window.movies.count() == 0 and str(second) in window.statusBar().currentMessage()
+    release.set()
+    window.background.join()
+    QApplication.processEvents()
+    assert len(readers) == 2 and threading.main_thread() not in readers
+    assert window.game == second and window.movies.count() == len(window.movie_paths) > 0
+    assert not window.open_game(str(tmp_path / "nothing")) and window.game == second
+
+
+def test_an_install_without_a_game_folder_and_an_export_that_cannot_be_written_say_so(tmp_path, monkeypatch, editor):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _w, _t, text, *_a: shown.append(text))
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *_a, **_k: shown.append("asked") or "")
+    window = editor()
+    for command in (window.install, window.uninstall):
+        command()
+        assert shown == [] and window.statusBar().currentMessage() == "open a game folder first"
+        window.statusBar().clearMessage()
+    window = editor(str(make_game(tmp_path, ui_files())))
+    window.open_movie(MOVIE)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(tmp_path / "none" / "m.swf"), ""))
+    window._export_swf()
+    assert len(shown) == 1 and "m.swf" in shown[0]
 
 
 def test_an_edit_file_is_written_whole_and_a_bom_reads(tmp_path: Path, monkeypatch):

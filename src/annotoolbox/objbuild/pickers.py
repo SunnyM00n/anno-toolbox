@@ -23,7 +23,7 @@ def pick_file(parent, name: str, hint: str, find: Callable[[str], list[str]], cu
     def rows(query: str) -> list[tuple[str, object]]:
         return [(path, path) for path in find(query)]
 
-    title = tr("Pick a file for {name}", name=name)
+    title = tr("assets.pick_file_name", name=name)
     return pick_from_list(parent, title, hint, rows, value=current, size=(640, 480))
 
 
@@ -32,7 +32,7 @@ class FlagsDialog(QDialog):
 
     def __init__(self, parent, name: str, names: tuple[str, ...], value: int) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Bits of {name}", name=name))
+        self.setWindowTitle(tr("common.title.bits_of_name", name=name))
         self.names, self.kept = names, value & ~((1 << len(names)) - 1)
         self.list = QListWidget()
         for bit, text in enumerate(names):
@@ -44,8 +44,8 @@ class FlagsDialog(QDialog):
         layout = QVBoxLayout(self)
         for widget in (self.list, self.total, ok_cancel(self)):
             layout.addWidget(widget)
-        self.list.itemChanged.connect(lambda _i: self.total.setText(tr("= {value}", value=self.value())))
-        self.total.setText(tr("= {value}", value=self.value()))
+        self.list.itemChanged.connect(lambda _i: self.total.setText(tr("common.eq_value", value=self.value())))
+        self.total.setText(tr("common.eq_value", value=self.value()))
         self.resize(360, 520)
 
     def value(self) -> int:

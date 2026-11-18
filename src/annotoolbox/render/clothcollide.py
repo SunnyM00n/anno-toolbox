@@ -95,10 +95,11 @@ class Box:
 def kind_name(kind) -> str:
     """A ``CollisionType`` as its name: the files write the name, the game reads it as an index."""
     text = str(kind or "").strip()
-    return KINDS[int(text)] if text.isdigit() and int(text) < len(KINDS) else text
+    # isdecimal: a digit int() cannot read (a superscript) is a name like any other, not an index
+    return KINDS[int(text)] if text.isdecimal() and int(text) < len(KINDS) else text
 
 
-def collider(kind, matrix: np.ndarray, values: Mapping[str, str]):
+def collider(kind, matrix: np.ndarray, values: Mapping[str, str]) -> Capsule | Sphere | Plane | Box | None:
     """A collision part as a shape in the cloth's space (``matrix``: the part's space -> the cloth's, its uniform
     scale ``s`` the mean of the axes' lengths); None for a kind without a shape."""
     kind = kind_name(kind)

@@ -1,5 +1,6 @@
 """The text editor's core on synthetic text files of every style: reading, writing back, the status of a row, the
-checks, the glossary, the exchange formats and what a project's texts become as files."""
+checks, the glossary, the exchange formats (odd CSV, XLIFF and PO input too), 117's twin lines and what a project's
+texts become as files, alone and with the asset editor's."""
 
 from __future__ import annotations
 
@@ -8,9 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from annotoolbox.assetedit import projectpart as assetpart
+from annotoolbox.assetedit.changeset import ChangeSet
 from annotoolbox.assetedit.gamefiles import LAYOUTS, folder_files
 from annotoolbox.suite.project import Project
-from annotoolbox.textedit import checks, exchange, projectpart, render, textfiles, texttable
+from annotoolbox.textedit import checks, exchange, merged, projectpart, render, textfiles, texttable
 from annotoolbox.textedit.editfile import Edit, EditFile
 from annotoolbox.textedit.glossary import Glossary, game_terms
 from annotoolbox.textedit.textdoc import CHANGED, NEW, OUTDATED, TRANSLATED, UNTRANSLATED, Filter, TextDoc
@@ -110,6 +113,27 @@ def test_a_file_without_a_signature_and_the_other_byte_order_keep_their_encoding
         assert parsed.render({"1": "a"}) == raw
 
 
+def test_a_file_with_a_broken_byte_is_written_back_with_that_byte_when_another_text_changes():
+    raw = b"<TextExport><Texts><Text><LineId>1</LineId><Text>a\xffb</Text></Text><Text><LineId>2</LineId><Text>x</Text></Text></Texts></TextExport>"
+    parsed = textfiles.parse("t.xml", raw, textfiles.XML)
+    assert parsed.render({"2": "y"}) == raw.replace(b">x<", b">y<")
+    utf16 = b"\xff\xfe" + "1=a".encode("utf-16-le") + b"\x00\xd8" + "\n2=x\n".encode("utf-16-le")  # a lone surrogate
+    lines = textfiles.parse("t.txt", utf16, textfiles.LINES)
+    assert lines.render({"2": "y"}) == utf16.replace(b"x\x00", b"y\x00")
+
+
+def test_an_entity_that_is_no_character_is_left_as_it_is_and_does_not_stop_the_file_from_reading():
+    raw = b"<TextExport><Texts><Text><LineId>1</LineId><Text>a&#xD800;b&#0;c&#1114112;d&#65;</Text></Text></Texts></TextExport>"
+    value = textfiles.parse("t.xml", raw, textfiles.XML).slots[0].value
+    assert value == "a&#xD800;b&#0;c&#1114112;dA"
+
+
+def test_a_line_file_never_gets_a_real_line_break_which_would_start_another_line():
+    parsed = textfiles.parse("t.txt", _utf16("1=a\r\n2=b\r\n"), textfiles.LINES)
+    out = parsed.render({"1": "x\r\ny\nz"}, {"3": "p\nq"})[2:].decode("utf-16-le")
+    assert out == "1=x<br/>y<br/>z\r\n2=b\r\n3=p<br/>q\r\n"
+
+
 # the tables
 def test_languages_are_the_files_the_game_holds_and_a_double_key_follows_the_games_rule(game117, game2070, tmp_path):
     assert texttable.languages(game117, LAYOUTS["anno117"]) == {"english": "english", "german": "german"}
@@ -176,6 +200,86 @@ def test_the_rows_are_filtered_by_status_file_group_words_and_problems(game117, 
     assert old.files_listed() == ["data/loca/eng/txt/addon/more.txt", "data/loca/eng/txt/interface.txt"]
     assert old.rows(Filter(file="data/loca/eng/txt/addon/more.txt")) == ["300"]
     assert old.counts()[TRANSLATED] == 2  # 100 and 101 have a German text the source does not equal
+
+
+def test_applying_a_text_that_is_already_there_is_no_edit_to_undo_or_to_save(tmp_path):
+    doc = _doc(_write(tmp_path, {"data/base/config/gui/texts_english.xml": XML_117,
+                                 "data/base/config/gui/texts_german.xml": GERMAN_117}))  # fmt: skip
+    doc.edit("-13", "Holz")
+    assert not doc.undo_stack and not doc.dirty
+    doc.edit("-13", "Holzstamm")
+    doc.dirty = False
+    doc.edit("-13", "Holzstamm")
+    assert len(doc.undo_stack) == 1 and not doc.dirty
+
+
+def test_a_translation_typed_again_after_the_source_was_edited_confirms_it_instead_of_staying_outdated(tmp_path):
+    doc = _doc(_write(tmp_path, {"data/base/config/gui/texts_english.xml": XML_117,
+                                 "data/base/config/gui/texts_german.xml": GERMAN_117}))  # fmt: skip
+    doc.edit("-13", "Wood and more", "english")
+    assert doc.status("-13") == OUTDATED
+    assert doc.edit("-13", "Holz") == CHANGED  # the person read the new source and kept the translation
+    assert doc.edits.get("german", "-13").source == "Wood and more"
+    assert doc.revert("-13") == OUTDATED
+
+
+def test_a_text_with_windows_line_ends_is_stored_with_the_plain_break(tmp_path):
+    doc = _doc(_write(tmp_path, {"data/base/config/gui/texts_english.xml": XML_117,
+                                 "data/base/config/gui/texts_german.xml": GERMAN_117}))  # fmt: skip
+    doc.edit("-13", "a\r\nb\rc")
+    assert doc.target_text("-13") == "a\nb\nc"
+    out = render.render(doc.files, doc.layout, doc.edits, "m", lambda _s: None)["data/base/config/gui/texts_german.xml"]
+    assert b"\r\r" not in out
+
+
+# 117's text groups and twin lines
+META_TWINS = (
+    "<TextExport><Texts>"
+    "<Text><LineId>-20</LineId><Name>Quest Hello</Name><FolderId>-777</FolderId></Text>"
+    "<Text><LineId>-21</LineId><Name>Quest Hello</Name><FolderId>-777</FolderId><MasterId>-20</MasterId><VariationId>-900</VariationId></Text>"
+    "<Text><LineId>-22</LineId><Name>Quest Hello</Name><FolderId>-777</FolderId><MasterId>-20</MasterId><VariationId>-901</VariationId></Text>"
+    "<Text><LineId>-23</LineId><Name>Other</Name><FolderId>-778</FolderId></Text>"
+    "</Texts></TextExport>"
+)
+
+
+def _entries(*items: tuple[str, str]) -> str:
+    body = "".join(f"<Text><LineId>{k}</LineId><Text>{v}</Text></Text>" for k, v in items)
+    return f"<TextExport><Texts>{body}</Texts></TextExport>"
+
+
+@pytest.fixture
+def twin_game(tmp_path):
+    gui = "data/base/config/gui/"
+    english = _entries(("-22", "Hello Marcia"), ("-23", "Other"), ("-20", "Hello Marcus"), ("-21", "Hello Marcus"))
+    german = _entries(("-20", "Hello Marcus"), ("-21", "Hello Marcus"), ("-22", "Hello Marcia"), ("-23", "Anderes"))
+    return _write(
+        tmp_path,
+        {gui + "texts_english.xml": english, gui + "texts_german.xml": german, gui + "texts_metadata.xml": META_TWINS},
+    )
+
+
+def test_the_metadata_names_the_group_the_main_line_and_the_kind_of_a_variation(twin_game):
+    table = texttable.read_language(
+        twin_game, LAYOUTS["anno117"], "english", texttable.read_names(twin_game, LAYOUTS["anno117"])
+    ).table
+    assert table.get("-21").master == "-20" and table.get("-21").kind == "-900" and table.get("-20").folder == "-777"
+    assert table.twins == {"-20": ["-22", "-21"]}  # in the file's order
+
+
+def test_a_variation_is_listed_behind_its_main_line_and_both_know_each_other(twin_game):
+    doc = _doc(twin_game)
+    assert doc.ids() == ["-23", "-20", "-22", "-21"]  # the file lists -22 first: it stands behind -20 all the same
+    assert doc.twins_of("-20") == ["-22", "-21"] and doc.twins_of("-21") == ["-20", "-22"] and doc.twins_of("-23") == []
+
+
+def test_a_translation_fills_the_twins_that_have_the_very_same_source_only(twin_game):
+    doc = _doc(twin_game)
+    doc.edit("-20", "Hallo Marcus")
+    assert doc.fill_twins("-20") == 1
+    assert doc.target_text("-21") == "Hallo Marcus" and doc.target_text("-22") == "Hello Marcia"
+    assert doc.undo().startswith("fill the twins") and doc.target_text("-21") == "Hello Marcus"
+    assert doc.status("-21") == UNTRANSLATED and doc.status("-20") == CHANGED and TRANSLATED
 
 
 # the checks
@@ -257,6 +361,86 @@ def test_the_edit_file_round_trips_and_a_file_of_another_format_is_refused(tmp_p
         EditFile.load(path)
 
 
+def test_a_po_text_with_characters_python_takes_for_line_ends_comes_back_whole():
+    odd = "a b\x85c\x0cd\x1ce"
+    rows = [exchange.Row("-1", odd, odd + "!", "f.xml", "", "")]
+    back = exchange.read("po", exchange.write("po", rows, "g", "english", "german"))
+    assert (back[0].source, back[0].target) == (odd, odd + "!")
+
+
+def test_a_po_file_without_blank_lines_between_entries_and_with_a_header_and_plurals_reads():
+    po = (
+        b'msgid ""\nmsgstr ""\n"Language: de\\n"\n\n'
+        b'#, fuzzy\nmsgctxt "-1"\nmsgid "One"\nmsgstr "Eins"\nmsgctxt "-2"\nmsgid "Two"\nmsgid_plural "Twos"\n'
+        b'msgstr[0] "Zwei"\nmsgstr ""\n"zwei"\n#~ msgid "gone"\n'
+    )
+    rows = exchange.read("po", po)
+    assert [(r.id, r.target, r.status) for r in rows] == [("-1", "Eins", OUTDATED), ("-2", "zwei", "")]
+
+
+def test_a_csv_from_a_german_spreadsheet_is_read_with_its_semicolons_and_in_utf16():
+    text = 'ID;Target;Source\r\n-1;Eins, zwei;One\r\n-2;"a;b\r\nc";Two\r\n'
+    for data in (text.encode("utf-8-sig"), text.encode("utf-16")):
+        rows = exchange.read("csv", data)
+        assert [(r.id, r.target, r.source) for r in rows] == [("-1", "Eins, zwei", "One"), ("-2", "a;b\r\nc", "Two")]
+    with pytest.raises(ValueError, match="columns"):
+        exchange.read("csv", b"")
+    tabbed = "id\ttarget\r\n-1\tx\r\n".encode("utf-16")
+    assert exchange.read("csv", tabbed)[0].target == "x"
+
+
+def test_a_csv_status_column_is_not_taken_for_a_review_request():
+    rows = exchange.read("csv", b"id,target,status\r\n-1,x,outdated\r\n")
+    assert rows[0].status == ""
+
+
+def test_xliff_2_is_read_and_a_unit_that_asks_for_a_review_becomes_outdated():
+    v2 = (
+        b'<xliff version="2.0" xmlns="urn:oasis:names:tc:xliff:document:2.0" srcLang="en" trgLang="de"><file id="f">'
+        b'<unit id="-1"><segment state="translated"><source>One</source><target>Eins</target></segment></unit>'
+        b'<unit id="-2"><segment state="initial"><source>Two</source><target>Zwei</target></segment></unit></file></xliff>'
+    )
+    assert [(r.id, r.target, r.status) for r in exchange.read("xliff", v2)] == [("-1", "Eins", ""), ("-2", "Zwei", "")]
+    v1 = (
+        b'<xliff version="1.2"><file><body><trans-unit id="-1"><source>a</source>'
+        b'<target state="needs-review-translation">b</target></trans-unit></body></file></xliff>'
+    )
+    assert exchange.read("xliff", v1)[0].status == OUTDATED
+
+
+def test_an_imported_review_request_marks_the_text_outdated_and_a_text_twice_counts_once(tmp_path):
+    doc = _doc(_write(tmp_path, {"data/base/config/gui/texts_english.xml": XML_117,
+                                 "data/base/config/gui/texts_german.xml": GERMAN_117}))  # fmt: skip
+    rows = [
+        exchange.Row("-13", "Wood", "Erster", status=OUTDATED),
+        exchange.Row("-13", "Wood", "Holzscheit", status=OUTDATED),
+        exchange.Row("-10", "", "Speichern {0} <b>jetzt</b>x\r\ny"),
+    ]
+    result = exchange.apply(doc, rows)
+    assert result.applied == 2 and doc.target_text("-13") == "Holzscheit" and doc.status("-13") == OUTDATED
+    assert doc.target_text("-10").endswith("x\ny")
+    assert doc.edit("-13", "Holzscheit") == CHANGED  # the person applying the text confirms it: the request is cleared
+
+
+def test_a_new_text_added_by_an_import_without_a_source_column_has_no_empty_source_edit(tmp_path):
+    doc = _doc(_write(tmp_path, {"data/base/config/gui/texts_english.xml": XML_117,
+                                 "data/base/config/gui/texts_german.xml": GERMAN_117}))  # fmt: skip
+    result = exchange.apply(doc, [exchange.Row("-900", "", "Neu")], add_new=True)
+    assert result.added == 1 and doc.edits.get("english", "-900") is None and doc.target_text("-900") == "Neu"
+
+
+def test_an_edit_file_with_odd_types_is_read_as_text_not_kept_as_it_is(tmp_path):
+    path = tmp_path / "e.json"
+    path.write_text(
+        '{"format": 1, "texts": {"german": {"7": {"text": 5, "source": 6}}}, "glossary": {"german": {"a": 1}}}'
+    )
+    edits = EditFile.load(path)
+    assert edits.get("german", "7") == Edit("5", "6") and edits.glossary == {"german": {"a": "1"}}
+    path.write_text('{"format": 1, "glossary": {"german": ["a"]}}')
+    with pytest.raises(ValueError, match="not a text edit file"):
+        EditFile.load(path)
+
+
 # what the project writes
 def test_117_gets_a_modops_per_language_and_a_new_id_in_every_language(game117):
     edits = EditFile(
@@ -310,3 +494,46 @@ def test_the_project_part_writes_what_the_edits_file_holds(game117, tmp_path):
     assert "Holzstamm" in out["data/base/config/gui/texts_german.xml"].decode() and logged[-1].startswith(
         "texts: 1 texts"
     )
+
+
+def test_a_new_id_of_a_line_game_is_one_line_in_the_mods_own_file(tmp_path):
+    files = _write(tmp_path, {"data/loca/eng/txt/a.txt": _utf16("1=a\r\n")})
+    edits = EditFile("anno2070", "english", {"english": {"9": Edit("two\nlines")}})
+    out = render.render(files, LAYOUTS["anno2070"], edits, "my-mod", lambda _s: None)
+    assert out["data/loca/eng/txt/my-mod.txt"][2:].decode("utf-16-le") == "9=two<br/>lines\r\n"
+
+
+# one writer for both apps (docs/text-editor.md, that section)
+def test_the_two_apps_texts_are_combined_and_a_text_both_changed_differently_is_a_conflict():
+    edits = EditFile("anno117", "english", {"german": {"-13": Edit("Holzstamm", "Wood")}})
+    combined, conflicts = merged.combine(edits, {"german": {"-13": "Balken", "-10": "Eins"}, "english": {"-13": "Log"}})
+    assert {k: e.text for k, e in combined.texts["german"].items()} == {"-13": "Holzstamm", "-10": "Eins"}
+    assert (
+        combined.texts["english"]["-13"].text == "Log" and edits.count() == 1
+    )  # the file's own edits stay as they are
+    assert [(c.language, c.key, c.kept, c.dropped) for c in conflicts] == [("german", "-13", "Holzstamm", "Balken")]
+    same, none = merged.combine(edits, {"german": {"-13": "Holzstamm"}})
+    assert none == [] and same.count() == 1  # the very same text is no conflict
+
+
+def _project_with_both(tmp_path):
+    project = Project(tmp_path / "proj", mod_id="my-mod", game="anno117")
+    EditFile("anno117", "english", {"german": {"-13": Edit("Holzstamm", "Wood")}}).save(projectpart.edits_path(project))
+    changes = ChangeSet("anno117")
+    changes.texts = {"german": {"-13": "Balken", "-10": "Eins"}}
+    changes.save(assetpart.change_set_path(project))
+    install = tmp_path / "game"
+    (install / "data/base/config/gui").mkdir(parents=True)
+    (install / "data/base/config/gui/texts_english.xml").write_text(XML_117, encoding="utf-8")
+    (install / "data/base/config/gui/texts_german.xml").write_text(GERMAN_117, encoding="utf-8")
+    return project, SimpleNamespace(anno117=str(install), workspace=str(tmp_path / "ws"))
+
+
+def test_the_texts_part_writes_the_texts_of_both_apps_once_and_names_the_conflict(tmp_path):
+    project, settings = _project_with_both(tmp_path)
+    logged: list[str] = []
+    out = projectpart.render(project, settings, logged.append)
+    german = out["data/base/config/gui/texts_german.xml"].decode()
+    assert "Holzstamm" in german and "Eins" in german and "Balken" not in german
+    assert any("-13" in line and "differently" in line for line in logged)
+    assert not assetpart.has_work(project)  # a change set that holds texts only has nothing for the assets part

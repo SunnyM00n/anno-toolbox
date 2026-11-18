@@ -45,6 +45,30 @@ def test_a_cut_short_settings_file_is_set_aside_and_a_bom_reads(tmp_path, monkey
     assert st.Settings.load(path).theme == "dark"
 
 
+def test_a_value_of_another_kind_in_the_file_is_left_at_its_default(tmp_path, monkeypatch):
+    """A file edited by hand: ``"apps": null`` stopped the window at its first ``settings.apps.get``."""
+    monkeypatch.setattr(st, "detect", dict)
+    path = tmp_path / st.SETTINGS_FILE
+    path.write_text('{"apps": null, "layout": [], "hardware": "no", "theme": "dark", "more": 1}', encoding="utf-8")
+    s = st.Settings.load(path)
+    assert (s.apps, s.layout, s.hardware, s.theme) == ({}, {}, True, "dark")
+
+
+def test_a_folder_that_cannot_be_listed_is_no_candidate(tmp_path, monkeypatch):
+    """A games folder of another user (or a drive without a disc) raised out of the search, and the window with it."""
+    (tmp_path / "Anno 1404").mkdir()
+    (tmp_path / "Other").mkdir()
+    assert st.anno_folders(tmp_path) == [tmp_path / "Anno 1404"]
+    assert st.anno_folders(tmp_path / "absent") == []
+
+    def denied(_self):
+        raise PermissionError("access is denied")
+
+    monkeypatch.setattr(Path, "iterdir", denied)
+    monkeypatch.setattr(st, "registry_installs", list)
+    assert st.anno_folders(tmp_path) == [] and st.candidates() == []
+
+
 def test_the_settings_are_saved_whole_or_not_at_all(tmp_path, monkeypatch):
     path = tmp_path / st.SETTINGS_FILE
     st.Settings(theme="dark").save(path)
@@ -83,3 +107,25 @@ def test_the_projects_and_the_ui_editors_files_are_saved_whole_or_not_at_all(tmp
         with pytest.raises(OSError):
             item.save()
     assert all(path.read_bytes() == data for path, data in before.items())
+
+
+def test_the_look_for_the_games_is_made_once_a_day_and_when_asked(tmp_path, monkeypatch):
+    """Few people have every game: the look over the registry and the drives ran at every start of every app."""
+    from datetime import date
+
+    looks: list[int] = []
+    found: dict[str, str] = {}
+    monkeypatch.setattr(st, "detect", lambda: looks.append(1) or dict(found))
+    path, day = tmp_path / st.SETTINGS_FILE, date(2026, 11, 17)
+    first = st.Settings.load(path, day)
+    assert looks == [1] and first.last_game_scan == "2026-11-17" and first.anno1800 == ""
+    first.save(path)
+    found["anno1800"] = "D:/Anno 1800"  # installed meanwhile
+    assert st.Settings.load(path, day).anno1800 == "" and looks == [1]  # the same day: no second look
+    asked = st.Settings.load(path, day)
+    asked.find_games()  # the setup page: now
+    assert asked.anno1800 == "D:/Anno 1800" and looks == [1, 1]
+    assert st.Settings.load(path, date(2026, 11, 18)).anno1800 == "D:/Anno 1800" and looks == [1, 1, 1]
+    full = st.Settings(mods="m", **dict.fromkeys(st.installs.GAMES, "x"))
+    full.find_games()
+    assert looks == [1, 1, 1]  # nothing unset: nothing to look for

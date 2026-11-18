@@ -138,9 +138,8 @@ class ModelFiles:
         from ..formats.efc1701 import is_efc1701
         from ..render.particlefx import load_efc, load_rdp
 
-        resolve = fileresolve.Resolver(self.files, getattr(self.files, "game", "") or "anno117", keep=False)
-
         def make() -> list:
+            resolve = fileresolve.Resolver(self.files, getattr(self.files, "game", "") or "anno117", keep=False)
             data = self.files.read(path)
             if path.endswith(".rdp"):
                 effect = load_rdp(data, path)

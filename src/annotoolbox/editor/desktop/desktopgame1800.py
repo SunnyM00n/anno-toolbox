@@ -144,12 +144,12 @@ class GameIsland1800(GameIsland):
         if self.error:
             return self.error
         if not hasattr(ctx, "native_pass") or ctx.rhi.backendName() not in BACKENDS:
-            return tr("the game's own shaders of this island draw on Direct3D 12 or 11 (View > Renderer)")
+            return tr("common.games_own_shaders_island_draw")
         if r.editor is None or not hasattr(r.editor, "files"):
-            return tr("the game's own shaders need the game's files")
+            return tr("common.games_own_shaders_need_files")
         got = r.loader.get(JOB, self._compile)
         if isinstance(got, Exception):
-            return tr("the game's shaders do not compile: {reason}", reason=f"{type(got).__name__}: {got}"[:300])
+            return tr("common.games_shaders_not_compile", reason=f"{type(got).__name__}: {got}"[:300])
         return ""
 
     def _game_source(self) -> terrain1800.TerrainSource:
@@ -298,14 +298,14 @@ class GameIsland1800(GameIsland):
         self.ending = desktopfinish1800.IslandFinish(ctx, self.GAME, got.light, *got.ending, self.r._message)
         self._bake_stages = got.bake if isinstance(got.bake, dict) else None
         if isinstance(got.bake, str):
-            self.r._message(tr("the game's ground bake: {reason}", reason=got.bake[:300]))
+            self.r._message(tr("islands.games_ground_bake", reason=got.bake[:300]))
         self.frame = frameforward.ForwardFrame(ctx, cascaded=self.GAME == "anno1800")
         self.terrain = self._terrain(ctx, terrain1800.program(got.stages), got.state, float(s.size), s.step, s.width)
         self.shared = self.terrain.shared = (SharedBuffers(ctx), SharedBuffers(ctx))
         if isinstance(got.shadow, tuple):
             self.terrain.casting = (terrain1800.program(got.shadow[0]), got.shadow[1])
         else:
-            self.r._message(tr("the game's terrain shadow: {reason}", reason=got.shadow[:300]))
+            self.r._message(tr("islands.games_terrain_shadow", reason=got.shadow[:300]))
         self._make_tessellated(got.tessellation)
         self._make_occlusion(got.occlusion)
 
@@ -314,9 +314,7 @@ class GameIsland1800(GameIsland):
         draws without it)."""
         for value in got.values():
             if isinstance(value, Exception):
-                self.r._message(
-                    tr("the game's ambient occlusion: {reason}", reason=f"{type(value).__name__}: {value}"[:300])
-                )
+                self.r._message(tr("islands.games_ambient_occlusion", reason=f"{type(value).__name__}: {value}"[:300]))
         if not isinstance(got.get("prepass"), tuple) or not isinstance(got.get("ssao"), dict):
             return
         self.terrain.prez = (terrain1800.program(got["prepass"][0]), got["prepass"][1])
@@ -330,9 +328,9 @@ class GameIsland1800(GameIsland):
         from PySide6.QtGui import QRhi
 
         ctx, s = self.r.ctx, self.r.session
-        said = {"detailed": lambda why: tr("the game's tessellated terrain: {reason}", reason=why),
-                "pages": lambda why: tr("the game's height pages: {reason}", reason=why),
-                "shadow": lambda why: tr("the game's terrain shadow: {reason}", reason=why)}  # fmt: skip
+        said = {"detailed": lambda why: tr("islands.games_tessellated_terrain", reason=why),
+                "pages": lambda why: tr("islands.games_height_pages", reason=why),
+                "shadow": lambda why: tr("islands.games_terrain_shadow", reason=why)}  # fmt: skip
         for key, value in got.items():
             if isinstance(value, Exception):
                 self.r._message(said[key](f"{type(value).__name__}: {value}"[:300]))
@@ -424,7 +422,7 @@ class GameIsland1800(GameIsland):
                 return []
             if isinstance(got, Exception):
                 self.sea_error = True
-                self.r._message(tr("the game's sea: {reason}", reason=f"{type(got).__name__}: {got}"[:300]))
+                self.r._message(tr("islands.games_sea_reason", reason=f"{type(got).__name__}: {got}"[:300]))
                 return []
             self.sea = self._new_sea(got)
             self.sea.set_session(*got[-1], float(s.size))
@@ -474,7 +472,7 @@ class GameIsland1800(GameIsland):
     def _inland_failed(self, why: str) -> None:
         """The rivers and lakes left to the view's own from now on, said once."""
         self.inland_error = True
-        self.r._message(tr("the game's rivers and lakes: {reason}", reason=why[:300]))
+        self.r._message(tr("common.games_rivers_lakes", reason=why[:300]))
         if self.inland is not None:
             self.inland.release()
             self.inland = None
@@ -571,7 +569,7 @@ class GameIsland1800(GameIsland):
         terrain = self.terrain
         got = self.r.loader.get(SOURCE_JOB, self._source)
         if isinstance(got, Exception):
-            self.r._message(tr("the island's terrain files: {reason}", reason=f"{type(got).__name__}: {got}"[:300]))
+            self.r._message(tr("islands.islands_terrain_files", reason=f"{type(got).__name__}: {got}"[:300]))
         elif got is not None and got[0] is not None and terrain.source is None:
             terrain.source = got[0]
             self._use_pages(got[1])
@@ -605,16 +603,16 @@ class GameIsland1800(GameIsland):
         broken = self.pages is not None and self.pages.error
         if patches or broken:  # the near nodes untessellated from now on, said once (117's rule)
             why = patches[0][1] if patches else self.pages.error
-            self.r._message(tr("the game's tessellated terrain: {reason}", reason=why[:300]))
+            self.r._message(tr("islands.games_tessellated_terrain", reason=why[:300]))
             if self.pages is not None:
                 self.pages.release()
             self.pages = terrain.pages = terrain.detailed = None
             terrain.set_heights(terrain.heights, None)
             mine = [x for x in mine if all(x is not y for y in patches)]
         if mine:
-            self.error = tr("the game's terrain shader: {reason}", reason=mine[0][1][:300])
+            self.error = tr("common.games_terrain_shader", reason=mine[0][1][:300])
         if ctx.pass_errors:
-            self.error = tr("the game's frame failed: {reason}", reason=ctx.pass_errors[-1][:300])
+            self.error = tr("common.games_frame_failed", reason=ctx.pass_errors[-1][:300])
             ctx.pass_errors.clear()
 
     def _rect(self, node) -> tuple:

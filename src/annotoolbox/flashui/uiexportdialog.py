@@ -31,7 +31,7 @@ def export_one(window, img: feuread.ExternalImage) -> Path | None:
     item = exporter.item_for(img)
     name, _ = QFileDialog.getSaveFileName(
         window,
-        tr("Export this picture"),
+        tr("ui.export_picture"),
         item.name.rsplit("/", 1)[-1],
         "PNG (*.png)",  # i18n: ok (a file filter)
     )
@@ -40,9 +40,9 @@ def export_one(window, img: feuread.ExternalImage) -> Path | None:
     try:
         Path(name).write_bytes(exporter.render(item))
     except (uiexport.ExportError, OSError) as e:
-        QMessageBox.warning(window, tr("Export"), str(e))
+        QMessageBox.warning(window, tr("common.export"), str(e))
         return None
-    window.statusBar().showMessage(tr("exported {name}", name=name))
+    window.statusBar().showMessage(tr("ui.exported_name", name=name))
     return Path(name)
 
 
@@ -52,16 +52,16 @@ class ExportDialog(QDialog):
     def __init__(self, window) -> None:
         super().__init__(window)
         self.window_ = window
-        self.setWindowTitle(tr("Export images"))
+        self.setWindowTitle(tr("ui.export_images"))
         lay = QVBoxLayout(self)
         has_pic = window.doc is not None and window.doc.picture_ref(window.node) is not None
         self.boxes = {}
         for key, label, enabled in (
-            ("selected", N_("The selected element's picture"), has_pic),
-            ("movie", N_("Every picture the open movie uses"), window.doc is not None),
-            ("all", N_("Every picture of all movies (a sub-folder per movie)"), True),
-            ("shared", N_("The shared pictures the movies point at (shared/)"), True),
-            ("atlases", N_("The atlases cut into their icons (atlases/<atlas>/)"), True),
+            ("selected", N_("ui.selected_elements_picture"), has_pic),
+            ("movie", N_("ui.every_picture_open_movie_uses"), window.doc is not None),
+            ("all", N_("ui.every_picture_all_movies_sub"), True),
+            ("shared", N_("ui.shared_pictures_movies_point"), True),
+            ("atlases", N_("ui.atlases_cut_icons"), True),
         ):
             box = QCheckBox(tr(label))
             box.setEnabled(enabled)
@@ -71,8 +71,8 @@ class ExportDialog(QDialog):
         self.boxes["movie"].setChecked(not has_pic and window.doc is not None)
         row = QHBoxLayout()
         self.folder = QLineEdit(str(window.settings.value("export", "")))
-        self.folder.setPlaceholderText(tr("folder to write into"))
-        browse = QPushButton(tr("Browse..."))
+        self.folder.setPlaceholderText(tr("ui.folder_to_write"))
+        browse = QPushButton(tr("common.browse"))
         browse.clicked.connect(self._browse)
         row.addWidget(self.folder)
         row.addWidget(browse)
@@ -83,7 +83,7 @@ class ExportDialog(QDialog):
         lay.addWidget(buttons)
 
     def _browse(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("Export into"), self.folder.text())
+        folder = QFileDialog.getExistingDirectory(self, tr("common.export_into"), self.folder.text())
         if folder:
             self.folder.setText(folder)
 
@@ -110,23 +110,23 @@ class ExportDialog(QDialog):
 def export_images(window) -> None:
     """File > Export images...: the dialog, then the export with a progress bar."""
     if window.ui is None:
-        window.statusBar().showMessage(tr("open a game folder first"))
+        window.statusBar().showMessage(tr("ui.open_game_folder_first"))
         return
     dialog = ExportDialog(window)
     if dialog.exec() != QDialog.Accepted:
         return
     folder = dialog.folder.text().strip()
     if not folder:
-        QMessageBox.warning(window, tr("Export images"), tr("choose a folder"))
+        QMessageBox.warning(window, tr("ui.export_images"), tr("ui.choose_folder"))
         return
     window.settings.setValue("export", folder)
     exporter = uiexport.Exporter(window.ui)
     items = dialog.items(exporter)
     if not items:
-        QMessageBox.information(window, tr("Export images"), tr("nothing chosen"))
+        QMessageBox.information(window, tr("ui.export_images"), tr("ui.nothing_chosen"))
         return
-    progress = QProgressDialog(tr("Exporting pictures..."), tr("Cancel"), 0, len(items), window)
-    progress.setWindowTitle(tr("Export images"))
+    progress = QProgressDialog(tr("ui.exporting_pictures"), tr("common.cancel"), 0, len(items), window)
+    progress.setWindowTitle(tr("ui.export_images"))
     progress.setMinimumDuration(0)
 
     def step(n: int, total: int, name: str) -> None:
@@ -139,11 +139,11 @@ def export_images(window) -> None:
     try:
         done = exporter.export(items, Path(folder), step)
     except KeyboardInterrupt:
-        window.statusBar().showMessage(tr("export cancelled (no index written)"))
+        window.statusBar().showMessage(tr("ui.export_cancelled_no_index_written"))
         return
     except OSError as e:
-        QMessageBox.warning(window, tr("Export images"), str(e))
+        QMessageBox.warning(window, tr("ui.export_images"), str(e))
         return
     finally:
         progress.close()
-    window.statusBar().showMessage(tr("{summary} in {folder}", summary=uiexport.summary(done), folder=folder))
+    window.statusBar().showMessage(tr("ui.summary_in_folder", summary=uiexport.summary(done), folder=folder))

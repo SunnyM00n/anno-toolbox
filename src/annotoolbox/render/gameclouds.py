@@ -55,6 +55,8 @@ FAR_PLANE = 750.0  # the camera's far plane while clouds are drawn: ViewDistance
 GUST, GUST_PACE, GUST_FACTOR = 0.2, 0.4, 0.5 * np.sin(0.37) * np.sin(0.079) + 0.5
 MAX_STRENGTH, NOISE_PACE, CURL_PACE = 4.0, 0.75, 0.1
 STEP = 1 / 30  # the scroll integrated in frames of this length (the engine adds one per frame)
+# steps added up once and kept (``_moved_before``): a view open for hours added every step again in each frame
+BLOCK = 4096
 
 
 @dataclass(frozen=True)
@@ -85,15 +87,33 @@ def wind_drift(seconds: np.ndarray, wind: Wind) -> tuple[np.ndarray, np.ndarray]
     return direction, 2.0 * strength[..., None] * direction
 
 
+@lru_cache(maxsize=8)  # a wind's blocks, kept while its views run
+def _blocks(wind: Wind) -> list:
+    """Per whole block of ``BLOCK`` steps what the wind moved the clouds before it (``_moved_before`` adds to it)."""
+    return [np.zeros(2)]
+
+
+def _moved_before(block: int, wind: Wind) -> np.ndarray:
+    """What ``wind`` moved the clouds in the whole steps before block ``block``, each block added up once."""
+    known = _blocks(wind)
+    while len(known) <= block:
+        first = (len(known) - 1) * BLOCK
+        _direction, drift = wind_drift(np.arange(first, first + BLOCK) * STEP, wind)
+        known.append(known[-1] + (drift * STEP).sum(0))
+    return known[block]
+
+
 @lru_cache(maxsize=8)  # every pass of a frame asks for the same moment
 def scroll(seconds: float, wind: Wind = CALM) -> dict:
     """``cWeatherScroll``, ``cCloudNoiseScroll`` and ``cCloudCurlScroll`` ``seconds`` into a view, as the engine
     adds them up frame by frame (read only: the result is shared)."""
-    steps = np.arange(0.0, max(0.0, seconds), STEP)
-    dt = np.diff(np.append(steps, max(0.0, seconds)))
+    time = max(0.0, float(seconds))
+    count = int(np.ceil(time / STEP))  # the steps begun: whole ones, then the rest up to ``seconds``
+    whole = max(0, count - 1) // BLOCK
+    steps = np.arange(whole * BLOCK, count) * STEP
+    dt = np.diff(np.append(steps, time))
     direction, drift = wind_drift(steps, wind)
-    moved = (drift * dt[:, None]).sum(0) if len(dt) else np.zeros(2)
-    time = float(dt.sum())
+    moved = _moved_before(whole, wind) + ((drift * dt[:, None]).sum(0) if len(dt) else np.zeros(2))
     out = {"cWeatherScroll": list(np.fmod(moved, WEATHERMAP_SCALE) / WEATHERMAP_SCALE)}
     for name, pace in (("cCloudNoiseScroll", NOISE_PACE), ("cCloudCurlScroll", CURL_PACE)):
         out[name] = [pace * direction[0] * time + moved[0], pace * time, pace * direction[1] * time + moved[1]]

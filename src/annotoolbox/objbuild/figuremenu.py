@@ -13,7 +13,7 @@ from PySide6.QtGui import QActionGroup
 from ..infra.i18n import N_, tr
 from ..viewer import figures
 
-STATES = ((0, N_("&Not working")), (1, N_("&Working")))
+STATES = ((0, N_("viewer.not_working")), (1, N_("viewer.working")))
 
 
 class FigureMenu:
@@ -55,7 +55,7 @@ class FigureMenu:
         self.figures = figures.Figures.of(obj.files, obj.game, feedback.root, self.state, self.units(obj))
         self.figures.graft(scene)
         found = sum(1 for f in self.figures.figures if f.unit is not None)
-        return tr("{n} walking figures, {found} with their unit", n=len(self.figures.figures), found=found)
+        return tr("viewer.walking_figures_unit", n=len(self.figures.figures), found=found)
 
     def animations(self, seconds: float) -> dict:
         return self.figures.animations(seconds) if self.figures is not None else {}

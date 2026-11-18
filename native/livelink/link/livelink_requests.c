@@ -1,11 +1,12 @@
-/* The live link's one-frame requests (mod_livelink.c; livelink_module.h): the widget dump, the selection, read, the
-   debug commands and the helper library's modules. Each answers before it returns. */
+/* The live link's one-frame requests (mod_livelink.c; livelink_module.h): the
+   selection, read, the debug commands and the helper library's modules. Each answers before it returns. */
 #include "hlib.h"
 #include "debug_logic.h"
 #include "livelink.h"
 #include "livelink_logic.h"
 #include "livelink_module.h"
 #include "livereload.h"
+#include "livevalues_logic.h"
 #include "luacmd.h"
 #include "modules_logic.h"
 #include "stability_logic.h"
@@ -16,38 +17,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The live widget values of the open scenes (ui.dump): the UI dump probe's walk, run now for the named states (all open
-   ones when none is named); the answer lists the files it wrote under log/ui-dump/, the suite reads them. */
-void llq_start_dump(const LLRequest *r) {
-    static char files[16][160], json[LLM_JSON_MAX];
-    int ids[LL_NAMES_MAX], n = 0, got;
-    uint32_t (*id_of)(const void *) = (uint32_t(*)(const void *))hlib_target(T_UI_STATE_ID);
-    for (int i = 0; i < r->nnames && id_of; i++) {
-        struct {
-            const char *text;
-            int64_t length;
-        } view = {r->names[i], (int64_t)strlen(r->names[i])};
-        uint32_t id = id_of(&view);
-        if (id != 0xffffffffu) ids[n++] = (int)id;
-    }
-    if (r->nnames && !n) {
-        llm_answer("skipped", "none of the names is a UI state of the game", NULL);
-        return;
-    }
-    got = hlib_ui_dump_now(llm_ui, ids, n, files, 16);
-    if (got < 0) {
-        llm_answer("unavailable", "the UI dump is not in place in this game build", NULL);
-    } else if (!got) {
-        llm_answer("skipped", "no open scene with a widget tree: the state is not open (or has no scene)", NULL);
-    } else {
-        ll_names_json(json, sizeof json, "files", files, got);
-        llm_answer("ok", "", json);
-    }
-}
-
 void llq_run_simple(const char *cmd, const char *ok_message) {
     if (hlib_lua_run(cmd, NULL, 0)) llm_answer("ok", ok_message, NULL);
     else llm_answer("unavailable", "the game's command runner did not take the command (see the log)", NULL);
+}
+
+/* The live widget values (ui.values; docs/live-link.md section 17): the named states' open scenes only, in them the
+   widgets of the one file the editor has open only, and of those only what they show. */
+void llq_start_values(const LLRequest *r) {
+    static char data[LV_DATA_MAX];
+    uint8_t file[16];
+    int unknown = 0, open = 0, got;
+    if (r->has_file && !lv_guid_parse(r->file, file)) {
+        llm_answer("refused", "name the open file by its GUID", NULL);
+        return;
+    }
+    got = hlib_live_link_values_now(llm_ui, (char(*)[64])r->names, r->nnames, r->has_file ? file : NULL, data, sizeof data,
+                                    &unknown, &open);
+    if (got < 0) llm_answer("unavailable", "the live widget values are not in place in this game build", NULL);
+    else if (got > 0) llm_answer("ok", strstr(data, "\"cut\":true}") ? "cut at the answer's size" : "", data);
+    else if (unknown == r->nnames) llm_answer("skipped", "none of the names is a UI state of the game", NULL);
+    else if (!open) llm_answer("skipped", "none of the named states has its scene open", NULL);
+    else llm_answer("skipped", "the file is not placed in the open scenes", NULL);
 }
 
 /* select by asset GUID: the first object of the asset's group in the current session (the group's shape is unverified) */

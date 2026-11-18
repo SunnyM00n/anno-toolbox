@@ -31,13 +31,13 @@ class ProfileError(ValueError):
 def name_problem(name: str) -> str:
     """Why ``name`` cannot be a profile's file name ("" when it can)."""
     if not name or name != name.strip():
-        return tr("the name is empty or starts or ends with a space")
+        return tr("mods.name_empty_starts_ends_space")
     if len(name) > MAX_NAME:
-        return tr("the name is longer than {n} characters", n=MAX_NAME)
+        return tr("mods.name_longer_characters", n=MAX_NAME)
     if NAME_FORBIDDEN.search(name):
-        return tr('the name has a character a file name cannot hold (< > : " / \\ | ? *)')
+        return tr("mods.name_character_file_cannot_hold")
     if name.endswith(".") or name.split(".")[0].lower() in RESERVED:
-        return tr("the name is one Windows does not take for a file")
+        return tr("mods.name_one_windows_not_take")
     return ""
 
 
@@ -70,9 +70,7 @@ class ProfileStore:
         try:
             return ProfileText.from_bytes(self.path(name).read_bytes())
         except OSError as exc:
-            raise ProfileError(
-                tr("the profile {name} cannot be read: {reason}", name=name, reason=exc.strerror or exc)
-            ) from exc
+            raise ProfileError(tr("mods.profile_cannot_read", name=name, reason=exc.strerror or exc)) from exc
 
     def save(self, name: str, text: ProfileText) -> None:
         _write(self.path(name), text.to_bytes())
@@ -109,9 +107,7 @@ class ProfileStore:
         try:
             os.replace(self.path(old), self.path(name))
         except OSError as exc:
-            raise ProfileError(
-                tr("the profile {name} cannot be renamed: {reason}", name=old, reason=exc.strerror or exc)
-            ) from exc
+            raise ProfileError(tr("mods.profile_cannot_renamed", name=old, reason=exc.strerror or exc)) from exc
         if was_active:
             self.set_active(name)
         return self.path(name)
@@ -119,20 +115,18 @@ class ProfileStore:
     def delete(self, name: str) -> None:
         """Delete a profile; the active one is not deleted (the game would find none)."""
         if self.active().lower() == name.lower():
-            raise ProfileError(tr("{name} is the active profile: make another one active first", name=name))
+            raise ProfileError(tr("mods.active_profile_make_another_one", name=name))
         try:
             self.path(name).unlink()
         except OSError as exc:
-            raise ProfileError(
-                tr("the profile {name} cannot be deleted: {reason}", name=name, reason=exc.strerror or exc)
-            ) from exc
+            raise ProfileError(tr("mods.profile_cannot_deleted", name=name, reason=exc.strerror or exc)) from exc
 
     def _free(self, name: str) -> None:
         why = name_problem(name)
         if why:
             raise ProfileError(why)
         if self._find(name) is not None:
-            raise ProfileError(tr("a profile named {name} exists already", name=self._find(name)))
+            raise ProfileError(tr("mods.profile_named_exists_already", name=self._find(name)))
 
     # the active profile
 
@@ -150,7 +144,7 @@ class ProfileStore:
     def set_active(self, name: str) -> None:
         """Make ``name`` the active profile ("" for none: the game starts without mods)."""
         if name and not self.exists(name):
-            raise ProfileError(tr("there is no profile named {name}", name=name))
+            raise ProfileError(tr("mods.no_profile_named", name=name))
         found = self.active_file() or new_active(name)
         found.set_name(name)
         _write(self.mods_dir / PROFILE_FILE, found.to_bytes())
@@ -161,6 +155,4 @@ def _write(path: Path, data: bytes) -> None:
     try:
         write_atomic(path, data)
     except OSError as exc:
-        raise ProfileError(
-            tr("{name} cannot be written: {reason}", name=path.name, reason=exc.strerror or exc)
-        ) from exc
+        raise ProfileError(tr("mods.name_cannot_written_reason", name=path.name, reason=exc.strerror or exc)) from exc

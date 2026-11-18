@@ -69,12 +69,17 @@ def read_ground(editor) -> dict:
     from .desktopgamebake import map_file
 
     view = editor.view
-    out: dict = {"displacement": coarse_displacement(view)}
+    out: dict = {}
+    for name, read in (("displacement", coarse_displacement), ("grit", grit_map)):
+        try:
+            out[name] = read(view)
+        except (AttributeError, ValueError):  # an island without the map: none (``GroundMaps._make``)
+            pass
     try:
-        out["grit"] = grit_map(view)
-    except (AttributeError, ValueError):  # an island without a grit map: no grit
-        pass
-    values, textures = set_grit(view.files.read(view.material_set).decode("utf-8", "replace"))
+        text = view.files.read(view.material_set).decode("utf-8", "replace")
+    except (OSError, KeyError):  # a set that does not ship: no grit materials, the island's maps all the same
+        text = ""
+    values, textures = set_grit(text)
     out["values"] = values
     out["textures"] = {key: dds for key, path in textures.items() if (dds := map_file(view.files, path)) is not None}
     return out

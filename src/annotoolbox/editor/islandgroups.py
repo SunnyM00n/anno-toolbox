@@ -15,7 +15,8 @@ from collections import Counter
 
 from ..infra.i18n import N_
 
-OTHER = N_("Other")  # a group key; shown through ``tr``
+OTHER = "Other"  # the key of the group of what fits no other
+OTHER_TITLE = N_("islands.other")  # how that group is shown
 ASSETS_1800 = "data/config/export/main/asset/assets.xml"
 # The display name of the game's own key (a folder or a region id), where the key is not the name.
 LABELS = {

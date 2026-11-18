@@ -14,7 +14,7 @@ from ...infra.i18n import N_
 from ...render.camera import OrbitCamera
 
 MODES = ("orbit", "fly")
-LABELS = {"orbit": N_("Orbit"), "fly": N_("Free fly")}
+LABELS = {"orbit": N_("islands.orbit"), "fly": N_("islands.free_fly")}
 PITCH = (
     math.radians(-80),
     math.radians(88),

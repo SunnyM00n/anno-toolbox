@@ -1,18 +1,20 @@
 """The values a save may be edited in, and the write of a new save next to the original (``docs/save-editor.md``,
 "What can be written, and how"). ``fields(save)`` lists what the form shows, ``write_beside(save, changes)`` writes;
-the format modules do the byte work (``formats.savegame117``, ``formats.savegame2070``). An edition may add values
-at the extension point ``features.SAVE_EDITS`` (``extspecs.SaveEdit``).
+the format modules do the byte work (``formats.savegame117``, ``formats.savegame2070``). The emperor's values are in
+``emperoredit``; an edition may add more at the extension point ``features.SAVE_EDITS`` (``extspecs.SaveEdit``).
 """
 
 from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..formats import savegame117, savegame2070
-from ..infra.i18n import N_
+from ..infra import i18n
+from ..infra.i18n import N_, tr
 from ..suite import features
 from . import summary117
 from .container import TAIL, SaveFile
@@ -21,6 +23,7 @@ TEXT, GUID, NUMBER = "text", "guid", "number"
 EDITABLE = ("anno117", "anno2070")
 SUFFIX = " (edited)"
 EDITED = re.compile(r" \(edited(?: \d+)?\)$")
+GROUPED_DE = re.compile(r"[+-]?\d{1,3}(\.\d{3})+")  # German: points group the thousands, three digits each
 
 
 @dataclass(frozen=True)
@@ -29,7 +32,22 @@ class Field:
     label: str  # marked for translation; ``{who}`` is the participant
     kind: str
     value: str | int
-    who: str = ""
+    who: str = ""  # with ``named``: ``{0}``, ``{1}`` ... stand for those GUIDs' names (``who_text``)
+    choices: tuple[int, ...] = ()  # a GUID field offered as a list of these (the save's value among them)
+    named: tuple[int, ...] = ()
+
+
+def who_text(field: Field, name: Callable[[int], str] | None) -> str:
+    """The field's ``who`` with each GUID of ``named`` as ``name(guid)`` gives it (its number when that is "")."""
+    if not field.named:
+        return field.who
+    return field.who.format(*(guid_label(g, name) for g in field.named))
+
+
+def guid_label(guid: int, name: Callable[[int], str] | None) -> str:
+    """``Name (guid)``, or the number alone without a name."""
+    found = name(guid) if name is not None else ""
+    return f"{found} ({guid})" if found else str(guid)
 
 
 class EditError(ValueError):
@@ -39,12 +57,12 @@ class EditError(ValueError):
 def _player_fields(save: savegame117.Save) -> list[Field]:
     head = savegame117.read_player(save)["header.a7s"]
     return [
-        Field("save_name", N_("Save name"), TEXT, savegame117.save_name(save)),
-        Field("name", N_("Company name"), TEXT, head.name),
-        Field("profile_name", N_("Profile name"), TEXT, head.profile_name or ""),
-        Field("color", N_("Colour (ParticipantColor GUID)"), GUID, head.color),
-        Field("logo", N_("Logo (PlayerLogo GUID)"), GUID, head.logo),
-        Field("portrait", N_("Portrait (Portrait GUID)"), GUID, head.portrait),
+        Field("save_name", N_("saves.save_name"), TEXT, savegame117.save_name(save)),
+        Field("name", N_("saves.company_name"), TEXT, head.name),
+        Field("profile_name", N_("saves.profile_name"), TEXT, head.profile_name or ""),
+        Field("color", N_("saves.colour_participantcolor_guid"), GUID, head.color),
+        Field("logo", N_("saves.logo_playerlogo_guid"), GUID, head.logo),
+        Field("portrait", N_("saves.portrait_guid"), GUID, head.portrait),
     ]
 
 
@@ -61,7 +79,7 @@ def _fields117(save: SaveFile) -> list[Field]:
     out = _player_fields(save117(save))
     money = summary117.money_by_participant(save.part("data.a7s").tree())
     for guid in sorted(money, key=lambda g: (g != savegame117.HUMAN_PARTICIPANT, g)):
-        label = N_("Money of the player ({who})") if guid == savegame117.HUMAN_PARTICIPANT else N_("Money of {who}")
+        label = N_("saves.money_player_who") if guid == savegame117.HUMAN_PARTICIPANT else N_("saves.money_of_who")
         out.append(Field(f"money:{guid}", label, NUMBER, money[guid], str(guid)))
     return out
 
@@ -69,7 +87,7 @@ def _fields117(save: SaveFile) -> list[Field]:
 def _fields2070(save: SaveFile) -> list[Field]:
     parsed = savegame2070.read_bytes(save.data, save.path.name)
     who = str(savegame2070.human_id(parsed))
-    return [Field("money", N_("Money of the player ({who})"), NUMBER, savegame2070.read_money(parsed), who)]
+    return [Field("money", N_("saves.money_player_who"), NUMBER, savegame2070.read_money(parsed), who)]
 
 
 def _own_fields(save: SaveFile) -> list[Field]:
@@ -81,8 +99,10 @@ def _own_fields(save: SaveFile) -> list[Field]:
 
 
 def _extra_fields(save: SaveFile) -> list[tuple[object, list[Field]]]:
-    """Per ``SaveEdit`` registered for the save's game, the rows it offers."""
-    specs = features.extensions(features.SAVE_EDITS).values()
+    """Per ``SaveEdit`` of the save's game (the emperor's, then those registered), the rows it offers."""
+    from . import emperoredit
+
+    specs = [emperoredit.EDIT, *features.extensions(features.SAVE_EDITS).values()]
     return [(spec, spec.fields(save)) for spec in specs if save.game in spec.games]
 
 
@@ -107,14 +127,22 @@ def _apply117(save: SaveFile, changes: dict[str, str | int]) -> savegame117.Save
     return parsed
 
 
-def parse_value(field: Field, text: str) -> str | int:
+def parse_value(field: Field, text: str, language: str | None = None) -> str | int:
     """A form's text as ``write_beside`` takes it: a name as typed, a GUID in decimal or ``0x`` hex, money in
-    decimal (leading zeros and thousands separators allowed); ``ValueError`` for anything else."""
+    decimal (leading zeros and thousands separators allowed); ``ValueError`` for anything else. The separators
+    are read by ``language`` (the interface's when None): English groups with ``,``; German groups with ``.``,
+    in threes, and refuses ``,``, its decimal sign, so "1.000" and "1,000" are never taken for each other."""
     if field.kind == TEXT:
         return text
     text = text.strip()
     if field.kind == GUID and text.lower().startswith("0x"):
         return int(text, 16)
+    if (language or i18n.current()) == "de":
+        if "," in text:
+            raise ValueError(tr("saves.comma_is_decimal_sign", text=text))
+        if "." in text and not GROUPED_DE.fullmatch(text):
+            raise ValueError(tr("saves.points_group_thousands", text=text))
+        return int(text.replace(".", "").replace("_", ""), 10)
     return int(text.replace(",", "").replace("_", ""), 10)
 
 
@@ -154,7 +182,7 @@ def _reserve(original: Path) -> Path:
         return path
 
 
-def write_beside(save: SaveFile, changes: dict[str, str | int], settings=None) -> Path:
+def write_beside(save: SaveFile, changes: dict[str, str | int], settings: object = None) -> Path:
     """Write the save with ``changes`` (keys of ``fields``) as a new file next to the original; returns its path.
     ``settings`` (the suite's) go to the values an extension adds, which may check them against the installed game."""
     if save.game not in EDITABLE:

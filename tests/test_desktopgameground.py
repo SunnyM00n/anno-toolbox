@@ -1,4 +1,5 @@
-"""The session maps of the island view's game look: the coarse displacement, the grit map, the set's grit values."""
+"""The session maps of the island view's game look: the coarse displacement, the grit map, the set's grit values;
+and the loader jobs of its decals' materials."""
 
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from annotoolbox.editor.desktop import desktopgamedecals
 from annotoolbox.editor.desktop import desktopgameground as gg
 
 
@@ -43,3 +45,29 @@ def test_a_material_sets_grit_values_are_the_shaders_constants_and_its_textures_
     values, textures = gg.set_grit(text)
     assert values == {"cGritTilingRec": 0.25, "cGritAlphaSharpness": 5.0, "cGritSlope": 0.2, "cCliffTilingRec": 0.125}
     assert textures == {"cGritDiffuseTex": "data/a/grit_diff.psd"}
+
+
+class _NoSet:
+    def read(self, path: str) -> bytes:
+        raise KeyError(path)
+
+
+def test_an_island_whose_material_set_does_not_ship_keeps_its_own_maps():
+    raw = np.arange(16, dtype=np.uint8).reshape(4, 4)
+    view = _view(raw.tobytes(), bytes(32), 2)
+    view.files, view.material_set = _NoSet(), "data/sets/gone.xml"
+    got = gg.read_ground(SimpleNamespace(view=view))
+    assert np.array_equal(got["displacement"], raw[:, ::-1]) and got["grit"][1] == 8
+    assert got["values"] == {} and got["textures"] == {}
+
+
+def test_a_decal_materials_loader_job_is_the_same_in_a_look_made_again_whatever_the_order():
+    """The loader outlives the look: a job named by the order the materials were met in handed a look made again
+    (another rendering quality) another material's shaders."""
+    stone, moss = (("ShaderID", "9"), ("cDiff", "stone.dds")), (("ShaderID", "9"), ("cDiff", "moss.dds"))
+    island = SimpleNamespace(r=SimpleNamespace())
+    first, again = desktopgamedecals.GameDecals(island), desktopgamedecals.GameDecals(island)
+    first._regroup({stone: {}, moss: {}})
+    again._regroup({moss: {}, stone: {}})
+    assert first.looks[stone].job == again.looks[stone].job != again.looks[moss].job
+    assert first.looks[moss].job == again.looks[moss].job and again.looks[moss].values == dict(moss)

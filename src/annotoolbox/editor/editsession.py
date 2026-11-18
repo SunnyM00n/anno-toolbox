@@ -58,7 +58,7 @@ def type_of(item: dict) -> str:
     if item.get("folder_path"):
         return item["folder_path"]
     if item.get("marker"):
-        return tr("editor-only / {marker}", marker=item["marker"])
+        return tr("islands.editor_only_marker", marker=item["marker"])
     return library_group(item.get("cfg") or "")
 
 
@@ -276,6 +276,8 @@ class EditSession(TerrainEdits):
     def end_transform(self, start: list[tuple], label: str = "") -> bool:
         after = [(e, self._state(e)) for e, _ in start]
         if all(a[1][1:4] == s[1:4] for a, (_, s) in zip(after, start, strict=True)):
+            for e, state in start:  # nothing moved: the drag's steps leave no record in the edit file
+                self._restore(e, state)
             return False
 
         def apply(states):
@@ -283,7 +285,7 @@ class EditSession(TerrainEdits):
                 self._restore(e, st)
             self._notify(Change(entries={e for e, _ in states}))
 
-        self._push(label or tr("move"), lambda: apply(start), lambda: apply(after))
+        self._push(label or tr("islands.move_lower"), lambda: apply(start), lambda: apply(after))
         return True
 
     def transform(self, e: Entry, label: str = "", **kw) -> None:
@@ -300,7 +302,7 @@ class EditSession(TerrainEdits):
         e.color = [round(float(v), 4) for v in color]
         self._record(e)
         after = self._state(e)
-        self._push(tr("colour"), lambda: self._apply_state(e, start), lambda: self._apply_state(e, after))
+        self._push(tr("common.colour_lower"), lambda: self._apply_state(e, start), lambda: self._apply_state(e, after))
         self._notify(Change(entries={e}))
 
     def delete(self, e: Entry) -> None:
@@ -316,7 +318,9 @@ class EditSession(TerrainEdits):
                 self._set_tree(k, True)
                 self._notify(Change(entries={self.trees[k]}, forest=True))
 
-            self._push(tr("delete tree"), back, lambda: (self._plant(k, False), self._notify(Change(forest=True))))
+            self._push(
+                tr("islands.delete_tree"), back, lambda: (self._plant(k, False), self._notify(Change(forest=True)))
+            )
             self._notify(Change(entries={e}, forest=True))
             return
         if e.added is not None:
@@ -334,13 +338,13 @@ class EditSession(TerrainEdits):
                 self._notify(Change(entries={e}, structure=True))
 
             take()
-            self._push(tr("delete"), put, take)
+            self._push(tr("islands.delete"), put, take)
             return
         start = self._state(e)
         self._edits_for(e.kind)[e.key] = {"deleted": True}
         e.visible = False
         after = self._state(e)
-        self._push(tr("delete"), lambda: self._apply_state(e, start), lambda: self._apply_state(e, after))
+        self._push(tr("islands.delete"), lambda: self._apply_state(e, start), lambda: self._apply_state(e, after))
         self._notify(Change(entries={e}))
 
     def _apply_state(self, e: Entry, st: tuple) -> None:
@@ -362,7 +366,7 @@ class EditSession(TerrainEdits):
             e.alive = True
             self._notify(Change(entries={e}, structure=True))
 
-        self._push(label or tr("place"), take, put)
+        self._push(label or tr("islands.place_lower"), take, put)
         self._notify(Change(entries={e}, structure=True))
         return e
 
@@ -390,7 +394,7 @@ class EditSession(TerrainEdits):
             item["clone"] = True
         if e.base.get("template"):
             item["template"] = e.base["template"]
-        return self.add_record(e.kind, rec, item, tr("duplicate"))
+        return self.add_record(e.kind, rec, item, tr("islands.duplicate_lower"))
 
     def place(self, pick: dict, position, yaw: float = 0.0) -> Entry | None:
         """Place a library pick at ``position`` (Anno), turned by ``yaw``: a model (``cfg``, with its 2070
@@ -410,7 +414,9 @@ class EditSession(TerrainEdits):
                 self._set_tree(k, False)
                 self._notify(Change(entries={self.trees[k]}, forest=True))
 
-            self._push(tr("plant tree"), back, lambda: (self._plant(k, True), self._notify(Change(forest=True))))
+            self._push(
+                tr("islands.plant_tree"), back, lambda: (self._plant(k, True), self._notify(Change(forest=True)))
+            )
             self._notify(Change(entries={self.trees[k]}, forest=True, structure=True))
             return self.trees[k]
         q = yaw_quat(yaw)
@@ -548,7 +554,7 @@ class EditSession(TerrainEdits):
             del r["widths"][i]
 
         self.edit_river(k, drop)
-        self.end_water(before, tr("river point"))
+        self.end_water(before, tr("islands.river_point"))
         return True
 
     def insert_river_point(self, k: int, i: int) -> int:
@@ -561,7 +567,7 @@ class EditSession(TerrainEdits):
             r["widths"].insert(i + 1, r["widths"][i])
 
         self.edit_river(k, ins)
-        self.end_water(before, tr("river point"))
+        self.end_water(before, tr("islands.river_point"))
         return i + 1
 
     # Anno 117 editing, saving
@@ -587,7 +593,7 @@ class EditSession(TerrainEdits):
         if value != self.island.get("session", {}).get(key):
             after[key] = value
         put(after)
-        self._push(tr("session settings"), lambda: put(before), lambda: put(after))
+        self._push(tr("islands.session_settings"), lambda: put(before), lambda: put(after))
 
     def set_target(self, target: str) -> None:
         before = self.edits.get("target")
@@ -599,7 +605,7 @@ class EditSession(TerrainEdits):
                 self.edits["target"] = v
 
         put(target)
-        self._push(tr("save as"), lambda: put(before), lambda: put(target))
+        self._push(tr("islands.save_as"), lambda: put(before), lambda: put(target))
 
     def save(self, editor) -> None:
         """Write the edit file (``IslandEditor.save_edits``)."""

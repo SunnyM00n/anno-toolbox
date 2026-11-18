@@ -22,6 +22,8 @@ LATE = "*"  # ``LoadAfter: ["*"]``: the late phase
 PROFILE_FILE = "profile.txt"
 OPTIONS_FILE = "active-options.jsonc"
 UBI = ".ubi"  # Ubisoft's example mods: on only when the profile lists them
+# a root's label: which of the loader's folders it is (the mod manager shows it in the interface's language)
+ROOT_EXAMPLES, ROOT_GAME, ROOT_DOCUMENTS, ROOT_EXTRA = "Ubisoft's examples", "game", "Documents", "extra"
 GAME_NUMBER = {"anno117": 8}  # ``Anno`` in a mod's ``modinfo`` (1800's mods say none)
 MODIO_GAME = {"anno117": "11358"}  # mod.io's number of the game: ``<public>/mod.io/<number>/mods``
 DEPENDENCY_KINDS = ("Require", "Optional", "LoadAfter", "Incompatible", "Deprecate")  # the ``Dependencies`` keys
@@ -61,10 +63,10 @@ def parse_jsonc(text: str) -> dict | None:
 
 
 def read_jsonc(path: Path) -> dict | None:
-    """A JSON file with comments, None when missing or not JSON."""
+    """A JSON file with comments, None when missing, not UTF-8 or not JSON."""
     try:
         return parse_jsonc(path.read_text(encoding="utf-8-sig"))
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -329,12 +331,12 @@ def loader_roots(
     ``extra``."""
     out = []
     if game_dir:
-        out += [Root(Path(game_dir) / "mods" / UBI, "Ubisoft's examples", False), Root(Path(game_dir) / "mods", "game")]
+        out += [Root(Path(game_dir) / "mods" / UBI, ROOT_EXAMPLES, False), Root(Path(game_dir) / "mods", ROOT_GAME)]
     if documents_mods:
-        out.append(Root(Path(documents_mods), "Documents"))
+        out.append(Root(Path(documents_mods), ROOT_DOCUMENTS))
     if public_dir and game in MODIO_GAME:
         out.append(Root(Path(public_dir) / "mod.io" / MODIO_GAME[game] / "mods", "mod.io"))
-    return out + [Root(Path(p), "extra") for p in extra]
+    return out + [Root(Path(p), ROOT_EXTRA) for p in extra]
 
 
 def read_profile(text: str, name: str = "") -> Profile:

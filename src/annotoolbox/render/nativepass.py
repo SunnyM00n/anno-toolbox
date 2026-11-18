@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtGui import QColor, QRhiDepthStencilClearValue
+from PySide6.QtGui import QColor, QRhiCommandBuffer, QRhiDepthStencilClearValue
 
 from .shaders import FINAL_VS
 
@@ -21,15 +21,25 @@ Prepare = Callable[[object, tuple[int, int], object], None]
 
 
 def draw_pass(ctx, fbo, prepare: Prepare, draw: Callable[[object], None], *, targets: int = 1, depth: float = 1.0,
-              clear: bool = True, color: tuple = (0.0, 0.0, 0.0, 0.0)) -> None:  # fmt: skip
+              clear: bool = True, color: tuple = (0.0, 0.0, 0.0, 0.0),
+              external: Callable[[object], None] | None = None) -> None:  # fmt: skip
     """One render pass into ``fbo`` as a native pass of ``ctx``: ``prepare`` makes the draws' resources and writes
     their constants before it begins, ``draw(cb)`` records them; the colour cleared to ``color`` (rgba 0..1,
-    transparent black) and the depth to ``depth`` (``clear`` False: both kept)."""
+    transparent black) and the depth to ``depth`` (``clear`` False: both kept). ``external(cb)``: draws of the native
+    backend recorded first, on QRhi's list (``beginExternal``; the terrain: ``terrainnative``)."""
     rt, rp, signature = ctx.render_target(fbo, clear=clear)
+    flags = QRhiCommandBuffer.BeginPassFlag.ExternalContent if external is not None else None
 
     def run(cb, batch) -> None:
         prepare(rp, (targets, signature[2]), batch)
-        cb.beginPass(rt, QColor.fromRgbF(*color), QRhiDepthStencilClearValue(depth, 0), batch)
+        clears = (QColor.fromRgbF(*color), QRhiDepthStencilClearValue(depth, 0), batch)
+        cb.beginPass(rt, *clears, flags) if flags is not None else cb.beginPass(rt, *clears)
+        if external is not None:
+            cb.beginExternal()
+            try:
+                external(cb)
+            finally:
+                cb.endExternal()
         draw(cb)
         cb.endPass()
 

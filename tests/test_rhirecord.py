@@ -40,6 +40,16 @@ class Cb:
         self.passes -= 1
 
 
+class Native:
+    """A device resource of a counting fake: destroyed once at most."""
+
+    def __init__(self) -> None:
+        self.destroyed = 0
+
+    def destroy(self) -> None:
+        self.destroyed += 1
+
+
 def boom(cb, batch) -> None:
     raise ValueError("cannot reshape")
 
@@ -58,12 +68,6 @@ def test_a_pass_that_raises_leaves_nothing_recorded_and_no_batch_open():
 
 
 def test_the_released_resources_rotate_even_when_a_frame_fails():
-    class Native:
-        destroyed = False
-
-        def destroy(self) -> None:
-            self.destroyed = True
-
     rhi = Rhi()
     rec = rhipass.Recorder(rhi)
     old = Native()
@@ -340,3 +344,302 @@ def test_a_texture_lets_its_base_pixels_go_once_its_levels_are_built():
     assert 0 in tex._levels
     tex.build_mipmaps()
     assert tex._levels == {} and tex.mipmapped and len(uploads) == 3  # the base again, then the levels
+
+
+def test_a_released_device_destroys_what_it_holds_now_and_what_is_let_go_after():
+    """Its view's QRhi goes away: no later frame would destroy what waits, and what a renderer lets go afterwards."""
+    rec = rhipass.Recorder(Rhi())
+    waiting, dying, srb, pipe, sampler, late = (Native() for _ in range(6))
+    rec.later(waiting)
+    rec._dying = [dying]
+    rec._srbs, rec._pipelines, rec._samplers = {(1, 0, ()): srb}, {(1, "v"): pipe, (2, "v"): None}, {"s": sampler}
+    rec.native_pass(boom)  # recorded for a frame that never comes
+    rec.release()
+    assert [n.destroyed for n in (waiting, dying, srb, pipe, sampler)] == [1] * 5
+    assert not (rec._srbs or rec._pipelines or rec._samplers or rec._doomed or rec._dying or rec._passes)
+    rec.later(late)
+    rec.later(None)
+    assert late.destroyed == 1 and rec._doomed == []
+
+
+def test_a_released_texture_takes_the_sets_that_bind_it_and_no_other():
+    rec = rhipass.Recorder(Rhi())
+    both, one, none = (1, 0, ((7, "s"), (8, "s"))), (1, 1, ((8, "s"),)), (2, 0, ())
+    rec._srbs = {both: Native(), one: Native(), none: Native()}
+    rec._srb_users = {7: {both}, 8: {both, one}}
+    rec.forget(7)
+    assert list(rec._srbs) == [one, none] and rec._srb_users == {8: {one}} and len(rec._doomed) == 1
+    rec.forget(7)  # released twice, or never bound: nothing more
+    rec.forget_program(1)
+    assert list(rec._srbs) == [none] and rec._srb_users == {} and len(rec._doomed) == 2
+
+
+def test_a_view_whose_device_goes_away_tells_its_owner_and_releases_the_device():
+    from annotoolbox.render import rhiview
+
+    class Ctx:
+        released = 0
+
+        def release(self) -> None:
+            self.released += 1
+
+    seen = []
+    view = rhiview.RhiView.__new__(rhiview.RhiView)
+    ctx = view.ctx = Ctx()
+    view._device, view.failed = 1, ""
+    view.released = seen.append
+    view.releaseResources()
+    assert seen == [ctx] and ctx.released == 1 and view.ctx is None and view._device is None
+    view.releaseResources()  # no device: nothing to release
+    assert seen == [ctx]
+    view.ctx = ctx
+    view.released = lambda ctx: (_ for _ in ()).throw(KeyError("renderer"))
+    view.releaseResources()  # the owner's release failed: the device's own still goes
+    assert ctx.released == 2 and view.failed.startswith("KeyError")
+
+
+def test_a_baker_that_does_not_start_or_never_ends_is_a_bake_error(monkeypatch):
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    from annotoolbox.render import shaderbake
+
+    for error in (FileNotFoundError("qsb"), subprocess.TimeoutExpired("qsb", 120)):
+        monkeypatch.setattr(subprocess, "run", lambda *a, error=error, **kw: (_ for _ in ()).throw(error))
+        with pytest.raises(shaderbake.BakeError, match="did not run"):
+            shaderbake._run(Path("qsb"), ["-d", "x"])
+
+
+def test_the_terrain_bake_destroys_the_pipelines_of_the_models_it_let_go():
+    """A baked node's model is let go a frame later by its resources alone: its program's pipeline keeps its count."""
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.render import gamedraw, terrainbake
+
+    program = gamedraw.Program.__new__(gamedraw.Program)
+    kept, given_back = Native(), Native()
+    program.pipelines = {"bake": [kept, 37], "last": [given_back, 1]}
+    last = SimpleNamespace(release=lambda: gamedraw.GameModel._give_back(SimpleNamespace(program=program), "last"))
+    bake = terrainbake.Bake.__new__(terrainbake.Bake)
+    bake.slots, bake.keep, bake.arrays, bake._done, bake.program = [], [], {}, [last], program
+    bake.common = SimpleNamespace(release=lambda: None)
+    bake.release()
+    assert kept.destroyed == 1 and given_back.destroyed == 1 and program.pipelines == {}
+
+
+def test_the_models_view_releases_its_renderer_with_the_device_and_shows_its_scene_again():
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.viewer import modelview
+
+    class Renderer:
+        released = 0
+
+        def release(self) -> None:
+            self.released += 1
+
+    class Ctx:
+        def release(self) -> None:
+            assert renderer.released == 1  # the renderer first: its resources are this device's
+
+    view = modelview.RhiModelView.__new__(modelview.RhiModelView)
+    renderer = view.renderer = Renderer()
+    view.ctx, view._device, view.failed, view.scene, view._pending = Ctx(), 1, "", "scene", None
+    view.releaseResources()
+    assert renderer.released == 1 and view.renderer is None and view._pending == "scene" and not view.failed
+    view.ctx = Ctx()
+    view.releaseResources()  # no renderer yet (the window closed first): nothing more
+    assert renderer.released == 1 and not view.failed
+
+
+def test_the_layout_caches_of_the_game_shaders_keep_a_bounded_number(monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from annotoolbox.render import gameshader as gs
+
+    monkeypatch.setattr(gs, "KEPT_LAYOUTS", 3)
+    monkeypatch.setattr(gs, "_PATHS", {})
+    monkeypatch.setattr(gs, "_replayed", {})
+    var = SimpleNamespace(name="cSun", offset=0, size=16, type="float4", elements=0, members=[], rows=1, columns=4)
+    layouts = [SimpleNamespace(size=16, variables=[var]) for _ in range(8)]
+    for layout in layouts:
+        c = gs.Constants(layout)
+        gs.replay(c, "sun", (1,), lambda c: c.set("cSun", (1.0, 2.0, 3.0, 4.0)))
+        assert np.frombuffer(c.data, np.float32).tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert len(gs._PATHS) == 3 and len(gs._replayed) == 3
+    assert [kept[0] for kept in gs._PATHS.values()] == layouts[-3:]  # the oldest went
+    first = gs.Constants(layouts[0])  # let go, asked for again: worked out anew
+    assert first.set("cSun", (5.0, 0.0, 0.0, 0.0)) and len(gs._PATHS) == 3
+
+
+def test_a_closed_model_library_takes_no_more_work_and_says_nothing():
+    import pytest
+
+    pytest.importorskip("PySide6")  # render's package imports Qt
+    from annotoolbox.render.modellibrary import ModelLibrary
+
+    library = ModelLibrary(editor=None, workers=1)
+    library.close()
+    library.request(["house.cfg"])  # each of these raised RuntimeError from the closed pool
+    assert library.texture("d:wall.psd") is None and library.parts("house.cfg") is None
+    assert library.set_full({"house.cfg"}) and not library._submit(print)
+    library.pool = None  # closed between the check and the call
+    library._closed = False
+
+    class Shut:
+        def submit(self, *a):
+            raise RuntimeError("cannot schedule new futures after shutdown")
+
+    library.pool = Shut()
+    assert not library._submit(print)
+
+
+def test_a_refused_srgb_level_pipeline_destroys_what_the_level_made(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import srgbmips
+
+    binding = lambda *a: a  # noqa: E731
+    stage = SimpleNamespace(ComputeStage=1)
+    fake = SimpleNamespace(StageFlag=stage, uniformBuffer=binding, sampledTexture=binding, imageStore=binding)
+    monkeypatch.setattr(srgbmips, "B", fake)
+
+    class Stage(tuple):
+        Type = SimpleNamespace(Compute=0)
+
+        def __new__(cls, *a):
+            return super().__new__(cls, a)
+
+    monkeypatch.setattr(srgbmips, "QRhiShaderStage", Stage)
+
+    class Made(Native):
+        def create(self) -> bool:
+            return not getattr(self, "refused", False)
+
+        def __getattr__(self, name: str):
+            if name.startswith("set"):
+                return lambda *a: None
+            raise AttributeError(name)
+
+    class Device:
+        def __init__(self) -> None:
+            self.made: list = []
+
+        def _new(self, *a) -> Made:
+            self.made.append(Made())
+            return self.made[-1]
+
+        newTexture = newBuffer = newSampler = newShaderResourceBindings = _new
+
+        def newComputePipeline(self) -> Made:
+            pipe = self._new()
+            pipe.refused = True
+            return pipe
+
+    device = Device()
+    mips = srgbmips.SrgbMips.__new__(srgbmips.SrgbMips)
+    mips.rhi, mips.shader, mips.pipeline = device, None, None
+    texture = type("T", (), {"native": object()})()
+    with pytest.raises(RuntimeError, match="refused"):
+        mips._level(None, texture, 0, (2, 2))
+    assert len(device.made) == 5 and [m.destroyed for m in device.made] == [1] * 5 and mips.pipeline is None
+
+
+def test_a_batch_a_native_pass_hands_on_itself_is_not_released_a_second_time():
+    """``cb.resourceUpdate(batch)`` in a native pass (the seas' and the pages' uploads): QRhi lets the batch go, and
+    the recorder released it again at the frame's end."""
+
+    class Commands(Cb):
+        def resourceUpdate(self, batch) -> None:
+            batch.release()  # as QRhi: the batch goes back to its pool
+
+    rhi = Rhi()
+    rec = rhipass.Recorder(rhi)
+    rec.native_pass(lambda cb, batch: cb.resourceUpdate(batch))
+    rec._run(Commands())  # a second release of the batch raised (the fake's pool no longer holds it)
+    assert rhi.open == [] and rec.errors == [] and rec._open_batches == []
+
+
+def test_the_shading_destroys_the_sky_cube_a_new_light_replaces():
+    """Every change of the look's light made a cube and kept the last one until the view closed."""
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.render import gamelight
+
+    shading = gamelight.DeferredShading.__new__(gamelight.DeferredShading)
+    shading.fixed, shading._sh, shading._replaced = {}, (), []
+    shading.res = SimpleNamespace(keep=[], invalidate=lambda: None)
+
+    def texture(batch, *a, **kw) -> Native:
+        shading.res.keep.append(Native())
+        return shading.res.keep[-1]
+
+    shading._texture, shading._raw = texture, lambda name: name
+    batch = SimpleNamespace(uploadStaticBuffer=lambda *a: None)
+    cubes = []
+    for k in range(4):
+        sh = tuple((float(k), 0.0, 0.0) for _ in range(9))
+        shading._cube(batch, gamelight.Sky((0.0, 1.0, 0.0), (1.0, 1.0, 1.0), sh))
+        shading._cube(batch, gamelight.Sky((0.0, 1.0, 0.0), (1.0, 1.0, 1.0), sh))  # the same light: the same cube
+        cubes.append(shading.fixed["cube"])
+    assert len({id(c) for c in cubes}) == 4
+    # the one in use and the one before it (a binding set of this frame may hold it) stand, the others are gone
+    assert [c.destroyed for c in cubes] == [1, 1, 0, 0] and shading.res.keep == [cubes[3]]
+    shading.res.release = lambda: [r.destroy() for r in shading.res.keep]
+    shading.constants = {}
+    shading.pipeline = None
+    shading.release()
+    assert [c.destroyed for c in cubes] == [1, 1, 1, 1] and shading._replaced == []
+
+
+def test_a_frame_part_the_device_refuses_is_said_once_and_asked_for_no_more():
+    """``make`` raising went on to the view in every frame after (the compiled result stays in the loader)."""
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import gameextras
+
+    said, made = [], []
+
+    def make(got):
+        made.append(got)
+        raise RuntimeError("no such buffer")
+
+    extras = gameextras.FrameExtras(None, lambda: "source", lambda job, work: work(), said.append)
+    for _frame in range(3):
+        assert extras._part("sea", lambda source: "compiled", make, gameextras.N_SEA) is None
+    assert made == ["compiled"] and len(said) == 1 and "no such buffer" in said[0]
+    assert extras.made == {"sea": False}
+
+
+def test_a_released_particle_layer_makes_its_drawer_anew():
+    import pytest
+
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import particledraw
+
+    class Drawer:
+        released = 0
+
+        def release(self) -> None:
+            self.released += 1
+
+    layer = particledraw.ParticleLayer(None, None, list, None)
+    drawer = layer.drawer = Drawer()
+    layer.release()
+    layer.release()  # nothing left to release
+    assert drawer.released == 1 and layer.drawer is None

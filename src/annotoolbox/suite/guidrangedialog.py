@@ -38,12 +38,12 @@ class GuidRangeDialog(QDialog):
     def __init__(self, parent, game: str, settings, others: dict, selection: Selection, vanilla=None) -> None:
         super().__init__(parent)
         self.game, self.settings, self.others, self.vanilla = game, settings, others, vanilla
-        self.setWindowTitle(tr("GUID range"))
+        self.setWindowTitle(tr("common.guid_range"))
         self.resize(640, 460)
         self.radios = {key: QRadioButton(tr(text)) for key, text in (
-            (gr.OWN, N_("My own range")),
-            (gr.PUBLIC, N_("A publicly declared free range")),
-            (gr.CUSTOM, N_("A range I type in")),
+            (gr.OWN, N_("common.my_own_range")),
+            (gr.PUBLIC, N_("common.publicly_declared_free_range")),
+            (gr.CUSTOM, N_("common.range_i_type")),
         )}  # fmt: skip
         self.own_text = QLabel(wordWrap=True)
         self.public = QComboBox()
@@ -68,7 +68,7 @@ class GuidRangeDialog(QDialog):
 
     def _layout(self) -> None:
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(tr("The numbers new assets and islands take their GUIDs from:")))
+        lay.addWidget(QLabel(tr("common.numbers_new_assets_islands_take")))
         lay.addWidget(self.radios[gr.OWN])
         lay.addWidget(self.own_text)
         lay.addWidget(self.radios[gr.PUBLIC])
@@ -76,7 +76,7 @@ class GuidRangeDialog(QDialog):
         lay.addWidget(self.public_text)
         lay.addWidget(self.radios[gr.CUSTOM])
         row = QHBoxLayout()
-        for widget in (self.first, QLabel(tr("to")), self.last):
+        for widget in (self.first, QLabel(tr("common.to")), self.last):
             row.addWidget(widget)
         lay.addLayout(row)
         lay.addWidget(self.status)
@@ -104,7 +104,7 @@ class GuidRangeDialog(QDialog):
             typed = (int(self.first.text().replace(",", "")), int(self.last.text().replace(",", "")))
         except ValueError:
             if choice == gr.CUSTOM:
-                raise ValueError(tr("the range is two whole numbers, first and last")) from None
+                raise ValueError(tr("common.range_two_whole_numbers_first")) from None
             typed = (0, 0)
         return Selection(
             choice, source, tuple(gr.resolve(choice, source, typed, self.settings, self.game, self.others))
@@ -117,18 +117,17 @@ class GuidRangeDialog(QDialog):
             edit.setEnabled(self.choice == gr.CUSTOM)
         found = self.choices[self.public.currentIndex()] if self.choices else None
         if found:
-            claim = f' <a href="{found.claim_url}">{tr("claim a range")}</a>' if found.claim_url else ""
+            claim = f' <a href="{found.claim_url}">{tr("common.claim_range")}</a>' if found.claim_url else ""
             self.public_text.setText(
-                f"{found.note}<br>{tr('Source:')} {found.source}{claim}"
+                f"{found.note}<br>{tr('common.source')} {found.source}{claim}"
             )  # i18n: ok (markup around marked text)
         else:
-            self.public_text.setText(tr("no declared range for this game"))
+            self.public_text.setText(tr("common.no_declared_range_game"))
         try:
             lo, hi = gr.own_range(self.settings, self.others)
             self.own_text.setText(
                 tr(
-                    "{span}: a block of your own reserve, kept in your settings, outside every published and "
-                    "every vanilla range, and not used by your other projects. Nobody else is given it.",
+                    "common.block_your_own_reserve_kept",
                     span=f"{number(lo)} - {number(hi)}",
                 )
             )
@@ -141,9 +140,9 @@ class GuidRangeDialog(QDialog):
             self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)
             return
         problems = gr.check(self.game, sel.span, self.others, self.vanilla)
-        levels = {gr.ERROR: N_("ERROR"), gr.WARNING: N_("WARNING")}
+        levels = {gr.ERROR: N_("common.error"), gr.WARNING: N_("common.warning")}
         lines = [f"{tr(levels.get(p.level, p.level.upper()))}: {p.text}" for p in problems] or [
-            tr("{span}: no clash found", span=f"{number(sel.span[0])} - {number(sel.span[1])}")
+            tr("common.no_clash_found", span=f"{number(sel.span[0])} - {number(sel.span[1])}")
         ]
         self.status.setStyleSheet("color: #c0392b" if problems else "")
         self.status.setText("\n".join(lines))
@@ -153,7 +152,7 @@ class GuidRangeDialog(QDialog):
     def accept_checked(self) -> None:
         if (
             self._problems
-            and QMessageBox.question(self, tr("GUID range"), tr("This range has the warnings shown. Use it anyway?"))
+            and QMessageBox.question(self, tr("common.guid_range"), tr("common.range_warnings_shown_use_anyway"))
             != QMessageBox.StandardButton.Yes
         ):
             return

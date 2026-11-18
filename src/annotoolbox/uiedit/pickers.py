@@ -56,4 +56,4 @@ def pick(parent, files: uifiles.UiFiles, kinds: tuple[str, ...], title: str) -> 
     def rows(text: str) -> list[tuple[str, object]]:
         return [(name if name == key else f"{name}  ({key})", key) for name, key in entries(files, kinds, text)]
 
-    return pick_from_list(parent, title, "", rows, size=(520, 600), placeholder=tr("filter by name or GUID"))
+    return pick_from_list(parent, title, "", rows, size=(520, 600), placeholder=tr("ui.filter_name_guid"))

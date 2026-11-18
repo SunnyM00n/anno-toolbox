@@ -102,7 +102,7 @@ void load_config(void) {
     static char text[16384];
     char path[MAX_PATH];
     int cut = 0, len = -1;
-    if (hlib_user_path(path, "log/helper-library.ini")) len = hlib_read_text(path, text, sizeof(text));
+    if (hlib_user_path(path, G_SETTINGS_FILE)) len = hlib_read_text(path, text, sizeof(text));
     if (len >= 0) {
         s_nini = hlib_ini_parse(text, s_ini, MAX_INI, &cut);
         hlib_logf("config: %d setting(s) read from helper-library.ini", s_nini);

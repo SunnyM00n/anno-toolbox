@@ -548,7 +548,7 @@ class GameObjects:
         if isinstance(got, Exception):
             self.parts[key] = got
             if type(got).__name__ != "NoGBufferPass":
-                self.r._message(tr("{mesh}: the game's shader: {reason}", mesh=part["mesh"],
+                self.r._message(tr("islands.mesh_games_shader_reason", mesh=part["mesh"],
                                    reason=f"{type(got).__name__}: {got}"[:300]))  # fmt: skip
             return got
         terrain = getattr(self.island, "terrain", None)  # its session maps: grit, wetness, wildfire read as none
@@ -779,7 +779,7 @@ class GameObjects:
                 part.release()
                 self.parts[key] = RuntimeError(error)
                 self.failures += 1
-                self.r._message(tr("{mesh}: the game's shader: {reason}", mesh=key[0], reason=error[:300]))
+                self.r._message(tr("islands.mesh_games_shader_reason", mesh=key[0], reason=error[:300]))
 
     def release(self) -> None:
         for part in self.parts.values():

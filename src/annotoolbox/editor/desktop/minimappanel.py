@@ -4,6 +4,8 @@ change, off the window's thread when given a ``suite.background.Background`` (a 
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import shiboken6
 from PySide6.QtCore import QSize, Qt, QTimer
@@ -19,15 +21,16 @@ DELAY_MS = 150  # a brush stroke changes the heights many times a second: paint 
 
 
 class MinimapPanel(QLabel):
-    """A label that shows the minimap of ``session`` at the size of the dock, square."""
+    """A label that shows the minimap of ``session`` at the size of the dock, square; ``say`` is told when a paint
+    failed (the status line), the last picture staying."""
 
-    def __init__(self, session, background=None) -> None:
+    def __init__(self, session, background=None, say: Callable[[str], None] | None = None) -> None:
         super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.session, self.background = session, background
+        self.session, self.background, self.say = session, background, say
         self._painting = self._again = False  # a paint runs off the window's thread; another is due after it
         self.setMinimumSize(QSize(96, 96))
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.setToolTip(tr("Land above sea level with its coast and mountains; underwater plateaus in teal"))
+        self.setToolTip(tr("islands.tip.land_above_sea_level_coast"))
         self.picture: np.ndarray | None = None  # the last minimap, RGBA over the sea colour
         self._timer = QTimer(self, singleShot=True, interval=DELAY_MS)
         self._timer.timeout.connect(self.repaint_map)
@@ -45,7 +48,10 @@ class MinimapPanel(QLabel):
         s = self.session
         heights, pixels = s.heights.copy(), min(MAX_PIXELS, max(16, s.size * 2))
         if self.background is None:
-            self._painted(_picture(heights, pixels))
+            try:
+                self._painted(_picture(heights, pixels))
+            except Exception as exc:  # as a background's work hands it over: said, the island still opens
+                self._painted(exc)
             return
         if self._painting:
             self._again = True
@@ -60,6 +66,8 @@ class MinimapPanel(QLabel):
         if isinstance(picture, np.ndarray):
             self.picture = picture
             self._show()
+        elif self.say is not None:
+            self.say(tr("islands.minimap_not_painted", error=f"{type(picture).__name__}: {picture}"))
         if self._again:
             self._again = False
             self.repaint_map()

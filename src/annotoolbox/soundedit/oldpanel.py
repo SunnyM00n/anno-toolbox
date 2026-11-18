@@ -38,13 +38,20 @@ from ..suite.widgets import ROLE, add_row, read_only_table
 from . import olddoc
 from .timelinepanel import TimelinePanel
 
-COLUMNS = (N_("id"), N_("file"), N_("type"), N_("volume"), N_("distance"), N_("group"))
+COLUMNS = (
+    N_("ui.id"),
+    N_("common.file_lower"),
+    N_("sound.type"),
+    N_("common.volume"),
+    N_("sound.distance"),
+    N_("common.group_lower"),
+)
 NUMBERS = (  # (field, label, lowest, highest): the boxes of the form
-    ("MasterVolume", N_("volume (0-100)"), 0, 100), ("MaxCount", N_("most at once"), 0, 1000),
-    ("MinDistance", N_("full volume up to (zoom)"), 0, 100), ("MaxDistance", N_("silent from (zoom)"), 0, 100),
-    ("Prio", N_("priority"), 0, 100), ("RandomPitch", N_("random pitch (%)"), -100, 100),
-    ("SoundFlags", N_("flags"), 0, 255), ("XZDistanceFactor", N_("horizontal reach (%)"), 0, 10000),
-    ("SoundGroupID", N_("sound group (-1: none)"), -1, 100000),
+    ("MasterVolume", N_("sound.volume_0_100"), 0, 100), ("MaxCount", N_("sound.most_once"), 0, 1000),
+    ("MinDistance", N_("sound.full_volume_up_zoom"), 0, 100), ("MaxDistance", N_("sound.silent_zoom"), 0, 100),
+    ("Prio", N_("sound.priority"), 0, 100), ("RandomPitch", N_("sound.random_pitch_percent"), -100, 100),
+    ("SoundFlags", N_("ui.flags"), 0, 255), ("XZDistanceFactor", N_("sound.horizontal_reach_percent"), 0, 10000),
+    ("SoundGroupID", N_("sound.sound_group_1_none"), -1, 100000),
 )  # fmt: skip
 
 
@@ -68,7 +75,7 @@ class OldSoundPanel(QWidget):
         self.background = Background(self)
         self.busy = False  # a clip is being prepared off the window's thread
         self.databases = QComboBox()
-        self.filter = QLineEdit(placeholderText=tr("filter: id, file or type"))
+        self.filter = QLineEdit(placeholderText=tr("sound.filter_id_file_type"))
         self.table = read_only_table(COLUMNS)
         self.file = QLineEdit()
         self.type = QComboBox()
@@ -79,7 +86,7 @@ class OldSoundPanel(QWidget):
             self.boxes[field].setRange(lo, hi)
         self.lists = QLabel(wordWrap=True)
         self.members = QTableWidget(0, 3)
-        self.members.setHorizontalHeaderLabels([tr("list"), tr("event"), tr("weight")])
+        self.members.setHorizontalHeaderLabels([tr("viewer.list"), tr("viewer.event"), tr("common.weight")])
         self.facts = QLabel(wordWrap=True)
         self.timelines = TimelinePanel(say, self.changed)
         self._build()
@@ -87,15 +94,15 @@ class OldSoundPanel(QWidget):
     def _build(self) -> None:
         form_box = QWidget()
         form = QFormLayout(form_box)
-        form.addRow(tr("file"), self.file)
-        form.addRow(tr("kind"), self.type)
+        form.addRow(tr("common.file_lower"), self.file)
+        form.addRow(tr("viewer.kind"), self.type)
         for field, label, _lo, _hi in NUMBERS:
             form.addRow(tr(label), self.boxes[field])
         buttons = QHBoxLayout()
         for text, call in (
-            (N_("Apply"), self.apply), (N_("Play"), self.play), (N_("Replace the clip..."), self.replace_clip),
-            (N_("Add a sound..."), self.add_sound), (N_("Replace a spoken line..."), self.replace_speech),
-            (N_("Add to a list..."), self.add_to_list), (N_("Apply the weights"), self.apply_weights),
+            (N_("common.apply"), self.apply), (N_("common.play"), self.play), (N_("sound.replace_clip"), self.replace_clip),
+            (N_("sound.add_sound_dots"), self.add_sound), (N_("sound.replace_spoken_line"), self.replace_speech),
+            (N_("sound.add_to_list"), self.add_to_list), (N_("sound.apply_weights"), self.apply_weights),
         ):  # fmt: skip
             button = QPushButton(tr(text))
             button.clicked.connect(call)
@@ -119,8 +126,8 @@ class OldSoundPanel(QWidget):
         split.addWidget(right)
         split.setSizes([700, 500])
         tabs = QTabWidget()
-        tabs.addTab(split, tr("Sounds"))
-        tabs.addTab(self.timelines, tr("Timelines"))
+        tabs.addTab(split, tr("viewer.sounds"))
+        tabs.addTab(self.timelines, tr("sound.timelines"))
         QVBoxLayout(self).addWidget(tabs)
         self.filter.textChanged.connect(lambda _t: self.fill())
         self.table.currentCellChanged.connect(lambda row, *_r: self.show_sound(self._id_at(row)))
@@ -139,8 +146,14 @@ class OldSoundPanel(QWidget):
             self.databases.setCurrentIndex(len(paths) - 1)
             self.open_database(tree, paths[-1])
         else:
-            self.doc = None
-            self.say(tr("this game has no sound database"))
+            self._close_database()
+            self.say(tr("sound.game_no_sound_database"))
+
+    def _close_database(self) -> None:
+        """No database is open: the table and the timelines of the one before go."""
+        self.doc = None
+        self.timelines.open_document(None)
+        self.fill()
 
     def _pick_database(self) -> None:
         """The database picked in the list, once ``may_leave`` let the open one go (else the list shows it again)."""
@@ -156,12 +169,12 @@ class OldSoundPanel(QWidget):
             self.doc = olddoc.OldSoundDoc(tree, path)
             self.doc.db  # noqa: B018  (read now, so a file that does not read is said here)
         except (ValueError, OSError) as exc:
-            self.doc = None
-            self.say(tr("{path} does not read: {error}", path=path, error=exc))
+            self._close_database()
+            self.say(tr("common.path_not_read_error", path=path, error=exc))
             return
         self.timelines.open_document(self.doc)
         self.fill()
-        self.say(tr("{path}: {count} sounds, {lists} lists", path=path, count=len(self.doc.db.sounds),
+        self.say(tr("sound.path_count_sounds_lists", path=path, count=len(self.doc.db.sounds),
                     lists=len(self.doc.db.lists)))  # fmt: skip
 
     def fill(self, keep: int | None = None) -> None:
@@ -199,11 +212,11 @@ class OldSoundPanel(QWidget):
         self.type.setCurrentIndex(max(0, self.type.findData(sound.number("SoundType"))))
         for field, box in self.boxes.items():
             box.setValue(sound.number(field))
-        self.facts.setText(tr("sound {id}: {path}", id=sid, path=sound.filename)
-                           + ("" if self.doc.has_clip(sid) else " · " + tr("no such file")))  # fmt: skip
+        self.facts.setText(tr("sound.sound_id_path", id=sid, path=sound.filename)
+                           + ("" if self.doc.has_clip(sid) else " · " + tr("sound.no_such_file")))  # fmt: skip
         rows = [(lid, ev, w) for lid, entry in self.doc.db.lists.items() for ev, ms in entry.events.items()
                 for s, w in ms if s == sid]  # fmt: skip
-        self.lists.setText(tr("{n} lists draw this sound", n=len(rows)))
+        self.lists.setText(tr("sound.lists_draw_sound", n=len(rows)))
         self.members.setRowCount(len(rows))
         for r, (lid, ev, weight) in enumerate(rows):
             for c, text in enumerate((str(lid), "" if ev == sounddb.NO_EVENT else str(ev), str(weight))):
@@ -219,10 +232,10 @@ class OldSoundPanel(QWidget):
         try:
             call()
         except olddoc.OldEditError as exc:
-            self.say(tr("cannot: {error}", error=exc))
+            self.say(tr("sound.cannot_error", error=exc))
             return False
         self.fill(keep)
-        self.say(done + " " + tr("(Ctrl+Z undoes it)"))
+        self.say(done + " " + tr("sound.ctrl_plus_z_undoes"))
         self.changed()
         return True
 
@@ -238,27 +251,29 @@ class OldSoundPanel(QWidget):
         if self.file.text().strip().replace("\\", "/") != sound.filename:
             values["Filename"] = self.file.text().strip()
         if not values:
-            self.say(tr("no value was changed"))
+            self.say(tr("sound.no_value_changed"))
             return
-        self._do(lambda: self.doc.set_fields(sid, **values), tr("changed the values of sound {id}.", id=sid))
+        self._do(lambda: self.doc.set_fields(sid, **values), tr("sound.changed_values_sound", id=sid))
 
     def apply_weights(self) -> None:
         sid = self.selected
         if self.doc is None or sid is None:
             return
 
-        def make() -> None:
-            for r in range(self.members.rowCount()):
-                lid, ev = int(self.members.item(r, 0).text()), self.members.item(r, 1).text()
-                new = int(self.members.item(r, 2).text())
-                old = next(w for s, w in self.doc.db.lists[lid].events[int(ev) if ev else sounddb.NO_EVENT] if s == sid)
-                if new != old:
-                    self.doc.set_weight(lid, sid, new, int(ev) if ev else sounddb.NO_EVENT)
-
-        try:
-            self._do(make, tr("changed the weights of sound {id}.", id=sid))
+        try:  # every weight read first: a cell that is no number leaves the lists as they are
+            cells = [[self.members.item(r, c).text() for c in range(3)] for r in range(self.members.rowCount())]
+            rows = [(int(lid), int(ev) if ev else sounddb.NO_EVENT, int(weight)) for lid, ev, weight in cells]
         except ValueError:
-            self.say(tr("a weight is a whole number"))
+            self.say(tr("sound.weight_whole_number"))
+            return
+
+        def make() -> None:
+            for lid, ev, new in rows:
+                old = next((w for s, w in self.doc.db.lists[lid].events[ev] if s == sid), None)
+                if old is not None and new != old:
+                    self.doc.set_weight(lid, sid, new, ev)
+
+        self._do(make, tr("sound.changed_weights_sound", id=sid))
 
     def add_to_list(self) -> None:
         """The picked sound joins a list the game draws from (an added sound plays only once a list draws it)."""
@@ -270,16 +285,16 @@ class OldSoundPanel(QWidget):
             for lid, entry in self.doc.db.lists.items()
             for ev in entry.events
         }
-        text, ok = QInputDialog.getItem(self, tr("Add to a list..."), tr("The list (and its event) that draws the sound"),
+        text, ok = QInputDialog.getItem(self, tr("sound.add_to_list"), tr("sound.list_event_draws_sound"),
                                         list(choices), 0, False)  # fmt: skip
         if not ok:
             return
-        weight, ok = QInputDialog.getInt(self, tr("Add to a list..."), tr("Its weight in the list"), 50, 0, 1000)
+        weight, ok = QInputDialog.getInt(self, tr("sound.add_to_list"), tr("sound.weight_list"), 50, 0, 1000)
         if ok:
             lid, ev = choices[text]
             self._do(
                 lambda: self.doc.add_member(lid, sid, weight, ev),
-                tr("sound {id} joined list {list}.", id=sid, list=text),
+                tr("sound.sound_joined_list", id=sid, list=text),
             )
             self.show_sound(sid)
 
@@ -287,13 +302,13 @@ class OldSoundPanel(QWidget):
         if self.doc is None or self.selected is None:
             return
         path, data = self.doc.clip(self.selected)
-        why = self.player.play(path, data, self.cache) if data else tr("nothing to play: the file is not in the game")
-        self.say(why or tr("playing {name}", name=path))
+        why = self.player.play(path, data, self.cache) if data else tr("sound.nothing_play_file_not_game")
+        self.say(why or tr("viewer.playing_name", name=path))
 
     def _pick(self) -> tuple[bytes, str] | None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            tr("A WAV, MP3 or Ogg file"),
+            tr("sound.wav_mp3_ogg_file"),
             "",
             "Audio (*.wav *.ogg *.mp3 *.flac)",  # i18n: ok (a file filter)
         )
@@ -308,20 +323,20 @@ class OldSoundPanel(QWidget):
     def _convert(self, work: Callable[[], object], done: Callable[[object], None]) -> None:
         """``work`` (preparing a clip: ffmpeg may run) off the window's thread, then ``done(result)`` on it."""
         if self.busy:
-            self.say(tr("a clip is still being converted"))
+            self.say(tr("sound.clip_still_converted"))
             return
 
         def finish(result: object) -> None:
             self.busy = False
             if isinstance(result, olddoc.OldEditError):
-                self.say(tr("cannot: {error}", error=result))
+                self.say(tr("sound.cannot_error", error=result))
             elif isinstance(result, Exception):
                 self.say(str(result))
             else:
                 done(result)
 
         self.busy = True
-        self.say(tr("converting the clip..."))
+        self.say(tr("sound.converting_clip"))
         self.background.run(work, finish)
 
     def replace_clip(self) -> None:
@@ -333,11 +348,11 @@ class OldSoundPanel(QWidget):
         try:
             target = doc.target_of(sid, suffix)  # the one read of the document, here: the thread only converts bytes
         except olddoc.OldEditError as exc:
-            return self.say(tr("cannot: {error}", error=exc))
+            return self.say(tr("sound.cannot_error", error=exc))
 
         def done(data) -> None:
             if doc is self.doc:
-                self._do(lambda: doc.put_clip(sid, target, data), tr("sound {id} plays the new clip.", id=sid))
+                self._do(lambda: doc.put_clip(sid, target, data), tr("sound.sound_plays_new_clip", id=sid))
                 self.show_sound(sid)
 
         self._convert(lambda: olddoc.convert_clip(target, clip, suffix), done)
@@ -348,7 +363,7 @@ class OldSoundPanel(QWidget):
             return
         known = set(self.tree.paths)
         lines = sorted(p for p in known if p.endswith(".sp") and f"{p[:-3]}.mp3" in known)
-        line, ok = QInputDialog.getItem(self, tr("A spoken line"), tr("The line to replace (its .mp3)"),
+        line, ok = QInputDialog.getItem(self, tr("sound.spoken_line"), tr("sound.line_replace_mp3"),
                                         [f"{p[:-3]}.mp3" for p in lines], 0, False)  # fmt: skip
         picked = self._pick() if ok and line else None
         if picked is None:
@@ -358,7 +373,7 @@ class OldSoundPanel(QWidget):
 
         def done(files) -> None:
             if doc is self.doc:
-                self._do(lambda: doc.put_files("replace_speech", files), tr("{path} says the new clip.", path=line))
+                self._do(lambda: doc.put_files("replace_speech", files), tr("sound.says_new_clip", path=line))
 
         self._convert(lambda: doc.prepare_speech(line, clip, suffix), done)
 
@@ -383,7 +398,7 @@ class OldSoundPanel(QWidget):
 
         def done(data) -> None:
             if doc is self.doc:
-                self._do(lambda: doc.add_sound(name, data, sid), tr("added a sound that plays {path}.", path=name))
+                self._do(lambda: doc.add_sound(name, data, sid), tr("sound.added_sound_plays", path=name))
 
         self._convert(convert, done)
 

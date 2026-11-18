@@ -1,22 +1,28 @@
 """The texture layer: 2070's DDS read to pixels, mip chains built, BC7 written in-process, the maps 117's PBR shader
 wants synthesised, the formats of 117's own textures matched (docs/texture-pipeline.md; engine-notes "Texture formats":
 which kind gets which BC7 format and what the channels hold). ``texturerefs`` decides the names in the mod; this
-module makes the files. texconv is the fallback for a DDS numpy does not read and for a machine without the encoder.
+module makes the files. The large pictures go to the graphics card (``bc7gpu``). texconv is the fallback for a DDS
+numpy does not read and for a machine without the encoder.
 """
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 import os
 import struct
 import tempfile
+import warnings
 from pathlib import Path
 
 from ..infra import buildcache
 from ..infra.tools import require_tool, run_tool
-from . import bc7encode, ddsdecode, mipchain
+from . import bc7encode, bc7gpu, ddsdecode, mipchain
 
-ENCODER_ENV = "ANNO_BC7_ENCODER"  # "texconv": the CPU fallback even when the in-process encoder is installed
+# "cpu": no GPU encoder; "texconv": texconv on the CPU for every texture even when the in-process encoder is installed
+ENCODER_ENV = "ANNO_BC7_ENCODER"
+_VECTORS = contextvars.ContextVar("bc7_vectors", default=False)
 CACHE: Path | None = None  # another folder for the BC7 results (the tests); the run's own is cache_base() / "bc7"
 SHARED_METAL = "shared/dielectric_metal"  # the one metal map every material points at (known-issues, engine-notes)
 
@@ -48,11 +54,30 @@ def in_process() -> bool:
     return os.environ.get(ENCODER_ENV, "") != "texconv" and bc7encode.available()
 
 
+def gpu_on() -> bool:
+    """Whether this run sends its large pictures to the graphics card (``bc7gpu``; ``ANNO_BC7_ENCODER=cpu`` not)."""
+    return os.environ.get(ENCODER_ENV, "") not in ("cpu", "texconv") and bool(bc7gpu.adapters())
+
+
 def encoder_id() -> str:
-    """What the cache keys hold of the encoder: its build and settings, or the texconv build."""
+    """What the cache keys hold of the encoder: its build and settings, or the texconv build, and the GPU encoder's
+    when it takes the large pictures (a texture's bytes depend on which encoder ran: never one key for both)."""
     if in_process():
-        return bc7encode.identity()
-    return f"texconv-cpu-{buildcache.file_digest(require_tool('texconv'))[:16]}-s{bc7encode.SETTINGS_VERSION}"
+        cpu = bc7encode.identity()
+    else:
+        cpu = f"texconv-cpu-{buildcache.file_digest(require_tool('texconv'))[:16]}-s{bc7encode.SETTINGS_VERSION}"
+    return f"{cpu}+{bc7gpu.identity()}" if gpu_on() else cpu
+
+
+@contextlib.contextmanager
+def vector_data():
+    """The textures written inside hold vectors (normal maps, ripples), not a picture: always the CPU encoder, whose
+    error is 4 to 10 dB lower on them (texture-pipeline "GPU encoder")."""
+    token = _VECTORS.set(True)
+    try:
+        yield
+    finally:
+        _VECTORS.reset(token)
 
 
 def _cache_file(key: str) -> Path:
@@ -98,22 +123,40 @@ def rgba_to_bc7(px, srgb: bool = False, srgb_in: bool = False, mips: int = 0) ->
     BC7_UNORM_SRGB; ``srgb_in`` says ``px`` already holds the stored sRGB values (filtered in linear light), else
     ``px`` is linear and stored gamma-encoded (120 reads back as 183). UI textures are sRGB (always with
     ``srgb_in``), the world's maps and particles are UNORM (engine-notes "Texture formats")."""
+    return _encode(px, srgb, srgb_in, mips)[0]
+
+
+def _encode(px, srgb: bool, srgb_in: bool, mips: int) -> tuple[bytes, bool]:
+    """``rgba_to_bc7``'s bytes, and whether they are what this run's encoder writes (False: the GPU failed on every
+    adapter and the CPU encoder stood in, a file no cache may keep under the run's key)."""
     levels = mipchain.mip_chain(px, mips, gamma=srgb and srgb_in, to_srgb=srgb and not srgb_in)
+    height, width = levels[0].shape[:2]
+    if not _VECTORS.get() and gpu_on() and bc7gpu.wanted(width, height):
+        try:
+            return bc7gpu.encode(_rgba_dds(levels, srgb), srgb), True
+        except bc7gpu.GpuError as exc:
+            warnings.warn(f"BC7 on the CPU for a {width}x{height} texture: {exc}", RuntimeWarning, stacklevel=2)
+            return _cpu_bc7(levels, srgb), False
+    return _cpu_bc7(levels, srgb), True
+
+
+def _cpu_bc7(levels, srgb: bool) -> bytes:
     if in_process():
         return bc7encode.encode_dds(levels, srgb, perceptual=srgb)
     return _texconv_bc7(levels, srgb)
 
 
 def _cached_bc7(kind: str, source: bytes, make, dst: Path, srgb: bool, srgb_in: bool, mips: int, cache: bool) -> Path:
-    """``make()`` (the BC7 bytes) written to ``dst``, kept in the BC7 cache by the key of its source. Both whole or
-    not at all: the callers skip a ``dst`` that exists, so a run stopped mid-write must not leave half a texture."""
+    """``make()`` (the BC7 bytes and whether the run's encoder wrote them, ``_encode``) written to ``dst``, kept in
+    the BC7 cache by the key of its source. Both whole or not at all: the callers skip a ``dst`` that exists, so a run
+    stopped mid-write must not leave half a texture."""
     cached = _cache_file(_cache_key(kind, source, srgb, srgb_in, mips)) if cache and buildcache.enabled() else None
     if cached is not None and cached.is_file():
         buildcache.write_atomic(dst, cached.read_bytes())
         return dst
-    data = make()
+    data, exact = make()
     buildcache.write_atomic(dst, data)
-    if cached is not None:
+    if cached is not None and exact:
         buildcache.write_atomic(cached, data)
     return dst
 
@@ -123,7 +166,7 @@ def png_to_bc7(
 ) -> Path:
     """``src`` (a PNG) as a BC7 DDS at ``dst`` (``rgba_to_bc7`` says how ``srgb`` and ``srgb_in`` read the values)."""
 
-    def make() -> bytes:
+    def make() -> tuple[bytes, bool]:
         import numpy as np
         from PIL import Image
 
@@ -132,7 +175,7 @@ def png_to_bc7(
                 px = np.asarray(img.convert("RGBA"), np.uint8)
         except OSError as exc:
             raise TextureConversionError(f"{src} is not an image: {exc}") from exc
-        return rgba_to_bc7(px, srgb, srgb_in, mips)
+        return _encode(px, srgb, srgb_in, mips)
 
     return _cached_bc7("png", src.read_bytes(), make, dst, srgb, srgb_in, mips, cache)
 
@@ -148,7 +191,7 @@ def solid_bc7(dst: Path, rgba: tuple[int, int, int, int], size: int = 4) -> Path
 
     px = np.empty((size, size, 4), np.uint8)
     px[:] = rgba
-    return _cached_bc7("solid", px.tobytes(), lambda: rgba_to_bc7(px), dst, False, False, 0, True)
+    return _cached_bc7("solid", px.tobytes(), lambda: _encode(px, False, False, 0), dst, False, False, 0, True)
 
 
 # 2070's normal-map alpha m is a specular strength: its highlight adds 10 m (N.H)^100 to the lerp between ambient and
@@ -464,8 +507,8 @@ def convert_dds(src: Path, dst: Path, srgb: bool = False) -> Path:
     does not read goes through texconv and a PNG."""
     data = src.read_bytes()
 
-    def make() -> bytes:
-        return rgba_to_bc7(ddsdecode.read_dds(data), srgb, srgb)
+    def make() -> tuple[bytes, bool]:
+        return _encode(ddsdecode.read_dds(data), srgb, srgb, 0)
 
     try:
         return _cached_bc7("dds", data, make, dst, srgb, srgb, 0, True)

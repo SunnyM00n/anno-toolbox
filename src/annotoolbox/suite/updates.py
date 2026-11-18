@@ -1,20 +1,19 @@
 """Looking for a newer release of the program, and fetching it: the part that needs no window.
 
-``check(current)`` asks the release page of ``RELEASES`` (a GitHub repository, ``owner/name``) for its latest release
-and returns a ``Release`` when it is newer than ``current``; ``download(release, folder)`` fetches the installer and its
-``SHA256SUMS`` and checks the one against the other; ``start_installer`` hands the file to Windows. ``RELEASES`` is empty
-in a build that has no release page of its own: nothing then asks the network (``enabled``). The window part is
-``updatenotice``; what is sent and where files go: ``docs/installer.md`` "Updates".
+``check(current)`` asks the release page of ``RELEASES`` (a GitHub repository, ``owner/name``) for its latest release.
+In an installed program the installer's own updater does the work (``stage`` downloads the changed parts, ``apply``
+restarts into the new version, ``verify_feed`` ties its checksums to ``SHA256SUMS``); elsewhere the person goes to the
+release page. ``helper_check`` compares the release's link helper with the installed one. ``RELEASES`` is empty in a
+build with no release page: nothing then asks the network. ``docs/installer.md`` "Updates" has the rest.
 """
 
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
-import os
 import re
-import subprocess
 import sys
 import urllib.request
 from collections.abc import Callable
@@ -25,14 +24,17 @@ from typing import NamedTuple
 from urllib.parse import urlparse
 
 from .. import __version__
-from ..infra.tools import NO_WINDOW
-from ..paths import local_data_dir
 
 RELEASES = "SunnyM00n/anno-toolbox"  # the release page, "owner/name"; set by the edition's build, empty means no update check
 TIMEOUT = 10.0  # seconds, for every request
 SUMS = "SHA256SUMS"
+HELPER_SUMS = "live-link-SHA256SUMS"  # the link helper's checksum on a release page (docs/live-link.md)
+HELPER_FILE = "version.dll"
+HELPER_MARK = b"library inert"  # text of our helper's log, in its file: tells it from another library of that name
 MAX_NOTES = 20000  # characters of the release notes shown
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(.*)$")
+# URLError, timeouts and HTTP errors (rate limit) are OSErrors; an answer cut short while it is read is not
+NET_ERRORS = (OSError, http.client.HTTPException)
 log = logging.getLogger(__name__)
 
 
@@ -41,22 +43,18 @@ class UpdateError(Exception):
 
 
 class Net(NamedTuple):
-    """The two network calls, so a test can stand in for them: ``get(url) -> bytes``, ``save(url, path)``."""
+    """The network call, so a test can stand in for it: ``get(url) -> bytes`` (the updater downloads the rest)."""
 
     get: Callable[[str], bytes]
-    save: Callable[[str, Path], None]
 
 
 @dataclass(frozen=True)
 class Release:
     version: str  # "0.1.1"
     notes: str  # the release's text, plain
-    msi_url: str
     sums_url: str
-
-    @property
-    def msi_name(self) -> str:
-        return f"AnnoToolbox-{self.version}.msi"
+    page_url: str = ""  # the release's own page (https), for the notices that send the person there
+    helper_sums_url: str = ""  # the link helper's checksum file, when the release carries a helper
 
 
 def enabled() -> bool:
@@ -65,8 +63,13 @@ def enabled() -> bool:
 
 
 def frozen() -> bool:
-    """True in the installed program (it can run the installer), False in a Python environment."""
+    """True in the packaged program, False in a Python environment."""
     return bool(getattr(sys, "frozen", False))
+
+
+def source_url() -> str:
+    """The repository the installer's updater reads releases from."""
+    return f"https://github.com/{RELEASES}"
 
 
 def parse_version(text: str) -> tuple[tuple[int, int, int], int]:
@@ -83,20 +86,12 @@ def is_newer(candidate: str, current: str) -> bool:
     return parse_version(candidate) > parse_version(current)
 
 
-def updates_dir() -> Path:
-    return local_data_dir() / "updates"
-
-
 def due(last: str, today: date) -> bool:
     """The once-a-day gate: ``last`` is the ISO date of the last successful check ('' for never)."""
     try:
         return date.fromisoformat(last) != today
     except ValueError:
         return True
-
-
-def pip_command(version: str) -> str:
-    return f'pip install --upgrade "anno-toolbox[gui] @ git+https://github.com/{RELEASES}@v{version}"'
 
 
 def _request(url: str) -> urllib.request.Request:
@@ -117,48 +112,41 @@ def http_get(url: str) -> bytes:
     try:
         with urllib.request.urlopen(_request(url), timeout=TIMEOUT) as answer:
             return _opened(answer).read()
-    except OSError as exc:  # URLError, timeouts and HTTP errors (rate limit) are all OSErrors
-        raise UpdateError(str(exc)) from exc
+    except NET_ERRORS as exc:
+        raise UpdateError(str(exc) or type(exc).__name__) from exc
 
 
-def http_save(url: str, path: Path) -> None:
-    part = path.with_name(path.name + ".part")
-    try:
-        with _opened(urllib.request.urlopen(_request(url), timeout=TIMEOUT)) as answer, part.open("wb") as out:
-            while chunk := answer.read(1 << 20):
-                out.write(chunk)
-        part.replace(path)
-    except OSError as exc:
-        part.unlink(missing_ok=True)
-        raise UpdateError(str(exc)) from exc
-
-
-NET = Net(http_get, http_save)
+NET = Net(http_get)
 
 
 def parse_release(raw: bytes) -> Release:
     """The release record from the release page's answer; ``UpdateError`` when it is not one we can use."""
     try:
         data = json.loads(raw)
-        tag = data["tag_name"]
-        version = parse_version(tag)[0]
+        version = parse_version(data["tag_name"])[0]
         text = ".".join(map(str, version))
         assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
         notes = data.get("body") or ""
-        msi, sums = assets[f"AnnoToolbox-{text}.msi"], assets[SUMS]
+        sums = assets[SUMS]
+        page = data.get("html_url") or ""
     except (ValueError, KeyError, TypeError) as exc:
         raise UpdateError(f"the release page's answer is not usable: {exc!r}") from exc
-    if not (isinstance(notes, str) and isinstance(msi, str) and isinstance(sums, str)):
+    if not (isinstance(notes, str) and isinstance(sums, str) and isinstance(page, str)):
         raise UpdateError("the release page's answer is not usable")
-    return Release(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], msi, sums)
+    return Release(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], sums, page, assets.get(HELPER_SUMS, ""))
+
+
+def latest(net: Net = NET) -> Release | None:
+    """The latest release, newer or not (None without a release page). ``UpdateError`` when it cannot be read."""
+    if not enabled():
+        return None
+    return parse_release(net.get(f"https://api.github.com/repos/{RELEASES}/releases/latest"))
 
 
 def check(current: str = __version__, net: Net = NET) -> Release | None:
     """The latest release when it is newer than ``current``, else None. ``UpdateError`` when the page cannot be read."""
-    if not enabled():
-        return None
-    release = parse_release(net.get(f"https://api.github.com/repos/{RELEASES}/releases/latest"))
-    return release if is_newer(release.version, current) else None
+    release = latest(net)
+    return release if release is not None and is_newer(release.version, current) else None
 
 
 def checksum_for(sums_text: str, name: str) -> str:
@@ -170,37 +158,110 @@ def checksum_for(sums_text: str, name: str) -> str:
     raise UpdateError(f"{name} is not in {SUMS}")
 
 
-def verify(path: Path, sums_text: str) -> None:
-    """``UpdateError`` unless the file's SHA256 is the one ``sums_text`` lists for its name."""
-    want = checksum_for(sums_text, path.name)
+def verify_feed(info, sums_text: str, version: str) -> None:
+    """``UpdateError`` unless the installer's update (``info``, from its ``check_for_updates``) is the release's
+    ``version`` and every package it will download (the full one, the deltas) has the SHA256 that ``SHA256SUMS`` lists.
+    The installer then checks each download against its own hashes; the two lists must agree."""
+    target = info.TargetFullRelease
+    if parse_version(target.Version)[0] != parse_version(version)[0]:
+        raise UpdateError(f"the update feed offers {target.Version}, the release is {version}")
+    for asset in (target, *info.DeltasToTarget):
+        have = (asset.SHA256 or "").lower()
+        if not have:
+            raise UpdateError(f"{asset.FileName}: the update feed carries no SHA256")
+        if have != checksum_for(sums_text, asset.FileName):
+            raise UpdateError(f"{asset.FileName} does not match its checksum in {SUMS}")
+
+
+def manager():
+    """The installer's update manager on this program's GitHub releases; ``UpdateError`` when this program has none
+    (the module is absent, or the program was not put there by the installer)."""
+    try:
+        import velopack
+
+        return velopack.UpdateManager(velopack.GithubSource(source_url()))
+    except Exception as exc:  # ImportError, or the manager's refusal outside an install
+        raise UpdateError(f"no installer to update with: {exc}") from exc
+
+
+def can_self_update(make: Callable[[], object] = manager) -> bool:
+    """Whether this is an installed program the installer's updater can replace (else: the release page)."""
+    if not (frozen() and enabled()):
+        return False
+    try:
+        make()
+    except UpdateError:
+        return False
+    return True
+
+
+def stage(release: Release, mgr=None, net: Net = NET, progress: Callable[[int], None] | None = None):
+    """Check the feed against ``SHA256SUMS``, then download the changed parts (a delta when one fits). Nothing is
+    fetched before this call, which the person starts. Returns the update to ``apply``."""
+    mgr = mgr or manager()
+    try:
+        info = mgr.check_for_updates()
+        if info is None:
+            raise UpdateError("the installer's update feed has no newer version")
+        verify_feed(info, net.get(release.sums_url).decode("utf-8", "replace"), release.version)
+        mgr.download_updates(info, progress)
+    except UpdateError:
+        raise
+    except Exception as exc:  # the updater's own errors (network, a package that fails its hash)
+        raise UpdateError(str(exc)) from exc
+    return info
+
+
+def apply(info, mgr=None) -> None:
+    """Quit and restart into the downloaded version; the installer's updater swaps the files in between.
+    ``UpdateError`` when the updater refuses (its own errors are ours, as in ``stage``)."""
+    mgr = mgr or manager()
+    try:
+        mgr.apply_updates_and_restart(info)
+    except Exception as exc:  # the updater's own errors: the window says them
+        raise UpdateError(str(exc) or type(exc).__name__) from exc
+
+
+@dataclass(frozen=True)
+class HelperCheck:
+    sha256: str  # the release's helper
+    changed: bool  # differs from the reference: the installed helper of ours, else the last release's
+    installed: bool  # an installed helper of ours was the reference
+
+
+def helper_path(game_dir: str) -> Path:
+    return Path(game_dir) / "Bin" / "Win64" / HELPER_FILE
+
+
+def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
         while chunk := f.read(1 << 20):
             digest.update(chunk)
-    if digest.hexdigest() != want:
-        raise UpdateError(f"{path.name} does not match its checksum in {SUMS}")
+    return digest.hexdigest()
 
 
-def download(release: Release, folder: Path | None = None, net: Net = NET) -> Path:
-    """Fetch the installer into ``folder`` (``updates_dir()``) and check it; older downloads are deleted. Returns its
-    path. A file that fails the check is deleted."""
-    folder = folder or updates_dir()
-    folder.mkdir(parents=True, exist_ok=True)
-    sums = net.get(release.sums_url).decode("utf-8", "replace")
-    msi = folder / release.msi_name
-    net.save(release.msi_url, msi)
+def is_our_helper(path: Path, seen: str = "") -> bool:
+    """Whether ``path`` is a link helper of ours: the hash of the last release's, or our marker text in the file
+    (another program's library of that name must not be reported on)."""
     try:
-        verify(msi, sums)
-    except (UpdateError, OSError) as exc:
-        msi.unlink(missing_ok=True)
-        raise UpdateError(str(exc)) from exc
-    for old in folder.iterdir():
-        if old != msi and old.is_file():
-            old.unlink(missing_ok=True)
-    return msi
+        if seen and file_sha256(path) == seen:
+            return True
+        return HELPER_MARK in path.read_bytes()
+    except OSError:
+        return False
 
 
-def start_installer(msi: Path) -> None:
-    """Run the installer (a major upgrade) apart from this program, which is about to quit."""
-    system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"  # not a msiexec.exe in the working folder
-    subprocess.Popen([str(system / "msiexec.exe"), "/i", str(msi)], close_fds=True, **NO_WINDOW)
+def helper_check(release: Release, game_dir: str, seen: str = "", net: Net = NET) -> HelperCheck | None:
+    """Compare the release's link helper with the installed one (``<game_dir>/Bin/Win64``) when it is ours, else with
+    ``seen``, the hash the last release had. None: no helper on the release. Nothing but the checksum file is fetched;
+    the helper itself is never downloaded."""
+    if not release.helper_sums_url:
+        return None
+    new = checksum_for(net.get(release.helper_sums_url).decode("utf-8", "replace"), HELPER_FILE)
+    path = helper_path(game_dir) if game_dir else None
+    ours = path is not None and path.is_file() and is_our_helper(path, seen)
+    reference = file_sha256(path) if ours else seen
+    if not reference:
+        return HelperCheck(new, False, False)
+    return HelperCheck(new, reference != new, ours)

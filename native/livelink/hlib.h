@@ -6,6 +6,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include "game.h"
 
 #define HLIB_VERSION "helper-library 0.1"
 /* The save format of the full mode's saves, carried in the meta part's marker: raised when a release breaks a rule
@@ -43,16 +44,8 @@ int hlib_config_str(const char *key, char *out, int cap); /* its text, trimmed; 
    value (0: log only). */
 int hlib_config_sim(const char *key, int dflt, volatile LONG *off);
 uint32_t hlib_config_digest(char *text, int cap); /* the simulation settings as "key=value ..." and their hash */
-/* The UI dump probe (ui/mod_uidump.c, switch ui_dump): a debug read of the live widget trees, in a dormant start too. */
-int hlib_ui_dump_wanted(void);
-int hlib_ui_dump_install(void); /* 1 when in place */
-int hlib_ui_dump_install_quiet(void); /* the same without the key and the scene watcher: for the live link */
-/* The open scenes of the UI states ids (n of them; none: every open scene) written now, on the UI frame (ui: the
-   frame listener's argument); the file names in files (cap of them). The count, -1 when the dump is not in place. */
-int hlib_ui_dump_now(void *ui, const int *ids, int n, char (*files)[160], int cap);
-const int *hlib_ui_dump_targets(int *n);
 
-/* files under <Documents>/Anno 117 - Pax Romana */
+/* files under the game's folder in Documents (game.h) */
 int hlib_user_path(char *out, const char *rel);          /* out holds MAX_PATH; 0 if it does not fit */
 int hlib_read_text(const char *path, char *buf, int cap); /* NUL-terminated; the length or -1 */
 

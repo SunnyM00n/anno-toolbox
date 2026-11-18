@@ -38,7 +38,7 @@ class GrannyModels(ConfigModels):
         bad = self._model_state()[1]
         if gr2 not in bad:
             if not self.tree2070.exists(gr2):
-                bad[gr2] = tr("not in the game's files")
+                bad[gr2] = tr("islands.not_games_files")
             else:
                 try:
                     GrannyFile(self.tree2070.read_bytes(gr2)).check()
@@ -85,5 +85,5 @@ class GrannyModels(ConfigModels):
                 try:
                     write_atomic(out, meshes_to_glb(self._meshes(gr2), material))
                 except GrannyError as exc:
-                    raise FileNotFoundError(tr("cannot read the mesh {ref}: {error}", ref=ref, error=exc)) from exc
+                    raise FileNotFoundError(tr("islands.cannot_read_mesh", ref=ref, error=exc)) from exc
         return out.read_bytes()

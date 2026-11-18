@@ -194,6 +194,13 @@ class Program:
         }
         self.pipelines: dict[tuple, list] = {}  # its pipelines by pass and layout: [pipeline, models using it]
 
+    def release(self) -> None:
+        """Destroy the pipelines its models did not give back: an owner that lets its models go by their resources
+        alone, a frame later, counts no user down (the terrain bake's)."""
+        for pipeline, _users in self.pipelines.values():
+            pipeline.destroy()
+        self.pipelines = {}
+
     @staticmethod
     def _buffer_names(stages: list) -> list[dict[str, str]]:
         """Per stage its constant buffers' keys: the name, or ``name@<stage>`` for a buffer an earlier stage names

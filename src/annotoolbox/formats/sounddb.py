@@ -21,11 +21,11 @@ FIELDS = (  # the children of a sound definition, in the shipped order
     "SoundFlags", "VolumeID", "RandomPitch", "SoundGroupID", "XZDistanceFactor",
 )  # fmt: skip
 TYPES = {
-    0: N_("interface"),
-    1: N_("one-shot"),
-    2: N_("atmosphere"),
-    3: N_("music"),
-    4: N_("3D loop"),
+    0: N_("common.interface"),
+    1: N_("common.one_shot"),
+    2: N_("common.atmosphere"),
+    3: N_("common.music_lower"),
+    4: N_("common.3d_loop"),
 }  # 2070's SoundType (sounds.md)
 NO_EVENT = -1  # the key of a list whose sounds hang directly below it (2070)
 

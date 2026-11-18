@@ -5,6 +5,7 @@ buttons. ``TABS`` says what is where and when it is enabled (plain data, no Qt);
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...infra.i18n import N_, tr
-from ...suite import features
+from ...suite import features, widgets
 from ...suite.icons import icon
 from ..cellbrush import AREA_KINDS
 from ..islandgrids import ZONES
@@ -48,11 +49,11 @@ NEEDS = (
     *TOOLS,
 )
 MODES = {
-    "none": N_("No island"),
-    "view": N_("View only"),
-    "object": N_("Object Mode"),
-    "terrain": N_("Terrain Mode"),
-    "path": N_("Path Mode"),
+    "none": N_("islands.no_island"),
+    "view": N_("islands.view_only"),
+    "object": N_("islands.object_mode"),
+    "terrain": N_("islands.terrain_mode"),
+    "path": N_("islands.path_mode"),
 }
 
 
@@ -86,105 +87,105 @@ def _spin(id, label, span, value, need, tip="", decimals=0):
     return Item(id, label, "", "spin", need, tip, False, *span, value, decimals)
 
 
-_RADIUS = _spin("radius", N_("Radius"), (1, 24, 1), 6, "brush", N_("The brush's radius in tiles"))
+_RADIUS = _spin("radius", N_("islands.radius"), (1, 24, 1), 6, "brush", N_("islands.brushs_radius_tiles"))
 
 
 TABS = (
     (
-        N_("Home"),
+        N_("islands.home"),
         (
-            (N_("Edit"), (_b("undo", N_("Undo"), "undo", "undo", N_("Undo the last change (Ctrl+Z)"), True),
-                      _b("redo", N_("Redo"), "redo", "redo", N_("Redo (Ctrl+Y)"), True))),
-            (N_("File"), (_b("save", N_("Save"), "save", "editable", N_("Write the edit file (Ctrl+S)")),
-                      _b("build", N_("Build &&\ninstall"), "build", "buildable", N_("Build the open island from its saved edits")),
-                      Item("target", N_("Saved"), "", "combo", "kind117", N_("How a 117 island is saved"),
-                           choices=(N_("replaces the original"), N_("as a new island"))))),
-            (N_("Selection"), (_t("tool_select", N_("Select"), "select", "select", N_("Select and move objects (S)")),
-                           _b("deselect", N_("De-Select"), "deselect", "island", N_("Select nothing (Esc)")),
-                           _b("focus", N_("Focus"), "focus", "selection", N_("Fly the camera to the selection (F)")))),
-            (N_("Camera"), (Item("goto", N_("go to: x z [distance] [turn]"), "", "text", "island",
-                             N_("x and z in tiles, then how far and from which side")),)),
+            (N_("common.edit"), (_b("undo", N_("islands.undo"), "undo", "undo", N_("islands.undo_last_change_ctrl_plus"), True),
+                      _b("redo", N_("islands.redo"), "redo", "redo", N_("islands.redo_ctrl_plus_y"), True))),
+            (N_("common.file"), (_b("save", N_("common.save"), "save", "editable", N_("islands.write_edit_file_ctrl_plus")),
+                      _b("build", N_("islands.build_install"), "build", "buildable", N_("islands.build_open_island_saved_edits")),
+                      Item("target", N_("islands.saved"), "", "combo", "kind117", N_("islands.how_117_island_saved"),
+                           choices=(N_("islands.replaces_original"), N_("islands.new_island_lower"))))),
+            (N_("islands.selection"), (_t("tool_select", N_("islands.select"), "select", "select", N_("islands.select_move_objects_s")),
+                           _b("deselect", N_("islands.de_select"), "deselect", "island", N_("islands.select_nothing_esc")),
+                           _b("focus", N_("islands.focus"), "focus", "selection", N_("islands.fly_camera_selection_f")))),
+            (N_("islands.camera"), (Item("goto", N_("islands.go_x_z_distance_turn"), "", "text", "island",
+                             N_("islands.x_z_tiles_how_far")),)),
         ),
     ),
     (
-        N_("Object"),
+        N_("common.object"),
         (
-            (N_("Place"), (_t("tool_place", N_("Place"), "place", "place", N_("Place the picked model on the ground (A; [ ] turn)")),
-                       _b("models", N_("Object\nGroups"), "models", "island", N_("The model library")))),
-            (N_("Transform"), (_t("gizmo_move", N_("Move"), "move", "editable", N_("Move along an axis or over the ground (W)")),
-                           _t("gizmo_turn", N_("Turn"), "turn", "editable", N_("Turn about the vertical (E)")),
-                           _t("gizmo_tilt", N_("Tilt"), "tilt", "editable", N_("Tilt about the model's own axes (E again)")),
-                           _t("gizmo_scale", N_("Scale"), "scale", "editable", N_("Scale (R); a prop per axis")))),
-            (N_("Edit"), (_b("delete", N_("Delete"), "delete", "selection", N_("Delete the selection (Del)")),
-                      _b("duplicate", N_("Duplicate"), "duplicate", "selection", N_("Duplicate the selection (Ctrl+D)")))),
-            (N_("Object Spray"), (_t("tool_plant", N_("Plant\nforest"), "plant", "forest", N_("Plant forest tiles (T)")),
-                              _t("tool_clear", N_("Clear\nforest"), "clear", "forest", N_("Clear forest tiles (T)")),
-                              _t("tool_spray", N_("Spray\nmodel"), "spray", "spray",
-                                 N_("Spray the picked model over the ground with a spacing and a random turn (O)")),
+            (N_("islands.place"), (_t("tool_place", N_("islands.place"), "place", "place", N_("islands.place_picked_model_ground_turn")),
+                       _b("models", N_("islands.object_groups"), "models", "island", N_("islands.model_library")))),
+            (N_("islands.transform"), (_t("gizmo_move", N_("islands.move"), "move", "editable", N_("islands.move_along_axis_over_ground")),
+                           _t("gizmo_turn", N_("islands.turn"), "turn", "editable", N_("islands.turn_about_vertical_e")),
+                           _t("gizmo_tilt", N_("islands.tilt"), "tilt", "editable", N_("islands.tilt_about_models_own_axes")),
+                           _t("gizmo_scale", N_("islands.scale"), "scale", "editable", N_("islands.scale_r_prop_per_axis")))),
+            (N_("common.edit"), (_b("delete", N_("common.delete"), "delete", "selection", N_("islands.delete_selection_del")),
+                      _b("duplicate", N_("islands.duplicate"), "duplicate", "selection", N_("islands.duplicate_selection_ctrl_plus_d")))),
+            (N_("islands.object_spray"), (_t("tool_plant", N_("islands.plant_forest"), "plant", "forest", N_("islands.plant_forest_tiles_t")),
+                              _t("tool_clear", N_("islands.clear_forest"), "clear", "forest", N_("islands.clear_forest_tiles_t")),
+                              _t("tool_spray", N_("islands.spray_model"), "spray", "spray",
+                                 N_("islands.spray_picked_model_over_ground")),
                               _RADIUS,
-                              _spin("spacing", N_("Spacing"), (0.5, 12, 0.5), 2.0, "spray",
-                              N_("Tiles between sprayed models, at least"), decimals=1))),
-            (N_("Visibility"), (_t("foliage", N_("Hide\nfoliage"), "hide", "island", N_("Trees, bushes and grass out of the view")),
-                            _b("show_hidden", N_("Show\nhidden"), "eye", "island", N_("Show everything hidden again")))),
+                              _spin("spacing", N_("islands.spacing"), (0.5, 12, 0.5), 2.0, "spray",
+                              N_("islands.tiles_between_sprayed_models_least"), decimals=1))),
+            (N_("islands.visibility"), (_t("foliage", N_("islands.hide_foliage"), "hide", "island", N_("islands.trees_bushes_grass_out_view")),
+                            _b("show_hidden", N_("islands.show_hidden"), "eye", "island", N_("islands.show_everything_hidden_again")))),
         ),
     ),
     (
-        N_("Terrain"),
+        N_("islands.terrain"),
         (
-            (N_("Height"), (_t("tool_raise", N_("Raise"), "raise", "height", N_("Height brush: raise (H)")),
-                         _t("tool_lower", N_("Lower"), "lower", "height", N_("Height brush: lower (H)")),
-                         _t("tool_flatten", N_("Flatten"), "flatten", "height", N_("Height brush: flatten to the height where the stroke began (H)")),
-                         _t("tool_smooth", N_("Smooth"), "smooth", "height", N_("Height brush: smooth (H)")))),
-            (N_("Relief"), (_t("tool_noise", N_("Noise"), "noise", "height", N_("Height brush: rough up the ground with repeatable noise (H)")),
-                        _t("tool_terrace", N_("Terrace"), "terrace", "height", N_("Height brush: pull the ground onto steps of one unit (H)")),
-                        _t("tool_ramp", N_("Ramp"), "ramp", "height", N_("Height brush: drag from one point to another to lay a slope between them (H)")),
-                        _t("tool_despike", N_("Spike\nremoval"), "despike", "height",
-                           N_("Height brush: level single corners that stand out of the ground (H)")))),
-            (N_("Ground"), (_t("tool_paint", N_("Paint"), "paint", "paint", N_("Paint the ground's materials (P)")),
-                        _b("materials", N_("Material\nGallery"), "materials", "island", N_("The ground materials by the game they come from")))),
-            (N_("Tint"), (_t("tool_tint", N_("Tint"), "paint", "active", N_("Tint: tint the ground; the build writes it into the tint pages (G)")),
-                      Item("tint", N_("Tint"), "", "combo", "active", N_("The tint the brush lays"),
+            (N_("islands.height"), (_t("tool_raise", N_("islands.raise"), "raise", "height", N_("islands.height_brush_raise_h")),
+                         _t("tool_lower", N_("islands.lower"), "lower", "height", N_("islands.height_brush_lower_h")),
+                         _t("tool_flatten", N_("islands.flatten"), "flatten", "height", N_("islands.height_brush_flatten_where_stroke")),
+                         _t("tool_smooth", N_("islands.smooth"), "smooth", "height", N_("islands.height_brush_smooth_h")))),
+            (N_("islands.relief"), (_t("tool_noise", N_("islands.noise"), "noise", "height", N_("islands.height_brush_rough_up_ground")),
+                        _t("tool_terrace", N_("islands.terrace"), "terrace", "height", N_("islands.height_brush_pull_ground_onto")),
+                        _t("tool_ramp", N_("islands.ramp"), "ramp", "height", N_("islands.height_brush_drag_one_point")),
+                        _t("tool_despike", N_("islands.spike_removal"), "despike", "height",
+                           N_("islands.height_brush_level_single_corners")))),
+            (N_("islands.ground"), (_t("tool_paint", N_("islands.paint"), "paint", "paint", N_("islands.paint_grounds_materials_p")),
+                        _b("materials", N_("islands.material_gallery"), "materials", "island", N_("islands.ground_materials_game_they_come")))),
+            (N_("islands.tint"), (_t("tool_tint", N_("islands.tint"), "paint", "active", N_("islands.tint_ground_build_writes_pages")),
+                      Item("tint", N_("islands.tint"), "", "combo", "active", N_("islands.tint_brush_lays"),
                            choices=tuple(name for name, _factor in PRESETS)))),
-            (N_("Surf"), (_t("tool_surf_on", N_("Waves"), "surf_on", "surf", N_("Sea map: set the coast waves to the brush's strength (U)")),
-                      _t("tool_surf_off", N_("Calm"), "surf_off", "surf", N_("Sea map: no coast waves (U)")))),
-            (N_("Brush"), (_RADIUS,
-                       _spin("strength", N_("Strength"), (0.1, 1.0, 0.05), 0.5, "brush", N_("The brush's strength"), decimals=2))),
+            (N_("islands.surf"), (_t("tool_surf_on", N_("islands.waves"), "surf_on", "surf", N_("islands.sea_map_set_coast_waves")),
+                      _t("tool_surf_off", N_("islands.calm"), "surf_off", "surf", N_("islands.sea_map_no_coast_waves")))),
+            (N_("islands.brush"), (_RADIUS,
+                       _spin("strength", N_("islands.strength"), (0.1, 1.0, 0.05), 0.5, "brush", N_("islands.brushs_strength"), decimals=2))),
         ),
     ),
     (
-        N_("Grid"),
+        N_("islands.grid"),
         (
-            (N_("Active map"), (_t("tool_cell_on", N_("Draw\ncells"), "cell_on", "active", N_("Active map: draw 8-tile cells the game draws (G)")),
-                            _t("tool_cell_off", N_("Erase\ncells"), "cell_off", "active", N_("Active map: erase cells (G)")),
+            (N_("islands.active_map"), (_t("tool_cell_on", N_("islands.draw_cells"), "cell_on", "active", N_("islands.active_map_draw_8_tile")),
+                            _t("tool_cell_off", N_("islands.erase_cells"), "cell_off", "active", N_("islands.active_map_erase_cells_g")),
                             _RADIUS)),
-            (N_("Ford"), (_t("tool_ford_on", N_("Lay\nford"), "ford_on", "active", N_("Ford: lay fords on river tiles, where units may cross (G)")),
-                        _t("tool_ford_off", N_("Erase\nford"), "ford_off", "active", N_("Ford: erase fords (G)")))),
-            (N_("Construction area"), (_t("tool_area_on", N_("Add\narea"), "cell_on", "active", N_("Construction area: add tiles (G)")),
-                             _t("tool_area_off", N_("Remove\narea"), "cell_off", "active", N_("Construction area: remove tiles (G)")),
-                             _t("tool_areakind", N_("Paint\narea id"), "zone", "active", N_("Construction area: paint the chosen area id (G)")),
-                             Item("areakind", N_("Area id"), "", "combo", "active", N_("The id of the island's other area the brush paints"),
+            (N_("islands.ford"), (_t("tool_ford_on", N_("islands.lay_ford"), "ford_on", "active", N_("islands.ford_lay_fords_river_tiles")),
+                        _t("tool_ford_off", N_("islands.erase_ford"), "ford_off", "active", N_("islands.ford_erase_fords_g")))),
+            (N_("islands.construction_area"), (_t("tool_area_on", N_("islands.add_area"), "cell_on", "active", N_("islands.construction_area_add_tiles_g")),
+                             _t("tool_area_off", N_("islands.remove_area"), "cell_off", "active", N_("islands.construction_area_remove_tiles_g")),
+                             _t("tool_areakind", N_("islands.paint_area_id"), "zone", "active", N_("islands.construction_area_paint_chosen_id")),
+                             Item("areakind", N_("islands.area_id"), "", "combo", "active", N_("islands.id_islands_other_area_brush"),
                                   choices=tuple(name for _id, name in AREA_KINDS)))),
-            (N_("Herd area"), (_t("tool_herd_on", N_("Add\nherds"), "cell_on", "active", N_("Herd area: add tiles the herds roam on (G)")),
-                           _t("tool_herd_off", N_("Remove\nherds"), "cell_off", "active", N_("Herd area: remove tiles from the herds' ground (G)")))),
-            (N_("Environment"), (_t("tool_zone", N_("Paint\nzone"), "zone", "active", N_("Environment: paint the chosen zone on 4-tile cells (G)")),
-                             Item("zone", N_("Zone"), "", "combo", "active", N_("The environment zone the brush paints"),
+            (N_("islands.herd_area"), (_t("tool_herd_on", N_("islands.add_herds"), "cell_on", "active", N_("islands.herd_area_add_tiles_herds")),
+                           _t("tool_herd_off", N_("islands.remove_herds"), "cell_off", "active", N_("islands.herd_area_remove_tiles_herds")))),
+            (N_("islands.environment"), (_t("tool_zone", N_("islands.paint_zone"), "zone", "active", N_("islands.environment_paint_chosen_zone_4")),
+                             Item("zone", N_("islands.zone"), "", "combo", "active", N_("islands.environment_zone_brush_paints"),
                                   choices=tuple(name for _number, name in ZONES)))),
-            (N_("Checks"), (_b("check_rules", N_("Check\nrules"), "rules", "island", N_("The island against the game's rules")),
-                        _b("check_slots", N_("Check\nslots"), "slots", "slots",
-                           N_("River slots: both banks on the build plateau and joined to the build grid")),
-                        _b("check_falls", N_("Check\nfalls"), "falls", "island", N_("Which waterfalls run through rock")))),
+            (N_("common.checks"), (_b("check_rules", N_("islands.check_rules"), "rules", "island", N_("islands.island_against_games_rules")),
+                        _b("check_slots", N_("islands.check_slots"), "slots", "slots",
+                           N_("islands.river_slots_both_banks_build")),
+                        _b("check_falls", N_("islands.check_falls"), "falls", "island", N_("islands.waterfalls_run_through_rock")))),
         ),
     ),
     (
-        N_("Path"),
+        N_("islands.path"),
         (
-            (N_("Rivers"), (_t("tool_water", N_("Rivers &&\nlakes"), "water", "water", N_("Rivers' points and lakes' levels (L)")),
-                        _b("point_delete", N_("Delete\npoint"), "point_delete", "river_point", N_("Remove the river point (Del)")),
-                        _b("point_insert", N_("Insert\npoint"), "point_insert", "river_point", N_("Insert a point after it (Ctrl+D)")))),
-            (N_("Path blockers"), (_t("tool_block", N_("Block\npath"), "block", "blocker", N_("Paint cells units cannot walk on (B)")),
-                               _t("tool_free", N_("Free\npath"), "free", "blocker", N_("Clear blocked cells (B)")),
+            (N_("islands.rivers"), (_t("tool_water", N_("islands.rivers_lakes"), "water", "water", N_("islands.rivers_points_lakes_levels_l")),
+                        _b("point_delete", N_("islands.delete_point"), "point_delete", "river_point", N_("islands.remove_river_point_del")),
+                        _b("point_insert", N_("islands.insert_point"), "point_insert", "river_point", N_("islands.insert_point_after_ctrl_plus")))),
+            (N_("islands.path_blockers"), (_t("tool_block", N_("islands.block_path"), "block", "blocker", N_("islands.paint_cells_units_cannot_walk")),
+                               _t("tool_free", N_("islands.free_path"), "free", "blocker", N_("islands.clear_blocked_cells_b")),
                                _RADIUS)),
-            (N_("Roads"), (_b("road_pieces", N_("Road\npieces"), "road", "", N_("The road piece editor")),)),
+            (N_("islands.roads"), (_b("road_pieces", N_("islands.road_pieces"), "road", "", N_("islands.road_piece_editor")),)),
         ),
     ),
 )  # fmt: skip
@@ -338,6 +339,7 @@ class Ribbon(QWidget):
         self.bar = QTabBar(drawBase=False, expanding=False)
         self.pages = QStackedWidget()
         self._names = [name for name, _groups in tabs]  # the data names: ``show_tab`` and the smoke report use them
+        self._tabs = tabs
         for name, groups in tabs:
             self.bar.addTab(tr(name))
             self.pages.addWidget(self._page(groups))
@@ -345,6 +347,20 @@ class Ribbon(QWidget):
         self.pages.setFixedHeight(max(self.pages.widget(k).sizeHint().height() for k in range(self.pages.count())))
         layout.addWidget(self.bar)
         layout.addWidget(self.pages)
+
+    def set_access_keys(self, avoid: str = "", shown_together: Iterable[list[QAction]] = ()) -> None:
+        """An access key for each tab and each button, none of the letters ``avoid`` (the menu bar's). A button's key
+        differs from every other action's of its page and of each list in ``shown_together`` (a menu's entries: the
+        buttons' actions are the menus' too)."""
+        titles = widgets.access_keys([tr(name) for name in self._names], avoid)
+        for k, title in enumerate(titles):
+            self.bar.setTabText(k, title)
+        away = avoid + widgets.access_letters(titles)
+        pages = []
+        for _name, groups in self._tabs:
+            ids = dict.fromkeys(it.id for _g, its in groups for it in its if it.kind in ("button", "toggle"))
+            pages.append([self.actions[i] for i in ids if i in self.actions])
+        widgets.assign_access_keys([a for page in pages for a in page], [*pages, *shown_together], away)
 
     def tab_names(self) -> list[str]:
         return list(self._names)
@@ -411,7 +427,7 @@ class Ribbon(QWidget):
         b = QToolButton()
         b.setDefaultAction(self.actions[it.id])
         b.setAutoRaise(True)
-        b.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # the view keeps the keyboard
+        b.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # reached by Tab; a click leaves the keyboard with the view
         return b
 
     def _big(self, it: Item) -> QToolButton:

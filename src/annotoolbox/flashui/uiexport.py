@@ -65,8 +65,9 @@ def relative(game_path: str) -> str:
 
 
 def safe_name(name: str) -> str:
-    """A path that stays below the export folder."""
-    return "/".join(p for p in name.replace("\\", "/").split("/") if p not in ("", ".", ".."))
+    """A path that stays below the export folder: no step up, no drive (a movie names its pictures as it likes)."""
+    parts = (p.replace(":", "_") for p in name.replace("\\", "/").split("/"))
+    return "/".join(p for p in parts if p not in ("", ".", ".."))
 
 
 class Exporter:
@@ -101,10 +102,10 @@ class Exporter:
             found = self.ui.atlas_entry(img.atlas_name)
             key = ui2205.image_path(img.atlas_name)
             if found is None:
-                return Item(name or relative(key), "", "icon", key, status="missing")
+                return Item(name or safe_name(relative(key)), "", "icon", key, status="missing")
             return self._icon(found[0], found[1], name)
         path = ui2205.image_path(img.path)
-        return Item(name or relative(path), path, "picture", path)
+        return Item(name or safe_name(relative(path)), path, "picture", path)
 
     def item_by_name(self, ref: str) -> Item:
         """A picture by a game path (``data/ui/...``), a movie's image name, or an atlas entry's name."""
@@ -122,7 +123,7 @@ class Exporter:
 
     def _icon(self, atlas_picture: str, entry: feuassets.AtlasEntry, name: str | None = None) -> Item:
         key = ui2205.image_path(entry.name)
-        return Item(name or relative(key), atlas_picture, "icon", key, (atlas_picture, entry), width=entry.width,
+        return Item(name or safe_name(relative(key)), atlas_picture, "icon", key, (atlas_picture, entry), width=entry.width,
                     height=entry.height)  # fmt: skip
 
     def picture_item(self, img: feuread.ExternalImage) -> Item:
@@ -189,8 +190,10 @@ class Exporter:
         """The PNG of an item; raises ``ExportError`` when the game has none."""
         if item.atlas is not None:
             picture, entry = item.atlas
-            width, _height, rgba = self.texture(picture)
+            width, height, rgba = self.texture(picture)
             x, y = entry.origin
+            if min(x, y) < 0 or x + entry.width > width or y + entry.height > height:
+                raise ExportError(f"{entry.name}: its place lies outside the {width} x {height} atlas {picture}")
             return imagewrite.png_bytes(entry.width, entry.height, crop(width, rgba, x, y, entry.width, entry.height))
         png = self.ui.read(item.source)
         if png is not None:
@@ -254,5 +257,5 @@ def summary(items: list[Item]) -> str:
     ok = sum(1 for i in items if i.status == "ok")
     bad = [i for i in items if i.status != "ok"]
     if bad:
-        return tr("{ok} pictures written, {bad} not available (listed in the index)", ok=ok, bad=len(bad))
-    return tr("{ok} pictures written", ok=ok)
+        return tr("ui.pictures_written_not_available_listed", ok=ok, bad=len(bad))
+    return tr("ui.ok_pictures_written", ok=ok)

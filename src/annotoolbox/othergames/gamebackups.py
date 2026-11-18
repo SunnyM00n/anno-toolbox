@@ -37,9 +37,7 @@ def keep(target: Path, backup: Path) -> None:
     copy_atomic(target, backup)
     if not filecmp.cmp(target, backup, shallow=False):
         backup.unlink(missing_ok=True)
-        raise OSError(
-            tr("the copy of {target} at {backup} is incomplete: nothing was changed", target=target, backup=backup)
-        )
+        raise OSError(tr("islands.copy_incomplete_nothing_changed", target=target, backup=backup))
 
 
 def no_copy(target: Path, backup: Path) -> RuntimeError:
@@ -47,8 +45,7 @@ def no_copy(target: Path, backup: Path) -> RuntimeError:
     on it would lose the game's files."""
     return RuntimeError(
         tr(
-            "{target} is the editor's, but there is no copy of the game's own at {backup}: verify the files in the "
-            "launcher, then build again",
+            "islands.editors_no_copy_games_own",
             target=target,
             backup=backup,
         )

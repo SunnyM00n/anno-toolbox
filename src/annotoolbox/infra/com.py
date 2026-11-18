@@ -8,6 +8,7 @@ Windows only: calling any of it elsewhere raises ``AttributeError`` from ``ctype
 from __future__ import annotations
 
 import ctypes
+import functools
 import uuid
 from pathlib import Path
 
@@ -28,10 +29,24 @@ class Guid(ctypes.Structure):
         return g
 
 
-def method(obj: int, index: int, *argtypes, restype=HRESULT):
-    """The ``index``-th function of a COM object's table, callable with the object first."""
+def method(obj: int, index: int, *argtypes, restype=HRESULT, held: bool = False):
+    """The ``index``-th function of a COM object's table, callable with the object first. ``held``: the call keeps
+    Python's lock, for the many short getters of a reflection: a call that lets it go waits to take it back while other
+    threads run Python, which made each of those microsecond calls take milliseconds on a busy view."""
     table = ctypes.cast(obj, POINTER(POINTER(c_void_p))).contents
-    return ctypes.WINFUNCTYPE(restype, c_void_p, *argtypes)(table[index])
+    kind = _held_type(restype, (c_void_p, *argtypes)) if held else ctypes.WINFUNCTYPE(restype, c_void_p, *argtypes)
+    return kind(table[index])
+
+
+@functools.cache
+def _held_type(restype, argtypes: tuple):
+    """A function type like ``WINFUNCTYPE``'s that does not let Python's lock go during the call."""
+
+    class Held(ctypes._CFuncPtr):
+        _argtypes_, _restype_ = argtypes, restype
+        _flags_ = ctypes._FUNCFLAG_STDCALL | ctypes._FUNCFLAG_PYTHONAPI
+
+    return Held
 
 
 def _release_call(obj):

@@ -17,7 +17,7 @@ OUTLINE_LIMIT = 40  # top-level tags listed per document
 
 def outline(save: SaveFile) -> Section:
     """Per FileDB document: its version and the tags at its top (name, how many nodes and values it holds)."""
-    table = Table([N_("Archive part"), N_("FileDB version"), N_("Tag"), N_("Holds")])
+    table = Table([N_("saves.archive_part"), N_("saves.filedb_version"), N_("saves.tag"), N_("saves.holds")])
     for part in save.parts:
         if part.kind != FILEDB:
             continue
@@ -28,7 +28,7 @@ def outline(save: SaveFile) -> Section:
             table.rows.append([part.name, version, child.name, holds])
         if len(tags) > OUTLINE_LIMIT:
             table.rows.append([part.name, version, f"... {len(tags) - OUTLINE_LIMIT} more", ""])
-    return Section(N_("Documents"), table=table)
+    return Section(N_("saves.documents"), table=table)
 
 
 def _load_list(s: Summary, save: SaveFile) -> bool:
@@ -46,8 +46,8 @@ def _load_list(s: Summary, save: SaveFile) -> bool:
 def summarize(save: SaveFile) -> Summary:
     s = Summary(save.game)
     if save.game == "anno1800" and _load_list(s, save):
-        s.note(N_("Read with Anno 117's tag names; no Anno 1800 save was available to confirm them."))
+        s.note(N_("saves.read_anno_117s_tag_names"))
     else:
-        s.note(N_("No sample of this game's saves pinned its layout: only the documents' tags are listed, read only."))
+        s.note(N_("saves.no_sample_games_saves_pinned_sentence"))
     s.sections.append(outline(save))
     return s

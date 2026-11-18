@@ -61,13 +61,15 @@ class Item:
 def outline(effect: EffectDoc) -> list[Item]:
     """The tree of the open effect: the file's items, then the model config's blocks that place it."""
     if effect.doc is None:
-        return [Item(effect.title, "file", note=tr("an empty file"))]
+        return [Item(effect.title, "file", note=tr("particles.empty_file"))]
     build = {RDP: _rdp, XML: _xml, BRACE: _brace}[effect.syntax]
     items = build(effect)
     if effect.model is not None:
         for k, block in enumerate(effect.model.blocks):
             rows = [_config_row(f) for f in cfgdoc.fields(block)]
-            title = tr("in {config}: {name}", config=effect.model.asked.rsplit("/", 1)[-1], name=cfgdoc.kind_of(block))
+            title = tr(
+                "particles.in_config_name", config=effect.model.asked.rsplit("/", 1)[-1], name=cfgdoc.kind_of(block)
+            )
             items.append(Item(title, f"model/{k}", rows))
     return items
 
@@ -76,7 +78,7 @@ def _tag_row(f: cfgdoc.Field, syntax: str) -> Row:
     found = fieldinfo.info(syntax, f.name)
     if f.binary:
         found = Info(FIXED, found.meaning)
-    value = tr("{n} bytes", n=len(f.node.data)) if f.binary else cfgdoc.shown(f.value)
+    value = tr("viewer.n_bytes", n=len(f.node.data)) if f.binary else cfgdoc.shown(f.value)
     return Row(f.name, value, found, f.node, syntax)
 
 
@@ -86,19 +88,21 @@ def _config_row(f: cfgdoc.Field) -> Row:
     found = {"switch": SWITCH, "number": NUMBER, "colour": NUMBER, "vector": NUMBER, "file": FILE, "kind": FIXED}
     info = Info(FIXED) if f.binary else Info(found.get(kind, TEXT))
     return Row(
-        f.name, cfgdoc.shown(f.value) if not f.binary else tr("{n} bytes", n=len(f.node.data)), info, f.node, RDP
+        f.name, cfgdoc.shown(f.value) if not f.binary else tr("viewer.n_bytes", n=len(f.node.data)), info, f.node, RDP
     )
 
 
 def _rdp(effect: EffectDoc) -> list[Item]:
     root = effect.doc.root
     header = [_tag_row(f, RDP) for f in cfgdoc.fields(root) if f.name.split(".")[0] not in BLOBS]
-    items = [Item(tr("header"), "header", header)]
+    items = [Item(tr("particles.header"), "header", header)]
     materials = root.find("Materials")
     for k, m in enumerate(materials.children if materials is not None else []):
-        items.append(Item(tr("material {n}", n=k), f"material/{k}", [_tag_row(f, RDP) for f in cfgdoc.fields(m)]))
+        items.append(
+            Item(tr("particles.material_n", n=k), f"material/{k}", [_tag_row(f, RDP) for f in cfgdoc.fields(m)])
+        )
     ticks = [_tag_row(f, RDP) for f in cfgdoc.fields(root) if f.name in BLOBS]
-    items.append(Item(tr("tick data"), "ticks", ticks, note=tr("baked by the studio's tool: Tint and Fade change it")))
+    items.append(Item(tr("particles.tick_data"), "ticks", ticks, note=tr("particles.baked_studios_tool_tint_fade")))
     return items
 
 
@@ -114,8 +118,11 @@ def _xml(effect: EffectDoc) -> list[Item]:
             curve = curves.XmlCurve(node, name)
             parts = [_tag_row(cfgdoc.Field(part, node.find(name + part)), XML)
                      for part in ("ValueMin", "ValueMax", "ValueDef", "Varianz", "Size") if node.find(name + part)]  # fmt: skip
-            note = fieldinfo.curve_meaning(name)
-            item.children.append(Item(tr("{name} (curve)", name=name), f"emitter/{k}/{name}", parts, curve, note=note))
+            meaning = fieldinfo.curve_meaning(name)
+            note = tr(meaning) if meaning else ""
+            item.children.append(
+                Item(tr("particles.name_curve", name=name), f"emitter/{k}/{name}", parts, curve, note=note)
+            )
         items.append(item)
     return items
 
@@ -124,7 +131,7 @@ def _brace(effect: EffectDoc) -> list[Item]:
     doc: BraceDoc = effect.doc
     top = next((g for g in doc.tree().groups("Effect")), None)
     if top is None:
-        return [Item(effect.title, "file", note=tr("no Effect block"))]
+        return [Item(effect.title, "file", note=tr("particles.no_effect_block"))]
     return [_brace_item(doc, g, f"emitter/{k}", g.name) for k, g in enumerate(top.groups())]
 
 
@@ -133,7 +140,7 @@ def _brace_item(doc: BraceDoc, group: Group, key: str, title: str) -> Item:
     rows = []
     for e in group.entries():
         seen[e.name] = seen.get(e.name, 0) + 1
-        shown = e.name if seen[e.name] == 1 else tr("{name} (line {n})", name=e.name, n=seen[e.name])
+        shown = e.name if seen[e.name] == 1 else tr("particles.name_line_n", name=e.name, n=seen[e.name])
         rows.append(Row(shown, _brace_value(e), fieldinfo.info(BRACE, e.name), e, BRACE))
     name = next((e for e in group.entries("Name")), None)
     if name is not None:
@@ -142,9 +149,11 @@ def _brace_item(doc: BraceDoc, group: Group, key: str, title: str) -> Item:
     for k, sub in enumerate(group.groups()):
         sub_key = f"{key}/{sub.name}#{k}"
         if any(c.name == "Color" for c in sub.groups()):
-            item.children.append(Item(tr("{name} (colours)", name=sub.name), sub_key, [], curves.BraceColors(doc, sub)))
+            item.children.append(
+                Item(tr("particles.name_colours", name=sub.name), sub_key, [], curves.BraceColors(doc, sub))
+            )
         elif sub.entries("Minimum") or sub.entries("Single"):
-            child = _brace_item(doc, sub, sub_key, tr("{name} (graph)", name=sub.name))
+            child = _brace_item(doc, sub, sub_key, tr("particles.name_graph", name=sub.name))
             child.children, child.curve = [], curves.BraceGraph(doc, sub)
             item.children.append(child)
         else:
@@ -165,38 +174,38 @@ def _number_problem(info: Info, text: str) -> str:
     try:
         value = float(text)
     except ValueError:
-        return tr("{value} is no number", value=repr(text))
+        return tr("objects.value_no_number", value=repr(text))
     if not math.isfinite(value):
-        return tr("{value} is no number a file can hold", value=repr(text))
+        return tr("particles.no_number_file_hold", value=repr(text))
     if info.kind == WHOLE and value != int(value):
-        return tr("{value} is no whole number", value=repr(text))
+        return tr("particles.no_whole_number", value=repr(text))
     if info.kind == SWITCH:
-        return tr("0 or 1")
+        return tr("particles.0_or_1")
     if info.limits and not info.limits[0] <= value <= info.limits[1]:
         least, most = info.limits
         if math.isinf(most):
-            return tr("{value} is below {least}", value=repr(text), least=f"{least:g}")
-        return tr("{value} is outside {least} to {most}", value=repr(text), least=f"{least:g}", most=f"{most:g}")
+            return tr("particles.value_is_below_least", value=repr(text), least=f"{least:g}")
+        return tr("particles.value_outside_least_to_most", value=repr(text), least=f"{least:g}", most=f"{most:g}")
     return ""
 
 
 def problem(info: Info, text: str, syntax: str = "") -> str:
     """Why a typed value is refused for a field ("" when it is taken); ``syntax`` is the file's (``BRACE`` has no markup)."""
     if info.kind == FIXED:
-        return tr("this value is made with the rest of the file and cannot be typed")
+        return tr("particles.value_made_rest_file_cannot")
     if any(ord(c) < 32 for c in text):
-        return tr("a line break or another control character would break the file")
+        return tr("particles.line_break_another_control_character")
     if info.kind in (NUMBER, WHOLE) or (info.kind == SWITCH and text not in ("0", "1")):
         if why := _number_problem(info, text):
             return why
     if info.kind == CHOICE and info.choices and text not in {v for v, _n in info.choices}:
-        return tr("{value} is not one of {choices}", value=repr(text), choices=", ".join(v for v, _n in info.choices))
+        return tr("particles.value_not_one_choices", value=repr(text), choices=", ".join(v for v, _n in info.choices))
     if any(c in text for c in "<>{}") or "CDATA[" in text:
-        return tr("< and > or a brace would break the file; leave them out")
+        return tr("particles.brace_break_file_leave_out")
     if syntax != BRACE and cfgdoc.BARE_AMPERSAND.search(text):
-        return tr("a bare & would break the file; write &amp; for it")
+        return tr("particles.bare_break_file_write_amp")
     if info.kind in (FILE, TEXT) and '"' in text:
-        return tr('a " would break the file; leave it out')
+        return tr("particles.break_file_leave_out")
     return ""
 
 

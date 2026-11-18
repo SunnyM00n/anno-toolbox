@@ -31,11 +31,11 @@ from .desktopview import BRUSHES, TOOLS
 from .minimappanel import MinimapPanel
 
 LOOKS = (
-    ("game_terrain", N_("Game terrain"), N_("the ground as the game draws it near the camera: rebuilt from the island's height pages (saved island)")),
-    ("native", N_("The game's own shaders"), N_("the terrain by the game's own shaders, in game light (117: Direct3D 12; 1800 and 2205: Direct3D 11)")),
-    ("look2070", N_("2070 look"), N_("islands edited for 2070: drawn as Anno 2070 draws them")),
-    ("underwater", N_("Underwater look"), N_("the 2070 look seen under water: light absorbed by depth and distance, the sea's haze")),
-    ("caustics", N_("Caustics"), N_("the underwater look's light patterns on the sea floor (an approximation)")),
+    ("game_terrain", N_("islands.game_terrain"), N_("islands.ground_game_draws_near_camera")),
+    ("native", N_("common.games_own_shaders"), N_("islands.terrain_games_own_shaders_game")),
+    ("look2070", N_("islands.2070_look"), N_("islands.islands_edited_2070_drawn_anno")),
+    ("underwater", N_("islands.underwater_look"), N_("islands.2070_look_seen_under_water")),
+    ("caustics", N_("islands.caustics"), N_("islands.underwater_looks_light_patterns_sea")),
 )  # fmt: skip
 LOOKS_2070 = ("look2070", "underwater", "caustics")  # the looks of islands edited for 2070
 GAME_TERRAIN = ("anno1800",)  # other games whose islands have the game's near terrain (height pages) for the view
@@ -50,14 +50,18 @@ NO_TOOLS = {
     "file": {"blocker", "active", "surf"},
 }
 LAYER_NAMES = {  # the view's layers (``desktoprender.LAYERS``) as a person reads them
-    "objects": N_("objects"),
-    "markers": N_("markers"),
-    "props": N_("effects"),
-    "grass": N_("grass"),
-    "forest": N_("forest"),
-    "water": N_("water"),
+    "objects": N_("islands.objects"),
+    "markers": N_("islands.markers"),
+    "props": N_("common.effects_lower"),
+    "grass": N_("islands.grass"),
+    "forest": N_("islands.forest_lower"),
+    "water": N_("islands.water"),
 }
-CHECK_NAMES = {"rules": N_("rules"), "slots": N_("slots"), "falls": N_("falls")}  # the checks of the Grid tab
+CHECK_NAMES = {
+    "rules": N_("islands.rules"),
+    "slots": N_("islands.slots"),
+    "falls": N_("islands.falls"),
+}  # the checks of the Grid tab
 OTHER_NO_TOOLS = {"water", "forest", "place", "blocker", "spray", "active", "surf"}  # an island of another game
 
 
@@ -138,9 +142,9 @@ class HistoryPanel(QListWidget):
     def fill(self) -> None:
         stack = self.doc.session.undo
         self.clear()
-        self.addItem(tr("(as opened)"))
+        self.addItem(tr("common.as_opened"))
         for k, label in enumerate(stack.labels()):
-            self.addItem(f"{label}" + ("  · " + tr("saved") if k + 1 == stack.clean else ""))
+            self.addItem(f"{label}" + ("  · " + tr("common.saved") if k + 1 == stack.clean else ""))
         undone, text = self.palette().placeholderText(), self.palette().text()
         for k in range(self.count()):
             self.item(k).setForeground(undone if k > stack.index else text)
@@ -189,7 +193,7 @@ class IslandDoc(QObject):
         self.layers = LayersPanel(self)
         self.checks = ChecksPanel(self)
         self.history = HistoryPanel(self)
-        self.minimap = MinimapPanel(self.session, self.background)
+        self.minimap = MinimapPanel(self.session, self.background, self.say)
         self._links = [
             (self.view.selectionChanged, self._selected),
             (self.view.waterChanged, self.props.show_water),
@@ -204,7 +208,7 @@ class IslandDoc(QObject):
         counts = island.get("objects", []), island.get("props", []), (island.get("forest") or {}).get("tiles", [])
         self.say(
             tr(
-                "{objects} objects · {props} props · {tiles} forest tiles",
+                "islands.objects_props_forest_tiles",
                 objects=len(counts[0]),
                 props=len(counts[1]),
                 tiles=len(counts[2]),
@@ -219,7 +223,7 @@ class IslandDoc(QObject):
         for note in notes:
             self.shell.log.appendPlainText(note)
         if notes:
-            more = " " + tr("(+{n} more in the Log)", n=len(notes) - 1) if len(notes) > 1 else ""
+            more = " " + tr("islands.plus_more_log", n=len(notes) - 1) if len(notes) > 1 else ""
             self.say(notes[0] + more)
 
     # what the workbench asks
@@ -290,27 +294,25 @@ class IslandDoc(QObject):
         parts = [
             n
             for k, n in (
-                ("game_terrain", tr("terrain")),
-                ("native", tr("its shaders")),
+                ("game_terrain", tr("islands.terrain_lower")),
+                ("native", tr("islands.its_shaders")),
             )
             if getattr(o, k)
         ]  # fmt: skip
         look = (
-            tr("2070 underwater look")
+            tr("islands.2070_underwater_look")
             if o.underwater
-            else tr("2070 look")
+            else tr("islands.2070_look")
             if o.look2070
-            else tr("the game's rules: {parts}", parts=", ".join(parts))
+            else tr("islands.games_rules_parts", parts=", ".join(parts))
             if parts and self.session.island.get("game")
-            else tr("117 rules: {parts}", parts=", ".join(parts))
+            else tr("islands.117_rules_parts", parts=", ".join(parts))
             if parts
-            else tr("editor look")
+            else tr("islands.editor_look")
         )
         game = self.modes["game"]
         head = (
-            tr("<b>{game} island (view only)</b>", game=game)
-            if self.session.readonly
-            else tr("<b>{game} island</b>", game=game)
+            tr("islands.island_view_only", game=game) if self.session.readonly else tr("islands.game_island", game=game)
         )
         return f"{head} · {look}"
 
@@ -392,13 +394,13 @@ class IslandDoc(QObject):
 
     def undo(self) -> None:
         label = self.session.undo.undo()
-        self.say(tr("undone: {label}", label=label) if label else tr("nothing to undo"))
+        self.say(tr("common.undone_label", label=label) if label else tr("islands.nothing_to_undo"))
         if self.view.selected is not None and not self.view.selected.alive:
             self.view.select(None)
 
     def redo(self) -> None:
         label = self.session.undo.redo()
-        self.say(tr("redone: {label}", label=label) if label else tr("nothing to redo"))
+        self.say(tr("common.redone_label", label=label) if label else tr("islands.nothing_to_redo"))
 
     def save(self) -> bool:
         if self.session.readonly:
@@ -406,9 +408,9 @@ class IslandDoc(QObject):
         try:
             self.session.save(self.editor)
         except Exception as exc:
-            QMessageBox.warning(self.shell, tr("Save"), tr("could not save: {error}", error=exc))
+            QMessageBox.warning(self.shell, tr("common.save"), tr("islands.could_not_save", error=exc))
             return False
-        self.say(tr("saved {path}", path=self.editor.edits_path))
+        self.say(tr("common.saved_path", path=self.editor.edits_path))
         return True
 
     def build(self) -> None:
@@ -421,7 +423,7 @@ class IslandDoc(QObject):
         it found in the Checks tab."""
         check = islandrules.RULES if name == "rules" else features.extension(features.CHECKS, name)
         if check is None:
-            self.say(tr("the {name} check is not available in this edition", name=name))
+            self.say(tr("islands.check_not_available_edition", name=name))
             return
         if check.saying:
             self.say(tr(check.saying))
@@ -430,7 +432,7 @@ class IslandDoc(QObject):
             if not self.alive:
                 return
             if isinstance(result, Exception):
-                self.say(tr("{failure}: {error}", failure=tr(check.failure), error=result))
+                self.say(tr("islands.failure_error", failure=tr(check.failure), error=result))
                 return
             rows, message = check.report(result)
             self.view.checks[name] = result
@@ -454,10 +456,14 @@ class IslandDoc(QObject):
             return True
         keys = QMessageBox.StandardButton
         box = QMessageBox(
-            QMessageBox.Icon.Question, tr("Unsaved edits"), tr("Save the edits before closing?"),
+            QMessageBox.Icon.Question, tr("islands.unsaved_edits"), tr("islands.save_edits_before_closing"),
             keys.Save | keys.Discard | keys.Cancel, self.shell,
         )  # fmt: skip
-        for key, text in ((keys.Save, tr("Save")), (keys.Discard, tr("Discard")), (keys.Cancel, tr("Cancel"))):
+        for key, text in (
+            (keys.Save, tr("common.save")),
+            (keys.Discard, tr("islands.discard")),
+            (keys.Cancel, tr("common.cancel")),
+        ):
             box.button(key).setText(text)
         answer = keys(box.exec())
         if answer == QMessageBox.StandardButton.Cancel:
@@ -465,11 +471,15 @@ class IslandDoc(QObject):
         return answer != QMessageBox.StandardButton.Save or self.save()
 
     def close(self) -> None:
-        """Let go of the view; the panels are the workbench's to drop."""
+        """Let go of the view and of the window (which kept every closed island's session alive as its child); the
+        panels are the workbench's to drop."""
         self.alive = False
         for signal, slot in self._links:
             signal.disconnect(slot)
+        self._links = []
         self.view.unload()
+        self.setParent(None)
+        self.deleteLater()
 
     # events
     def _tool(self, name: str) -> None:
@@ -505,19 +515,19 @@ class IslandDoc(QObject):
                 try:
                     vanilla = editor.vanilla_materials()
                 except Exception as exc:
-                    problems.append(tr("no 117 ground materials: {error}", error=f"{type(exc).__name__}: {exc}"))
+                    problems.append(tr("islands.no_117_ground_materials", error=f"{type(exc).__name__}: {exc}"))
             if "place" in tools:
                 try:
                     library = editor.library()
                 except Exception as exc:
-                    problems.append(tr("no model library: {error}", error=f"{type(exc).__name__}: {exc}"))
+                    problems.append(tr("islands.no_model_library", error=f"{type(exc).__name__}: {exc}"))
             return own, vanilla, library, problems
 
         def done(result):
             if not self.alive:
                 return
             if isinstance(result, Exception):
-                self.say(tr("no ground materials: {error}", error=result))
+                self.say(tr("islands.no_ground_materials", error=result))
                 return
             self._show_side_data(*result)
 

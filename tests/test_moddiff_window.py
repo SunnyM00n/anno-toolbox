@@ -259,3 +259,40 @@ def test_a_jump_does_not_wait_for_the_filters_quarter_second(qt):
     assert tree.timer.isActive()  # waiting for the last key
     tree.settle()
     assert not tree.timer.isActive() and tree.select_target("f.xml", "7")
+
+
+def test_mods_that_cannot_be_read_are_said_not_swallowed(qt, setup, monkeypatch):
+    def fail(_settings, _key):
+        raise OSError("the mods folder is not reachable")
+
+    monkeypatch.setattr(jobs, "manager_for", fail)
+    window = ModDiffWindow(setup[0], sync=True)
+    try:
+        assert "not reachable" in window.statusBar().currentMessage()
+    finally:
+        window.close()
+
+
+@pytest.mark.parametrize(
+    ("language", "values", "decided"),
+    [
+        ("en", "a: added; b: removed; c: set a value; d: 3 value(s); e: 12 bytes; f: -", "late phase"),
+        ("de", "a: hinzugefügt; b: entfernt; c: Wert gesetzt; d: 3 Wert(e); e: 12 Byte; f: -", "späte Phase"),
+    ],
+)
+def test_a_conflicts_notes_are_shown_in_the_interface_language_and_the_games_data_as_it_is(language, values, decided):
+    from annotoolbox.infra import i18n
+    from annotoolbox.moddiff import model
+    from annotoolbox.moddiff.tables import cells
+
+    i18n.use(language)
+    who = ("a", "b", "c", "d", "e", "f")
+    notes = ("added", "removed", "set a value", "3 value(s)", "12 bytes", None)
+    noted = model.Conflict(model.GONE, model.CONFLICT, "f.xml", "5", "", "", who, notes, "f", model.LATE_PHASE)
+    assert cells(noted)[4:] == [values, "f", decided]
+    data = model.Conflict(model.VALUE, model.CONFLICT, "f.xml", "5", "", "p", who, notes, "f", model.LOAD_AFTER)
+    assert cells(data)[4:] == [
+        "a: added; b: removed; c: set a value; d: 3 value(s); e: 12 bytes; f: -",
+        "f",
+        "LoadAfter",
+    ]

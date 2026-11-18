@@ -57,7 +57,7 @@ def members_of(path: Path, game: Game | None = None) -> dict[str, Member]:
             out[key] = Member(key, entry.size, lambda e=entry: rda.read_entry(e))
         return out
     except (RdaError, OSError, ValueError) as exc:
-        raise ValueError(tr("{path} is not an archive that reads: {error}", path=path, error=exc)) from exc
+        raise ValueError(tr("assets.not_archive_reads", path=path, error=exc)) from exc
 
 
 def compare_members(
@@ -107,15 +107,15 @@ def _targets(base: GameBase, run: Run, path: str, data: bytes) -> list[Target] |
         return text_targets(path, _line_texts(theirs), _line_texts(data))
     try:
         doc = PatchDoc.load(data)
-    except ET.ParseError:
+        if base.language_of()(path) is not None:
+            return text_targets(path, base.texts_of(PatchDoc.load(theirs)), base.texts_of(doc))
+        if doc.by_guid or path in base.files:
+            run.touched[path] = set(doc.by_guid)
+            run.session.docs[path] = doc
+            return run.asset_targets(path, doc, base.vanilla_guids(path))
+        changes = data_changes(data_of(PatchDoc.load(theirs)), data_of(doc))
+    except ET.ParseError:  # the member or the game's file is no XML: compared by its bytes
         return None
-    if base.language_of()(path) is not None:
-        return text_targets(path, base.texts_of(PatchDoc.load(theirs)), base.texts_of(doc))
-    if doc.by_guid or path in base.files:
-        run.touched[path] = set(doc.by_guid)
-        run.session.docs[path] = doc
-        return run.asset_targets(path, doc, base.vanilla_guids(path))
-    changes = data_changes(data_of(PatchDoc.load(theirs)), data_of(doc))
     return [Target(path, "", CHANGED, changes=changes)] if changes else []
 
 

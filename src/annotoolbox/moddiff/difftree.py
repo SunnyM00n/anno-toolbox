@@ -40,9 +40,9 @@ SETTLE_MS = 250  # the filter is worked out this long after the last key
 EXPAND_ROWS = 20000  # a file with more targets than this is not opened by itself
 BITS, MASK = 20, (1 << 20) - 1  # an index id holds the level and three row numbers
 KINDS = {
-    ADDED: N_("added"), REMOVED: N_("removed"), CHANGED: N_("changed"), ONLY_A: N_("only in the first"),
-    ONLY_B: N_("only in the second"), DIFFERS: N_("differs"), NEW: N_("new file"),
-    REPLACED: N_("replaces the game's file"), SAME: N_("the game's own file"),
+    ADDED: N_("moddiff.added"), REMOVED: N_("moddiff.removed"), CHANGED: N_("common.changed"), ONLY_A: N_("moddiff.only_first"),
+    ONLY_B: N_("moddiff.only_second"), DIFFERS: N_("moddiff.differs"), NEW: N_("moddiff.new_file"),
+    REPLACED: N_("moddiff.replaces_games_file"), SAME: N_("moddiff.games_own_file"),
 }  # fmt: skip
 
 
@@ -98,7 +98,7 @@ def build_groups(report: Report | None, needle: str) -> list[Group]:
             out.append(Group(file, rows, len(every)))
     files = [f for f in report.files if not needle or needle in f.path.lower()]
     if files:
-        out.append(Group(tr("Files"), files, len(report.files)))
+        out.append(Group(tr("common.files"), files, len(report.files)))
     return out
 
 
@@ -113,7 +113,7 @@ def _parts(ident: int) -> tuple[int, int, int, int]:
 class TargetModel(QAbstractItemModel):
     """Groups, then each group's targets (or files), then a target's value changes; rows are numbers until asked for."""
 
-    HEADERS = (N_("Target"), N_("Kind"), N_("Before"), N_("After"), N_("Mods"))
+    HEADERS = (N_("common.target"), N_("ui.kind"), N_("moddiff.before"), N_("moddiff.after"), N_("common.mods"))
 
     def __init__(self) -> None:
         super().__init__()

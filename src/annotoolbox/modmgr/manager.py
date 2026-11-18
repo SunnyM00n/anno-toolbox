@@ -68,18 +68,27 @@ class ModManager:
         self.catalog = catalog.scan(self.roots, self.anno)
         return self.catalog
 
-    def install(self, source: Path) -> list[install.Installed]:
-        """A mod folder, a folder of mods or a zip into the mods folder (the Documents one)."""
-        found = install.install_path(source, self.mods_dir, self.anno, self.trash)
-        for one in found:  # one announcement per mod; the whole folder counts as changed
-            one.notice = linkannounce.announce_install(one.mod_id, one.folder, {}).text
+    def install(
+        self,
+        source: Path,
+        progress: Callable[[str], None] | None = None,
+        placed: list[install.Installed] | None = None,
+    ) -> list[install.Installed]:
+        """A mod folder, a folder of mods or a zip into the mods folder (the Documents one). ``progress`` is told
+        each step and may raise to stop; ``placed`` then holds the mods that are in (the game is told of them)."""
+        found = [] if placed is None else placed
+        try:
+            install.install_path(source, self.mods_dir, self.anno, self.trash, progress, found)
+        finally:
+            for one in found:  # one announcement per mod; the whole folder counts as changed
+                one.notice = linkannounce.announce_install(one.mod_id, one.folder, {}).text
         return found
 
     def remove(self, card: catalog.ModCard, announce: bool = True) -> str:
         """The mod folder of ``card`` to the recycle bin; the profiles keep its line (the game notes it as not installed).
         A window that moves the folder off its thread passes ``announce=False`` and calls ``announce_removal`` on its own."""
         if card.mod is not None and card.mod.parent is not None:
-            raise install.InstallError(tr("a nested mod is part of its mod's folder: remove the whole mod"))
+            raise install.InstallError(tr("mods.nested_mod_part_mods_folder"))
         where = install.remove_mod(card.folder, [r.path for r in self.roots], self.trash)
         if announce:
             self.announce_removal(card)
@@ -137,11 +146,11 @@ class ModManager:
         plan = self.plan(name)
         tree = None
         if self.game_dir is not None and self.game_dir.is_dir():
-            say(f"opening {self.name}'s files")
+            say(tr("mods.opening_game_files", game=self.name))
             try:
                 tree = gametree.open_game(self.game, self.game_dir, self.cache)
             except (OSError, ValueError, KeyError) as exc:
-                say(f"the game's files could not be opened ({exc}): the patches are not applied")
+                say(tr("mods.game_files_not_opened_patches_not_applied", error=exc))
         read_base = None if tree is None else (lambda p: tree.read(p) if tree.exists(p) else None)
         has_base = None if tree is None else tree.exists
         return checks.deep_check(plan, self.mods_dir, read_base, has_base, progress, lint=self.anno is not None)

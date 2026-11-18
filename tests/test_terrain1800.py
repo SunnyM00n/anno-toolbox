@@ -158,7 +158,7 @@ def test_2205s_stored_node_asks_for_its_page_and_draws_with_it_once_in():
     node = Node(3, 8.0, 16.0)  # 8 tiles: inside level 0's page (0, 1)
     assert t._kind(node) == ("stored", None, 0) and list(t.wanted) == [(0, 0, 1)]
     t.ready[(0, 0, 1)] = tex = object()
-    assert t._kind(node) == ("stored", (0, 0, 1), id(tex))
+    assert t._kind(node) == ("stored", (0, 0, 1), tex) and t._kind(node)[2] is tex  # held, not its id
     assert t._kind(Node(3, 0.0, 0.0))[0] == "grid"  # no stored mesh there: the view's heights
 
 
@@ -176,7 +176,7 @@ def test_2205s_stored_node_stands_in_while_its_quarters_bake_by_its_session_page
     t.size, t._visible, t.cache, t.pages = 32.0, None, SliceCache(8), None
     t.ready = OrderedDict({(0, 0, 0): (tex := object())})
     t.models = {n: SimpleNamespace(node=n, kind=("grid", None, 0)) for n in (parent, *kids)}
-    t.models[parent].kind = ("stored", (0, 0, 0), id(tex))
+    t.models[parent].kind = ("stored", (0, 0, 0), tex)
     for n in (parent, *kids):
         t.cache.get(n)
     t.cache.baked(parent)

@@ -102,6 +102,86 @@ def test_the_frames_parts_are_switches_where_the_path_draws_them(monkeypatch):
     assert not any(f.enabled for f in ours.features)  # only the game's own shaders have them
 
 
+def test_the_texts_a_view_shows_are_in_the_interface_language(monkeypatch):
+    """tool-suite.md 25: a look's label, why it is greyed out, a part's reason, the compiler's source and the adapter
+    come from the language files; a part's ``status`` stays the key the code compares."""
+    from dataclasses import replace
+
+    from annotoolbox.infra import i18n
+
+    def shown() -> list[str]:
+        o = nl.options("anno2205", nl.Found("FXC"), {"gl"})
+        plain = nl.options("anno2205", nl.Found("FXC"), ALL, nl.Choice(look=nl.PLAIN))
+        ssr = next(f for f in nl.options("anno2205", nl.Found("FXC"), ALL).features if f.key == "ssr")
+        assert (
+            ssr.status == nl.RIVERS_2205 and plain.features[0].status == nl.ONLY_NATIVE
+        )  # keys, whatever the language
+        return [
+            o.look_option(nl.NATIVE).label, o.look_option(nl.NATIVE).why, o.look_option(nl.PLAIN).label,
+            ssr.status_text, plain.features[0].status_text, nl.native_label("other"),
+            nl.options("other", NONE, ALL).look_option(nl.NATIVE).why, nl.options("anno117", nl.Found(), ALL).looks[0].why,
+            nl.find_compiler("other", None).why, nl.Adapter("GPU", False, "d3d11", "12_1").text(),
+            nl.Adapter("WARP", True, "d3d12").text(), nl.status_text(nl.YES), nl.status_text("a state without a text"),
+        ]  # fmt: skip
+
+    english = shown()
+    assert english == [
+        "Anno 2205's own shaders (FXC, Direct3D 11)", "needs d3d11, which this machine or window cannot draw with",
+        "Our plain look", "the game traces them on rivers and lakes only", "only with the game's own shaders",
+        "The game's own shaders", "this game has no shaders of its own the viewer reads",
+        "the shader compiler was not found", "no shaders of its own are drawn for this game",
+        "GPU (hardware, d3d11, 12_1)", "WARP (software, d3d12)", "yes", "a state without a text",
+    ]  # fmt: skip
+    assert nl.options("anno2070", nl.Found("FXC"), ALL).note.startswith(
+        "its Direct3D 11 path (shader model 5), deferred"
+    )
+    assert nl.options("anno117", DXC, ALL).note == ""
+    monkeypatch.setitem(nl.GAMES, "anno1701", replace(nl.GAMES["anno1701"], built=False))
+    why = nl.options("anno1701", nl.Found("FXC"), ALL).look_option(nl.NATIVE).why
+    assert why.startswith("Anno 1701's own shaders: not yet (its Direct3D 9 effects") and why.endswith("turned on)")
+    monkeypatch.setitem(nl.GAMES, "anno1701", replace(nl.GAMES["anno1701"], built=False, note=""))
+    assert nl.options("anno1701", nl.Found("FXC"), ALL).look_option(nl.NATIVE).why == nl.NOT_YET == "not yet"
+    i18n.use("de")
+    german = shown()
+    assert german[:3] == ["Die Shader von Anno 2205 (FXC, Direct3D 11)",
+                          "braucht d3d11, womit dieser Rechner oder dieses Fenster nicht zeichnen kann",
+                          "Unser schlichter Look"]  # fmt: skip
+    assert all(a != b for a, b in zip(english[:-2], german[:-2], strict=True)) and german[-2:] == english[-2:]
+    assert nl.options("anno2070", nl.Found("FXC"), ALL).note.startswith("sein Direct3D-11-Pfad") and not i18n.missing()
+
+
+def test_the_adapters_support_is_probed_once_and_its_ray_tracing_said_unused(monkeypatch):
+    from types import SimpleNamespace
+
+    from annotoolbox.infra import gpuinfo, i18n
+
+    probes = []
+    found = SimpleNamespace(ray_tracing="1.1", text=lambda: "feature level 12_2, ray tracing tier 1.1")
+    monkeypatch.setattr(gpuinfo, "probe", lambda: probes.append(1) or found)
+    monkeypatch.setattr(nl, "_SUPPORT", [])
+    assert nl.gpu_support() == (
+        "feature level 12_2, ray tracing tier 1.1; not used: QRhi has no ray-tracing API "
+        "(the games' non-ray-traced techniques draw)"
+    )
+    i18n.use("de")
+    assert "; nicht genutzt: QRhi" in nl.gpu_support() and len(probes) == 1  # asked once, said in the language in use
+    found.ray_tracing = ""
+    assert nl.gpu_support() == "feature level 12_2, ray tracing tier 1.1"
+
+
+def test_the_adapters_support_is_said_in_the_interface_language():
+    from annotoolbox.infra import gpuinfo, i18n
+
+    both, none = gpuinfo.Support("12_2", "1.1"), gpuinfo.Support("11_0")
+    assert both.text() == "feature level 12_2, ray tracing tier 1.1"
+    assert (
+        none.text() == "feature level 11_0, no ray tracing" and gpuinfo.Support(why="no device").text() == "no device"
+    )
+    i18n.use("de")
+    assert both.text() == "Feature-Level 12_2, Raytracing-Stufe 1.1"
+    assert none.text() == "Feature-Level 11_0, kein Raytracing" and not i18n.missing()
+
+
 def test_every_part_a_game_lists_as_drawn_is_a_switch_its_pass_reads():
     """The table is the menu: a part offered as a switch must be one the game's pass (or its bases) turns off, and
     the forward games' shadows, sky cubes and blended pass, drawn since 2026-11-10/12, are offered (R7)."""

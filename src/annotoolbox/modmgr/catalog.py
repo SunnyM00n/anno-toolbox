@@ -12,7 +12,21 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..modloader.mods import DEPENDENCY_KINDS, MODINFO_NAMES, Mod, Root, find_mods, localized, parked, read_mod
+from ..infra.i18n import N_, tr
+from ..modloader.mods import (
+    DEPENDENCY_KINDS,
+    MODINFO_NAMES,
+    ROOT_DOCUMENTS,
+    ROOT_EXAMPLES,
+    ROOT_EXTRA,
+    ROOT_GAME,
+    Mod,
+    Root,
+    find_mods,
+    localized,
+    parked,
+    read_mod,
+)
 from ..modloader.profilefile import ProfileText
 
 NOT_MODS = frozenset({"profiles"})  # folders of a mods folder that are no mods
@@ -20,6 +34,17 @@ SETUP_DEFAULTS = {"RequiresNewGame": False, "SafeToRemove": False, "Multiplayer"
 
 ON, OFF = "on", "off"  # ``state_of``; with how the profile decides
 LISTED, NEW, UNLISTED = "listed", "new", "unlisted"
+ROOT_LABELS = {
+    ROOT_EXAMPLES: N_("mods.root_examples"),
+    ROOT_GAME: N_("mods.root_game"),
+    ROOT_DOCUMENTS: N_("mods.root_documents"),
+    ROOT_EXTRA: N_("mods.root_extra"),
+}
+
+
+def root_label(root: Root) -> str:
+    """Which of the loader's folders ``root`` is, as the interface says it (mod.io's is a name and stays)."""
+    return tr(ROOT_LABELS[root.label]) if root.label in ROOT_LABELS else root.label
 
 
 def public_folder() -> Path | None:

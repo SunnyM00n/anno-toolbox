@@ -268,7 +268,7 @@ def test_the_ribbon_offers_the_zone_box_and_names_its_button():
     from annotoolbox.editor.islandgrids import ZONES as NAMES
 
     box = next(item for item in items() if item.id == "zone")
-    assert box.kind == "combo" and len(box.choices) == len(NAMES) and box.choices[0] == "Meadow"
+    assert box.kind == "combo" and len(box.choices) == len(NAMES) and box.choices[0] == "islands.meadow"
     assert tool_action("active", {"plant": True, "grid": "environment"}) == "tool_zone"
 
 

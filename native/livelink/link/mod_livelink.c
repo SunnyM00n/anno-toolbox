@@ -19,10 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PIPE_BASE "\\\\.\\pipe\\anno117-live-link-"
-#define SESSION_DIR "live-link"
-#define SESSION_FILE "live-link/session.json"
-#define GAME_NAME "anno117"
+#define PIPE_BASE G_PIPE_BASE
+#define SESSION_DIR G_SESSION_DIR
+#define SESSION_FILE G_SESSION_FILE
+#define GAME_NAME G_ID
 #define HANDSHAKE_MS 5000
 #define WRITE_MS 5000
 #define OUT_MAX 256
@@ -43,9 +43,10 @@ typedef struct Out {
 } Out;
 
 static volatile LONG s_on, s_client, s_topics, s_epoch, s_mb, s_installed, s_edit_asked;
+static volatile LONG s_scene_reset; /* a new subscription to ui.scene: the client was told nothing yet */
 static char s_token[40], s_pipe_name[96], s_session_path[MAX_PATH], s_build[24];
 static HANDLE s_stop, s_wake, s_pipe;
-static int s_kinds, s_edit_key = 'E', s_sel_ms = 500, s_log_ms = 500;
+static int s_kinds, s_edit_key = 'E', s_sel_ms = 500, s_log_ms = 500, s_scene_ms = 250;
 static LLRequest s_req, s_parse; /* the slot the UI frame reads; the pipe thread's own decode target */
 static uint32_t s_req_epoch;
 static SRWLOCK s_olock = SRWLOCK_INIT;
@@ -179,6 +180,7 @@ static int hello(Conn *c, const LLRequest *r) {
 static int subscribe(Conn *c, const LLRequest *r, int on) {
     LONG bits = 0;
     for (int i = 0; i < r->nnames; i++) bits |= ll_topic_bit(r->names[i]);
+    if (on && (bits & LL_TOPIC_SCENE)) InterlockedExchange(&s_scene_reset, 1); /* its first events: every open scene */
     if (on) InterlockedOr(&s_topics, bits);
     else InterlockedAnd(&s_topics, ~bits);
     return reply(c, r, "ok", "", NULL);
@@ -213,6 +215,7 @@ static int handle(Conn *c, const char *json, size_t len) {
     if (ll_request_is(r, "hello")) return reply(c, r, "refused", "already connected", NULL);
     if (ll_request_is(r, "subscribe")) return subscribe(c, r, 1);
     if (ll_request_is(r, "unsubscribe")) return subscribe(c, r, 0);
+    if (!G_HAS_ENGINE) return reply(c, r, "unavailable", "not served by this game build", NULL); /* no engine side */
     if (ll_request_is(r, "files.changed")) return files_changed(c, r);
     if (InterlockedCompareExchange(&s_mb, MB_LOADING, MB_EMPTY) != MB_EMPTY)
         return reply(c, r, "busy", "another request is running", NULL);
@@ -362,16 +365,17 @@ static void post_event(const char *event, const char *data) {
 /* 1 when the request was answered here: its kind switched off, the engine busy, or refused by the gate */
 static int request_gated(const LLRequest *r) {
     const char *why = "";
-    int gate, debug, reload;
+    int gate, debug, reload, values;
     if (ll_kind_of_request(r->type) == LL_KIND_DEBUG && !(s_kinds & LL_KIND_DEBUG)) {
         llm_answer("unavailable", "the debug commands are off: set live_link_commands=1 in the helper library's settings", NULL);
         return 1;
     }
     debug = ll_request_is(r, "debug.run") || ll_request_is(r, "debug.cheat") || ll_request_is(r, "modules.set");
     reload = !strncmp(r->type, "reload.", 7);
+    values = ll_request_is(r, "ui.values"); /* a read of the widget trees: not while the scenes may be torn down */
     /* every reload and every debug change: not while a session loads, a save is written, the session changes or an
        asset reload runs; first, as the human count is not to be trusted while an asset reload holds */
-    if ((debug || reload) && (why = hlib_live_link_busy(ll_request_is(r, "reload.assets") || ll_request_is(r, "reload.texts")))) {
+    if ((debug || reload || values) &&(why = hlib_live_link_busy(ll_request_is(r, "reload.assets") || ll_request_is(r, "reload.texts")))) {
         llm_answer("busy", why, NULL);
         return 1;
     }
@@ -417,7 +421,7 @@ static void start_request(ULONGLONG now) {
         llq_run_simple(cmd, "asked: the ambient settings are read again; the game gives no confirmation");
     else if (ll_request_is(r, "reload.models")) llr_start_files(r, now, "models");
     else if (ll_request_is(r, "reload.effects")) llr_start_files(r, now, "effects");
-    else if (ll_request_is(r, "ui.dump")) llq_start_dump(r);
+    else if (ll_request_is(r, "ui.values")) llq_start_values(r);
     else if (ll_request_is(r, "reload.scenes")) llr_start_scenes(r, now);
     else if (ll_request_is(r, "reload.banks")) llr_start_banks(r, now);
     else if (ll_request_is(r, "reload.session")) llr_start_session(now);
@@ -551,6 +555,29 @@ static void title_sync(ULONGLONG at) {
     s_title_on = want;
 }
 
+/* The open scenes for a client that follows them (topic ui.scene, docs/live-link.md section 18): the UI states are
+   looked at every s_scene_ms, and only the changes against what this client was told are sent. */
+static void poll_scenes(ULONGLONG now) {
+    static ULONGLONG next;
+    static LsSeen seen;
+    static LsOpen open[LS_MAX];
+    static LsChange changes[LS_EVENTS];
+    char data[512];
+    FindWin f = {GetCurrentProcessId(), NULL};
+    RECT rc = {0};
+    int n, got, first;
+    if (!(s_kinds & LL_KIND_FOLLOW) || !(s_topics & LL_TOPIC_SCENE) || now < next) return;
+    next = now + (ULONGLONG)s_scene_ms;
+    if ((first = InterlockedExchange(&s_scene_reset, 0)) != 0) ls_reset(&seen);
+    if ((n = hlib_live_link_scenes_now(llm_ui, open, LS_MAX)) < 0) return;
+    if (first) hlib_logf("live link: follow: %d scene(s) open", n);
+    if (!(got = ls_diff(&seen, open, n, changes, LS_EVENTS))) return;
+    EnumWindows(find_window, (LPARAM)&f); /* the size the scenes are laid out at; only when something changed */
+    if (f.found) GetClientRect(f.found, &rc);
+    for (int i = 0; i < got; i++)
+        if (ls_event_json(data, sizeof data, &changes[i], (int)rc.right, (int)rc.bottom) > 0) post_event("ui.scene", data);
+}
+
 /* the request's step, guarded: a fault answers the request and frees the slot (and gives the speed back) instead of
    leaving the link busy for good */
 static void request_step(void *now) {
@@ -582,6 +609,7 @@ static void frame_listener(void *ui) {
     edit_key();
     poll_selection(now);
     poll_log(now);
+    poll_scenes(now);
 }
 
 /* install: the pipe, its session file, the thread */
@@ -690,9 +718,26 @@ int hlib_live_link_edit_selected(void) {
 int hlib_live_link_wanted(void) { return hlib_feature_on("live_link"); }
 
 static int ll_resolve(void) {
+    if (!G_HAS_ENGINE) return 1; /* no engine side for this game (game.h): the pipe needs no target */
     for (size_t i = 0; i < sizeof g_need / sizeof g_need[0]; i++)
         if (!hlib_target_ok(g_need[i])) return 0;
     return 1;
+}
+
+static void engine_kinds(void) {
+    llr_glog_sync();
+    if (hlib_config_int("live_link_models", 1) && hlib_live_reload_install()) s_kinds |= LL_KIND_MODELS | LL_KIND_EFFECTS;
+    if (hlib_target_ok(T_UI_STATE_ID) && hlib_target_ok(T_DATA_UI_CONTROLLER) && hlib_target_ok(T_UI_NEW))
+        s_kinds |= LL_KIND_SCENES;
+    if (hlib_config_int("live_link_values", 1) && hlib_live_link_values_ready()) s_kinds |= LL_KIND_VALUES;
+    if (hlib_config_int("live_link_follow", 1) && hlib_live_link_values_ready()) s_kinds |= LL_KIND_FOLLOW;
+    if (hlib_target_ok(T_AK_LOAD_BANK) && hlib_target_ok(T_AK_UNLOAD_BANK) && hlib_target_ok(T_AK_PREPARE_BANK) &&
+        hlib_target_ok(T_DATA_SOUND_ENGINE))
+        s_kinds |= LL_KIND_BANKS;
+    if (hlib_lua_run_ok() && hlib_config_int("live_link_commands", 0)) s_kinds |= LL_KIND_DEBUG;
+    if (hlib_lua_run_ok())
+        s_kinds |= LL_KIND_ASSETS | LL_KIND_TEXTS | LL_KIND_AMBIENT | LL_KIND_SELECT | LL_KIND_JUMP | LL_KIND_READ |
+                   LL_KIND_SESSION;
 }
 
 int hlib_live_link_install(void) {
@@ -706,11 +751,13 @@ int hlib_live_link_install(void) {
     s_log_ms = hlib_config_int("live_link_log_ms", 500);
     if (s_sel_ms < 100) s_sel_ms = 100;
     if (s_log_ms < 100) s_log_ms = 100;
+    s_scene_ms = hlib_config_int("live_link_scene_ms", 250);
+    if (s_scene_ms < 100) s_scene_ms = 100;
     s_stall_ms = hlib_config_int("live_link_stall_s", SL_STALL_MS / 1000) * 1000;
     if (s_stall_ms < LL_STALL_MIN_MS) s_stall_ms = LL_STALL_MIN_MS;
     /* the UI frame first (its listener idles until s_on), then the pipe and its file, undone when they fail; the reload
-       and the UI dump only after them, the thread last (a client's welcome lists the kinds) */
-    if (!hlib_on_ui_frame("live link", frame_listener)) {
+       only after them, the thread last (a client's welcome lists the kinds) */
+    if (G_HAS_ENGINE && !hlib_on_ui_frame("live link", frame_listener)) {
         hlib_log("live link: the UI's frame was not reached, no link");
         return 0;
     }
@@ -723,19 +770,8 @@ int hlib_live_link_install(void) {
         install_undo();
         return 0;
     }
-    llr_glog_sync();
-    if (hlib_config_int("live_link_models", 1) && hlib_live_reload_install()) s_kinds |= LL_KIND_MODELS | LL_KIND_EFFECTS;
-    if (hlib_target_ok(T_UI_STATE_ID) && hlib_target_ok(T_DATA_UI_CONTROLLER) && hlib_target_ok(T_UI_NEW))
-        s_kinds |= LL_KIND_SCENES;
-    if (hlib_config_int("live_link_ui", 1) && hlib_ui_dump_install_quiet()) s_kinds |= LL_KIND_UIDUMP;
-    if (hlib_target_ok(T_AK_LOAD_BANK) && hlib_target_ok(T_AK_UNLOAD_BANK) && hlib_target_ok(T_AK_PREPARE_BANK) &&
-        hlib_target_ok(T_DATA_SOUND_ENGINE))
-        s_kinds |= LL_KIND_BANKS;
-    if (hlib_lua_run_ok() && hlib_config_int("live_link_commands", 0)) s_kinds |= LL_KIND_DEBUG;
-    if (hlib_lua_run_ok())
-        s_kinds |= LL_KIND_ASSETS | LL_KIND_TEXTS | LL_KIND_AMBIENT | LL_KIND_SELECT | LL_KIND_JUMP | LL_KIND_READ |
-                   LL_KIND_SESSION;
-    llm_log_off = llr_log_size();
+    if (G_HAS_ENGINE) engine_kinds(); /* a game without one answers the handshake and ping, kinds none */
+    if (G_HAS_ENGINE) llm_log_off = llr_log_size();
     {
         HANDLE thread = CreateThread(NULL, 0, pipe_main, NULL, 0, NULL);
         if (!thread) {
@@ -746,14 +782,15 @@ int hlib_live_link_install(void) {
         CloseHandle(thread);
     }
     InterlockedExchange(&s_on, 1);
-    if (!hlib_target_ok(T_DATA_SES_TRANSITIONS) || !hlib_target_ok(T_DATA_PAUSE_MANAGER) || !hlib_target_ok(T_DATA_SESSION_TABLE))
+    if (G_HAS_ENGINE && (!hlib_target_ok(T_DATA_SES_TRANSITIONS) || !hlib_target_ok(T_DATA_PAUSE_MANAGER) || !hlib_target_ok(T_DATA_SESSION_TABLE)))
         hlib_logf("live link: guards not located on this build: %s%s%s", hlib_target_ok(T_DATA_SES_TRANSITIONS) ? "" : "session switch ",
                    hlib_target_ok(T_DATA_PAUSE_MANAGER) ? "" : "pause ", hlib_target_ok(T_DATA_SESSION_TABLE) ? "" : "session (no pause) ");
-    hlib_logf("live link: ready on %s (reloads: %s%s%s%s%s%s%s; one client of this user, the token in %s); unverified in game", s_pipe_name,
+    hlib_logf("live link: ready on %s (reloads: %s%s%s%s%s%s%s%s; one client of this user, the token in %s); unverified in game", s_pipe_name,
                s_kinds & LL_KIND_ASSETS ? "assets texts ambient " : "", s_kinds & LL_KIND_SCENES ? "scenes " : "",
                s_kinds & LL_KIND_MODELS ? "models effects " : "",
                s_kinds & LL_KIND_BANKS ? "banks " : "", s_kinds & LL_KIND_SESSION ? "session " : "",
-               s_kinds & LL_KIND_SELECT ? "select jump read " : "", s_kinds & LL_KIND_DEBUG ? "debug " : "", SESSION_FILE);
+               s_kinds & LL_KIND_SELECT ? "select jump read " : "", s_kinds & LL_KIND_VALUES ? "values " : "",
+               s_kinds & LL_KIND_DEBUG ? "debug " : "", SESSION_FILE);
     return 1;
 }
 

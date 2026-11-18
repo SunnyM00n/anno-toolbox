@@ -27,6 +27,7 @@ TOOL_VERSION = (28, 9, 1)  # the editor build most shipped files carry
 TYPED_VALUES = 0x1F01  # a list of typed values (the History Editions' DynamicProperties), not a code of the schema
 TYPED_OBJECTS = (0x4000, 0x4200)  # typed values that are inline objects
 OBJECT = "af01aeda"  # the root record of every type
+RUNTIME = 0x80  # a field flag: set at run time, not stored (a label's TextSizingFactor; format "Object encoding")
 
 # fixed-size type codes -> bytes (the low bit of a code makes it a list of the type)
 SIZES = {
@@ -60,11 +61,7 @@ OLD_LAYOUTS = {
         "d7645aed",
     ),  # WidgetTypeTemplate without Components, d7645aed
     ("1bb72d66", "50143ba4-1ab8-14f2-6344-9ed8fe337462"): ("7f67eaef",),  # PropertyContainer without UseCount
-    ("41a404e5", "960a9a6c-30e7-1df3-afce-ab4cf76e5ce7"): ("30411ebc",),  # LabelWidgetInstance without ActiveAreaType
-    ("41a404e5", "bfb3caf6-84c9-00d8-9cb3-a4835c6cb92e"): (
-        "dd0d7908",
-        "30411ebc",
-    ),  # ... without BaselineY, ActiveAreaType
+    ("41a404e5", "bfb3caf6-84c9-00d8-9cb3-a4835c6cb92e"): ("dd0d7908",),  # LabelWidgetInstance without BaselineY
     # font language entry: FallbackFontGroup kept (a set one read it), df84b302 gone, as in 1800's schema
     ("4674a895", "12ebe5dd-b69e-7105-e3c8-f70e76c80e91"): ("df84b302", "5962aa9a"),
     ("4674a895", "5a46c6af-3a4b-f283-dae1-07eec564c03b"): ("5962aa9a",),
@@ -155,8 +152,10 @@ def type_chain(schema: dict, h: str, versions: dict[str, str] | None = None) -> 
 
 
 def is_stored(f: dict) -> bool:
-    """False for computed (offset 0) and editor-only (flags 0x2000) fields; the Object base bit is kept."""
-    return int(f["code"], 16) == 0 or (f["offset"] != 0 and int(f["flags"], 16) != 0x2000)
+    """False for computed (offset 0), editor-only (flags 0x2000) and run-time (flag ``RUNTIME``) fields; the Object
+    base bit is kept."""
+    flags = int(f["flags"], 16)
+    return int(f["code"], 16) == 0 or (f["offset"] != 0 and flags != 0x2000 and not flags & RUNTIME)
 
 
 def stored_fields(schema: dict, h: str) -> list[tuple[dict, dict]]:
@@ -256,8 +255,7 @@ def alt_layout(fields: list[tuple[dict, dict]], spec: tuple) -> list[tuple[dict,
 
 def layout_versions(tables: list[list[tuple[str, str, int]]]) -> dict[str, str]:
     """Per type hash the layout version new objects are written in: the newest the shipped files use (fewest
-    fields missing, OLD_LAYOUTS), the one with the most objects among equals. Labels have no shipped file in
-    the schema's full layout, so theirs is an older one, as the game's own. ``tables``: ``phoenixread.type_table``
+    fields missing, OLD_LAYOUTS), the one with the most objects among equals. ``tables``: ``phoenixread.type_table``
     of the files to follow."""
     seen: dict[str, dict[str, int]] = {}
     for table in tables:

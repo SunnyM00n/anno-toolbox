@@ -42,7 +42,7 @@ def send(link: livelink.LiveLink, command: Command, values: dict) -> livelink.Re
         return livelink.Reply(livelink.REFUSED, why)
     call = getattr(link, "debug_run", None)
     if call is None:
-        return livelink.Reply(livelink.UNAVAILABLE, tr("this link has no debug commands yet"))
+        return livelink.Reply(livelink.UNAVAILABLE, tr("common.link_no_debug_commands_yet"))
     return call(command.id, typed)
 
 
@@ -50,9 +50,9 @@ def send_cheat(link: livelink.LiveLink, name: str, known: list[str]) -> livelink
     """Run one of the game's own cheats: only a name the game itself listed."""
     call = getattr(link, "debug_cheat", None)
     if name not in known:
-        return livelink.Reply(livelink.REFUSED, tr("not a cheat the game listed: {name}", name=name))
+        return livelink.Reply(livelink.REFUSED, tr("common.not_cheat_game_listed", name=name))
     if call is None:
-        return livelink.Reply(livelink.UNAVAILABLE, tr("this link has no debug commands yet"))
+        return livelink.Reply(livelink.UNAVAILABLE, tr("common.link_no_debug_commands_yet"))
     return call(name)
 
 
@@ -67,7 +67,7 @@ def fetch(link: livelink.LiveLink) -> livelink.Reply:
 def state_text(state) -> str:
     if state is None:
         return ""
-    return tr("on") if state is True else tr("off") if state is False else str(state)
+    return tr("mods.on") if state is True else tr("mods.off") if state is False else str(state)
 
 
 class PaletteWindow(QWidget):
@@ -78,7 +78,7 @@ class PaletteWindow(QWidget):
 
     def __init__(self, parent=None, state: dict | None = None, on_state: Callable[[], None] | None = None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle(tr("Debug commands"))
+        self.setWindowTitle(tr("common.debug_commands"))
         self.state = state if state is not None else {}
         self._on_state = on_state or (lambda: None)
         self.game = dc.GAME
@@ -88,16 +88,35 @@ class PaletteWindow(QWidget):
         self.current: Command | None = None
         self.fields: dict[str, QWidget] = {}
         self._build()
-        self._removers = [livelink.on("status", lambda _s: self.answered.emit("", ""))]
+        self._removers: list[Callable[[], None]] = []
+        self._follow_link()
         self.answered.connect(self._link_changed)
-        self.destroyed.connect(lambda _o=None: [remove() for remove in self._removers])
+        removers = self._removers  # not ``self``: the window is gone when the signal comes
+        self.destroyed.connect(lambda _o=None: [remove() for remove in removers])
         self.refresh_list()
         self.refresh_connection()
+
+    def _follow_link(self) -> None:
+        """Hear of the link's status from now on (once)."""
+        if not self._removers:
+            self._removers.append(livelink.on("status", lambda _s: self.answered.emit("", "")))
+
+    def showEvent(self, event) -> None:
+        self._follow_link()
+        super().showEvent(event)
+
+    def closeEvent(self, event) -> None:
+        """A closed window stops listening: the suite's window keeps it, and it would ask the game the commands again
+        at every change of the link."""
+        for remove in self._removers:
+            remove()
+        self._removers.clear()
+        super().closeEvent(event)
 
     # building
 
     def _build(self) -> None:
-        self.search = QLineEdit(placeholderText=tr("Search the commands"))
+        self.search = QLineEdit(placeholderText=tr("common.search_commands"))
         self.search.textChanged.connect(lambda _t: self.refresh_list())
         self.categories = QListWidget()
         self.categories.setMaximumWidth(180)
@@ -114,9 +133,9 @@ class PaletteWindow(QWidget):
         self.call = QLabel(wordWrap=True)
         self.call.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.form = QFormLayout()
-        self.run = QPushButton(tr("Send to the game"))
+        self.run = QPushButton(tr("common.send_to_game"))
         self.run.clicked.connect(lambda _c=False: self.run_current())
-        self.star = QPushButton(tr("Favourite"))
+        self.star = QPushButton(tr("common.favourite"))
         self.star.clicked.connect(lambda _c=False: self.star_current())
         self.note = QLabel(wordWrap=True)
         self.connection = QLabel(wordWrap=True)
@@ -133,7 +152,7 @@ class PaletteWindow(QWidget):
         side.addLayout(self.form)
         side.addLayout(buttons)
         side.addWidget(self.note)
-        side.addWidget(QLabel(tr("History (double click to fill the form again)")))
+        side.addWidget(QLabel(tr("common.history_double_click_fill_form")))
         side.addWidget(self.history, 1)
         middle = QWidget()
         column = QVBoxLayout(middle)
@@ -152,7 +171,7 @@ class PaletteWindow(QWidget):
 
     @staticmethod
     def _category_rows() -> list[tuple[str, str]]:
-        rows = [("", tr("All")), (dc.FAVOURITES, dc.category_title(dc.FAVOURITES))]
+        rows = [("", tr("common.all")), (dc.FAVOURITES, dc.category_title(dc.FAVOURITES))]
         rows += [(key, dc.category_title(key)) for key in dc.CATEGORIES]
         return [*rows, (dc.CHEATS, dc.category_title(dc.CHEATS))]
 
@@ -190,7 +209,7 @@ class PaletteWindow(QWidget):
         if known is None:
             return text
         if not known.get("available", True):
-            return f"{text}  ({tr('not in this game')})"
+            return f"{text}  ({tr('common.not_game')})"
         shown = state_text(known.get("state"))
         return f"{text}  [{shown}]" if shown else text
 
@@ -204,7 +223,7 @@ class PaletteWindow(QWidget):
         self.current = None if not key or key.startswith("cheat:") else dc.commands(self.game).get(key)
         if key.startswith("cheat:"):
             self.title.setText(key[6:])
-            self.effect.setText(tr("one of the cheats the game itself registered"))
+            self.effect.setText(tr("common.one_cheats_game_itself_registered"))
             self.call.setText("")
         elif self.current:
             self.title.setText(tr(self.current.title))
@@ -212,7 +231,7 @@ class PaletteWindow(QWidget):
             self._fill_form(self.current)
             self.update_call()
         else:
-            self.title.setText(tr("no command"))
+            self.title.setText(tr("common.no_command"))
             self.effect.setText("")
             self.call.setText("")
         self.star.setEnabled(self.current is not None)
@@ -246,7 +265,9 @@ class PaletteWindow(QWidget):
 
     def refresh_connection(self) -> None:
         link = livelink.current()
-        self.connection.setText(link.status().text if link.connected else tr("not connected: nothing is sent"))
+        self.connection.setText(link.status().text if link.connected else tr("common.not_connected_nothing_sent"))
+        self.game = (link.status().game if link.connected else "") or dc.GAME  # the commands of the linked game
+        self.refresh_list()
         if link.connected:
             self.background.run(lambda: fetch(link), self._listed)
         self.update_buttons()
@@ -265,7 +286,7 @@ class PaletteWindow(QWidget):
         link = livelink.current()
         runnable = bool(link.connected and (self.current or self.list.currentItem()))
         self.run.setEnabled(runnable)
-        self.run.setToolTip("" if link.connected else tr("not connected: nothing is sent"))
+        self.run.setToolTip("" if link.connected else tr("common.not_connected_nothing_sent"))
 
     def run_current(self) -> None:
         item = self.list.currentItem()
@@ -279,12 +300,14 @@ class PaletteWindow(QWidget):
             self._dispatch(command.id, values, lambda link: send(link, command, values))
 
     def _confirmed(self, command: Command) -> bool:
-        answer = QMessageBox.question(self, tr("Debug commands"), tr("Really send: {title}?", title=tr(command.title)))
+        answer = QMessageBox.question(
+            self, tr("common.debug_commands"), tr("common.really_send_title", title=tr(command.title))
+        )
         return answer == QMessageBox.StandardButton.Yes
 
     def _dispatch(self, name: str, values: dict, call: Callable[[livelink.LiveLink], livelink.Reply]) -> None:
         link = livelink.current()
-        self.note.setText(tr("sending ..."))
+        self.note.setText(tr("common.sending"))
         self.run.setEnabled(False)
         self.background.run(lambda: call(link), lambda reply: self._answered(name, values, reply))
 

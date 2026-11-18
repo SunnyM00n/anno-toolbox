@@ -131,3 +131,22 @@ def test_the_tint_brush_records_a_stroke_per_drag_with_the_presets_factor_and_un
     held = EditSession(edit_island(), readonly=True)
     held.tint.begin((0, 0.5), 3.0, 4.0, 4.0)
     assert held.edits["tint"] == [] and held._brush is None
+
+
+def test_a_tint_from_the_other_game_keeps_its_pattern_in_the_donors_range():
+    rng = np.random.default_rng(3)
+    stored = np.stack([rng.integers(90, 170, (SIDE, SIDE)), rng.integers(60, 230, (SIDE, SIDE))], -1)
+    rgb = np.dstack([stored[..., 0], stored[..., 1], 256 - stored[..., 0]]).astype(np.uint8)  # r Cb, g Y, b Cr
+    raw = page_file(rgb)
+    before = ddsdecode.read_dds(raw)[..., :3].astype(float)
+    land = np.ones((SIDE, SIDE), bool)
+    src, dst = tintpages.land_spread(before, land), (130.0, 12.0)
+    after = ddsdecode.read_dds(tintpages.fit_blocks(raw, src, dst))[..., :3].astype(float)
+    y = after[..., 1]
+    assert abs(y.mean() - 130) < 3 and abs(y.std() - 12) < 2  # the donor's range
+    assert np.corrcoef(y.ravel(), before[..., 1].ravel())[0, 1] > 0.95  # the source's pattern
+    k = 12 / src[1]
+    assert np.abs((after[..., 0] - 128) - (before[..., 0] - 128) * k).max() < 10  # the chroma narrowed alike
+    assert tintpages.fit_blocks(raw, (130.0, 12.0), (130.0, 40.0))[128:] == raw[128:]  # never widened, never moved
+    bare = raw[128:]
+    assert tintpages.fit_blocks(bare, src, dst) == tintpages.fit_blocks(raw, src, dst)[128:]  # a far picture's blocks

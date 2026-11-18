@@ -14,16 +14,16 @@ from ..infra.i18n import N_, tr
 from . import bindings, elements, fields, operators
 from .panels import TYPE_CODES
 
-TITLE = N_("UI editor")
+TITLE = N_("ui.ui_editor")
 PROPERTY_KINDS = ["Boolean", "Int32", "Float32", "String", "Vector2", "Vector3", "Event", "Action"]
 
 
 def ask_property(parent: QWidget) -> tuple[str, int, int, object] | None:
     """A custom property's name and type: (name, property type, value type code, default value)."""
-    name, ok = QInputDialog.getText(parent, tr(TITLE), tr("The custom property's name:"))
+    name, ok = QInputDialog.getText(parent, tr(TITLE), tr("ui.custom_propertys_name"))
     if not ok or not name:
         return None
-    kind, ok = QInputDialog.getItem(parent, tr(TITLE), tr("Its type:"), PROPERTY_KINDS, 2, False)
+    kind, ok = QInputDialog.getItem(parent, tr(TITLE), tr("ui.its_type"), PROPERTY_KINDS, 2, False)
     if not ok:
         return None
     ptype = {v: k for k, v in fields.ENUMS["PropertyType"].items()}[kind]
@@ -35,14 +35,14 @@ def ask_property(parent: QWidget) -> tuple[str, int, int, object] | None:
 
 def ask_binding(parent: QWidget, own: dict[int, tuple[str, int]], top: elements.Element | None):
     """A binding from a source to a target through an operator: (source, operator hash, target)."""
-    source = choose_end(parent, tr("The source:"), own, top)
+    source = choose_end(parent, tr("ui.the_source"), own, top)
     if source is None:
         return None
-    ops = [f"{o.name} ({tr(o.family)}: {tr(o.doc)})" for o in operators.OPERATORS.values()]
-    op, ok = QInputDialog.getItem(parent, tr(TITLE), tr("The operator:"), ops, 0, False)
+    ops = [f"{o.name} ({tr(operators.FAMILY_LABELS[o.family])}: {tr(o.doc)})" for o in operators.OPERATORS.values()]
+    op, ok = QInputDialog.getItem(parent, tr(TITLE), tr("ui.the_operator"), ops, 0, False)
     if not ok:
         return None
-    target = choose_end(parent, tr("The target:"), own, top, targets=True)
+    target = choose_end(parent, tr("ui.the_target"), own, top, targets=True)
     if target is None:
         return None
     return source, list(operators.OPERATORS)[ops.index(op)], target
@@ -62,13 +62,13 @@ def choose_end(parent: QWidget, what: str, own: dict[int, tuple[str, int]], top:
             if b.kind == "property" or (b.kind == "action" and targets) or (b.kind == "event" and not targets):
                 choices.append((f"{el.name}.{b.name}", bindings.EndSpec("path", el.guid, (b.uid,))))
     if not targets:
-        choices.append((tr("a constant..."), bindings.EndSpec("constant")))
+        choices.append((tr("ui.a_constant"), bindings.EndSpec("constant")))
     text, ok = QInputDialog.getItem(parent, tr(TITLE), what, [c[0] for c in choices], 0, True)
     if not ok:
         return None
     spec = dict(choices).get(text)
     if spec is not None and spec.kind == "constant":
-        value, ok = QInputDialog.getText(parent, tr(TITLE), tr("The constant (a number, or text):"))
+        value, ok = QInputDialog.getText(parent, tr(TITLE), tr("ui.constant_number_text"))
         if not ok:
             return None
         try:
@@ -82,6 +82,6 @@ def ask_bind_read(parent: QWidget, element: elements.Element):
     """The built-in property of ``element`` a field the file reads is bound into, None when cancelled."""
     props = [b for b in fields.builtins_of(element.kind) if b.kind == "property"]
     name, ok = QInputDialog.getItem(
-        parent, tr(TITLE), tr("Bind into {name}'s:", name=element.name), [b.name for b in props], 0, False
+        parent, tr(TITLE), tr("ui.bind_into_names", name=element.name), [b.name for b in props], 0, False
     )
     return next(b for b in props if b.name == name) if ok else None

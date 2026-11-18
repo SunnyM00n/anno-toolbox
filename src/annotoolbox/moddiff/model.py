@@ -13,6 +13,10 @@ ONLY_A, ONLY_B, DIFFERS = "only-a", "only-b", "differs"  # a target of two versi
 NEW, REPLACED, SAME = "new", "replaced", "same"  # a carried file: not in the game, replaces its file, is its file
 VALUE, BLOCK, GONE, DUPLICATE, FILE, ASSET = "value", "block", "removed", "duplicate", "file", "asset"  # conflicts
 CONFLICT, OVERLAP = "conflict", "overlap"  # how much a conflict matters
+LATE_PHASE, LOAD_AFTER, NAME_ORDER, ORDER = "late phase", "LoadAfter", "name order", "order"  # ``Conflict.decided``
+# a conflict's value where it is a note of ours and not the game's data (``NOTED``): a word, or a count and its unit
+SET_VALUE, VALUES, BYTES = "set a value", "value(s)", "bytes"
+NOTED = frozenset({GONE, DUPLICATE, FILE, ASSET})
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +86,7 @@ class Conflict:
     mods: tuple[str, ...]
     values: tuple[str | None, ...]
     winner: str
-    decided: str  # what put the winner last: "LoadAfter", "late phase", "name order"
+    decided: str  # what put the winner last: ``LOAD_AFTER``, ``LATE_PHASE``, ``NAME_ORDER``, ``ORDER``
 
 
 @dataclass

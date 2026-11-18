@@ -12,7 +12,7 @@ from ..suite.livelink import BANKS
 from ..suite.project import EditsFolder, Project
 
 EDITS = EditsFolder("sound-edits", ("anno117", "anno1800", "anno2205", "anno2070", "anno1404", "anno1701"))
-PART = EDITS.part("sound", N_("Sound"), "Sound")
+PART = EDITS.part("sound", N_("sound.sound"), "Sound")
 
 
 def drop(project: Project, game: str, paths: set[str]) -> list[str]:

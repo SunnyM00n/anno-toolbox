@@ -53,7 +53,7 @@ def scenario_label(mission: dict) -> str:
     name = re.sub(r"^(?:ulc|dlc)\d+\s*", "", mission["name"]).strip()
     dlc = re.search(r"/dlc_(\d+)/", mission["level"])
     label = (f"DLC {dlc.group(1)} " if dlc else "") + name
-    return tr("{name} (multiplayer)", name=label) if "/multiplayer/" in mission["level"] else label
+    return tr("islands.name_multiplayer", name=label) if "/multiplayer/" in mission["level"] else label
 
 
 def owners(tree, paths: list[str]) -> dict[str, list[str]]:
@@ -139,9 +139,9 @@ def convertible(paths: list[str], dirs: tuple[str, ...]) -> dict[str, str | None
     for p in paths:
         stem = p.rsplit("/", 1)[-1].removesuffix(".isd")
         if not any(p.startswith(d) for d in dirs):
-            out[p] = tr("a level's own island: the build makes the pool's islands (normal and underwater) by name")
+            out[p] = tr("islands.levels_own_island_build_makes")
         elif first.get(stem) != p or not re.fullmatch(r"[a-z0-9_]+", stem):
-            out[p] = tr("its name is not one the build can look up")
+            out[p] = tr("islands.name_not_one_build_look")
         else:
             out[p] = None
     return out

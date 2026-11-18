@@ -18,7 +18,7 @@ from ..models.cfgdoc import Part, is_config
 from .objdoc import ObjectDoc
 
 ROW = Qt.ItemDataRole.UserRole + 1
-ROLE_TITLES = {"cfg": N_("Config"), "ifo": N_("Info"), "fc": N_("Feedback")}
+ROLE_TITLES = {"cfg": N_("objects.config"), "ifo": N_("objects.info"), "fc": N_("objects.feedback")}
 EXPAND = 12  # a list with more parts starts folded
 
 
@@ -62,9 +62,7 @@ class ObjectTree(QTreeWidget):
             top = QTreeWidgetItem(
                 [f"{tr(ROLE_TITLES[role]) if role in ROLE_TITLES else role}  {opened.read.rsplit('/', 1)[-1]}"]
             )
-            top.setToolTip(
-                0, opened.read + ("" if opened.doc.exact else tr(" (does not read back exactly: read only)"))
-            )
+            top.setToolTip(0, opened.read + ("" if opened.doc.exact else tr("objects.not_read_back_exactly_only")))
             self.addTopLevelItem(top)
             root = opened.doc.parts()
             top.setData(0, ROW, Row(role, "part", root.path))
@@ -78,7 +76,7 @@ class ObjectTree(QTreeWidget):
     def _add(self, parent: QTreeWidgetItem, role: str, part: Part, mcf: bool = False) -> None:
         for child in part.children:
             if child.is_list:
-                text = tr("{title} ({count})", title=cfgparts.title(child.section), count=len(child.children))
+                text = tr("common.title_count", title=cfgparts.title(child.section), count=len(child.children))
                 row = Row(role, "list", child.path, child.section)
             else:
                 text, row = label(child, mcf), Row(role, "part", child.path)
@@ -92,7 +90,7 @@ class ObjectTree(QTreeWidget):
             have = {c.section for c in part.children if c.is_list}
             for section in cfgparts.lists_of(part.node):
                 if section not in have and cfgparts.kinds_for(section):
-                    item = QTreeWidgetItem([tr("{title} (empty)", title=cfgparts.title(section))])
+                    item = QTreeWidgetItem([tr("objects.title_empty", title=cfgparts.title(section))])
                     item.setForeground(0, Qt.GlobalColor.gray)
                     item.setData(0, ROW, Row(role, "empty", part.path, section))
                     parent.addChild(item)

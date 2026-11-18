@@ -12,7 +12,7 @@ import warnings
 from pathlib import Path
 
 from .islandgrid import HEIGHT_UNITS
-from .islandground import stroke_cover
+from .islandground import stroke_cover, stroke_material
 
 MAP_IMAGE = 512  # mapimage.png is always this size
 SEA_COLOR = (16, 40, 64)
@@ -209,7 +209,7 @@ def _laid(base, strokes, colours, box, ppt: float):
 
     h, w = base.shape[:2]
     for st in strokes:
-        colour = colours.get(int(st.get("material", -1)))
+        colour = colours.get(stroke_material(st))
         if colour is None:
             continue
         moved = {**st, "points": [[p[0] - box[0], p[1] - box[1]] for p in st["points"]]}

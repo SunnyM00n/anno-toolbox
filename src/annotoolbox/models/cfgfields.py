@@ -34,9 +34,13 @@ SHADERS_1800 = {
 SHADERS_2205 = {
     7: "Water", 9: "Frame Cycle", 10: "Interior Mapping", 12: "Hair", 13: "Arctic", 15: "Video", 16: "Planet",
 }  # fmt: skip
-TRACK_TYPES = {0: N_("Animation"), 1: N_("Effect"), 2: N_("State")}  # configtree.sequences: 0, 1, 2
+TRACK_TYPES = {
+    0: N_("common.animation"),
+    1: N_("common.effect"),
+    2: N_("common.state"),
+}  # configtree.sequences: 0, 1, 2
 # the newer games' fourth kind: a sound (an audio asset's GUID played at a bone of a model)
-TRACK_TYPES_NEWER = {**TRACK_TYPES, 3: N_("Sound")}
+TRACK_TYPES_NEWER = {**TRACK_TYPES, 3: N_("sound.sound")}
 # 117's condition bits, bit 0 first (engine-animation "Conditions")
 CONDITION_BITS_117 = (
     "ColorTransform", "PhysicsTransform", "DestructionTransform", "Selected", "Unselected",

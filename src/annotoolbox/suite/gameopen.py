@@ -35,10 +35,10 @@ def open_installed(
         QMessageBox.information(
             window,
             window.windowTitle(),
-            tr("No folder is set for {title}: set it in Islands, File > Games and folders.", title=title),
+            tr("common.no_folder_set_islands_file", title=title),
         )
         return False
-    window.statusBar().showMessage(tr("Opening {title} (its archives are indexed once)...", title=title))
+    window.statusBar().showMessage(tr("common.opening_archives_indexed_once", title=title))
     index = settings.index_dir(key)
     background.run(lambda: prepare(gametree.open_game(key, Path(folder), index)), then, wait=wait)
     return True

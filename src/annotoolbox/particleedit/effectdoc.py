@@ -98,16 +98,16 @@ class EffectDoc:
         ``FileNotFoundError`` and ``ValueError`` (no effect file)."""
         path = normalize(path)
         if not path.endswith(EFFECT_ENDINGS):
-            raise ValueError(tr("{path} is no effect file (.rdp, .efc)", path=path))
+            raise ValueError(tr("particles.no_effect_file_rdp_efc", path=path))
         saved = held(path)
         data = saved if saved is not None else files.read(path)
         found = _model(files, game, path, model, held) if model else None
         shipped = (files.read(path) if files.exists(path) else b"") if saved is not None else None
         doc = cls(files, game, path, data, found, shipped)
         if saved is not None:
-            doc.notes.append(tr("opened with your saved edits from the project"))
+            doc.notes.append(tr("particles.opened_your_saved_edits_project"))
         if not data:
-            doc.notes.append(tr("{path} is empty: shown, not saved", path=path))
+            doc.notes.append(tr("particles.empty_shown_not_saved", path=path))
         doc.sync()
         return doc
 

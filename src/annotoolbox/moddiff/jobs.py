@@ -59,7 +59,7 @@ def warm(game: Game) -> None:
 def find_mod(ref: str, manager: ModManager | None, game: str) -> Mod:
     """The mod ``ref`` names: a folder, or a ModID the manager has found."""
     if not ref.strip():
-        raise ValueError(tr("no mod chosen"))
+        raise ValueError(tr("moddiff.no_mod_chosen"))
     card = manager.catalog.by_id(ref) if manager is not None and not Path(ref).is_absolute() else None
     if (
         card is not None and card.mod is not None
@@ -72,7 +72,7 @@ def find_mod(ref: str, manager: ModManager | None, game: str) -> Mod:
         return mod
     if game in ZIP_GAMES:
         return _zip_mod(ref, manager, game)
-    raise ValueError(tr("no installed mod {id}", id=ref))
+    raise ValueError(tr("moddiff.no_installed_mod", id=ref))
 
 
 def _zip_mod(ref: str, manager: ModManager | None, game: str) -> Mod:
@@ -86,7 +86,7 @@ def _zip_mod(ref: str, manager: ModManager | None, game: str) -> Mod:
     for mod in find_mods(roots, GAME_NUMBER.get(game), zips=True)[0]:
         if mod.mod_id == ref:
             return mod
-    raise ValueError(tr("no installed mod {id}", id=ref))
+    raise ValueError(tr("moddiff.no_installed_mod", id=ref))
 
 
 def run_job(job: Job, game: Game, manager: ModManager | None = None, progress: Progress = None) -> Report:
@@ -98,7 +98,7 @@ def run_job(job: Job, game: Game, manager: ModManager | None = None, progress: P
     search = [r.path for r in manager.roots] if manager is not None else None
     if job.mode == PROFILE:
         if manager is None:
-            raise ValueError(tr("no mod manager for this game"))
+            raise ValueError(tr("moddiff.no_mod_manager_game"))
         order, notes = profile_order(manager, job.profile)
         return compare.profile_conflicts(game, order, manager.mods_dir, job.profile, progress, notes)
     first = find_mod(job.a, manager, job.game)
@@ -126,10 +126,10 @@ def profile_order(manager: ModManager, profile: str) -> tuple[list[Mod], list[st
     roots = [r.path for r in manager.roots]
     found, _skipped = find_mods(roots, manager.anno, zips=True)
     on = activations.switched_on(found, roots)
-    notes = [tr("1800 switches a mod on unless its folder's {file} lists it: there is no profile", file=ACTIVATIONS)]
+    notes = [tr("moddiff.1800_switches_mod_unless_folders", file=ACTIVATIONS)]
     zipped = sum(1 for m in on if isinstance(m, ZipMod))
     if zipped:
-        notes.append(tr("{n} mod(s) are read in place from .zip files, as the loader does", n=zipped))
+        notes.append(tr("moddiff.mods_read_place_zip_files", n=zipped))
     return resolve(on, [m for m in found if m not in on]).order, notes
 
 

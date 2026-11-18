@@ -25,10 +25,12 @@ PROTOCOL = 1
 MAX_FRAME = 1 << 20  # a frame's JSON, bytes
 SESSION_FOLDER = "live-link"
 SESSION_FILE = "session.json"
-PIPE_PATTERN = re.compile(r"\\\\\.\\pipe\\anno117-live-link-[A-Za-z0-9_-]{1,64}")
+DEFAULT_GAME = "anno117"
+LINK_GAMES = ("anno117", "anno1800", "anno2205")  # the games whose helper speaks this protocol, each with its own pipe
+PIPE_PATTERN = re.compile(r"\\\\\.\\pipe\\(anno\d{3,4})-live-link-[A-Za-z0-9_-]{1,64}")
 NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")  # a mod id, a bank name, a UI state name
 FIELD = re.compile(r"[A-Za-z0-9_./-]{1,128}")  # a value path such as Building/BuildCost
-TOPICS = (livelink.SELECTION, livelink.RELOAD, livelink.SESSION_EVENT, livelink.LOG)
+TOPICS = (livelink.SELECTION, livelink.RELOAD, livelink.SESSION_EVENT, livelink.LOG, livelink.SCENE)
 MODES = ("full", "rebuild")  # reload.assets
 UNKNOWN, ERROR = "unknown", "error"  # answers beyond livelink's: a message not in the set, a bad request
 
@@ -126,13 +128,14 @@ class SessionInfo:
     pid: int = 0
 
 
-def session_folder(user_dir: Path | None = None) -> Path:
-    """Where the session file is: ``live-link`` in the game's folder under Documents (``user_dir`` for a test)."""
-    return (user_dir or gametree.user_dir("anno117")) / SESSION_FOLDER
+def session_folder(user_dir: Path | None = None, game: str = DEFAULT_GAME) -> Path:
+    """Where the session file of ``game`` is: ``live-link`` in its folder under Documents (``user_dir`` for a test)."""
+    return (user_dir or gametree.user_dir(game)) / SESSION_FOLDER
 
 
-def parse_session(text: str) -> SessionInfo:
-    """The session file's content; ``SessionError`` when it is not one the link would trust."""
+def parse_session(text: str, game: str = "") -> SessionInfo:
+    """The session file's content; ``SessionError`` when it is not one the link would trust. ``game``: the game the file
+    is expected to belong to (its pipe and its own ``game`` field must say so); none, any of ``LINK_GAMES``."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
@@ -140,8 +143,11 @@ def parse_session(text: str) -> SessionInfo:
     if not isinstance(data, dict):
         raise SessionError("not an object")
     pipe, token = data.get("pipe"), data.get("token")
-    if not isinstance(pipe, str) or not PIPE_PATTERN.fullmatch(pipe):
+    found = PIPE_PATTERN.fullmatch(pipe) if isinstance(pipe, str) else None
+    if found is None or found[1] not in LINK_GAMES:
         raise SessionError("the pipe is not one of the live link's")
+    if game and (found[1] != game or str(data.get("game", game)) != game):
+        raise SessionError(f"the session is not {game}'s")
     if not isinstance(token, str) or not 16 <= len(token) <= 128:
         raise SessionError("no token")
     if data.get("protocol") != PROTOCOL:
@@ -151,11 +157,11 @@ def parse_session(text: str) -> SessionInfo:
     return SessionInfo(pipe, token, PROTOCOL, **fields, pid=pid if isinstance(pid, int) else 0)
 
 
-def read_session(user_dir: Path | None = None) -> SessionInfo | None:
-    """The running game's session, or None when there is no file or it is not a usable one."""
-    path = session_folder(user_dir) / SESSION_FILE
+def read_session(user_dir: Path | None = None, game: str = DEFAULT_GAME) -> SessionInfo | None:
+    """The running ``game``'s session, or None when there is no file or it is not a usable one."""
+    path = session_folder(user_dir, game) / SESSION_FILE
     try:
-        return parse_session(path.read_text(encoding="utf-8"))
+        return parse_session(path.read_text(encoding="utf-8"), game)
     except (OSError, SessionError):
         return None
 
@@ -204,7 +210,7 @@ REQUESTS: dict[str, tuple[Arg, ...]] = {
     "select": (Arg("object", "int"), Arg("guid", "int")),
     "jump": (Arg("object", "int"), Arg("session", "name"), Arg("position", "numbers")),
     "read": (Arg("guid", "int"), Arg("object", "int"), Arg("fields", "fields", True)),
-    "ui.dump": (Arg("states", "names"),),
+    "ui.values": (Arg("states", "names", True), Arg("file", "name")),
     "debug.list": (),
     "debug.run": (Arg("command", "name", True), Arg("values", "values")),
     "debug.cheat": (Arg("name", "name", True),),

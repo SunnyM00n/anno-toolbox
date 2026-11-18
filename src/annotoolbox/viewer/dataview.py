@@ -51,7 +51,7 @@ class DataView(QStackedWidget):
         self.text = QPlainTextEdit(readOnly=True)
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels([tr("tag or attribute"), tr("value")])
+        self.tree.setHeaderLabels([tr("viewer.tag_attribute"), tr("common.value_lower")])
         self.addWidget(self.text)
         self.addWidget(self.tree)
 
@@ -65,17 +65,17 @@ class DataView(QStackedWidget):
                 return kind
             except Exception as exc:  # a document this reader does not take: its bytes instead
                 kind = "bytes"
-                self.text.setPlainText(tr("FileDB, not read: {error}", error=exc) + "\n\n" + hex_lines(data))
+                self.text.setPlainText(tr("viewer.filedb_not_read", error=exc) + "\n\n" + hex_lines(data))
         elif kind == "text":
             self.text.setPlainText(data.decode("utf-8", "replace"))
         else:
-            self.text.setPlainText(tr("{n} bytes", n=number(len(data))) + "\n\n" + hex_lines(data))
+            self.text.setPlainText(tr("viewer.n_bytes", n=number(len(data))) + "\n\n" + hex_lines(data))
         self.setCurrentWidget(self.text)
         return kind
 
     def _tree(self, root) -> None:
         self.tree.clear()
-        top = QTreeWidgetItem([root.name or tr("document"), ""])
+        top = QTreeWidgetItem([root.name or tr("viewer.document"), ""])
         self.tree.addTopLevelItem(top)
         stack, shown = [(top, root)], 0
         while stack and shown < TREE_LIMIT:
@@ -83,7 +83,7 @@ class DataView(QStackedWidget):
             for child in tag.children:
                 shown += 1
                 if isinstance(child, filedb.Tag):
-                    sub = QTreeWidgetItem([child.name, tr("{n} children", n=len(child.children))])
+                    sub = QTreeWidgetItem([child.name, tr("viewer.n_children", n=len(child.children))])
                     item.addChild(sub)
                     stack.append((sub, child))
                 else:

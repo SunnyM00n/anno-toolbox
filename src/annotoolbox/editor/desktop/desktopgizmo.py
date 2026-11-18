@@ -144,6 +144,8 @@ class GizmoControls:
         center, q, kind = self._gizmo_target()
         o, d = self.ray(pos)
         start = {"handle": h, "center": center, "quat": q, "kind": kind, "pos": pos}
+        # the drag stays what its handle is for: W, E and R change the gizmo for the next one
+        start["mode"], start["tilt"] = (self.gizmo.mode if kind == "entry" else "translate"), self.gizmo.tilt
         if kind == "entry":
             e = self.selected
             start["entry"], start["undo"] = e, self.session.begin_transform(self.group.moving(e))
@@ -164,8 +166,8 @@ class GizmoControls:
 
     def _drag_gizmo(self, pos) -> None:
         st = self._drag[1]
-        mode = self.gizmo.mode if st["kind"] == "entry" else "translate"
-        moved = {"translate": self._drag_move, "rotate": self._drag_turn, "scale": self._drag_scale}[mode](st, pos)
+        drags = {"translate": self._drag_move, "rotate": self._drag_turn, "scale": self._drag_scale}
+        moved = drags[st["mode"]](st, pos)
         if moved is None:
             return
         if st["kind"] == "entry":
@@ -193,7 +195,7 @@ class GizmoControls:
         u, v = st["anchor"], p - center
         ang = math.atan2(float(np.dot(np.cross(u, v), h["dir"])), float(np.dot(u, v)))
         before = tuple(float(c) for c in st["quat"])
-        if self.gizmo.tilt:
+        if st["tilt"]:
             return None, np.array(meshxform.qmul(before, meshxform.qaxis(tuple(np.eye(3)[h["axis"]]), ang))), None
         return None, np.array(meshxform.qmul(meshxform.qaxis(tuple(h["dir"]), ang), before)), None
 
@@ -244,8 +246,12 @@ class GizmoControls:
     def _end_gizmo(self, d) -> None:
         st = d[1]
         if st["kind"] == "entry":
-            label = {"translate": tr("move"), "rotate": tr("rotation"), "scale": tr("scale")}[self.gizmo.mode]
+            label = {
+                "translate": tr("islands.move_lower"),
+                "rotate": tr("islands.rotation"),
+                "scale": tr("common.scale"),
+            }[st["mode"]]
             self.session.end_transform(st["undo"], label)
         else:
-            self.session.end_water(st["water"], tr("water"))
+            self.session.end_water(st["water"], tr("islands.water"))
         self.update()

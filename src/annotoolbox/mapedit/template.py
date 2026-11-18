@@ -18,18 +18,18 @@ from ..infra.i18n import N_
 
 KIND_FIXED, KIND_SLOT, KIND_START = 0, 1, 2
 # a slot's stored Size: absent is Small; Continental only on fixed islands of 117's DLC (docs/map-editor.md)
-SIZES = (N_("Small"), N_("Medium"), N_("Large"), N_("XL"), N_("Continental"))
+SIZES = (N_("islands.small"), N_("islands.medium"), N_("islands.large"), N_("maps.xl"), N_("islands.continental"))
 SIZE_SMALL, SIZE_MEDIUM, SIZE_LARGE, SIZE_XL, SIZE_CONTINENTAL = range(5)
 # IslandType ids, the same in both games
 TYPES = {
-    0: N_("Normal"),
-    1: N_("Starter"),
-    2: N_("Decoration"),
-    3: N_("Third party"),
-    4: N_("Pirate"),
-    5: N_("Cliff island"),
-    6: N_("Reserved for a player"),
-    7: N_("Volcanic"),
+    0: N_("maps.normal"),
+    1: N_("maps.starter"),
+    2: N_("maps.decoration"),
+    3: N_("maps.third_party"),
+    4: N_("maps.pirate"),
+    5: N_("maps.cliff_island"),
+    6: N_("maps.reserved_player"),
+    7: N_("maps.volcanic"),
 }
 TYPE_KEYS = {0: "Normal", 1: "Starter", 2: "Decoration", 3: "ThirdParty", 4: "PirateIsland", 5: "CliffIsland",
              6: "ReservedForPlayer", 7: "VolcanicIsland"}  # fmt: skip  # the names the asset list uses

@@ -12,7 +12,7 @@ import pytest
 from tests.fakes import INSTALL_VARS
 
 from annotoolbox.assetedit.gamefiles import LAYOUTS, open_files
-from annotoolbox.textedit import render, textfiles, texttable
+from annotoolbox.textedit import fontchain, render, textfiles, texttable
 from annotoolbox.textedit.editfile import Edit, EditFile
 from annotoolbox.textedit.textdoc import TextDoc
 
@@ -171,3 +171,27 @@ def test_117s_stray_letters_of_other_scripts_are_drawn_by_the_fallbacks_so_no_te
         "the Asian fallbacks draw the stray Han letters"
     )
     assert [(ch, other) for ch, _n, other in check.audit("german", [chr(0x378)])] == [(chr(0x378), False)]
+
+
+def test_1800s_four_scripted_localized_fonts_give_the_asian_languages_their_faces(tmp_path):
+    chain = fontchain.FontChain(_files("anno1800", tmp_path))
+    assert chain.available and not chain._raw  # the schema decodes them now; the byte scan is a fallback
+    japanese = {s.key: s for s in chain.styles("japanese")}
+    assert sum(any(p.endswith(".ttc") for p in s.faces) for s in japanese.values()) == 4
+    assert all(s.faces for s in chain.styles("korean")) and sum(s.styles for s in chain.styles("chinese")) > 100
+    assert {s.faces[0] for s in chain.styles("taiwanese") if s.styles > 20} == {"data/fonts/dfpt_b5.ttf"}
+
+
+@pytest.mark.parametrize(("game", "least"), [("anno117", 150), ("anno1800", 900)])
+def test_the_labels_of_the_ui_files_link_texts_to_their_text_styles(game, least, tmp_path):
+    files = _files(game, tmp_path)
+    doc = TextDoc(files, LAYOUTS[game], EditFile(game), "english", "german")
+    doc.prepare("english", "german")
+    doc.prepare_styles()
+    links = doc.links.load()
+    assert len(links) >= least
+    assert sum(k in doc.table("english") for k in links) > 0.8 * len(links)
+    known = {key for key, _name in doc.style_choices()}
+    assert all(set(fonts) <= known for fonts in links.values() if fonts)
+    key = next(k for k in links if k in doc.table("english"))
+    assert doc.linked_names(key) and doc.glyph_problems("Haus", key=key) == []

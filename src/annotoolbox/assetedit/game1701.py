@@ -357,7 +357,7 @@ def _order(src: Sources, objects: dict[int, props1701.PropObject], doc: AssetDoc
 
 
 def _table_changed(src: Sources, doc: AssetDocument) -> bool:
-    return any(src.table.rows.get(g) != _original_row(src, doc, g) for g in {*src.table.rows, *src.table.order})
+    return any(src.table.rows.get(g) != _original_row(src, doc, g) for g in {*src.table.rows, *src.table.raw})
 
 
 def _original_row(src: Sources, doc: AssetDocument, guid: int) -> list[str] | None:

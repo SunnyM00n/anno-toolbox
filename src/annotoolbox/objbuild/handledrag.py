@@ -106,10 +106,10 @@ class PartDrag:
 
     def label(self) -> str:
         if self.name.startswith("ring"):
-            return tr("turn {path}", path=self.target.path)
+            return tr("common.turn_path", path=self.target.path)
         if self.name == "scale":
-            return tr("scale {path}", path=self.target.path)
-        return tr("move {path}", path=self.target.path)
+            return tr("common.scale_path", path=self.target.path)
+        return tr("common.move_path", path=self.target.path)
 
     def end(self) -> list[Edit] | None:
         """The preview put back, then the edits of the final values and the ones that made what the part lacked."""

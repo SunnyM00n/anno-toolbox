@@ -125,6 +125,8 @@ def test_the_clip_player_says_why_a_clip_cannot_play(qt, tmp_path):
     player = ClipPlayer()
     assert "cannot play" in player.play("x.wem", b"not a riff file", tmp_path)
     assert "no cache folder" in player.play("x.mp3", b"ID3", None)
+    (tmp_path / "taken").write_bytes(b"")  # a file where the cache folder would be: it cannot be written into
+    assert "cannot play" in player.play("x.mp3", b"ID3", tmp_path / "taken")  # said, as the others: it was raised
 
 
 def _panel(qt, tmp_path):
@@ -220,3 +222,28 @@ def test_a_sound_joins_a_list_and_a_timeline_is_edited_in_the_panel(qt, tmp_path
     line.remove()
     assert len(panel.doc.timeline("data/graphics/mill.snd").placements[6001]) == 1
     assert panel.doc.undo() and line.refresh() is None and line.table.rowCount() == 2
+
+
+def test_a_game_without_a_database_shows_nothing_of_the_game_before(qt, tmp_path):
+    panel = _panel(qt, tmp_path)
+    assert panel.table.rowCount() == 2 and panel.timelines.files.count() == 1
+    panel.open_game(tree_of({"data/graphics/other.snd": FILES["data/graphics/mill.snd"]}))
+    assert panel.doc is None and panel.table.rowCount() == 0 and panel.timelines.files.count() == 0
+    panel.open_game(tree_of(FILES))
+    panel.open_database(panel.tree, "data/sound/missing/sounddatabase.xml")  # one that does not read
+    assert panel.doc is None and panel.table.rowCount() == 0 and panel.timelines.doc is None
+
+
+def test_a_weight_that_is_no_number_changes_no_list(qt, tmp_path):
+    said: list[str] = []
+    panel = _panel(qt, tmp_path)
+    panel.say = said.append
+    panel.table.selectRow(0)  # sound 1: drawn by the lists 40 (event 4) and 98000
+    assert panel.members.rowCount() == 2
+    panel.members.item(0, 2).setText("45")
+    panel.members.item(1, 2).setText("many")
+    panel.apply_weights()
+    assert not panel.doc.changed and said[-1] == "a weight is a whole number"
+    panel.members.item(1, 2).setText("55")
+    panel.apply_weights()
+    assert panel.doc.db.lists[40].events[4][0] == (1, 45) and panel.doc.db.lists[98000].events[-1] == [(1, 55)]

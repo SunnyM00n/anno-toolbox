@@ -106,3 +106,11 @@ def test_the_sky_above_the_horizon_is_the_games():
     assert top != got["ours"][0]  # the game's sky, not the view's
     assert top[2] > top[0] + 30  # blue
     assert lower[0] + lower[1] + lower[2] > top[0] + top[1] + top[2]  # paler towards the horizon
+
+
+def test_a_fog_map_cut_short_reads_its_whole_rows_and_one_without_a_texel_is_no_fog():
+    assert ga.fog_layers(bytes(15 * 8)).shape == (2, 3, 3, 4)  # 15 texels: 3 x 3 and a rest (rounded: 4 x 4)
+    air = ga.Atmosphere.__new__(ga.Atmosphere)
+    air.fog = None
+    air.set_fog(bytes(5), 64.0)
+    assert air._fog_layers is None and air.fog is None

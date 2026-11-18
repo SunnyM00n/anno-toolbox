@@ -209,7 +209,7 @@ class Namer:
     def end(self, e: bindings.End, top: elements.Element, own: dict[int, tuple[str, int]]) -> str:
         """A binding end of the file whose element tree is ``top`` (its own properties ``own``) as words."""
         if e.kind == "constant":
-            return tr("constant {value}", value=e.value[1] if isinstance(e.value, tuple) else repr(e.value))
+            return tr("ui.constant_value", value=e.value[1] if isinstance(e.value, tuple) else repr(e.value))
         axis = bindings.AXES.get(e.field, "")
         if e.kind == "own":
             return f"own.{own.get(e.ids[0], (f'{e.ids[0]:08x}', 0))[0]}{axis}"

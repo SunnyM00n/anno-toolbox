@@ -58,8 +58,8 @@ class Options:
     ``all_mips`` writes every mip level (else the largest), ``all_faces`` every face of a cube or array and every
     slice; ``hdr_form`` is "exr" or "hdr" for a float texture; ``exposure`` (stops) brightens a float texture's
     8-bit PNG; ``axes`` ("gltf" mirrors, "anno" keeps the stored values), ``strict``, ``lods``, ``with_textures`` and
-    ``anims_folder`` are the model export's (docs/rdm-gltf.md); ``language`` limits language texts to one language;
-    ``force`` overwrites files that exist."""
+    ``anims_folder`` are the model export's (docs/rdm-gltf.md); ``rdm_target`` is the game a Granny file's ``rdm``
+    form is for; ``language`` limits language texts to one language; ``force`` overwrites files that exist."""
 
     png_depth: int = 8
     all_mips: bool = False
@@ -72,6 +72,7 @@ class Options:
     lods: bool = False
     with_textures: bool = True
     anims_folder: str = ""
+    rdm_target: str = "anno117"
     language: str = ""
     force: bool = False
 

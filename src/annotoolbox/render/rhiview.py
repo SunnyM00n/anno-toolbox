@@ -24,6 +24,7 @@ from .rhidevice import RhiContext
 from .shaderbake import TARGETS
 
 ENV = "ANNO_RENDERER"
+DEBUG_ENV = "ANNO_D3D12_DEBUG"  # "1": the graphics API's debug layer, where Windows' Graphics Tools are installed
 BACKENDS = ("gl", "d3d12", "d3d11", "vulkan", "opengl")  # gl: moderngl; opengl: QRhi's OpenGL backend
 DEFAULT = "gl"
 _API = {
@@ -106,6 +107,8 @@ class RhiView(QRhiWidget):
         super().__init__(parent)
         self.backend = backend
         self.setApi(_API[backend])
+        if os.environ.get(DEBUG_ENV, "") == "1":  # the native backend's checks (native-backend.md 8.2)
+            self.setDebugLayerEnabled(True)
         self.ctx: RhiContext | None = None
         self.failed = ""
         self._device = None
@@ -118,6 +121,22 @@ class RhiView(QRhiWidget):
 
     def ready(self, ctx: RhiContext) -> None:
         """The device is made (again, after the widget moved to another window): the subclass makes its renderer."""
+
+    def releaseResources(self) -> None:  # QRhiWidget's: its QRhi goes away, every resource of it is destroyed now
+        ctx, self.ctx, self._device = self.ctx, None, None
+        if ctx is None:
+            return
+        try:
+            self.released(ctx)
+        except Exception as exc:  # an error inside Qt's call would vanish, and the device's own must still go
+            self.failed = self.failed or f"{type(exc).__name__}: {exc}"
+            traceback.print_exc()
+        finally:
+            ctx.release()
+
+    def released(self, ctx: RhiContext) -> None:
+        """The device goes away (the widget moved to another window, its window closes; ``ready`` follows when it
+        draws again): the subclass releases its renderer here, whose resources are this device's."""
 
     def render(self, cb) -> None:
         if self.ctx is None:

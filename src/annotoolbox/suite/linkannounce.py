@@ -58,34 +58,40 @@ def changed_since(before: dict[str, str], folder: Path) -> list[str]:
     return sorted([p for p, h in now.items() if before.get(p) != h] + [p for p in before if p not in now])
 
 
-def announce(kinds: Iterable[str], mod: str = "", paths: Iterable[str] = (), deployed: bool = True) -> Notice:
+def announce(
+    kinds: Iterable[str], mod: str = "", paths: Iterable[str] = (), deployed: bool = True, game: str = ""
+) -> Notice:
     """Tell the game that ``kinds`` of reload are due for the mod ``mod`` (``paths``: its changed files, relative to
     its folder). ``deployed`` False: the change is saved in the project only, so nothing is sent and the text says
-    to build and install first."""
+    to build and install first. ``game``: the game the mod is for, so the manual route names its way."""
+    if game:
+        livelink.set_target_game(game)
     groups = {kind: [p for p in paths if classify(p) == kind] for kind in kinds}
     if not deployed:
-        return Notice(False, tr("saved in the project: build and install, then {how}", how=_manual(groups)))
+        return Notice(False, tr("common.saved_project_build_install", how=_manual(groups)))
     return _push(groups, mod, list(paths))
 
 
-def announce_files(mod: str, paths: Iterable[str], new: Iterable[str] = ()) -> Notice:
+def announce_files(mod: str, paths: Iterable[str], new: Iterable[str] = (), game: str = "") -> Notice:
     """The same for a list of changed files: they are sorted into kinds with ``classify``. ``new``: the files the
     game has not seen (a scene file the mod pass has not mapped yet makes the pass run first)."""
     paths = list(paths)
+    if game:
+        livelink.set_target_game(game)
     groups: dict[str, list[str]] = {}
     for path in paths:
         kind = classify(path)
         if kind:
             groups.setdefault(kind, []).append(path)
     if not groups:
-        return Notice(False, tr("no file the game reloads changed"))
+        return Notice(False, tr("common.no_file_game_reloads_changed"))
     return _push(groups, mod, paths, new=set(new))
 
 
-def announce_install(mod: str, folder: Path, before: dict[str, str]) -> Notice:
+def announce_install(mod: str, folder: Path, before: dict[str, str], game: str = "") -> Notice:
     """After a mod was written into ``folder`` (``before``: its ``snapshot`` from before): announce what changed."""
     changed = changed_since(before, folder)
-    return announce_files(mod, changed, new=[p for p in changed if p not in before])
+    return announce_files(mod, changed, new=[p for p in changed if p not in before], game=game)
 
 
 def announce_in_background(background, say: Callable[[str], None], call: Callable[[], Notice]) -> Notice | None:
@@ -96,14 +102,14 @@ def announce_in_background(background, say: Callable[[str], None], call: Callabl
         notice = call()
         say(notice.text)
         return notice
-    say(tr("game link: reloading ..."))
+    say(tr("common.game_link_reloading"))
     background.run(call, lambda result: say(_text_of(result)))
     return None
 
 
 def _text_of(result: object) -> str:
     if isinstance(result, Exception):
-        return tr("the game link failed: {reason}", reason=result)
+        return tr("common.game_link_failed", reason=result)
     return result.text if isinstance(result, Notice) else str(result)
 
 
@@ -139,18 +145,19 @@ def _push(groups: dict[str, list[str]], mod: str, paths: list[str], new: set[str
     sent = any(r.sent for r in replies)
     bad = [r.message for r in replies if not r.ok and r.message]
     if left_out:
-        bad.append(tr("not sent, the game link takes no such file name: {names}", names=", ".join(left_out)))
+        bad.append(tr("common.not_sent_game_link_takes", names=", ".join(left_out)))
     done = ", ".join(reloaded)
-    text = "; ".join([tr("game reloaded: {kinds}", kinds=done)] * bool(done) + bad) or tr(
-        "the game link refused the request"
+    text = "; ".join([tr("common.game_reloaded_kinds", kinds=done)] * bool(done) + bad) or tr(
+        "common.game_link_refused_request"
     )
     return Notice(sent, text + "".join(f" ({n})" for n in notes), tuple(replies))
 
 
 def _manual(groups: dict[str, list[str]]) -> str:
     """The manual route for the kinds in ``groups`` (the same sentence once)."""
-    steps = list(dict.fromkeys(tr(livelink.MANUAL.get(k, "restart the game")) for k in groups))
-    return " / ".join(steps) if steps else tr("nothing the game reloads")
+    game = livelink.target_game()
+    steps = list(dict.fromkeys(livelink.manual(k, game) for k in groups))
+    return " / ".join(steps) if steps else tr("common.nothing_game_reloads")
 
 
 def _digest(path: Path) -> str:

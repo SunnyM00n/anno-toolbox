@@ -87,10 +87,10 @@ def choose(
             return path, place
         best = (miss, grid) if best is None or miss < best[0] else best
     if best is None:
-        raise ValueError(tr("no pool island larger than {size} tiles to carry the island into", size=size))
+        raise ValueError(tr("islands.no_pool_island_larger_tiles", size=size))
     raise ValueError(
         tr(
-            "no larger pool island draws the island's land: the best leaves {share}% of it outside (grid {grid})",
+            "islands.no_larger_pool_island_draws",
             share=round(best[0] * 100, 1),
             grid=best[1],
         )

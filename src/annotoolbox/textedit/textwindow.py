@@ -7,8 +7,6 @@ reads a file runs off the window's thread (``suite.background``). docs/text-edit
 
 from __future__ import annotations
 
-import hashlib
-import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
@@ -33,7 +31,7 @@ from ..assetedit import assetgame
 from ..assetedit.gamefiles import LAYOUTS, GameFiles
 from ..infra.i18n import N_, tr
 from ..sources import gametree
-from ..suite import gameopen, widgets
+from ..suite import gameopen, gamesync, widgets
 from ..suite import project as suite_project
 from ..suite.background import Background
 from . import exchange, projectpart
@@ -44,7 +42,7 @@ from .rowsmodel import RowsModel
 from .textdoc import CHANGED, OUTDATED, STATUS_NAMES, STATUSES, UNTRANSLATED, Filter, TextDoc
 
 APP = "texts"
-TITLE = N_("Text editor")
+TITLE = N_("texts.text_editor")
 GAMES = dict(gametree.GAMES)
 ALL = ""  # the filters' first entry: no filter
 
@@ -71,26 +69,26 @@ class TextWindow(QMainWindow):
         self.detail = DetailPanel(Actions(self._apply, self._revert, self._fill_twins, self._play))
         self.source_box, self.target_box = QComboBox(), QComboBox()
         self.status_box, self.file_box, self.group_box = QComboBox(), QComboBox(), QComboBox()
-        self.search = QLineEdit(placeholderText=tr("search the id, the texts, the editor name, the speaker"))
-        self.problems_only = QCheckBox(tr("only problems"))
-        self.voiced_only = QCheckBox(tr("only spoken"))
+        self.search = QLineEdit(placeholderText=tr("texts.search_id_texts_editor_name"))
+        self.problems_only = QCheckBox(tr("texts.only_problems"))
+        self.voiced_only = QCheckBox(tr("texts.only_spoken"))
         self.player = self.output = None  # the media player and its output, made at the first voice played
         self.timer = QTimer(self, singleShot=True, interval=250)
         self._build()
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("File > Open game, then pick the two languages."))
+        self.statusBar().showMessage(tr("texts.file_gt_open_game_pick"))
 
     # layout
     def _build(self) -> None:
         bar = QHBoxLayout()
-        for label, box in ((N_("Source"), self.source_box), (N_("Target"), self.target_box)):
+        for label, box in ((N_("texts.source"), self.source_box), (N_("common.target"), self.target_box)):
             bar.addWidget(QLabel(tr(label)))
             bar.addWidget(box)
-        self.status_box.addItem(tr("every status"), ALL)
+        self.status_box.addItem(tr("texts.every_status"), ALL)
         for status in STATUSES:
             self.status_box.addItem(tr(STATUS_NAMES[status]), status)
-        self.file_box.addItem(tr("every file"), ALL)
-        self.group_box.addItem(tr("every group"), ALL)
+        self.file_box.addItem(tr("texts.every_file"), ALL)
+        self.group_box.addItem(tr("texts.every_group"), ALL)
         for widget in (self.status_box, self.file_box, self.group_box, self.problems_only, self.voiced_only):
             bar.addWidget(widget)
         bar.addWidget(self.search, 1)
@@ -108,6 +106,7 @@ class TextWindow(QMainWindow):
             box.currentIndexChanged.connect(lambda _i: self._refilter())
         for check in (self.problems_only, self.voiced_only):
             check.toggled.connect(lambda _on: self._refilter())
+        widgets.find_key(self, self.search)
         self.search.textChanged.connect(lambda _t: self.timer.start())
         self.timer.timeout.connect(self._refilter)
         self.source_box.activated.connect(lambda _i: self._switch())
@@ -117,22 +116,22 @@ class TextWindow(QMainWindow):
         )
 
     def _menus(self) -> None:
-        menu = self.menuBar().addMenu(tr("&File"))
-        games = menu.addMenu(tr("Open &game"))
+        menu = self.menuBar().addMenu(tr("common.menu.file"))
+        games = menu.addMenu(tr("common.menu.open_game"))
         for key, name in GAMES.items():
             games.addAction(name, lambda k=key: self.open_game(k))
-        menu.addAction(tr("&Save to the project"), self.save, QKeySequence.StandardKey.Save)
+        menu.addAction(tr("sound.save_to_project"), self.save, QKeySequence.StandardKey.Save)
         menu.addSeparator()
-        menu.addAction(tr("&Import a translation..."), self.import_file)
-        menu.addAction(tr("&Export the shown rows..."), self.export_file)
+        menu.addAction(tr("texts.import_translation_dots"), self.import_file)
+        menu.addAction(tr("texts.export_shown_rows"), self.export_file)
         menu.addSeparator()
-        menu.addAction(tr("&New text..."), self.new_text)
+        menu.addAction(tr("texts.new_text_dots"), self.new_text)
         edit, _undo, _redo = widgets.edit_menu(self, self.undo, self.redo)
         edit.addSeparator()
-        edit.addAction(tr("&Revert to the game's text"), self._revert)
-        edit.addAction(tr("Next &untranslated"), self.next_untranslated, QKeySequence("F3"))
-        edit.addAction(tr("&Glossary..."), self.edit_glossary)
-        edit.addAction(tr("Glyphs of the &target language..."), self.audit_glyphs)
+        edit.addAction(tr("texts.revert_games_text_accel"), self._revert)
+        edit.addAction(tr("texts.next_untranslated"), self.next_untranslated, QKeySequence("F3"))
+        edit.addAction(tr("texts.glossary"), self.edit_glossary)
+        edit.addAction(tr("texts.glyphs_target_language"), self.audit_glyphs)
 
     # opening
     def project(self) -> suite_project.Project:
@@ -140,7 +139,7 @@ class TextWindow(QMainWindow):
 
     def open_game(self, key: str, wait: bool = False) -> None:
         """Open an installed game (its folder from the settings); its text files are read in the background."""
-        if self.doc is not None and self.doc.dirty and not self._ask_save():
+        if not gamesync.may_switch(self, key, self.may_leave):  # asks; the suite's other apps follow
             return
         gameopen.open_installed(
             self, self.settings, key, self.background, then=lambda t: self._opened(key, t), wait=wait
@@ -148,7 +147,7 @@ class TextWindow(QMainWindow):
 
     def _opened(self, key: str, tree) -> None:
         if isinstance(tree, Exception):
-            self.statusBar().showMessage(tr("{game} did not open: {error}", game=GAMES.get(key, key), error=tree))
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=GAMES.get(key, key), error=tree))
             return
         saved = self.settings.apps.setdefault(APP, {})
         path = projectpart.edits_path(self.project(), key)
@@ -166,7 +165,7 @@ class TextWindow(QMainWindow):
             saved.get("target", ""),
         )
         if not doc.languages:
-            self.statusBar().showMessage(tr("{game} has no text files", game=GAMES.get(key, key)))
+            self.statusBar().showMessage(tr("texts.no_text_files", game=GAMES.get(key, key)))
             return
         self.key, self.doc, self.model.doc = key, doc, doc
         saved["game"] = key
@@ -183,7 +182,7 @@ class TextWindow(QMainWindow):
         doc = self.doc
         source, target = self.source_box.currentData(), self.target_box.currentData()
         self.setEnabled(False)
-        self.statusBar().showMessage(tr("Reading the texts..."))
+        self.statusBar().showMessage(tr("texts.reading_texts"))
 
         def work():
             doc.prepare(source, target)
@@ -192,7 +191,9 @@ class TextWindow(QMainWindow):
         def done(result) -> None:
             self.setEnabled(True)
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("the texts did not read: {error}", error=result))
+                self.statusBar().showMessage(tr("texts.texts_not_read", error=result))
+                for box, language in ((self.source_box, doc.source), (self.target_box, doc.target)):
+                    box.setCurrentIndex(box.findData(language))  # the pair the document still holds
                 return
             self.settings.apps.setdefault(APP, {}).update(source=source, target=target)
             self._fill_filters()
@@ -219,8 +220,8 @@ class TextWindow(QMainWindow):
             self._load_pair()
 
     def _fill_filters(self) -> None:
-        for box, items, label in ((self.file_box, self.doc.files_listed(), N_("every file")),
-                                  (self.group_box, self.doc.groups_listed(), N_("every group"))):  # fmt: skip
+        for box, items, label in ((self.file_box, self.doc.files_listed(), N_("texts.every_file")),
+                                  (self.group_box, self.doc.groups_listed(), N_("texts.every_group"))):  # fmt: skip
             box.blockSignals(True)
             box.clear()
             box.addItem(tr(label), ALL)
@@ -249,12 +250,15 @@ class TextWindow(QMainWindow):
             return doc.rows(flt), doc.counts()
 
         def done(result) -> None:
-            if mine != self.generation or isinstance(result, Exception):
+            if mine != self.generation or doc is not self.doc:
+                return  # a newer filter run, or another game opened meanwhile
+            if isinstance(result, Exception):
+                self.statusBar().showMessage(tr("texts.texts_not_read", error=result))
                 return
             ids, counts = result
             self.model.show(ids)
             line = tr(
-                "{shown} of {all} texts shown; {untranslated} untranslated, {outdated} outdated, {changed} changed",
+                "texts.texts_shown_untranslated_outdated",
                 shown=len(ids), all=sum(counts.values()), untranslated=counts[UNTRANSLATED],
                 outdated=counts[OUTDATED], changed=counts[CHANGED],
             )  # fmt: skip
@@ -271,14 +275,14 @@ class TextWindow(QMainWindow):
         doc, entry = self.doc, self.doc.entry(key)
         where = f"{key}   {entry.file}" if entry else key
         name = f"   {entry.name}" if entry and entry.name else ""
-        group = f"   {tr('group {id}', id=entry.folder[-8:])}" if entry and entry.folder else ""
+        group = f"   {tr('texts.group_id', id=entry.folder[-8:])}" if entry and entry.folder else ""
         voice = doc.voice(key)
         kind = doc.kind_label(key)
         self.detail.show_row(RowView(
             key, where + name + group + (f"   [{kind}]" if kind else ""), doc.source_text(key), doc.target_text(key),
             doc.one_line, doc.glossary(), lambda text, style: doc.glyph_problems(text, style, key),
             self._twin_lines(key), self._speaker(voice), doc.playable(key),
-            drawn_in=", ".join(doc.linked_names(key)),
+            drawn_in=", ".join(doc.linked_names(key)), face=lambda style: doc.face(style, key),
         ))  # fmt: skip
         if voice is not None and voice.path:
             self._show_lips(key)
@@ -288,14 +292,14 @@ class TextWindow(QMainWindow):
         if voice is None:
             return ""
         line = f"{voice.speaker} ({voice.mood})" if voice.mood else voice.speaker
-        return line + (tr(", {count} speech files of this text", count=voice.variants) if voice.variants > 1 else "")
+        return line + (tr("texts.speech_files_text", count=voice.variants) if voice.variants > 1 else "")
 
     def _show_lips(self, key: str) -> None:
         """The lip file of the picked text's voice, read off the window's thread, shown when the row is still picked."""
         doc = self.doc
 
         def done(result) -> None:
-            if isinstance(result, str) and key == self.current_key():
+            if isinstance(result, str) and doc is self.doc and key == self.current_key():
                 self.detail.lips_label.setText(result)
                 self.detail.lips_label.setVisible(bool(result))
 
@@ -303,7 +307,9 @@ class TextWindow(QMainWindow):
 
     def _twin_lines(self, key: str) -> list[str]:
         doc = self.doc
-        return [f"{t}   {doc.kind_label(t) or tr('main line')}   {doc.source_text(t)[:90]}" for t in doc.twins_of(key)]
+        return [
+            f"{t}   {doc.kind_label(t) or tr('texts.main_line')}   {doc.source_text(t)[:90]}" for t in doc.twins_of(key)
+        ]
 
     def current_key(self) -> str:
         return self.model.key_at(self.table.currentIndex().row())
@@ -320,7 +326,7 @@ class TextWindow(QMainWindow):
             if isinstance(row, int) and row >= 0:
                 self.table.selectRow(row)
             else:
-                self.statusBar().showMessage(tr("no untranslated text among the rows shown"))
+                self.statusBar().showMessage(tr("texts.no_untranslated_text_among_rows"))
 
         if doc is not None:
             self.background.run(work, done)
@@ -333,8 +339,8 @@ class TextWindow(QMainWindow):
         status = self.doc.edit(key, text)
         problems = len([p for p in self.doc.problems(key) if p.severity == "error"])
         self.model.refresh(key)
-        self.statusBar().showMessage(tr("{id}: {status}", id=key, status=tr(STATUS_NAMES[status]))
-                                     + (tr(", {n} problems", n=problems) if problems else ""))  # fmt: skip
+        self.statusBar().showMessage(tr("texts.id_status", id=key, status=tr(STATUS_NAMES[status]))
+                                     + (tr("texts.n_problems", n=problems) if problems else ""))  # fmt: skip
 
     def _revert(self) -> None:
         key = self.current_key()
@@ -352,7 +358,7 @@ class TextWindow(QMainWindow):
     def _walk(self, label: str) -> None:
         if label:
             self.model.show(self.model.ids)
-            self.statusBar().showMessage(tr("{label} done again or undone", label=label))
+            self.statusBar().showMessage(tr("texts.done_again_undone", label=label))
             self._show(self.current_key())
 
     def new_text(self) -> None:
@@ -360,16 +366,21 @@ class TextWindow(QMainWindow):
         if self.doc is None:
             return
         doc = self.doc
-        key, ok = QInputDialog.getText(self, tr("New text"), tr("Id:"), text=doc.free_id(self.project().guid_range[0]))
-        words, ok2 = QInputDialog.getMultiLineText(
-            self, tr("New text"), tr("The text in {language}:", language=doc.source)
+        key, ok = QInputDialog.getText(
+            self, tr("texts.new_text"), tr("texts.id_colon"), text=doc.free_id(self.project().guid_range[0])
         )
-        if ok and ok2 and key.strip() and words.strip():
-            if doc.has(key.strip()):
-                self.statusBar().showMessage(tr("{id} is a text already", id=key.strip()))
-                return
-            doc.edit(key.strip(), words, doc.source)
-            self.search.setText(key.strip())
+        key = key.strip()
+        if not ok or not key:
+            return  # cancelled: the text itself is not asked for
+        if doc.has(key):
+            self.statusBar().showMessage(tr("texts.id_text_already", id=key))
+            return
+        words, ok = QInputDialog.getMultiLineText(
+            self, tr("texts.new_text"), tr("texts.the_text_in_language", language=doc.source)
+        )
+        if ok and words.strip():
+            doc.edit(key, words, doc.source)
+            self.search.setText(key)
             self._refilter()
 
     def edit_glossary(self) -> None:
@@ -390,25 +401,20 @@ class TextWindow(QMainWindow):
             project = self.project()
             self.doc.edits.save(projectpart.edits_path(project, self.key))
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, tr(TITLE), tr("could not save: {error}", error=exc))
+            QMessageBox.warning(self, tr(TITLE), tr("islands.could_not_save", error=exc))
             return False
         self.doc.dirty = False
-        note = (
-            ""
-            if self.key == project.game
-            else " " + tr("(the project builds {game}: these are kept, not built)", game=project.game)
-        )
-        self.statusBar().showMessage(tr("{count} texts kept in the project", count=self.doc.edits.count()) + note)
+        note = "" if self.key == project.game else " " + tr("texts.project_builds_kept_not_built", game=project.game)
+        self.statusBar().showMessage(tr("texts.texts_kept_project", count=self.doc.edits.count()) + note)
         return True
+
+    def may_leave(self) -> bool:
+        """Ask before unkept edits are dropped (another game opened); True when there are none."""
+        return self.doc is None or not self.doc.dirty or self._ask_save()
 
     def _ask_save(self) -> bool:
         """False when the person cancelled or the save failed (nothing is closed or opened)."""
-        buttons = QMessageBox.StandardButton
-        answer = QMessageBox.question(self, tr(TITLE), tr("Keep the edits in the project first?"),
-                                      buttons.Save | buttons.Discard | buttons.Cancel)  # fmt: skip
-        if answer == buttons.Save:
-            return self.save()
-        return answer != buttons.Cancel
+        return widgets.ask_keep(self, tr(TITLE), tr("texts.keep_edits_project_first"), self.save)
 
     def closeEvent(self, event) -> None:
         if self.doc is not None and self.doc.dirty and not self._ask_save():
@@ -420,7 +426,7 @@ class TextWindow(QMainWindow):
         if self.doc is None:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, tr("Import a translation"), "", tr("Translations (*.csv *.xlf *.xliff *.po)")
+            self, tr("texts.import_translation"), "", tr("texts.translations_csv_xlf_xliff_po")
         )
         if path:
             self.import_path(path)
@@ -439,7 +445,7 @@ class TextWindow(QMainWindow):
 
         def got(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("{path} did not read: {error}", path=path, error=result))
+                self.statusBar().showMessage(tr("texts.path_not_read_error", path=path, error=result))
                 return
             rows, unknown = result
             self._apply_rows(rows, bool(unknown) and self.ask_add(unknown), wait)
@@ -447,7 +453,7 @@ class TextWindow(QMainWindow):
         self.background.run(read, got, wait)
 
     def ask_add(self, unknown: int) -> bool:
-        question = tr("{n} ids are not in the game. Add them as new texts?", n=unknown)
+        question = tr("texts.ids_not_game_add_new", n=unknown)
         return QMessageBox.question(self, tr(TITLE), question) == QMessageBox.StandardButton.Yes
 
     def _apply_rows(self, rows: list[exchange.Row], add: bool, wait: bool) -> None:
@@ -457,7 +463,7 @@ class TextWindow(QMainWindow):
         def done(result) -> None:
             self.setEnabled(True)
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("the import failed: {error}", error=result))
+                self.statusBar().showMessage(tr("assets.import_failed_error", error=result))
                 return
             self._refilter(result.line())
 
@@ -467,8 +473,8 @@ class TextWindow(QMainWindow):
         if self.doc is None:
             return
         name = f"{self.key}-{self.doc.target}"
-        path, _ = QFileDialog.getSaveFileName(self, tr("Export the translation"), name + exchange.SUFFIXES["csv"],
-                                              tr("CSV (*.csv);;XLIFF (*.xlf);;PO (*.po)"))  # fmt: skip
+        path, _ = QFileDialog.getSaveFileName(self, tr("texts.export_translation"), name + exchange.SUFFIXES["csv"],
+                                              tr("texts.csv_xliff_xlf_po"))  # fmt: skip
         if path:
             self.export_path(path)
 
@@ -478,7 +484,7 @@ class TextWindow(QMainWindow):
         try:
             fmt = exchange.format_of(path)
         except ValueError as exc:
-            self.statusBar().showMessage(tr("{path} was not written: {error}", path=path, error=exc))
+            self.statusBar().showMessage(tr("texts.path_not_written_error", path=path, error=exc))
             return
 
         def work() -> int:
@@ -488,9 +494,9 @@ class TextWindow(QMainWindow):
 
         def done(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("{path} was not written: {error}", path=path, error=result))
+                self.statusBar().showMessage(tr("texts.path_not_written_error", path=path, error=result))
             else:
-                self.statusBar().showMessage(tr("{count} rows written to {path}", count=result, path=path))
+                self.statusBar().showMessage(tr("texts.rows_written_to", count=result, path=path))
 
         self.background.run(work, done, wait)
 
@@ -500,7 +506,7 @@ class TextWindow(QMainWindow):
         if key and self.doc is not None:
             count = self.doc.fill_twins(key)
             self.model.show(self.model.ids)
-            self.statusBar().showMessage(tr("{count} twin lines filled", count=count))
+            self.statusBar().showMessage(tr("texts.twin_lines_filled", count=count))
 
     def _play(self, side: str, wait: bool = False) -> None:
         """Play the picked text's voice in the language of one side: the clip is read and decoded off the window's thread."""
@@ -509,14 +515,11 @@ class TextWindow(QMainWindow):
             return
 
         def work() -> Path:
-            data, suffix = doc.clip(key, side)
-            target = Path(tempfile.gettempdir()) / f"texts-{hashlib.sha1(data).hexdigest()[:12]}{suffix}"
-            target.write_bytes(data)
-            return target
+            return doc.clip_file(key, side)
 
         def done(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("cannot play: {error}", error=result))
+                self.statusBar().showMessage(tr("common.cannot_play_error", error=result))
                 return
             from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
@@ -540,12 +543,12 @@ class TextWindow(QMainWindow):
 
         def done(result) -> None:
             if isinstance(result, Exception):
-                self.statusBar().showMessage(tr("the glyphs were not checked: {error}", error=result))
+                self.statusBar().showMessage(tr("texts.glyphs_not_checked", error=result))
                 return
             lines = [
-                f"U+{ord(ch):04X}  {ch}  {tr('{n} texts', n=n)}  {tr('another text style draws it') if other else tr('no font of the game draws it')}"
+                f"U+{ord(ch):04X}  {ch}  {tr('texts.n_texts', n=n)}  {tr('texts.another_text_style_draws') if other else tr('texts.no_font_game_draws')}"
                 for ch, n, other in result[:40]
             ]
-            QMessageBox.information(self, tr(TITLE), "\n".join(lines) or tr("every character has a glyph"))
+            QMessageBox.information(self, tr(TITLE), "\n".join(lines) or tr("texts.every_character_glyph"))
 
         self.background.run(work, done)

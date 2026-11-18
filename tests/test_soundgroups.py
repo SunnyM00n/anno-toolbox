@@ -6,9 +6,11 @@ from __future__ import annotations
 import struct
 
 import pytest
+from tests.test_soundedit import sound_window  # noqa: F401
 
 from annotoolbox.exporting.banks import BankInfo
 from annotoolbox.formats import bnk, bnkgraph, bnkstmg
+from annotoolbox.infra.i18n import N_
 from annotoolbox.soundedit import groupedits, outline
 from annotoolbox.soundedit.bankdoc import BankDoc
 from annotoolbox.soundedit.registry import EditError
@@ -130,7 +132,7 @@ def test_the_detail_panel_and_the_list_show_groups_by_name():
     lines = groupedits.group_lines(doc, bnk.fnv1_32("st_water"))
     assert lines[0].startswith("state group st_water") and "500 ms" in lines[0] and "above to 5: 10 ms" in lines[1]
     assert any("from 50 the switch" in line for line in groupedits.group_lines(doc, ZOOM))
-    assert [r.title for r in outline.outline(doc)["Groups"]] == sorted(rows.values())
+    assert [r.title for r in outline.outline(doc)[N_("assets.groups")]] == sorted(rows.values())
     assert any("state group" in line for line in outline.describe(doc, SCREEN))
     assert bnkgraph.family(172) == "new"
 
@@ -158,16 +160,8 @@ def test_a_new_group_is_planned_as_an_edit_or_named_with_its_ids():
     assert other.info.group_label(5, 6) == "6"
 
 
-def test_the_window_picks_a_group_of_the_init_bank_without_a_fault(monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
+def test_the_window_picks_a_group_of_the_init_bank_without_a_fault(sound_window):  # noqa: F811
+    window = sound_window
     window.doc = init_bank(172)
     window._fill_outline()
     window._select(SCREEN)  # an id of a state group, no object of the bank

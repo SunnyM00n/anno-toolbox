@@ -17,7 +17,7 @@ from collections.abc import Callable
 
 from ....formats.isd2070 import Node
 from ....islands import islandedits, objectedits
-from ....islands.islandground import stroke_cover
+from ....islands.islandground import stroke_cover, stroke_material
 from ....othergames import grid1701
 from ....othergames.isd1701 import FIXED, TILE, TILE_RECORD, VERTEX, Island1701
 from ..isd import props as isd_props
@@ -199,7 +199,7 @@ def apply_paint(isl: Island1701, strokes: list[dict]) -> int:
     done = 0
     n = max(isl.width, isl.height)
     for st in strokes:
-        guid = int(st.get("material", -1))
+        guid = stroke_material(st)
         hit = stroke_cover(st, n, 1)[: isl.height, : isl.width] >= PAINT_COVER
         if not 0 <= guid < 65536 or not hit.any():
             continue

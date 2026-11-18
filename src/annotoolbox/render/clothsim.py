@@ -152,7 +152,9 @@ def tethers(count: int, edges: np.ndarray, lengths: np.ndarray, pinned: np.ndarr
     return anchor.astype(np.int64), np.where(np.isfinite(dist), dist, np.inf)
 
 
-def _tethers_plain(count: int, edges: np.ndarray, lengths: np.ndarray, pinned: np.ndarray):
+def _tethers_plain(
+    count: int, edges: np.ndarray, lengths: np.ndarray, pinned: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     near = [[] for _ in range(count)]
     for (a, b), length in zip(edges.tolist(), lengths.tolist(), strict=True):
         near[a].append((b, length))

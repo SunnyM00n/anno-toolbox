@@ -1,6 +1,6 @@
 """Models exported as glTF: an ``.rdm`` through the RDM toolchain (docs/rdm-gltf.md), a Granny ``.gr2`` the same way
 once it is RDM records (``rdm.grannygltf``: meshes, skeletons, its animations and those of the animation folder), a
-model config (``.cfg``) as the meshes it names.
+model config (``.cfg``) as the meshes it names. A ``.gr2`` also goes to ``.rdm`` files for one RDM game (``rdm.grannyrdm``).
 
 ``.glb`` is the default form. An ``.rdm`` keeps exactly what the file holds; the options choose the axes, ``strict``
 values, the LOD files beside it, the textures as PNG and the animation files of a folder that move it. A config
@@ -134,15 +134,42 @@ def granny_files(job: Job) -> tuple[dict[str, bytes], list[str]]:
     return {p.as_posix(): b for p, b in builder.files(target, _form(job)).items()}, notes
 
 
+def _gr2_to_rdm(job: Job, made: Made) -> None:
+    """The ``.rdm`` files of a ``.gr2`` for ``options.rdm_target`` (``rdm.grannyrdm``): the mesh file and an animation
+    file for each animation of the file and of the folder's ``.gr2`` files that move only its bones."""
+    from ..rdm import grannyrdm
+
+    def candidates():
+        for path in _folder_files(job, ".gr2"):
+            try:
+                yield PurePosixPath(path).stem, job.source.read(path)
+            except (OSError, KeyError):
+                continue
+
+    game = getattr(job.source, "game", "")
+    opts = grannyrdm.Options(job.options.rdm_target, game if game in grannyrdm.SOURCE_TILE else "")
+    extra = grannyrdm.animation_files(candidates(), grannyrdm.bone_names(job.data))
+    done = grannyrdm.convert(job.data, PurePosixPath(job.path).stem, opts, extra)
+    folder = PurePosixPath(job.path).parent
+    made.files.update({(folder / name).as_posix(): body for name, body in done.files.items()})
+    made.notes += done.notes
+
+
 def export(job: Job) -> Made:
-    """glTF of a model file."""
+    """glTF of a model file, and the ``.rdm`` files of a Granny ``.gr2`` (the ``rdm`` form)."""
     suffix = PurePosixPath(job.path).suffix.lower()
     made = Made()
+    gltf = bool(job.formats & {"glb", "gltf"})
     try:
-        if suffix == ".rdm":
+        if suffix == ".gr2":
+            if gltf:
+                made.files, made.notes = granny_files(job)
+            if "rdm" in job.formats:
+                _gr2_to_rdm(job, made)
+        elif not gltf:
+            return made  # the rdm form is for Granny files only
+        elif suffix == ".rdm":
             made.files, made.notes = rdm_files(job, job.path)
-        elif suffix == ".gr2":
-            made.files, made.notes = granny_files(job)
         elif suffix in (".cfg", ".mcf", ".ocf"):
             _config(job, made)
         else:

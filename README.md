@@ -53,23 +53,16 @@ can confirm that an edit is drawn.
 
 ## Install
 
-The Windows installer (`.msi`) is on the [releases page](https://github.com/SunnyM00n/anno-toolbox/releases/latest), and
-it needs no Python. With Python 3.12 or newer there are two ways to install the same program from this repository:
+The Toolbox ships as a Windows installer only: `AnnoToolbox-win-Setup.exe`, with updates from the releases, on the
+[releases page](https://github.com/SunnyM00n/anno-toolbox/releases/latest). It needs no Python. It carries the island
+view's Direct3D 12 module, which a source checkout builds itself (`python scripts/build_native.py`,
+[`native/d3d12/README.md`](native/d3d12/README.md)). There is no pip install and the package is not on PyPI.
 
-```bash
-pip install "anno-toolbox @ git+https://github.com/SunnyM00n/anno-toolbox"         # light: the file formats, the mod writing, the export commands (no window)
-pip install "anno-toolbox[gui] @ git+https://github.com/SunnyM00n/anno-toolbox"    # the full Toolbox: the windows (PySide6, moderngl, numpy, scipy, Pillow)
-```
-
-The package is not on PyPI.
-
-The light install has the command line only, with two commands:
+The program's command line (`anno-toolbox.exe` beside the window's exe) has two commands:
 
 - `rdm`: the models of the games as glTF 2.0 and back, inspect, diff, validate and relayout
   ([`docs/rdm-gltf.md`](docs/rdm-gltf.md))
 - `export`: any game file as stored and in a converted form, with an index ([`docs/exporting.md`](docs/exporting.md))
-
-When the `[gui]` part is missing, the windows say what to install.
 
 ```bash
 anno-toolbox rdm export model.rdm -o out/ --lods     # .rdm to glTF 2.0 (.glb)
@@ -93,8 +86,12 @@ The windows need Python 3.12 or newer and an OpenGL 3.3 driver. The textures are
 (see [`tools/README.md`](tools/README.md)). The settings and the editor's workspace are kept under
 `%LOCALAPPDATA%/anno-toolbox`.
 
-`python scripts/build_app.py` packages the editor with PyInstaller (a folder with an .exe), for a computer that has no
-Python installed.
+From a checkout (`pip install -e ".[dev,gui]"`), the island view draws the game's own shaders natively once the
+Direct3D 12 module is built: `pip install nanobind==2.9.2` and `python scripts/build_native.py` (Visual Studio's C++
+build tools; [`native/d3d12/README.md`](native/d3d12/README.md)). Without it the view draws its own look.
+
+`python scripts/build_app.py` packages the editor with PyInstaller (a folder with an .exe, the module built first), for
+a computer that has no Python installed; with `--pack` the installer.
 
 ## Tests
 

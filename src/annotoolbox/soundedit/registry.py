@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from ..infra.i18n import tr
 
 EDITS: dict[str, Callable] = {}
-LABELS: dict[str, str] = {}  # edit name -> its label (an English text of the catalog)
+LABELS: dict[str, str] = {}  # edit name -> its label (a string id)
 
 
 class EditError(ValueError):
@@ -45,25 +45,25 @@ def reading(what: str) -> Iterator[None]:
     except EditError:
         raise
     except (ValueError, struct.error) as exc:
-        raise EditError(tr("{what} does not read ({exc})", what=what, exc=exc)) from exc
+        raise EditError(tr("sound.what_not_read_exc", what=what, exc=exc)) from exc
 
 
 def check_index(items: Sequence, index: int, what: str) -> int:
     """``index`` when ``items`` has one there, else an ``EditError`` ("there are 3 curves, none at 5")."""
     if not 0 <= index < len(items):
-        raise EditError(tr("there are {count} {what}, none at {index}", count=len(items), what=what, index=index))
+        raise EditError(tr("common.count_what_none_index", count=len(items), what=what, index=index))
     return index
 
 
 def check_u32(value: int, what: str, zero: bool = True) -> int:
     """``value`` as a 32-bit unsigned number (``zero`` False: an id, which is never 0)."""
     if not (0 if zero else 1) <= int(value) < 2**32:
-        raise EditError(tr("{what} is a 32-bit number", what=what))
+        raise EditError(tr("sound.32_bit_number", what=what))
     return int(value)
 
 
 def check_byte(value: int, what: str) -> int:
     """``value`` as a number from 0 to 255."""
     if not 0 <= int(value) < 256:
-        raise EditError(tr("{what} is a number from 0 to 255", what=what))
+        raise EditError(tr("common.number_0_255", what=what))
     return int(value)

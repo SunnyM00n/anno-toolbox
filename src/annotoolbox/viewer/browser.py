@@ -28,15 +28,27 @@ from ..exporting.kinds import suffixes
 from ..infra.i18n import N_, number, tr
 
 KINDS = {
-    N_("All files"): (),
-    N_("Models"): suffixes("model"),
-    N_("Textures"): suffixes("texture", "picture"),
-    N_("Effects"): suffixes("effect"),
-    N_("Sounds"): (*suffixes("sound", "bank"), ".sp", ".snd"),  # and the older games' speech envelopes and timelines
-    N_("Data"): suffixes("data", "island", "text"),
+    "All files": (),
+    "Models": suffixes("model"),
+    "Textures": suffixes("texture", "picture"),
+    "Effects": suffixes("effect"),
+    "Sounds": (
+        *suffixes("sound", "bank"),
+        ".sp",
+        ".snd",
+    ),  # and the older games' speech envelopes and timelines
+    "Data": suffixes("data", "island", "text"),
 }
-DELETED = N_("Deleted by the game")  # the kind that lists the paths the archive map takes away (117)
-NOT_REFERENCED_TIP = N_("Files no other file names. The game may still load one (by a name its program builds).")
+KIND_TITLES = {
+    "All files": N_("viewer.all_files"),
+    "Models": N_("viewer.models"),
+    "Textures": N_("viewer.textures"),
+    "Effects": N_("common.effects"),
+    "Sounds": N_("viewer.sounds"),
+    "Data": N_("viewer.data"),
+}
+DELETED = N_("viewer.deleted_game")  # the kind that lists the paths the archive map takes away (117)
+NOT_REFERENCED_TIP = N_("viewer.files_no_other_file_names")
 SEARCH_SHOWN = 3000  # matches listed at most; the status says how many there were
 PATH_ROLE = 0x0100 + 1  # Qt.UserRole + 1: the full game path of a row
 FOLDER_ROLE = 0x0100 + 2  # whether a row is a folder still to fill
@@ -59,11 +71,11 @@ def origin_text(tree, path: str) -> str:
     """Where a path is read from and which archives it overrides (or, deleted, which still carry it)."""
     found = tree.origins(path)
     if not tree.exists(path):
-        return tr("deleted by the archive map; still in: {archives}", archives=", ".join(found) or "-")
+        return tr("viewer.deleted_archive_map_still", archives=", ".join(found) or "-")
     if not found:
-        return tr("read from: -")
-    also = "\n" + tr("also in (overridden): {archives}", archives=", ".join(found[1:])) if len(found) > 1 else ""
-    return tr("read from: {archive}", archive=found[0]) + also
+        return tr("viewer.read_from_lower")
+    also = "\n" + tr("viewer.also_overridden_archives", archives=", ".join(found[1:])) if len(found) > 1 else ""
+    return tr("viewer.read_from_archive", archive=found[0]) + also
 
 
 def matches(paths: list[str], text: str, suffixes: tuple[str, ...]) -> list[str]:
@@ -80,11 +92,11 @@ class FileBrowser(QWidget):
         super().__init__(parent)
         self.tree = None
         self.index: dict = {}
-        self.search = QLineEdit(placeholderText=tr("Search the paths (all words)"), clearButtonEnabled=True)
+        self.search = QLineEdit(placeholderText=tr("viewer.search_paths_all_words"), clearButtonEnabled=True)
         self.kind = QComboBox()
         for name in KINDS:
-            self.kind.addItem(tr(name), name)
-        self.unref = QCheckBox(tr("Not referenced"), toolTip=tr(NOT_REFERENCED_TIP))
+            self.kind.addItem(tr(KIND_TITLES[name]), name)
+        self.unref = QCheckBox(tr("viewer.not_referenced"), toolTip=tr(NOT_REFERENCED_TIP))
         self.unref.hide()  # shown once the reference graph is there (``set_unreferenced``)
         self.unreferenced: list[str] = []
         self.model = QStandardItemModel(self)
@@ -140,7 +152,7 @@ class FileBrowser(QWidget):
         self.unref.setChecked(False)
         self.unref.blockSignals(False)
         self.unref.setVisible(paths is not None)
-        self.unref.setText(tr("Not referenced ({count})", count=number(len(self.unreferenced))))
+        self.unref.setText(tr("viewer.not_referenced_count", count=number(len(self.unreferenced))))
         if self.tree is not None:
             self._refresh()
 
@@ -161,7 +173,7 @@ class FileBrowser(QWidget):
         if self.tree is not None:
             self._add_children(self.model.invisibleRootItem(), "")
         self.origin.setText(
-            tr("{name}: {count} files", name=self.tree.name, count=number(len(self.tree.paths))) if self.tree else ""
+            tr("viewer.name_count_files", name=self.tree.name, count=number(len(self.tree.paths))) if self.tree else ""
         )
 
     def _suffixes(self) -> tuple[str, ...]:
@@ -204,8 +216,8 @@ class FileBrowser(QWidget):
         self.found.clear()
         self.found.addItems(found[:SEARCH_SHOWN])
         self.pages.setCurrentWidget(self.found)
-        more = tr(" (the first {n} shown)", n=number(SEARCH_SHOWN)) if len(found) > SEARCH_SHOWN else ""
-        self.origin.setText(tr("{count} files{more}", count=number(len(found)), more=more))
+        more = tr("viewer.first_n_shown", n=number(SEARCH_SHOWN)) if len(found) > SEARCH_SHOWN else ""
+        self.origin.setText(tr("viewer.count_files_more", count=number(len(found)), more=more))
 
     def _pick(self, path) -> None:
         if not path or self.tree is None or path.endswith("/"):
@@ -223,6 +235,7 @@ class FileBrowser(QWidget):
         if self.tree is None or not self.tree.exists(path):
             return
         self.search.clear()
+        self._timer.stop()  # the cleared search must not rebuild the tree under the row
         self._refresh()
         parent, folder = self.model.invisibleRootItem(), ""
         for name in path.split("/")[:-1]:

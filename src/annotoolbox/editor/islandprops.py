@@ -55,14 +55,14 @@ class Section:
 
 def info_fields() -> tuple[Field, ...]:
     return (
-        Field("grid", tr("Grid (tiles)"), "readonly", tip=tr("The island's grid: fixed by its files")),
+        Field("grid", tr("islands.grid_tiles"), "readonly", tip=tr("islands.tip.islands_grid_fixed_files")),
         Field(
-            "start_coast", tr("Start coast faces (degrees)"), "angle", 0, 360,
-            tip=tr("Where the start coast lies"), optional=True,
+            "start_coast", tr("islands.start_coast_faces_degrees"), "angle", 0, 360,
+            tip=tr("islands.tip.where_start_coast_lies"), optional=True,
         ),
         Field(
-            "active_rect", tr("Active rectangle (tiles)"), "rect",
-            tip=tr("x0, z0, x1, z1 in whole 8-tile cells: the generator's size"),
+            "active_rect", tr("islands.active_rectangle_tiles"), "rect",
+            tip=tr("islands.tip.x0_z0_x1_z1_whole"),
         ),
     )  # fmt: skip
 
@@ -71,13 +71,13 @@ def property_fields(north_south: bool = False) -> tuple[Field, ...]:
     """The 2070-format island's property fields; ``north_south``: 1701's header (clime north or south, difficulty 0-2)."""
     if north_south:
         return (
-            Field("clime", tr("Clime"), "int", 0, 1, tip=tr("0 north, 1 south")),
-            Field("difficulty", tr("Difficulty"), "int", 0, 2, tip=tr("0 to 2")),
+            Field("clime", tr("islands.clime"), "int", 0, 1, tip=tr("islands.tip.0_north_1_south")),
+            Field("difficulty", tr("common.difficulty"), "int", 0, 2, tip=tr("islands.tip.0_to_2")),
         )
     return (
-        Field("clime", tr("Clime"), "int", 0, 1, tip=tr("0 above water, 1 underwater")),
-        Field("difficulty", tr("Difficulty"), "int", 0, 1, tip=tr("0 on all but one island of the game")),
-        Field("sea_level", tr("Sea level"), "int", -40, 0, tip=tr("0 on normal islands, -28 and lower under water")),
+        Field("clime", tr("islands.clime"), "int", 0, 1, tip=tr("islands.tip.0_above_water_1_underwater")),
+        Field("difficulty", tr("common.difficulty"), "int", 0, 1, tip=tr("islands.tip.0_all_one_island_game")),
+        Field("sea_level", tr("islands.sea_level"), "int", -40, 0, tip=tr("islands.tip.0_normal_islands_28_lower")),
     )
 
 
@@ -86,9 +86,9 @@ def _info_section(editor, session: EditSession) -> Section:
     grid = info["grid"] or session.size
     note = ""
     if session.edits.get("active"):
-        note = tr("The active map is edited: the rectangle follows its cells unless set here.")
+        note = tr("islands.active_map_edited_rectangle_follows")
     return Section(
-        tr("Island"),
+        tr("islands.island"),
         "meta",
         info_fields(),
         {k: info[k] for k in ("grid", "start_coast", "active_rect")},
@@ -123,21 +123,17 @@ def _registration_section(editor, session: EditSession) -> Section | None:
                 name.removeprefix("Island"),
                 kind,
                 choices=choices,
-                tip=tr("The {name} of the registration", name=name),
+                tip=tr("islands.tip.name_registration", name=name),
             )
         )
     new = session.edits.get("target") == "new"
     return Section(
-        tr("Pool registration"),
+        tr("islands.pool_registration"),
         "registration",
         tuple(fields),
         data["current"],
         lambda values: islandmeta.check(values, data["known"], session.size),
-        ""
-        if new
-        else tr(
-            "Only an island saved as a new one (Home > Saved) is registered again; a replaced island keeps its own."
-        ),
+        "" if new else tr("islands.only_island_saved_new_one"),
         new,
     )
 
@@ -150,28 +146,28 @@ def _session_section(editor, session: EditSession) -> Section | None:
         return None
     names = {"ambient": sessionsettings.ambient_names, "vegetation": sessionsettings.vegetation_names}
     labels = {
-        "ambient": (tr("Ambient light"), tr("The light preset the island is drawn with (the game's ambient settings)")),
-        "vegetation": (tr("Vegetation set"), tr("The set the island's vegetation props are drawn from")),
+        "ambient": (tr("islands.ambient_light"), tr("islands.light_preset_island_drawn_games")),
+        "vegetation": (tr("islands.vegetation_set"), tr("islands.set_islands_vegetation_props_drawn")),
     }
     fields = [
         Field(key, labels[key][0], "choice", choices=tuple(names[key](editor.files)), tip=labels[key][1])
         if key in labels
         else Field(
             key,
-            tr("Playable area (tiles)"),
+            tr("islands.playable_area_tiles"),
             "rect",
-            tip=tr("x0, z0, x1, z1: inside the island's grid, corners in order"),
+            tip=tr("islands.tip.x0_z0_x1_z1_inside"),
         )
         for key in sessionsettings.FIELDS
         if key in base
     ]
     return Section(
-        tr("Session"),
+        tr("islands.session"),
         "session",
         tuple(fields),
         base,
         lambda changes: [why for k, v in changes.items() if (why := sessionsettings.problem(k, v, session.size))],
-        tr("Names the game does not know are kept as typed; none of the lists is checked to load."),
+        tr("islands.names_game_not_know_kept"),
     )
 
 
@@ -187,9 +183,12 @@ def _properties_section(editor) -> Section | None:
     if not keys:
         return None
     base = isd_props.read(root)
-    fields = (Field("size", tr("Size (tiles)"), "readonly"), *(f for f in property_fields(header) if f.key in keys))
+    fields = (
+        Field("size", tr("islands.size_tiles"), "readonly"),
+        *(f for f in property_fields(header) if f.key in keys),
+    )
     return Section(
-        tr("Island properties"),
+        tr("islands.island_properties"),
         "properties",
         fields,
         {"size": base["width"], **base},

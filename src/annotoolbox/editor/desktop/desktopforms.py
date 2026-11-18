@@ -21,13 +21,16 @@ from PySide6.QtWidgets import (
 )
 
 from ...infra.i18n import tr
+from ...suite import widgets
 from .. import islandprops
 from ..islandprops import Field, Section
 from . import desktopslots
 
 
 class FieldEditor:
-    """The widget of one ``Field``: ``get`` and ``set`` the value as the edit file keeps it; ``changed(callback)``."""
+    """The widget of one ``Field``: ``get`` and ``set`` the value as the edit file keeps it; ``changed(callback)``.
+    A value the widget cannot show as it is (a number past the field's range, a list entry that is no choice) stays
+    the island's until the field is changed: OK alone must not write the widget's nearest value as an edit."""
 
     def __init__(self, field: Field, value) -> None:
         self.field = field
@@ -41,18 +44,18 @@ class FieldEditor:
         elif kind == "int":
             self.parts = [self._spin(row, int(field.lo), int(field.hi))]
         elif kind == "angle":
-            self.has_value = QCheckBox(tr("set"))
+            self.has_value = QCheckBox(tr("islands.set"))
             self.has_value.setChecked(value is not None)
             self.parts = [QDoubleSpinBox(minimum=field.lo, maximum=field.hi - 0.01, decimals=2, singleStep=5)]
-            self.parts[0].setEnabled(value is not None)
-            self.has_value.toggled.connect(self.parts[0].setEnabled)
+            self.has_value.toggled.connect(self._angle_on)
+            self._angle_on(value is not None)
             row.addWidget(self.has_value)
             row.addWidget(self.parts[0])
         elif kind == "rect":
             self.parts = [self._spin(row, 0, 4096) for _ in range(4)]
         elif kind == "choice":
             box = QComboBox()
-            box.addItems([c or tr("(none)") for c in field.choices])
+            box.addItems([c or tr("common.none_in_brackets") for c in field.choices])
             self.parts = [box]
             row.addWidget(box)
         elif kind == "choices":
@@ -62,6 +65,11 @@ class FieldEditor:
                 row.addWidget(box)
         self.set(value)
 
+    def _angle_on(self, on: bool) -> None:
+        """The angle box follows the "set" tick and says what it waits for while it is off."""
+        self.parts[0].setEnabled(on)
+        self.parts[0].setToolTip("" if on else tr("islands.tip.angle_tick_set"))
+
     @staticmethod
     def _spin(row, lo: int, hi: int) -> QSpinBox:
         spin = QSpinBox(minimum=lo, maximum=hi)
@@ -69,6 +77,14 @@ class FieldEditor:
         return spin
 
     def set(self, value) -> None:
+        self._put(value)
+        self._given, self._shown = value, self._read()
+
+    def get(self):
+        now = self._read()  # (None for a field that only shows)
+        return self._given if now is not None and now == self._shown else now
+
+    def _put(self, value) -> None:
         kind = self.field.kind
         if kind == "int":
             self.parts[0].setValue(int(value))
@@ -79,7 +95,7 @@ class FieldEditor:
                 spin.setValue(int(v))
         elif kind == "choice":
             if value not in self.field.choices:  # a value the game's own islands do not use is kept, not lost
-                self.parts[0].addItem(value or tr("(none)"))
+                self.parts[0].addItem(value or tr("common.none_in_brackets"))
                 self.field = Field(**{**self.field.__dict__, "choices": (*self.field.choices, value)})
             self.parts[0].setCurrentIndex(self.field.choices.index(value))
         elif kind == "choices":
@@ -87,7 +103,8 @@ class FieldEditor:
             for box in self.parts:
                 box.setChecked(box.text() in chosen)
 
-    def get(self):
+    def _read(self):
+        """The value the widget shows now."""
         kind = self.field.kind
         if kind == "int":
             return self.parts[0].value()
@@ -126,8 +143,12 @@ class SectionPage(QWidget):
         self.editors = {f.key: FieldEditor(f, values.get(f.key)) for f in section.fields}
         for f in section.fields:
             editor = self.editors[f.key]
-            editor.widget.setToolTip(f.tip)
-            editor.widget.setEnabled(section.enabled and f.kind != "readonly")
+            why = ""
+            if not section.enabled:
+                why = tr("islands.tip.section_not_editable")
+            elif f.kind == "readonly":
+                why = tr("islands.tip.field_shown_only")
+            widgets.enable_unless(editor.widget, " ".join(filter(None, (why, f.tip))) if why else "", f.tip)
             form.addRow(f.label, editor.widget)
         self.problems = QLabel()
         self.problems.setWordWrap(True)
@@ -149,7 +170,7 @@ class SectionPage(QWidget):
 class IslandPropertiesDialog(QDialog):
     def __init__(self, parent, sections: list[Section], edits: dict) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Island properties"))
+        self.setWindowTitle(tr("islands.island_properties"))
         self.pages = [SectionPage(s, edits) for s in sections]
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
@@ -157,8 +178,8 @@ class IslandPropertiesDialog(QDialog):
             tabs.addTab(page, page.section.title)
         layout.addWidget(tabs)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("OK"))
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("Cancel"))
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("islands.ok"))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("common.cancel"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -175,8 +196,8 @@ class IslandPropertiesDialog(QDialog):
 def edit_menu(main, menu) -> None:
     """The Island properties item of the window's Edit menu."""
     menu.addSeparator()
-    menu.addAction(tr("Island properties…"), lambda: show(main))
-    menu.addAction(tr("Slot list…"), lambda: desktopslots.show(main))
+    menu.addAction(tr("islands.island_properties_dots"), lambda: show(main))
+    menu.addAction(tr("islands.slot_list"), lambda: desktopslots.show(main))
 
 
 def show(main) -> None:
@@ -185,10 +206,10 @@ def show(main) -> None:
         return
     sections = islandprops.sections_for(doc.editor, doc.session)
     if not sections:
-        main.say(tr("this island has no settings to change"))
+        main.say(tr("islands.island_no_settings_change"))
         return
     dialog = IslandPropertiesDialog(main, sections, doc.session.edits)
     if dialog.exec():
         problems = dialog.write(doc.session)
-        main.say("; ".join(problems) if problems else tr("island properties set"))
+        main.say("; ".join(problems) if problems else tr("islands.island_properties_set"))
         main.sync()

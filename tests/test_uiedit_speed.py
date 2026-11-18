@@ -314,6 +314,52 @@ def test_a_reverted_copy_is_read_from_the_game_again(scene_files):
     assert elements.tree(scene_files.root(INNER)).guid == INNER  # not the copy's tree, kept decoded
 
 
+SIZED, MEASURES = (str(uuid.uuid5(uuid.NAMESPACE_URL, n)) for n in ("speed-sized", "speed-measures"))
+
+
+def _measured_scene(tmp_path) -> dict[str, bytes]:
+    """A file whose first binding reads a placed file's size and whose second writes that file's input: the size
+    read must wait for the input, or the placed file is placed for a value about to change."""
+    from tests.test_uiedit_compose import _container, _image, _root
+
+    sized = _root(SIZED)
+    wf = phoenixedit.WidgetFile(SCHEMA, sized, versions=VERSIONS)
+    picture = wf.add_instance(_image("Picture"))
+    wf.add_property("Value", "vec3", (0.0, 0.0, 0.0))
+    wf.bind(wf.own("Value"), wf.end(picture, [phoenixedit.BUILTIN["Position"]]))
+    wf.finish("speed-sized")
+    top = _root(MEASURES)
+    wf = phoenixedit.WidgetFile(SCHEMA, top, versions=VERSIONS)
+    child = wf.add_instance(_container("Child", SIZED))
+    marker = wf.add_instance(_image("Marker"))
+    wf.add_property("V", "vec3", (30.0, 40.0, 0.0))
+    wf.bind(wf.end(child, [phoenixedit.BUILTIN["Size"]]), wf.end(marker, [phoenixedit.BUILTIN["Position"]]))
+    wf.bind(wf.own("V"), wf.end(child, [phoenixedit.unique_id(0x10000000, "Value")]))
+    wf.finish("speed-measures")
+    from tests.test_uiedit import _write
+
+    return {SIZED: _write("WI", sized), MEASURES: _write("WI", top)}
+
+
+def test_a_size_is_read_once_the_placed_files_inputs_are_written(tmp_path, monkeypatch):
+    """A call budget, not seconds (ui-editor.md "Speed"): each file's bindings evaluated once, a few runs each."""
+    from tests.test_uiedit_runtimevalues import _pictures_of_scene
+
+    made, runs = [], []
+    init, run = scope.Scope.__init__, scope.Scope._run
+
+    def counted(self, key, *args, **kwargs) -> None:
+        made.append(key)
+        init(self, key, *args, **kwargs)
+
+    monkeypatch.setattr(scope.Scope, "__init__", counted)
+    monkeypatch.setattr(scope.Scope, "_run", lambda self, b: (runs.append(b), run(self, b))[1])
+    pictures = _pictures_of_scene(tmp_path, MEASURES, _measured_scene(tmp_path))
+    assert (94.0, 72.0) in pictures  # the marker at the placed file's size: its picture at 30, 40 and 64 x 32
+    assert made.count(SIZED) == 1 and made.count(MEASURES) == 1
+    assert len(runs) <= 6
+
+
 def test_a_change_of_the_view_starts_the_kept_results_over(scene_files, scopes):
     ctx = layout.Context(scene_files, viewmodels.Samples())
     layout.place("composed", scene_files.root("composed"), ctx)
@@ -458,27 +504,6 @@ def test_an_edit_of_the_largest_scene_takes_well_under_a_second():
     started = time.perf_counter()
     layout.place(key, root, ctx)
     assert time.perf_counter() - started < 1.0
-
-
-def test_a_dump_the_game_names_is_read_off_the_windows_thread(window, monkeypatch):
-    from types import SimpleNamespace
-
-    from annotoolbox.uiedit import dumpview, gamedump
-
-    readers = []
-
-    def load(path):
-        readers.append(threading.current_thread())
-        raise OSError("no such dump")
-
-    shown = []
-    monkeypatch.setattr(gamedump, "load", load)
-    monkeypatch.setattr(window.statusBar(), "showMessage", lambda text, *_a: shown.append(text))
-    dumpview.live_dumped(window, SimpleNamespace(ok=True, data={"files": ["scene.json"]}))
-    window.background.join()
-    window.qt.processEvents()
-    assert readers and readers[0] is not threading.main_thread()
-    assert any("no such dump" in text for text in shown) and window.dump_panel.dump is None
 
 
 def test_a_file_is_decoded_off_the_windows_thread_and_the_one_asked_for_last_is_shown(window, monkeypatch):

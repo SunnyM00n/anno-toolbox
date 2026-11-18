@@ -69,6 +69,20 @@ def test_a_short_file_and_an_unknown_format_are_refused():
         DdsFile(header(4, 4, 1) + dx10(777))
 
 
+@pytest.mark.parametrize("code", [10, 95])  # half floats, BC6H: the layouts ``level_float`` reads itself
+def test_a_float_level_the_file_ends_inside_is_refused_as_a_byte_level_is(code):
+    with pytest.raises(UnsupportedDds):
+        DdsFile(header(4, 4, 1) + dx10(code) + bytes(8)).level_float(0)
+    with pytest.raises(IndexError):
+        DdsFile(header(4, 4, 1) + dx10(code) + bytes(128)).level_float(3)
+
+
+def test_a_header_that_claims_too_much_is_cut_to_what_a_file_can_hold():
+    assert DdsFile(header(4, 4, 5_000_000) + dx10(28) + bytes(84)).info.mips == 3  # 4, 2, 1 texels across
+    with pytest.raises(UnsupportedDds):
+        DdsFile(header(4, 4, 1) + dx10(28, array=10_000_000) + bytes(64))
+
+
 def test_a_volume_reads_its_first_slice_and_knows_its_depth():
     red = struct.pack("<HHI", 0xF800, 0xF800, 0)  # one DXT1 block, both colours pure red
     volume = bytearray(header(4, 4, 1, fourcc=b"DXT1") + red + bytes(8))  # two slices of one block each

@@ -180,8 +180,8 @@ def apply_paint(isl: Session2205, strokes: list[dict]) -> dict:
         order = set_ranks(isl.files.read(isl.material_set).decode("utf-8", "ignore"))
     except (KeyError, OSError):
         order = {}
-    ok = [st for st in strokes if int(st.get("material", -1)) in order and int(st["material"]) < 32]
-    report = {"strokes": len(ok), "other materials": len(strokes) - len(ok), "blocks": 0}
+    ok = groundedit.painted_strokes(strokes, order)
+    report = {"strokes": len(ok), "other materials": groundedit.other_materials(strokes, ok), "blocks": 0}
     t = isl.rd.path("Terrain")
     ids_tag, al_tag = t.find("MaterialIDs2"), t.find("MaterialAlphas2")
     if not ok or ids_tag is None or al_tag is None:

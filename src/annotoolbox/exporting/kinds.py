@@ -39,19 +39,20 @@ class Format:
     default: bool = False
 
 
-RAW = Format("raw", N_("As stored"), "", True)
-PNG = Format("png", N_("PNG (8 bit)"), ".png")
-PNG16 = Format("png16", N_("PNG (16 bit)"), ".png")
-EXR = Format("exr", N_("OpenEXR (float)"), ".exr")
-HDR = Format("hdr", N_("Radiance HDR"), ".hdr")
-GLB = Format("glb", N_("glTF binary (.glb)"), ".glb")
-GLTF = Format("gltf", N_("glTF with a .bin (.gltf)"), ".gltf")
-WAV = Format("wav", N_("WAV"), ".wav")
-OGG = Format("ogg", N_("Ogg Vorbis"), ".ogg")
-MP4 = Format("mp4", N_("MP4 (needs ffmpeg)"), ".mp4")
-WEBM = Format("webm", N_("WebM (needs ffmpeg)"), ".webm")
-JSON = Format("json", N_("JSON"), ".json")
-CSV = Format("csv", N_("CSV"), ".csv")
+RAW = Format("raw", N_("common.as_stored"), "", True)
+PNG = Format("png", N_("common.png_8_bit"), ".png")
+PNG16 = Format("png16", N_("common.png_16_bit"), ".png")
+EXR = Format("exr", N_("common.openexr_float"), ".exr")
+HDR = Format("hdr", N_("common.radiance_hdr"), ".hdr")
+GLB = Format("glb", N_("common.gltf_binary_glb"), ".glb")
+GLTF = Format("gltf", N_("common.gltf_bin"), ".gltf")
+RDM = Format("rdm", N_("common.gr2_to_rdm"), ".rdm")
+WAV = Format("wav", N_("common.wav"), ".wav")
+OGG = Format("ogg", N_("common.ogg_vorbis"), ".ogg")
+MP4 = Format("mp4", N_("common.mp4_needs_ffmpeg"), ".mp4")
+WEBM = Format("webm", N_("common.webm_needs_ffmpeg"), ".webm")
+JSON = Format("json", N_("common.json"), ".json")
+CSV = Format("csv", N_("common.csv"), ".csv")
 
 SUFFIX_KIND = {
     **dict.fromkeys((".cfg", ".rdm", ".gr2", ".mcf", ".ocf"), "model"),
@@ -71,7 +72,7 @@ SUFFIX_KIND = {
 }
 
 FORMATS = {
-    "model": (GLB, GLTF),
+    "model": (GLB, GLTF, RDM),
     "texture": (PNG, PNG16, EXR, HDR),
     "picture": (PNG,),
     "movie": (MP4, WEBM),

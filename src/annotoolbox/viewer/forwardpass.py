@@ -17,6 +17,7 @@ from dataclasses import replace
 import numpy as np
 
 from ..infra import fxc
+from ..infra.i18n import N_, tr
 from ..models import fileresolve, shaderforward, shaderview
 from ..models.shaderforward import NoPass
 from ..render import (
@@ -335,7 +336,7 @@ class ForwardPass(OwnPass):
         if key in self.models:
             return self.models[key]
         values = shaderview.first_values(decal.material.values)
-        job, what = f"{self.PREFIX}:decal:{decal.node}", f"{decal.node}: the game's decal shader"
+        job, what = f"{self.PREFIX}:decal:{decal.node}", tr("viewer.node_games_decal_shader", node=decal.node)
         got = self._job(key, job, lambda: self._decal_work(source, values), what)
         if got is None or isinstance(got, Exception):
             return got
@@ -374,7 +375,7 @@ class ForwardPass(OwnPass):
         key = ("fx", placed.node, path, k)
         if key in self.models:
             return self.models[key]
-        job, what = f"{self.PREFIX}:fx:{path}:{k}:{int(shadows)}", f"{path}: the game's particle shader"
+        job, what = f"{self.PREFIX}:fx:{path}:{k}:{int(shadows)}", tr("viewer.path_games_particle_shader", path=path)
         got = self._job(key, job, lambda: self._effect_work(source, effect, shadows), what)
         if got is None or isinstance(got, Exception):
             return got
@@ -412,6 +413,7 @@ class ForwardPass(OwnPass):
         """The forward pass of every group the game's shaders draw into ``target`` with its depth; the rest of
         ``drawn`` is returned for the renderer, or None while a shader compiles."""
         ready, rest, waiting = self._split(drawn)
+        self.ground = False  # until the sea is drawn: a frame that draws none leaves the ground to the view
         found = []
         for _key, part, item, place, model in ready:
             model.world = MIRROR @ np.asarray(place, float)
@@ -500,7 +502,7 @@ class ForwardPass(OwnPass):
             return sea2205.compile_stages(ready.shaders), water, sea2205.read_maps(files)
 
         return self._part("sea2205", parts, lambda got: sea2205.Sea2205(self.r.ctx, *got, self._dummies()),
-                          "the game's sea", "the view's ground", lambda: setattr(self, "sea_broken", True))  # fmt: skip
+                          N_("viewer.games_sea"), N_("viewer.views_ground"), lambda: setattr(self, "sea_broken", True))  # fmt: skip
 
     def _draw_sky(self, target, size: tuple[int, int], cam, values: dict) -> None:
         """The game's visible sky into ``target`` before the models (``skyforward``): made once it compiled, its boxes
@@ -508,7 +510,7 @@ class ForwardPass(OwnPass):
 
         def make():  # None while it compiles (asked again next frame)
             return self._part("sky", sky_work, lambda got: skyforward.SkyForward(self.r.ctx, *got, self._dummies()),
-                              "the game's sky", "the view's sky", lambda: setattr(self, "sky_broken", True))  # fmt: skip
+                              N_("viewer.games_sky"), N_("viewer.views_sky"), lambda: setattr(self, "sky_broken", True))  # fmt: skip
 
         if fxcdraw.switched(self, "sky", self._on("atmosphere"), None if self.sky_broken else make) is not None:
             boxes = {
@@ -558,8 +560,8 @@ class ForwardPass(OwnPass):
                 "post",
                 lambda ready: postforward.compile_chain(ready.shaders, chain),
                 lambda stages: postforward.PostChain(self.r.ctx, stages, self._dummies(), chain),
-                "the game's post chain",
-                "the view's finish",
+                N_("viewer.games_post_chain"),
+                N_("viewer.views_finish"),
             )
         if self.post is None:
             return None
@@ -580,7 +582,7 @@ class ForwardPass(OwnPass):
         if self.eye is None:
             self.eye = self._part("eye", lambda ready: eyeforward.compile_stages(ready.shaders),
                                   lambda got: eyeforward.EyeAdaptation1800(self.r.ctx.rhi, got),
-                                  "the game's eye adaptation", "the post chain without it")  # fmt: skip
+                                  N_("viewer.games_eye_adaptation"), N_("viewer.post_chain_without_it"))  # fmt: skip
         if self.eye is None or self.eye.error:
             return {}
         self.again = self.eye.take()
@@ -601,8 +603,8 @@ class ForwardPass(OwnPass):
             self.frame.drop_prepass()
         part = fxcdraw.switched(self, "ssao", on, lambda: self._part(
             "ssao", lambda ready: ssaoforward.compile_stages(ready.shaders),
-            lambda got: ssaoforward.Ssao1800(self.r.ctx.rhi, got), "the game's ambient occlusion",
-            "the models without it"))  # fmt: skip
+            lambda got: ssaoforward.Ssao1800(self.r.ctx.rhi, got), N_("viewer.games_ambient_occlusion"),
+            N_("viewer.models_without_it")))  # fmt: skip
         return part if part is not None and not part.error else None
 
     def _ssr(self, found: list) -> ssrforward.Ssr1800 | None:
@@ -611,8 +613,8 @@ class ForwardPass(OwnPass):
         on = self.SSR and self._on("ssr") and any(m.ssr is not None for m in found)
         part = fxcdraw.switched(self, "ssr", on, lambda: self._part(
             "ssr", lambda ready: ssrforward.compile_stages(ready.shaders),
-            lambda got: ssrforward.Ssr1800(self.r.ctx, got, self._dummies()), "the game's screen-space reflections",
-            "the water without them"))  # fmt: skip
+            lambda got: ssrforward.Ssr1800(self.r.ctx, got, self._dummies()), N_("viewer.games_screen_space_reflections"),
+            N_("viewer.water_without_them")))  # fmt: skip
         return part if part is not None and not part.error else None
 
     def _small_waves(self, found: list, seconds: float):
@@ -624,8 +626,8 @@ class ForwardPass(OwnPass):
         files = self.r.files.files
         part = fxcdraw.switched(self, "waves", on, lambda: self._part(
             "waves", lambda ready: (waves1800.compile_stage(ready.shaders), waves1800.read_volumes(files)),
-            lambda got: waves1800.SmallWaves1800(self.r.ctx, *got), "the game's small ocean waves",
-            "still water"))  # fmt: skip
+            lambda got: waves1800.SmallWaves1800(self.r.ctx, *got), N_("viewer.games_small_ocean_waves"),
+            N_("viewer.still_water")))  # fmt: skip
         return part.run(self.r.ctx, seconds) if part is not None and not part.error else None
 
     def _lut(self, path: str):
@@ -699,5 +701,5 @@ class ForwardPass1800(ForwardPass):
             sea.set_session(OPEN_SEA_1800 * 16, b"", 1.0)  # a 4 x 4 info map; the flow map's stand-in
             return sea
 
-        return self._part("ocean1800", parts, make, "the game's sea", "the view's ground",
+        return self._part("ocean1800", parts, make, N_("viewer.games_sea"), N_("viewer.views_ground"),
                           lambda: setattr(self, "sea_broken", True))  # fmt: skip

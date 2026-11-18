@@ -27,15 +27,15 @@ def _text(node, path: str) -> str:
 
 
 def _load_list(s: Summary, stats, engine) -> None:
-    sec = s.section(N_("Save"))
+    sec = s.section(N_("common.save"))
     sec.rows += [
-        (N_("Game"), "Anno 2070"),
-        (N_("Game version"), _text(stats, "GameStats/Version")),
-        (N_("Play time"), duration(number(_text(stats, "GameStats/PlayingTimeMilliSec")))),
-        (N_("Money in the load list"), _text(stats, "GameStats/GoldAmount")),
-        (N_("Population in the load list"), _text(stats, "GameStats/Inhabitants")),
-        (N_("Save kind"), _text(stats, "GameStats/SaveGameType")),
-        (N_("Game speed"), engine.value("m_GameSpeed", "") if engine is not None else ""),
+        (N_("common.game"), "Anno 2070"),
+        (N_("saves.game_version"), _text(stats, "GameStats/Version")),
+        (N_("saves.play_time"), duration(number(_text(stats, "GameStats/PlayingTimeMilliSec")))),
+        (N_("saves.money_load_list"), _text(stats, "GameStats/GoldAmount")),
+        (N_("saves.population_load_list"), _text(stats, "GameStats/Inhabitants")),
+        (N_("saves.save_kind"), _text(stats, "GameStats/SaveGameType")),
+        (N_("saves.game_speed"), engine.value("m_GameSpeed", "") if engine is not None else ""),
     ]
 
 
@@ -51,8 +51,8 @@ def _players(s: Summary, params, tree) -> None:
         node = p.path("m_Resource/Credits")
         if node is not None and node.text is not None:
             credits[number(p.value("m_PlayerID"), -1)] = number(node.text) // savegame2070.CREDIT_UNIT
-    table = Table([N_("Player"), N_("Kind"), N_("Name"), N_("Profile"), N_("Difficulty"), N_("Team"), N_("Colour"),
-                   N_("Credits")])  # fmt: skip
+    table = Table([N_("saves.player"), N_("ui.kind"), N_("common.name"), N_("mods.profile"), N_("common.difficulty"), N_("saves.team"), N_("common.colour"),
+                   N_("saves.credits")])  # fmt: skip
     factions = params.find("FactionInfos") if params is not None else None
     for i in factions.children if factions is not None else []:
         pid = number(i.value("PlayerId"), -1)
@@ -62,11 +62,11 @@ def _players(s: Summary, params, tree) -> None:
             _text(i, "Difficulty/Difficulty"), i.value("Team", ""), f"#{colour & 0xFFFFFFFF:08X}",
             f"{credits[pid]:,}" if pid in credits else "",
         ])  # fmt: skip
-    s.sections.append(Section(N_("Players"), table=table))
+    s.sections.append(Section(N_("saves.players"), table=table))
 
 
 def _setup(s: Summary, params) -> None:
-    sec = s.section(N_("Game setup"))
+    sec = s.section(N_("mods.game_setup"))
     for name in SETUP:
         node = params.find(name) if params is not None else None
         if node is not None and node.text is not None:
@@ -85,7 +85,16 @@ def _population(island) -> list[int]:
 
 
 def _islands(s: Summary, world) -> None:
-    table = Table([N_("Island"), N_("Name"), N_("File"), N_("Position"), N_("Size"), N_("Residents per player")])
+    table = Table(
+        [
+            N_("islands.island"),
+            N_("common.name"),
+            N_("common.file"),
+            N_("saves.position"),
+            N_("saves.size"),
+            N_("saves.residents_per_player"),
+        ]
+    )
     islands = world.find("Islands") if world is not None else None
     children = islands.children if islands is not None else []
     for value in (c for c in children if c.name == "v"):
@@ -99,9 +108,9 @@ def _islands(s: Summary, world) -> None:
             f"{cfg.value('PositionX', '')}, {cfg.value('PositionZ', '')}", f"{cfg.value('Width', '')} x {cfg.value('Height', '')}",
             people or "-",
         ])  # fmt: skip
-    sec = Section(N_("Islands"), table=table)
+    sec = Section(N_("common.islands"), table=table)
     if world is not None:
-        sec.rows.append((N_("World size"), f"{world.value('Width', '')} x {world.value('Height', '')}"))
+        sec.rows.append((N_("saves.world_size"), f"{world.value('Width', '')} x {world.value('Height', '')}"))
     s.sections.append(sec)
 
 
@@ -111,7 +120,7 @@ def summarize(save: SaveFile) -> Summary:
     game = save.part("game2.xml").tree() if save.part("game2.xml") else None
     tree = save.part("save.sww").tree()
     if not isinstance(tree, bintree.Tree):
-        s.note(N_("save.sww is no binary tag tree: only the parts are shown."))
+        s.note(N_("saves.save_sww_no_binary_tag"))
         return s
     engine = tree.path("SaveGame/m_GameEngine")
     _load_list(s, stats, engine)

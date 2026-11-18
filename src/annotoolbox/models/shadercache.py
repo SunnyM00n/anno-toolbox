@@ -10,6 +10,7 @@ cache".
 
 from __future__ import annotations
 
+import json
 import re
 import struct
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from ..formats import fxeffect, fxmaterial
 from ..formats.fnv import fnv
+from ..infra import buildcache
 
 SOURCE_DIR = "data/shaders/"
 FX_DIR = "data/shaders/fx/"
@@ -43,6 +45,7 @@ SHADER_FILES = {
     32: "model_tech_artist_04",  # the glow overlays (glow2070.fx_text)
 }
 GLOBAL_SET_SHADERS = 8  # shaders read for the graphics sets of the shipped cache
+SWITCHES_CACHE, SWITCHES_VERSION = "game-shader-switches", 1  # a shipped file's switches kept (``switches``)
 # the cache file's tokens: a list starts with its number, an entry with 1, its name and value fields carry a tag
 LIST_GLOBAL, LIST_MATERIAL, LIST_END, ENTRY, NAME_TAG, VALUE_TAG = 3, 4, 5, 1, 0x8001, 0x8002
 
@@ -331,6 +334,7 @@ class GameShaders:
                 self.by_file.setdefault(parts[2], []).append(path)
                 self.prefix = self.prefix or (parts[0], parts[1])
         self._info: dict[str, ShaderInfo | None] = {}
+        self._switches: dict[str, tuple[Switches, Switches]] = {}  # a shipped file's, read once (``switches``)
         self._global_sets: list[Switches] | None = None
         self._stale: dict[str, int] | None = None
 
@@ -348,7 +352,24 @@ class GameShaders:
     def shipped(self, file_hash: int, limit: int | None = None) -> list[tuple[str, Switches, Switches]]:
         """(path, global switches, material switches) of the shipped cache files of a shader file (``limit``: at
         most that many)."""
-        return [(p, *read_switches(self.files.read(p))) for p in self.by_file.get(file_hash, [])[:limit]]
+        return [(p, *self.switches(p)) for p in self.by_file.get(file_hash, [])[:limit]]
+
+    def switches(self, path: str) -> tuple[Switches, Switches]:
+        """``read_switches`` of a shipped cache file, kept in the build cache under its name: the name is the hash of
+        what the file was compiled from (shader-compile.md 5), so a later start reads no cache file for them (each
+        read from the archives takes tens of milliseconds)."""
+        found = self._switches.get(path)
+        if found is not None:
+            return found
+        key = buildcache.digest(SWITCHES_VERSION, path)
+        kept = buildcache.get(SWITCHES_CACHE, key)
+        if kept is not None:
+            pair = json.loads(kept)
+            found = tuple(map(tuple, pair[0])), tuple(map(tuple, pair[1]))
+        else:
+            found = read_switches(self.files.read(path))
+            buildcache.put(SWITCHES_CACHE, key, json.dumps(found).encode("utf-8"))
+        return self._switches.setdefault(path, found)
 
     def stale(self) -> dict[str, int]:
         """Shader files whose shipped cache was compiled from another revision of their source (its files carry a
@@ -375,7 +396,16 @@ class GameShaders:
         of the shaders with the fewest files, which have one variant per set."""
         if self._global_sets is None:
             smallest = sorted((len(v), k) for k, v in self.by_file.items())[:GLOBAL_SET_SHADERS]
-            self._global_sets = sorted({g for _n, key in smallest for _p, g, _m in self.shipped(key)})
+            # kept as one entry under the files' names: one read at a later start, not one per file
+            key = buildcache.digest(
+                SWITCHES_VERSION, "global sets", *(p for _n, k in smallest for p in self.by_file[k])
+            )
+            kept = buildcache.get(SWITCHES_CACHE, key)
+            if kept is not None:
+                self._global_sets = [tuple(map(tuple, g)) for g in json.loads(kept)]
+            else:
+                self._global_sets = sorted({g for _n, k in smallest for _p, g, _m in self.shipped(k)})
+                buildcache.put(SWITCHES_CACHE, key, json.dumps(self._global_sets).encode("utf-8"))
         return self._global_sets
 
     def shipped_variants(self, stem: str, file_hash: int, vertex_formats: set[str]) -> list[tuple[str, Switches]]:

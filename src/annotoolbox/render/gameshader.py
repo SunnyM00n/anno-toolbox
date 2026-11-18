@@ -281,6 +281,17 @@ def _pack(value, type_name: str, row_major: bool = False) -> bytes:
 
 
 _PATHS: dict[int, tuple] = {}  # a layout's id -> (its reflection, member path -> its slot): the lookups made once
+KEPT_LAYOUTS = 4096  # layouts each cache below keeps (and keeps alive): a session of many islands would hold them all
+
+
+def _keep(cache: dict, key, value: tuple) -> tuple:
+    """``value`` kept under ``key``; the oldest entries go once the cache holds ``KEPT_LAYOUTS`` (worked out anew
+    when asked for again)."""
+    cache.pop(key, None)  # a replaced entry counts as new
+    while len(cache) >= KEPT_LAYOUTS:
+        del cache[next(iter(cache))]
+    cache[key] = value
+    return value
 
 
 class Constants:
@@ -292,7 +303,7 @@ class Constants:
         self.data = bytearray(max(16, reflection.size))
         kept = _PATHS.get(id(reflection))
         if kept is None or kept[0] is not reflection:
-            kept = _PATHS[id(reflection)] = (reflection, {})
+            kept = _keep(_PATHS, id(reflection), (reflection, {}))
         self._slots: dict = kept[1]
 
     def find(self, path: str):
@@ -385,7 +396,7 @@ def replay(c: Constants, name: str, token: tuple, write) -> None:
         write(high)
         a, b = np.frombuffer(low.data, np.uint8), np.frombuffer(high.data, np.uint8)
         places = np.flatnonzero((a != 0) | (b != 0xFF))  # what the writer wrote, whatever was there
-        kept = _replayed[key] = (c.reflection, token, places, a[places].copy())
+        kept = _keep(_replayed, key, (c.reflection, token, places, a[places].copy()))
     if len(kept[2]):
         np.frombuffer(c.data, np.uint8)[kept[2]] = kept[3]
 

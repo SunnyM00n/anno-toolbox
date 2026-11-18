@@ -177,9 +177,21 @@ def candidates(
     return found
 
 
+_FOUND: dict[tuple, Path] = {}  # a search's places -> the tool found there
+
+
 def find_tool(name: str) -> Path | None:
+    """The program ``name`` (``_TOOL_SPECS``), None when absent. A hit is remembered while the places searched stay
+    and the file stands: a PATH search costs 40 ms, and every texture asks (build-cache "Where the time went")."""
     env_var, names = _TOOL_SPECS[name]
-    return next(iter(candidates(names, env=env_var, search_repo_tools=True, on_path=True, explicit_files=True)), None)
+    key = (name, os.environ.get(env_var, ""), os.environ.get("PATH", ""), str(REPO_TOOLS_DIR))
+    hit = _FOUND.get(key)
+    if hit is not None and hit.is_file():
+        return hit
+    found = next(iter(candidates(names, env=env_var, search_repo_tools=True, on_path=True, explicit_files=True)), None)
+    if found is not None:
+        _FOUND[key] = found
+    return found
 
 
 def require_tool(name: str) -> Path:

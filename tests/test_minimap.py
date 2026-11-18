@@ -2,6 +2,7 @@
 plateaus."""
 
 import numpy as np
+import pytest
 
 from annotoolbox.editor import minimap
 
@@ -30,8 +31,13 @@ def test_colors_are_replaceable():
     assert tuple(img[20, 20, :3]) == (1, 2, 3)
 
 
-def test_height_exactly_at_sea_level_is_sea():
-    img = minimap.paint(np.zeros((32, 32), np.float32), 32, underwater=False)
+@pytest.mark.parametrize(
+    "height, underwater",
+    [(0.0, False), (-35.0, True)],
+    ids=["exactly at sea level is sea", "below the underwater level is no island"],
+)
+def test_ground_that_is_neither_land_nor_a_plateau_stays_clear(height, underwater):
+    img = minimap.paint(np.full((32, 32), height, np.float32), 32, underwater=underwater)
     assert not img[..., 3].any()
 
 
@@ -46,11 +52,6 @@ def test_an_underwater_plateau_is_teal_with_a_border_and_a_shelf_is_not():
     assert img[13, 32, 3] == 0  # the shelf
     off = minimap.paint(h, 64, underwater=False)
     assert off[8, 8, 3] == 0
-
-
-def test_ground_below_the_underwater_level_is_not_an_island():
-    h = np.full((32, 32), -35.0, np.float32)
-    assert not minimap.paint(h, 32)[..., 3].any()
 
 
 def test_a_tiny_picture_does_not_fail():

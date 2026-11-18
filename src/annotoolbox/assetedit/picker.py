@@ -56,10 +56,10 @@ def candidates(doc: AssetDocument, spec: ValueSpec, query: str = "", limit: int 
 def asset_hint(spec: ValueSpec) -> str:
     parts = []
     if spec.allowed_templates:
-        parts.append(tr("templates: {names}", names=", ".join(spec.allowed_templates)))
+        parts.append(tr("assets.templates_names", names=", ".join(spec.allowed_templates)))
     if spec.needed_property:
-        parts.append(tr("needs: {names}", names=alternatives([n for n in spec.needed_property.split(";") if n])))
-    return "; ".join(parts) or tr("any asset")
+        parts.append(tr("assets.needs_names", names=alternatives([n for n in spec.needed_property.split(";") if n])))
+    return "; ".join(parts) or tr("assets.any_asset")
 
 
 def pick_asset(parent, doc: AssetDocument, spec: ValueSpec) -> int | None:
@@ -67,10 +67,11 @@ def pick_asset(parent, doc: AssetDocument, spec: ValueSpec) -> int | None:
 
     def rows(query: str) -> list[tuple[str, object]]:
         return [
-            (f"{doc.name(g) or tr('(no name)')}  ·  {g}  ·  {doc.template(g)}", g) for g in candidates(doc, spec, query)
+            (f"{doc.name(g) or tr('assets.no_name')}  ·  {g}  ·  {doc.template(g)}", g)
+            for g in candidates(doc, spec, query)
         ]
 
-    return pick_from_list(parent, tr("Pick an asset for {name}", name=spec.name), asset_hint(spec), rows)
+    return pick_from_list(parent, tr("assets.pick_asset_name", name=spec.name), asset_hint(spec), rows)
 
 
 def pick_file(parent, paths: list[str], spec: ValueSpec) -> str | None:
@@ -79,8 +80,8 @@ def pick_file(parent, paths: list[str], spec: ValueSpec) -> str | None:
     def rows(query: str) -> list[tuple[str, object]]:
         return [(p, p) for p in files_for(paths, spec.file_filter, query)]
 
-    title = tr("Pick a file for {name}", name=spec.name)
-    return pick_from_list(parent, title, spec.file_filter or tr("any file"), rows)
+    title = tr("assets.pick_file_name", name=spec.name)
+    return pick_from_list(parent, title, spec.file_filter or tr("assets.any_file"), rows)
 
 
 # Colours

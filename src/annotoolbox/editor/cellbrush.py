@@ -39,12 +39,12 @@ def pack(cells: np.ndarray, allowed: np.ndarray | None = None) -> dict:
 
 
 AREA_KINDS = (
-    (0x4001, N_("Area 0x4001")),
-    (0x6001, N_("Area 0x6001")),
-    (0x8001, N_("Area 0x8001")),
-    (0xA001, N_("Area 0xA001")),
-    (0xC001, N_("Area 0xC001")),
-    (0xE001, N_("Area 0xE001")),
+    (0x4001, N_("islands.area_0x4001")),
+    (0x6001, N_("islands.area_0x6001")),
+    (0x8001, N_("islands.area_0x8001")),
+    (0xA001, N_("islands.area_0xa001")),
+    (0xC001, N_("islands.area_0xc001")),
+    (0xE001, N_("islands.area_0xe001")),
 )  # the ids the shipped islands use besides the construction area's 0x2001
 AREA_KIND_IDS = tuple(i for i, _name in AREA_KINDS)
 
@@ -194,7 +194,7 @@ class CellEdits(_GridEdits):
 class ActiveMapEdits(CellEdits):
     """The active map: the cells of 8 tiles the game draws and copies into the session."""
 
-    GRID = CellGrid("active_map", "active", N_("active map"), by_square=True)
+    GRID = CellGrid("active_map", "active", N_("islands.active_map_lower"), by_square=True)
 
 
 class AreaEdits(CellEdits):
@@ -202,7 +202,7 @@ class AreaEdits(CellEdits):
     the brush may touch (``allowed``), except to paint another area's id over it (``begin`` with a number above 1:
     ``kind_ids``, ``kind_cells``; island-editor "Area kinds")."""
 
-    GRID = CellGrid("area_grid", "area", N_("construction area"), by_square=False)
+    GRID = CellGrid("area_grid", "area", N_("islands.construction_area_lower"), by_square=False)
 
     def __init__(self, session) -> None:
         data = session.island.get(self.GRID.island_key) or {}
@@ -269,13 +269,13 @@ class AreaEdits(CellEdits):
 class HerdEdits(CellEdits):
     """The herd grid: the tiles the island's herds roam; only land that is no river is offered (``allowed``)."""
 
-    GRID = CellGrid("herd_grid", "herd", N_("herd area"), by_square=False)
+    GRID = CellGrid("herd_grid", "herd", N_("islands.herd_area_lower"), by_square=False)
 
 
 class FordEdits(CellEdits):
     """The ford grid: the river tiles units may cross; a ford is only laid on a river tile."""
 
-    GRID = CellGrid("ford_grid", "ford", N_("ford"), by_square=False)
+    GRID = CellGrid("ford_grid", "ford", N_("islands.ford_lower"), by_square=False)
 
 
 FULL = 255  # the largest byte of a value grid: full coast waves
@@ -355,10 +355,10 @@ class ValueEdits(_GridEdits):
 class SurfEdits(ValueEdits):
     """The sea map's coast waves: 0 calm water up to 255 full waves, a cell per 2 x 2 tiles."""
 
-    GRID = ValueGrid("surf_map", "surf", N_("surf"))
+    GRID = ValueGrid("surf_map", "surf", N_("islands.surf_lower"))
 
 
 class EnvironmentEdits(ValueEdits):
     """The environment grid: the zone (the game's ``EnvironmentType``) of each 4 x 4 tiles."""
 
-    GRID = ValueGrid("environment_map", "environment", N_("environment"))
+    GRID = ValueGrid("environment_map", "environment", N_("islands.environment_lower"))

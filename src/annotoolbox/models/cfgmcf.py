@@ -13,12 +13,12 @@ from .cfgdoc import Node, Part, shown, strip
 
 # m_MCClassType of an m_MeshConfig, and of an m_MeshTransform (101 and up); 50 and 51 are the animation and material nodes
 NODE_CLASSES = {
-    0: N_("Group"), 1: N_("Mesh"), 2: N_("Nested config"), 3: N_("Effect"), 4: N_("Billboard"), 6: N_("Dummy"),
-    7: N_("Instanced vegetation"), 8: N_("Walking unit"), 9: N_("Cloth"),
+    0: N_("common.group"), 1: N_("common.mesh"), 2: N_("common.nested_config"), 3: N_("common.effect"), 4: N_("common.billboard"), 6: N_("common.dummy"),
+    7: N_("common.instanced_vegetation"), 8: N_("common.walking_unit"), 9: N_("common.cloth"),
 }  # fmt: skip
 TRANSFORM_CLASSES = {
-    101: N_("Offset"), 102: N_("Rotation"), 103: N_("Link to a dummy"), 104: N_("Sway"), 105: N_("Level of detail"),
-    107: N_("Scale"), 109: N_("Shown on a condition"), 110: N_("Colour"), 111: N_("Circling motion"),
+    101: N_("common.offset"), 102: N_("common.rotation"), 103: N_("common.link_to_dummy"), 104: N_("common.sway"), 105: N_("common.level_detail"),
+    107: N_("islands.scale"), 109: N_("common.shown_condition"), 110: N_("common.colour"), 111: N_("common.circling_motion"),
 }  # fmt: skip
 # the field that says what a node is about, by class: a file, or a name
 POINTS_AT = {
@@ -76,17 +76,17 @@ def label(part: Part) -> str | None:
     that is none of its nodes."""
     node, tag = part.node, strip(part.node.name)
     if tag == "MCChilds":
-        return tr("Children ({count})", count=len(part.children))
+        return tr("common.children_count", count=len(part.children))
     if tag == "MCConfig":
         inner = next((c for c in node.children if strip(c.name) == "MeshConfig"), None)
-        return _join(_title(inner), _what(inner)) if inner is not None else tr("Config")
+        return _join(_title(inner), _what(inner)) if inner is not None else tr("objects.config")
     if tag == "MeshConfig":
         inside = part.parent is not None and strip(part.parent.name) == "MCConfig"
-        return tr("{title} settings", title=_title(node)) if inside else _join(_title(node), _what(node))
+        return tr("common.title_settings", title=_title(node)) if inside else _join(_title(node), _what(node))
     if tag == "MeshTransform":
         return _join(_title(node), _what(node) or (_lod(node) if class_of(node) == 105 else ""))
     if tag == "Material":
-        return _join(tr("Material"), _text(node, "Name"))
+        return _join(tr("common.material"), _text(node, "Name"))
     if tag == "Animation":
-        return _join(tr("Animation"), _stem(_text(node, "Filename")))
+        return _join(tr("common.animation"), _stem(_text(node, "Filename")))
     return None

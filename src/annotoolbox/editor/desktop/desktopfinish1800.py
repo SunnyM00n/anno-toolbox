@@ -100,7 +100,7 @@ def read_parts(files, light: ambientforward.Light, game: str) -> dict:
     if light.lut:
         try:
             out["lut"] = postforward.lut_volume(files.read(light.lut))
-        except (OSError, KeyError, ValueError):
+        except (OSError, KeyError, ValueError):  # a grade that does not read: the picture stays ungraded
             pass
     return out
 
@@ -167,12 +167,12 @@ class IslandFinish:
         self.chain = chain = postforward.CHAINS[game]
         self.post = postforward.PostChain(ctx, post, dummies, chain) if isinstance(post, dict) else None
         if isinstance(sky, str):  # the view's own sky then
-            said(tr("the game's visible sky and haze: {reason}", reason=sky[:300]))
+            said(tr("islands.games_visible_sky_haze", reason=sky[:300]))
         if isinstance(post, str):  # the view's own finish then
-            said(tr("the game's post chain: {reason}", reason=post[:300]))
+            said(tr("islands.games_post_chain", reason=post[:300]))
         eye = compiled.get("eye")
         if isinstance(eye, str):  # the chain without it then
-            said(tr("the game's eye adaptation: {reason}", reason=eye[:300]))
+            said(tr("islands.games_eye_adaptation", reason=eye[:300]))
         self.eye = eyeforward.EyeAdaptation1800(ctx.rhi, eye) if isinstance(eye, dict) and self.post else None
         self.eye_time: float | None = None  # when it last ran (its easing's time step)
         self.again = False  # the exposure read back changed: the view draws once more

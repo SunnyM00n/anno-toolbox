@@ -8,6 +8,7 @@ and the bindings as a node graph below; edits go on the undo stack and are kept 
 
 from __future__ import annotations
 
+import struct
 import uuid
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from PySide6.QtWidgets import (
 from ..guiold.view import OldGuiPage
 from ..infra.i18n import N_, tr, trn
 from ..sources import gametree
-from ..suite import gameopen, linkannounce, linkscenes, livelink, project, widgets
+from ..suite import gameopen, gamesync, linkannounce, linkscenes, livelink, project, widgets
 from ..suite.background import Background
 from . import (
     animations,
@@ -32,11 +33,13 @@ from . import (
     elements,
     fields,
     fonts,
-    gamedump,
+    gamedataview,
     layout,
     library,
+    livevalues,
     operators,
     pickers,
+    previewdefaults,
     projectpart,
     tweens,
     uidoc,
@@ -48,7 +51,7 @@ from . import (
 from .pictures import Pictures
 from .uiframe import APP, GAMES, OLD_GAMES, ROLE
 
-TITLE = N_("UI editor")
+TITLE = N_("ui.ui_editor")
 
 
 class _Game:
@@ -85,10 +88,11 @@ class UiWindow(QMainWindow):
         self._own: dict[int, tuple[str, int]] = {}  # the open file's own properties (``library.Namer.own``)
         self._opening: str | None = None  # the file asked for last (an older one decoded later is not shown)
         self.world_menu = worldmenu.WorldMenu(self)  # the scene behind the preview (View menu)
+        self.mirror = None  # the game mirror once opened (View menu; ``mirror``)
         uiframe.build(self)
         uiframe.menus(self)
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("File > Open game, then pick a scene or a widget file on the left."))
+        self.statusBar().showMessage(tr("ui.file_gt_open_game_pick"))
 
     # games and files
 
@@ -97,6 +101,8 @@ class UiWindow(QMainWindow):
 
     def open_game(self, key: str, then: str = "", wait: bool = False) -> None:
         """Open an installed game (its folder from the settings) in the background; ``then``: a file to open."""
+        if not gamesync.may_switch(self, key, self.may_leave):  # asks; the suite's other apps follow
+            return
 
         def prepare(tree):
             index = self.settings.index_dir(key) / "ui"
@@ -120,29 +126,44 @@ class UiWindow(QMainWindow):
 
     def _opened_old(self, key: str, tree) -> None:
         if isinstance(tree, Exception):
-            self.statusBar().showMessage(tr("{game} did not open: {error}", game=OLD_GAMES.get(key, key), error=tree))
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=OLD_GAMES.get(key, key), error=tree))
             return
         if self.old_page is not None:
             self.centre.removeWidget(self.old_page)
+            self.old_page.deleteLater()  # taken off the stack only, it would stay for the window's life
         self.old_page = OldGuiPage(tree)
         self.centre.addWidget(self.old_page)
         self.centre.setCurrentWidget(self.old_page)
         for dock in self.docks.values():
             dock.hide()
         self.setWindowTitle(f"{OLD_GAMES.get(key, key)} - {tr(TITLE)}")
-        self.statusBar().showMessage(tr("{game}: the old interface, read only", game=OLD_GAMES.get(key, key)))
+        self.statusBar().showMessage(tr("ui.old_interface_read_only", game=OLD_GAMES.get(key, key)))
 
     def _open_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("A folder of loose files (an unpacked game or a mod)"))
+        if not self.may_leave():
+            return
+        folder = QFileDialog.getExistingDirectory(self, tr("ui.folder_loose_files_unpacked_game"))
         if folder:
-            self._opened("anno117", "", _Game("anno117", gametree.loose_tree(Path(folder)), None))
+            self.open_folder(Path(folder))
+
+    def open_folder(self, folder: Path, wait: bool = False) -> None:
+        """Open a folder of loose 117 files; they are listed and read off the window's thread."""
+        self.background.run(
+            lambda: _Game("anno117", gametree.loose_tree(folder), None),
+            lambda game: self._opened("anno117", "", game),
+            wait,
+        )
 
     def _opened(self, key: str, then: str, game) -> None:
         if isinstance(game, Exception):
-            self.statusBar().showMessage(tr("{game} did not open: {error}", game=GAMES.get(key, key), error=game))
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=GAMES.get(key, key), error=game))
             return
         self.game, self.docs, self.doc, self._opening = game, {}, None, None
         self._queued, self._view = [], {}  # what waited was for the game before
+        self.top = self.selected = self.frame = None  # nothing of the game before stays to be picked or saved
+        self.element_tree.clear()
+        self.preview.show_frame(None, None)
+        self.setWindowTitle(tr(TITLE))
         self.centre.setCurrentWidget(self.preview)
         for name in ("Files", "Properties"):
             self.docks[name].show()
@@ -157,17 +178,24 @@ class UiWindow(QMainWindow):
         self.fonts = fonts.GameFonts(game.files)
         self.ctx = layout.Context(game.files, self.samples, canvas.measure, fonts=self.fonts.lookup)
         self.ctx.editor_hidden = self.hidden_action.isChecked()
+        previewdefaults.attach(self, key)  # what the preview assumes of the player's game (``preview_store``)
+        gamedataview.game_opened(self, game)  # its languages; the game's data, built in the background
         self.namer = library.Namer(game.library, game.files.root, self.names.short())
         self.palette_panel.show_library(game.library)
         self.settings.apps.setdefault(APP, {})["game"] = key
         self._fill_files()
         n = len(game.files.of_kind(*uifiles.EDITABLE))
         name = GAMES.get(key, key)
-        self.statusBar().showMessage(
-            tr("{game}: {n} scenes and widget files; reading who names them...", game=name, n=n)
-        )
-        self.background.run(game.files.scan_users, lambda _r: (self._fill_files(), self.statusBar().showMessage(
-            tr("{game}: {n} scenes and widget files", game=name, n=n))))  # fmt: skip
+        self.statusBar().showMessage(tr("ui.scenes_widget_files_reading_names", game=name, n=n))
+
+        def scanned(_result) -> None:
+            if game is self.game:  # another game may be open by now
+                self._fill_files()
+                self.statusBar().showMessage(tr("ui.scenes_widget_files", game=name, n=n))
+
+        self.background.run(game.files.scan_users, scanned)
+        if unread := [kept.error for kept in (self.samples, self.names) if kept.error]:
+            QMessageBox.warning(self, tr(TITLE), "\n".join(unread))  # they start empty and are not written over
         self.world_menu.game_opened()
         if then:
             self.open_file(then)
@@ -176,25 +204,8 @@ class UiWindow(QMainWindow):
         self.file_list.clear()
         if self.game is None:
             return
-        files, words = self.game.files, self.file_filter.text().lower().split()
         saved = set(projectpart.EDITS.saved_files(self.project(), self.game.key))
-        groups = {"SC": QTreeWidgetItem(self.file_list, [tr("Scenes"), ""]), "WI": QTreeWidgetItem(self.file_list, [tr("Widget files"), ""]),
-                  "": QTreeWidgetItem(self.file_list, [tr("Other files (properties only)"), ""])}  # fmt: skip
-        for entry in sorted(files.entries.values(), key=lambda e: (files.title(e.key).lower(), e.key)):
-            title = files.title(entry.key)
-            if words and not all(w in f"{title} {entry.key}".lower() for w in words):
-                continue
-            group = groups.get(entry.kind, groups[""])
-            if group is groups[""] and not words:
-                continue
-            mark = " *" if entry.path in saved else ""
-            kind = uifiles.KIND_NAMES.get(entry.kind)
-            it = QTreeWidgetItem(group, [title + mark, tr(kind) if kind else entry.kind])
-            it.setToolTip(0, entry.path)
-            it.setData(0, ROLE, entry.key)
-        for g in groups.values():
-            g.setText(0, f"{g.text(0)} ({g.childCount()})")
-        groups["SC"].setExpanded(True)
+        uiframe.fill_files(self.file_list, self.game.files, self.file_filter.text(), saved)
 
     def open_file(self, key: str) -> None:
         """Open a UI file of the game (the project's copy where it has one) and show it; after the edits that wait for
@@ -204,7 +215,7 @@ class UiWindow(QMainWindow):
             self._queued.append((None, lambda: self.open_file(key)))
             return
         if self.game is None or key not in self.game.files.entries:
-            self.statusBar().showMessage(tr("no such UI file: {key}", key=key))
+            self.statusBar().showMessage(tr("ui.no_such_ui_file", key=key))
             return
         self._opening = key
         if key in self.docs:
@@ -218,7 +229,7 @@ class UiWindow(QMainWindow):
             files.names_of(doc.root)  # the History Editions' names: an editor document read once
             return doc
 
-        self.statusBar().showMessage(tr("opening {name} ...", name=files.title(key)))
+        self.statusBar().showMessage(tr("ui.opening_name", name=files.title(key)))
         self.background.run(decode, lambda doc: self._decoded(game, key, doc), self.sync_layout)
 
     def _decoded(self, game: _Game, key: str, doc) -> None:
@@ -227,7 +238,7 @@ class UiWindow(QMainWindow):
         if game is not self.game or self._opening != key:
             return
         if isinstance(doc, Exception):
-            QMessageBox.warning(self, tr(TITLE), tr("{key} does not decode: {error}", key=key, error=doc))
+            QMessageBox.warning(self, tr(TITLE), tr("ui.key_not_decode_error", key=key, error=doc))
             return
         self._when_idle(lambda: self._went_live(game, key, doc))
 
@@ -248,12 +259,8 @@ class UiWindow(QMainWindow):
         self.selected = None
         self.preview.fit = True
         self._show_doc()
-        exact = (
-            ""
-            if self.doc.exact
-            else " - " + tr("this file does not re-encode byte for byte: a save writes it through the codec")
-        )
-        origin = tr("project") if self.doc.origin == "project" else tr("game")
+        exact = "" if self.doc.exact else " - " + tr("ui.file_not_re_encode_byte")
+        origin = tr("ui.project") if self.doc.origin == "project" else tr("ui.game")
         self.statusBar().showMessage(f"{self.game.files.title(key)} ({origin}){exact}")
 
     # showing the open file
@@ -262,6 +269,8 @@ class UiWindow(QMainWindow):
         """An edit (or its undo) changed ``doc``: what was kept of it is out of date, the other files' stays."""
         if self.ctx is not None:
             self.ctx.forget(doc.root)
+        if self.mirror is not None:
+            self.mirror.edited(doc)  # the game mirror's scenes that show it, and its push
         if doc is self.doc:
             self._show_doc()
         else:
@@ -323,12 +332,13 @@ class UiWindow(QMainWindow):
             self._again = True
             return
         doc, ctx = self.doc, self.ctx
-        ctx.live_text = self._live_texts()
+        ctx.live_text, ctx.live_values = self._live_texts(), livevalues.overrides(self)
+        gamedataview.before_layout(self)  # the scene and the language of the game's texts
         for name, value in self._view.items():
             setattr(ctx, name, value)
         self._view.clear()
         self._placing, self._again = True, False
-        self.statusBar().showMessage(tr("laying out the preview ..."))
+        self.statusBar().showMessage(tr("ui.laying_out_preview"))
         self.background.run(
             lambda: layout.place(doc.key, doc.root, ctx), lambda result: self._placed(doc, result), self.sync_layout
         )
@@ -347,17 +357,14 @@ class UiWindow(QMainWindow):
             else:
                 lost += 1
         if lost:
-            self.statusBar().showMessage(trn("{n} edit was not made: its file is closed",
-                                             "{n} edits were not made: their file is closed", lost))  # fmt: skip
+            self.statusBar().showMessage(trn("ui.edit_not_made_file_closed", lost))  # fmt: skip
         if (self._again or doc is not self.doc) and not self._placing:
             self._redraw()
 
     def _show_result(self, result) -> None:
         if isinstance(result, Exception):  # a file the placing does not follow still opens: its properties and bindings
             self.frame = None
-            self.statusBar().showMessage(
-                tr("the preview failed: {kind}: {error}", kind=type(result).__name__, error=result)
-            )
+            self.statusBar().showMessage(tr("ui.preview_failed_kind_error", kind=type(result).__name__, error=result))
         else:
             self.frame = result
             self.statusBar().clearMessage()
@@ -376,40 +383,35 @@ class UiWindow(QMainWindow):
         self._view.update(values)
         self._redraw()
 
+    def show_dock(self, key: str) -> None:
+        """Show a dock and bring it to the front of its tab group."""
+        self.docks[key].show()
+        self.docks[key].raise_()
+
     def _show_frame(self) -> None:
         self.preview.show_frame(self.frame, self.pictures)
+        self.preview_panel.refresh_note()  # live values win over the preview settings
         self.preview.select(id(self.selected.node) if self.selected else None)
         self.sample_panel.show_samples(self.samples, self._describe_key)
         self._show_checks()
-        self._show_dump()
+        if self.compare:
+            self.compare.show(self)
 
     def _live_texts(self) -> dict[str, str]:
-        """U8: the texts the running game's labels show, from the held dump, when the view asks for them."""
-        dump = self.dump_panel.dump
-        if dump is None or self.top is None or self.doc is None or not self.live_action.isChecked():
-            return {}
-        return gamedump.live_text(dump, self.top.guid, self.doc.key)
-
-    def _show_dump(self) -> None:
-        """The held dump against the preview: the game's rectangles over the file, the differences listed."""
-        if self.dump_panel.dump is None or self.top is None or self.doc is None:
-            return
-        c = gamedump.compare(
-            self.dump_panel.dump, self.top, self.frame, self.dump_panel.tolerance.value(), self.doc.key
-        )
-        self.preview.overlay = c.overlay
-        self.preview.update()
-        self.dump_panel.show_comparison(c)
+        """The label texts the game's live values (or their recording) and an optional comparison panel hold, in
+        place of sample values; the panel's win."""
+        return {**livevalues.texts(self), **(self.compare.texts(self) if self.compare else {})}
 
     def _pick(self, el: elements.Element | None) -> None:
         self.selected = el if el is not None and el.kind != "template" else None
         self.preview.select(id(el.node) if self.selected else None)
         node = el.node if el is not None else (self.doc.root if self.doc else None)
         self.props.show_node(node, el.kind if el is not None else "template", self.namer)
+        self.props.show_origins(gamedataview.origin_rows(self, self.selected))  # live, recorded, game, placeholder
         self._show_graph()
 
     def _picked_in_preview(self, node_id: int) -> None:
-        el = next((e for e in self.top.walk() if id(e.node) == node_id), None) if self.top else None
+        el = elements.by_node_id(self.top, node_id)
         if el is not None:
             self.selected = el
             self._fill_elements()
@@ -431,10 +433,10 @@ class UiWindow(QMainWindow):
         graph = bindings.read(self.doc.root)
         guid = None if self.all_bindings.isChecked() or self.selected is None else self.selected.guid
         shown = graph.touching(guid)
-        self.graph.empty_text = tr("No binding names this element.") if guid else tr("This file has no bindings.")
+        self.graph.empty_text = tr("ui.no_binding_names_element") if guid else tr("ui.file_no_bindings")
         self.graph.show_graph(shown, self._describe_end)
         self.docks["Bindings"].setWindowTitle(
-            tr("Bindings ({shown} of {total})", shown=len(shown), total=len(graph.bindings))
+            tr("ui.title.bindings_shown_of_total", shown=len(shown), total=len(graph.bindings))
         )
 
     def _show_view_models(self) -> None:
@@ -457,12 +459,12 @@ class UiWindow(QMainWindow):
         self._show_doc()
 
     def _load_scripts(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, tr("A script list"), "", tr("Script lists (*.json)"))
+        path, _ = QFileDialog.getOpenFileName(self, tr("ui.script_list"), "", tr("ui.script_lists_json"))
         if path:
             try:
                 self.scripts = viewmodels.ScriptList.read(Path(path))
             except (OSError, ValueError) as exc:
-                QMessageBox.warning(self, tr(TITLE), tr("{path} does not read: {error}", path=path, error=exc))
+                QMessageBox.warning(self, tr(TITLE), tr("common.path_not_read_error", path=path, error=exc))
                 return
             self._show_view_models()
 
@@ -475,20 +477,22 @@ class UiWindow(QMainWindow):
 
     def _fill_toggled(self) -> None:
         fill = self.fill_action.isChecked()
-        self.settings.apps.setdefault(APP, {})["placeholders"] = fill
         self._when_idle(lambda: (setattr(self.samples, "fill", fill), self._redraw()))
 
     def _play_toggled(self) -> None:
         self.preview.set_play_effects(self.play_action.isChecked())
-        self.settings.apps.setdefault(APP, {})["play_effects"] = self.play_action.isChecked()
 
     def _hidden_toggled(self) -> None:
         if self.ctx is not None:
             self._set_view(editor_hidden=self.hidden_action.isChecked())
 
+    def _window_shape(self, aspect: float) -> None:
+        if self.ctx is not None:
+            self._set_view(window_aspect=aspect)
+
     def _pick_reference(self, node: dict, field: str, kinds: tuple) -> None:
         if self.game is not None:
-            key = pickers.pick(self, self.game.files, kinds, tr("Choose the {field}", field=field))
+            key = pickers.pick(self, self.game.files, kinds, tr("ui.choose_the_field", field=field))
             if key:
                 self._edit(lambda d: d.set_field(node, field, key))
 
@@ -497,12 +501,18 @@ class UiWindow(QMainWindow):
         self.checks.clear()
         notes = list(self.frame.notes) if self.frame is not None else []
         missing = sorted(self.pictures.missing) if self.pictures is not None else []
-        notes += [tr("picture not in the game: {name}", name=name) for name in missing]
+        notes += [tr("ui.picture_not_game", name=name) for name in missing]
+        notes += (
+            [tr("ui.picture_slot_no_icon", name=name) for name in sorted(self.pictures.standins)]
+            if self.pictures
+            else []
+        )
+        notes += self.fonts.notes() if self.frame is not None else []  # the game's fonts that did not load, and why
         made = sum(1 for k in self.samples.seen if k in self.samples.generated)
         if made:
-            notes.append(tr("{n} values are placeholders (Sample values, in grey)", n=made))
-        self.checks.addItems(notes or [tr("Every reference of the open file resolves.")])
-        self.docks["Checks"].setWindowTitle(tr("Checks ({n})", n=len(notes)))
+            notes.append(tr("ui.values_placeholders_sample_grey", n=made))
+        self.checks.addItems(notes or [tr("ui.every_reference_open_file_resolves")])
+        self.docks["Checks"].setWindowTitle(tr("ui.title.checks_n", n=len(notes)))
 
     def _sample_changed(self, key: str, value) -> None:
         def change() -> None:
@@ -532,7 +542,7 @@ class UiWindow(QMainWindow):
 
         def describe(track) -> str:
             end = graph.ends[track.end] if track.end < len(graph.ends) else None
-            return self._describe_end(end) if end is not None else tr("end {number}", number=track.end)
+            return self._describe_end(end) if end is not None else tr("ui.end_number", number=track.end)
 
         shown = anim if isinstance(anim, animations.Animation) else None
         self.sequence.show_sequence(shown, describe, self.tween_list, self.game.library.enum_named("EaseType"))
@@ -565,28 +575,28 @@ class UiWindow(QMainWindow):
         if doc is None:
             return
         if self._placing:
-            self.statusBar().showMessage(tr("laying out the preview; the edit is made when it is done"))
+            self.statusBar().showMessage(tr("ui.laying_out_preview_edit_made"))
         self._when_idle(lambda: self._make(edit, doc), doc)
 
     def _make(self, edit, doc: uidoc.UiDoc) -> None:
         try:
             edit(doc)
-        except (KeyError, ValueError, TypeError, IndexError) as exc:
-            QMessageBox.warning(self, tr(TITLE), tr("That edit was not made: {error}", error=exc))
+        except (KeyError, ValueError, TypeError, IndexError, OverflowError, struct.error) as exc:  # the last two: a
+            QMessageBox.warning(self, tr(TITLE), tr("ui.edit_not_made", error=exc))  # number its type does not hold
 
     def undo(self) -> None:
-        self._edit(lambda d: d.undo.undo() is not None and self.statusBar().showMessage(tr("undone")))
+        self._edit(lambda d: d.undo.undo() is not None and self.statusBar().showMessage(tr("ui.undone")))
 
     def redo(self) -> None:
-        self._edit(lambda d: d.undo.redo() is not None and self.statusBar().showMessage(tr("redone")))
+        self._edit(lambda d: d.undo.redo() is not None and self.statusBar().showMessage(tr("ui.redone")))
 
     def _moved(self, node_id: int, dx: float, dy: float) -> None:
-        el = next((e for e in self.top.walk() if id(e.node) == node_id), None) if self.top else None
+        el = elements.by_node_id(self.top, node_id)
         if el is not None:
             self._edit(lambda d: d.move(el.node, _moved_by(fields.get(el.node, "Position"), dx, dy)))
 
     def _sized(self, node_id: int, fx: float, fy: float) -> None:
-        el = next((e for e in self.top.walk() if id(e.node) == node_id), None) if self.top else None
+        el = elements.by_node_id(self.top, node_id)
         if el is not None:
             self._edit(lambda d: d.set_field(el.node, "Scale", _scaled_by(fields.get(el.node, "Scale"), fx, fy)))
 
@@ -600,9 +610,7 @@ class UiWindow(QMainWindow):
             return
         el, self.selected = self.selected, None
         self._edit(
-            lambda d: self.statusBar().showMessage(
-                tr("removed {name} and {n} bindings naming it", name=el.name, n=d.remove(el))
-            )
+            lambda d: self.statusBar().showMessage(tr("ui.removed_bindings_naming", name=el.name, n=d.remove(el)))
         )
 
     def _add_from_palette(self, what: str, which: str, at: tuple[float, float] | None = None) -> None:
@@ -615,13 +623,13 @@ class UiWindow(QMainWindow):
             parent = self.top  # a drop places in the file's own space
         if what == "instance":
             name, ok = QInputDialog.getText(
-                self, tr(TITLE), tr("The new {kind}'s name:", kind=which), text=f"New{which.title()}"
+                self, tr(TITLE), tr("ui.new_kinds_name", kind=which), text=f"New{which.title()}"
             )  # i18n: ok (the default name is a datum: the game's element kind)
             if not ok or not name:
                 return
             node = self.doc.new_instance(which, name)
             if which == "container":
-                tpl = pickers.pick(self, self.game.files, ("WI",), tr("The widget file it places"))
+                tpl = pickers.pick(self, self.game.files, ("WI",), tr("ui.widget_file_places"))
                 if tpl:
                     fields.set_value(node, "Template", tpl)
             if at is not None:
@@ -633,9 +641,7 @@ class UiWindow(QMainWindow):
             on = self.selected.node
             self._edit(lambda d: (d.add_component if what == "Component" else d.add_effect)(on, which, name))
         else:
-            self.statusBar().showMessage(
-                tr("select an element first; widget types, enums and game objects are shown for their descriptions")
-            )
+            self.statusBar().showMessage(tr("ui.select_element_first_widget_types"))
 
     def new_property(self) -> None:
         asked = bindingdialogs.ask_property(self) if self.doc is not None else None
@@ -653,7 +659,7 @@ class UiWindow(QMainWindow):
     def _bind_read(self, path: list[int]) -> None:
         """A field the file reads already, bound to a built-in property of the selected element."""
         if self.selected is None or not self.selected.guid:
-            self.statusBar().showMessage(tr("select an element in the preview or the element list first"))
+            self.statusBar().showMessage(tr("ui.select_element_preview_list_first"))
             return
         target = bindingdialogs.ask_bind_read(self, self.selected)
         if target is not None:
@@ -663,21 +669,29 @@ class UiWindow(QMainWindow):
 
     # files of the project
 
-    def save(self) -> None:
-        """Keep the open file in the project (``ui-edits/<game>/``), as the mod's build takes it."""
+    def save(self) -> bool:
+        """Keep the open file in the project (``ui-edits/<game>/``), as the mod's build takes it. False (and the
+        reason shown) when it could not be written."""
         if self.doc is None or self.game is None:
-            return
+            return True
         entry = self.game.files.entries.get(self.doc.key)
         path = entry.path if entry else f"{self.game.files.prefix}{self.doc.key}"
-        data = self.doc.to_bytes()
-        dest = projectpart.save_file(self.project(), self.game.key, path, data)
+        try:
+            data = self.doc.to_bytes()
+            dest = projectpart.save_file(self.project(), self.game.key, path, data)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, tr(TITLE), tr("islands.could_not_save", error=exc))
+            return False
         self.game.files.extra[self.doc.key] = data
         self.doc.undo.mark_clean()
         self.doc.origin = "project"
         self._fill_files()
         # deployed=False sends nothing, so there is no answer to wait for
         notice = linkannounce.announce((livelink.SCENES,), self.project().mod_id, [path], deployed=False)
-        self.statusBar().showMessage(tr("kept in the project: {path}; {notice}", path=dest, notice=notice.text))
+        self.statusBar().showMessage(tr("ui.kept_project_path_notice", path=dest, notice=notice.text))
+        if self.mirror is not None:
+            self.mirror.kept(self.doc, path, data)  # with Push edits on: into the installed mod, the game reloads
+        return True
 
     def revert(self) -> None:
         """Drop the open file's edits and the project's copy of it (after a running layout: it reads the file)."""
@@ -691,11 +705,15 @@ class UiWindow(QMainWindow):
         key = doc.key
         if saved is not None:
             if (
-                QMessageBox.question(self, tr(TITLE), tr("Delete the project's copy {path}?", path=saved))
+                QMessageBox.question(self, tr(TITLE), tr("ui.delete_projects_copy", path=saved))
                 != QMessageBox.StandardButton.Yes
             ):
                 return
-            saved.unlink()
+            try:
+                saved.unlink()
+            except OSError as exc:
+                QMessageBox.warning(self, tr(TITLE), tr("texts.path_not_written_error", path=saved, error=exc))
+                return
         self.game.files.drop_copy(key)
         if self.ctx is not None:
             self.ctx.forget_file(key)  # what the other files placed of the edited tree goes with it
@@ -715,13 +733,17 @@ class UiWindow(QMainWindow):
         """An empty widget file of the project (its GUID from the project's id and the name given)."""
         if self.game is None:
             return
-        name, ok = QInputDialog.getText(self, tr(TITLE), tr("The new widget file's name (its GUID follows from it):"))
+        name, ok = QInputDialog.getText(self, tr(TITLE), tr("ui.new_widget_files_name_guid"))
         if not ok or not name:
             return
         guid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.project().mod_id}/ui/{name}"))
         data = uidoc.empty_widget_file(self.game.files, guid)
         path = f"{self.game.files.prefix}{guid}"
-        projectpart.save_file(self.project(), self.game.key, path, data)
+        try:
+            projectpart.save_file(self.project(), self.game.key, path, data)
+        except OSError as exc:
+            QMessageBox.warning(self, tr(TITLE), tr("islands.could_not_save", error=exc))
+            return
         self.game.files.lay_over({path: data})
         self.game.files.users.setdefault(guid, []).append(("", name))
         self._fill_files()
@@ -734,36 +756,42 @@ class UiWindow(QMainWindow):
         QMessageBox.information(
             self,
             tr(TITLE),
-            "\n".join(found[:40]) if found else tr("Every file the project's UI files name exists."),
+            "\n".join(found[:40]) if found else tr("ui.every_file_projects_ui_files"),
         )
 
     def _save_picture(self) -> None:
         if self.frame is None:
             return
         name, _ = QFileDialog.getSaveFileName(
-            self, tr("Save the preview"), "", "PNG (*.png)"
+            self, tr("ui.save_preview"), "", "PNG (*.png)"
         )  # i18n: ok (a file filter)
         if name:
             canvas.render(self.frame, self.pictures, 1.0, world=self.preview.world).save(name)
 
-    def closeEvent(self, event) -> None:
+    def may_leave(self) -> bool:
+        """Ask before unkept edits are dropped (another game opened, the window closed): False when the person
+        cancelled or a file could not be kept."""
         dirty = [k for k, d in self.docs.items() if d.dirty]
-        if dirty:
-            ask = trn(
-                "{n} file has edits not kept in the project. Keep them now?",
-                "{n} files have edits not kept in the project. Keep them now?",
-                len(dirty),
-            )
-            buttons = QMessageBox.StandardButton
-            answer = QMessageBox.question(self, tr(TITLE), ask, buttons.Yes | buttons.No | buttons.Cancel)
-            if answer == QMessageBox.StandardButton.Cancel:
-                event.ignore()
-                return
-            if answer == QMessageBox.StandardButton.Yes:
-                for k in dirty:
-                    self.doc = self.docs[k]
-                    self.save()
+        if not dirty:
+            return True
+
+        def keep_all() -> bool:
+            for k in dirty:
+                self.doc = self.docs[k]
+                if not self.save():
+                    return False
+            return True
+
+        return widgets.ask_keep(self, tr(TITLE), trn("ui.file_edits_not_kept_project", len(dirty)), keep_all)
+
+    def closeEvent(self, event) -> None:
+        if not self.may_leave():
+            event.ignore()
+            return
         self._forget_states()
+        self.world_menu.close()
+        if self.mirror is not None:
+            self.mirror.close()
         super().closeEvent(event)
 
 

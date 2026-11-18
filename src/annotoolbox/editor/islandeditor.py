@@ -112,7 +112,7 @@ class IslandEditor(IslandAssets):
             try:
                 self._editor = editorassets.load(self.files.game)
             except Exception as exc:  # a game without them (or a test): no markers, and the window says so
-                self.notes.append(tr("no editor-only assets (markers): {error}", error=f"{type(exc).__name__}: {exc}"))
+                self.notes.append(tr("islands.no_editor_only_assets_markers", error=f"{type(exc).__name__}: {exc}"))
                 self._editor = ([], {})
         return self._editor
 
@@ -122,9 +122,7 @@ class IslandEditor(IslandAssets):
             try:
                 self._assets = assetmodels.AssetModels.read(self.files.game.read, assetmodels.ASSETS_117)
             except Exception as exc:  # a test or a game without them: the objects keep what their file names
-                self.notes.append(
-                    tr("no game assets, buildings draw only when the island names a model: {error}", error=exc)
-                )
+                self.notes.append(tr("islands.no_game_assets_buildings_draw", error=exc))
                 self._assets = False
         return self._assets or None
 
@@ -207,9 +205,7 @@ class IslandEditor(IslandAssets):
         except (KeyError, FileNotFoundError):
             return None
         except ValueError as exc:  # a damaged file is not "no network": the water tool stays empty, and says why
-            self.notes.append(
-                tr("{path} is not valid JSON ({error}): the river network is not shown", path=path, error=exc)
-            )
+            self.notes.append(tr("islands.not_valid_json_river_network", path=path, error=exc))
             return None
 
     def props(self) -> list[dict]:
@@ -500,7 +496,7 @@ class IslandEditor(IslandAssets):
 
     def save_edits(self, edits: dict) -> None:
         if self.edits_path is None:
-            raise FileNotFoundError(tr("this island has no edit file: a vanilla island is only looked at"))
+            raise FileNotFoundError(tr("islands.island_no_edit_file_vanilla"))
         islandedits.save(self.edits_path, {**edits, **self.edit_meta})
 
     # the ground
@@ -543,7 +539,7 @@ class IslandEditor(IslandAssets):
 
     def ground2070(self) -> tuple[dict, bytes]:
         """The ground as 2070 paints it, chunk by chunk: only an island edited for 2070 has it."""
-        raise FileNotFoundError(tr("not a 2070 island: it has no chunk layers"))
+        raise FileNotFoundError(tr("islands.not_2070_island_no_chunk"))
 
     def albedo_png(self) -> bytes:
         """The ground as an image (what the view shows until the materials have loaded), at up to 8 pixels
@@ -626,9 +622,9 @@ class IslandEditor(IslandAssets):
         """Make a 2070 model drawable in the mod (as the island build does) and return its 117 path."""
         imports = next(iter(features.extensions(features.MODEL_IMPORTS).values()), None)
         if imports is None:
-            raise FileNotFoundError(tr("2070 models are {state}", state=tr(features.NOT_IN_EDITION)))
+            raise FileNotFoundError(tr("islands.2070_models_state", state=tr(features.NOT_IN_EDITION)))
         if self.tree2070 is None or self.files.mod_root is None:
-            raise FileNotFoundError(tr("2070 models need the 2070 install and a mod folder"))
+            raise FileNotFoundError(tr("islands.2070_models_need_install_mod"))
         with self._convert_lock:
             rel = imports.make(self.tree2070, self.files.mod_root).convert(source)
             self.files.refresh()

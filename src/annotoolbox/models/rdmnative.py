@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..formats import rdmwrite as w
-from ..formats.rdmlayout import direction
+from ..formats.rdmlayout import direction, parse
 from ..formats.rdmread import Animation, Joint, Mesh, RdmFile, RdmReadError, Skeleton, VertexElement, read_rdm
 from ..formats.rdmwrite import pack_direction
 from . import meshxform, tangents
@@ -297,18 +297,20 @@ def convert_static(
     source_format: str = "",
     only: int | None = None,
     matrix: meshxform.Matrix | None = None,
+    layout: str = "",
 ) -> Relaid:
     """The 117 static mesh file of a 2070 mesh file: every mesh kept (or just mesh ``only``), vertices copied into
     :func:`static_format` (bone data left out: this is the static use of the mesh). ``matrix``: a linear transform
     baked into the vertices (a scale per axis and a turn): positions by the matrix, normals by its inverse transpose,
-    tangents by the matrix (``meshxform``), the winding reversed where the matrix mirrors."""
+    tangents by the matrix (``meshxform``), the winding reversed where the matrix mirrors. ``layout`` names the
+    layout to write instead (any ``rdmlayout`` name: another game's)."""
     rdm = _read(data)
     if not rdm.meshes or (only is not None and not 0 <= only < len(rdm.meshes)):
         raise NativeError("no mesh in the file")
-    fmt = static_format(source_format or rdm.meshes[0].format)
+    fmt = layout or static_format(source_format or rdm.meshes[0].format)
     notes = Notes()
     out = [
-        _mesh_data(rdm, m, _Layout(_FORMATS[fmt], static=True, matrix=matrix), notes)
+        _mesh_data(rdm, m, _Layout(_FORMATS.get(fmt) or parse(fmt), static=True, matrix=matrix), notes)
         for k, m in enumerate(rdm.meshes)
         if only in (None, k)
     ]
@@ -366,17 +368,19 @@ def file_bones(rdm: RdmFile) -> int:
     return 3
 
 
-def convert_skinned(data: bytes | RdmFile) -> Relaid:
+def convert_skinned(data: bytes | RdmFile, layout: str = SKINNED_FORMAT, bones: int = 0) -> Relaid:
     """The 117 skinned mesh file of a 2070 mesh file: every mesh kept, vertices in ``P4h_N4b_G4b_B4b_T2h_I4b_W4b``,
     the skeletons merged into the one skin 117 reads (a mesh's bone indices shifted by its skeleton's first joint;
     a rigid mesh bound to its skeleton's first joint; a mesh that names no skeleton is not skinned in 2070 and
-    hangs on a joint of its own that nothing animates), the skeleton record's +4 word 0."""
+    hangs on a joint of its own that nothing animates), the skeleton record's +4 word 0. ``layout`` and ``bones``
+    (the vertex description's word) write another game's skin layout instead."""
     rdm = _read(data)
     if not rdm.meshes or not rdm.skeletons:
         raise NativeError("no skinned mesh in the file")
     notes = Notes()
     skeleton, firsts, static_at = merge_skeletons(rdm, notes, any(m.skeleton is None for m in rdm.meshes))
-    bones = file_bones(rdm)
+    bones = bones or file_bones(rdm)
+    attrs = _FORMATS.get(layout) or parse(layout)
     out = []
     for m in rdm.meshes:
         if m.skeleton is not None and m.skeleton >= len(rdm.skeletons):
@@ -387,23 +391,19 @@ def convert_skinned(data: bytes | RdmFile) -> Relaid:
                 _mesh_data(
                     rdm,
                     m,
-                    _Layout(_FORMATS[SKINNED_FORMAT], base=static_at or 0, skeleton=0, bones=bones, rigid=True),
+                    _Layout(attrs, base=static_at or 0, skeleton=0, bones=bones, rigid=True),
                     notes,
                 )
             )
             continue
-        out.append(
-            _mesh_data(
-                rdm, m, _Layout(_FORMATS[SKINNED_FORMAT], base=firsts[m.skeleton], skeleton=0, bones=bones), notes
-            )
-        )
+        out.append(_mesh_data(rdm, m, _Layout(attrs, base=firsts[m.skeleton], skeleton=0, bones=bones), notes))
         limit = len(rdm.skeletons[m.skeleton].joints)
-        idx = next((i for i, e in enumerate(m.elements) if e.usage == 7), None)
+        idx = m.element_at(7)
         if idx is not None and max((max(v) for v in m.element(idx)), default=0) >= limit:
             raise NativeError(f"mesh {m.name!r}: a bone index points past its skeleton's {limit} joints")
     joints = frozenset(j.name for j in skeleton.joints)
     data = w.write_rdm(*out, skeletons=[skeleton])
-    return Relaid(data, SKINNED_FORMAT, bones, len(out), notes, joints, frozenset(m.name for m in rdm.meshes))
+    return Relaid(data, layout, bones, len(out), notes, joints, frozenset(m.name for m in rdm.meshes))
 
 
 # Animations

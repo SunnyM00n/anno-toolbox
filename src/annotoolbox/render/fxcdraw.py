@@ -262,6 +262,12 @@ def layout_key(reflection) -> tuple:
     return reflection.name, reflection.size, tuple((v.name, v.offset) for v in reflection.variables)
 
 
+def same_objects(a: list, b: list) -> bool:
+    """Whether two lists hold the same objects in order (a tuple by its value: a buffer's slot). What a binding set
+    was made with is kept and compared so: the id of a buffer or texture let go is given again to the next one made."""
+    return len(a) == len(b) and all(x is y or (isinstance(x, tuple) and x == y) for x, y in zip(a, b, strict=True))
+
+
 class SharedBuffers:
     """One pass's frame buffers (``FRAME_BUFFERS``), shared by every draw that binds one of the same layout: filled
     once a frame (``begin``), by the first draw that binds it (each draw wrote the frame's values into its own copy:
@@ -308,7 +314,7 @@ class FxcDraw:
         self.pipeline = self.srb = None
         self.constants: dict[str, gs.Constants] = {}
         self.buffers: dict[str, object] = {}
-        self._bound: dict[str, int] = {}
+        self._bound: dict[str, object] = {}  # texture name -> the caller's texture its binding set holds
         self._samplers: dict[str, object] = {}
         self.uploaded = 0  # the mesh version its vertex buffer holds
         self.error = ""
@@ -357,7 +363,7 @@ class FxcDraw:
                 out.append(B.sampler(number, st, self._sampler(name)))
             elif kind == "texture":
                 tex = self._texture(name, textures, batch)
-                self._bound[name] = id(textures.get(name))  # the caller's (None: a stand-in), so dropping one rebinds
+                self._bound[name] = textures.get(name)  # the caller's (None: a stand-in), so dropping one rebinds
                 out.append(B.texture(number, st, tex))
         return out
 
@@ -414,9 +420,8 @@ class FxcDraw:
             batch.uploadStaticBuffer(self.vbufs[0], self.mesh.data)
             self.uploaded = self.mesh.version
         due = self._shared_due()
-        wanted = {n: id(textures.get(n)) for (n, k) in self.program.numbers if k == "texture"}
-        bound = [id(self.buffers.get(n)) for n in self.program.cbuffers]
-        if self.srb is None or bound != self._bound_buffers or any(self._bound.get(n) != i for n, i in wanted.items()):
+        bound = [self.buffers.get(n) for n in self.program.cbuffers]
+        if self.srb is None or not same_objects(bound, self._bound_buffers) or self._maps_changed(textures):
             self._make_srb(textures, batch)
             self._bound_buffers = bound
         if self.pipeline is None and not self.error:
@@ -425,6 +430,10 @@ class FxcDraw:
         fill(written)
         for name, c in written.items():
             batch.updateDynamicBuffer(self.buffers[name], 0, bytes(c.data))
+
+    def _maps_changed(self, textures: dict) -> bool:
+        """Whether a texture the binding set holds is no longer the caller's of that name."""
+        return any(self._bound.get(n) is not textures.get(n) for (n, k) in self.program.numbers if k == "texture")
 
     def _shared_due(self) -> dict:
         """The pass's frame buffers bound into ``buffers`` (a draw without ``shared``: its own, made now), those this

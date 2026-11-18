@@ -174,3 +174,17 @@ def test_the_window_prints_an_asset_and_a_table_into_pdf_files(tmp_path):
     window.tabs.setCurrentWidget(window.texts)
     assert "words in this asset's texts" in window.texts.words.text()
     window.close()
+
+
+def test_a_cell_edit_goes_to_the_column_shown_not_to_the_line_being_typed(doc):
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.assetedit.assettabs import BalancingPanel
+
+    QApplication.instance() or QApplication([])
+    panel = BalancingPanel()
+    panel.columns.setText("Building/Upkeep")
+    panel.present(doc, [2001])
+    panel.columns.setText("Standard/Name, Building/Level")  # typed, Enter not pressed: the table still shows Upkeep
+    panel.table.item(0, 1).setText("9")
+    assert doc.changes.assets[2001].set == {"Building/Upkeep": "9"}

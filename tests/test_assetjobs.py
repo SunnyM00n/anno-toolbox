@@ -14,7 +14,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 from tests.fakes import asset_game
 
-from annotoolbox.assetedit import checks, native
+from annotoolbox.assetedit import assetgame, checks, native
 from annotoolbox.assetedit.assetgame import open_game
 from annotoolbox.assetedit.assetwindow import AssetWindow
 from annotoolbox.suite.settings import Settings
@@ -91,3 +91,80 @@ def test_an_edit_while_the_games_files_are_written_is_not_in_them(window, monkey
     written = text_of(tmp_path / "native")
     assert "<Upkeep>7</Upkeep>" in written and "4242" not in written
     assert window.doc.changes.assets[2001].set == {"Building/Upkeep": "4242"} and not window.working
+
+
+def test_another_document_forgets_the_clipboard_and_fills_the_tab_in_front(window):
+    window.go_to(2001)
+    window.clip(cut=False)
+    window.tabs.setCurrentWidget(window.balancing)
+    old = window.doc
+    assert window.balancing.doc is old and window.clipboard == ([2001], False)
+    window._attach(window.game.document())  # a change set loaded, a mod imported, another game
+    assert window.clipboard is None and window.balancing.doc is window.doc is not old
+    window.paste()  # nothing to paste: said, no asset made
+    assert not window.doc.changes.new
+
+
+def test_a_pasted_asset_that_is_gone_is_left_out(window):
+    window.go_to(2001)
+    made = window.doc.new_asset("", "Copy", copy_of=2001)
+    window.clipboard = ([made, 2002], False)
+    window.doc.remove_asset(made)
+    window.go_to(2001)
+    window.paste()
+    assert [n.copy_of for n in window.doc.changes.new.values()] == [2002]
+
+
+def test_no_second_game_opens_while_one_opens(window, monkeypatch):
+    qt = QApplication.instance()
+    release, started = held(monkeypatch, assetgame, "open_game")
+    window.open("anno117")
+    assert started.wait(30) and not window.open_menu.isEnabled()
+    release.set()
+    window.background.join()
+    qt.processEvents()
+    assert window.open_menu.isEnabled() and not window.opening
+
+
+def test_a_game_opened_again_closes_the_index_of_the_one_before(window):
+    old = window.game.index
+    old.element(2001)
+    assert old._maps
+    window.open("anno117", wait=True)
+    assert window.game.index is not old and not old._maps
+
+
+def test_the_check_reads_a_snapshot_not_the_document_being_edited(window, monkeypatch):
+    seen = []
+    monkeypatch.setattr(checks, "check", lambda doc: seen.append(doc) or [])
+    window.doc.set_value(2001, "Building/Upkeep", "7")
+    assert window.run_check(wait=True) == []
+    assert seen[0] is not window.doc and seen[0].changes.assets[2001].set == {"Building/Upkeep": "7"}
+
+
+def test_a_used_up_guid_range_is_said_not_raised(window, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    said = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: said.append(text))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_a, **_k: ("Another", True))
+    window.doc.changes.guid_range = (2001, 2001)  # the one number is the game's
+    window.go_to(2001)
+    window.new_from(base=False)
+    window.clip(cut=False)
+    window.paste()
+    assert len(said) == 2 and "2001" in said[0] and not window.doc.changes.new
+
+
+def test_a_table_from_a_spreadsheet_is_read_with_its_mark_and_a_bad_file_is_said(window, monkeypatch, tmp_path):
+    failed = []
+    monkeypatch.setattr(window, "_failed", failed.append)
+    table = tmp_path / "table.csv"
+    table.write_bytes(b"\xef\xbb\xbfGUID,Name,Building/Upkeep\n2001,Hut,6\n")  # as a spreadsheet saves UTF-8
+    window.import_csv(table)
+    assert window.doc.changes.assets[2001].set == {"Building/Upkeep": "6"} and not failed
+    table.write_bytes(b"GUID,Name\n2001,H\xfct\n")  # not UTF-8
+    window.import_csv(table)
+    window.import_texts(tmp_path / "missing.csv")
+    window.export_csv(tmp_path)  # a folder is no file to write
+    assert [type(e).__name__ for e in failed][:2] == ["UnicodeDecodeError", "FileNotFoundError"] and len(failed) == 3

@@ -108,6 +108,15 @@ class Mesh:
             fmt = f"{e.size}B"
         return [struct.unpack_from("<" + fmt, self.vertices, v * self.stride + at) for v in range(self.vertex_count)]
 
+    def element_at(self, usage: int) -> int | None:
+        """The index of the first element of ``usage`` (0 position, 1 normal, 4 UV, 5 colour, 6 weights, 7 bones)."""
+        return next((i for i, e in enumerate(self.elements) if e.usage == usage), None)
+
+    def column(self, usage: int) -> list[tuple] | None:
+        """``element`` of the first element of ``usage``, None without one."""
+        at = self.element_at(usage)
+        return self.element(at) if at is not None else None
+
     def positions(self) -> list[Vec3]:
         for i, e in enumerate(self.elements):
             if e.usage == 0 and e.type in (6, 7) and e.count >= 3:

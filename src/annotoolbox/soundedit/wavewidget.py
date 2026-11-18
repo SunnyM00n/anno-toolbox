@@ -22,7 +22,7 @@ class WaveformView(QWidget):
         self.setMinimumHeight(HEIGHT)
         self.shape: Shape | None = None
         self.marks: list[tuple[float, str]] = []
-        self.message = tr("no clip picked")
+        self.message = tr("common.no_clip_picked")
 
     def show_shape(self, shape: Shape, marks: list[tuple[float, str]] | None = None) -> None:
         self.shape, self.marks, self.message = shape, list(marks or []), ""
@@ -37,9 +37,7 @@ class WaveformView(QWidget):
         s = self.shape
         if s is None:
             return self.message
-        return tr(
-            "{seconds} s, {rate} Hz, {channels} channels", seconds=f"{s.seconds:.2f}", rate=s.rate, channels=s.channels
-        )
+        return tr("common.s_hz_channels", seconds=f"{s.seconds:.2f}", rate=s.rate, channels=s.channels)
 
     def paintEvent(self, _event) -> None:  # Qt's name
         p = QPainter(self)

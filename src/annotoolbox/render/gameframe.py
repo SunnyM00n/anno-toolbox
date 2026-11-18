@@ -113,6 +113,9 @@ class Passes:
     sea: object = None  # gamesea.Sea: the sea by the game's ocean shader, the transparent pass's first draw
     inland: object = None  # gameinland.InlandWater: rivers and lakes by the game's shader, drawn before the sea
     ground: Ground | None = None  # the session's terrain the models' terrain adaptation reads (None: none)
+    # the native backend's draws, recorded first in the G-buffer's and the shadow map's passes: ``gbuffer(cb, camera,
+    # size)``, ``shadow(cb, camera, cascades, info, side)``, ``casters`` (any to draw) (``terrainnative.FrameDraws``)
+    native: object = None
 
 
 @dataclass
@@ -219,9 +222,13 @@ class GameFrame:
         passes = passes or Passes()
         self._gbuffer(size)
         ground = passes.ground
-        self._record(self.fbo, models, size, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps)
+        native = passes.native
+        external = (lambda cb: native.gbuffer(cb, camera, size)) if native is not None else None
+        self._record(self.fbo, models, size, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps,
+                     external=external)  # fmt: skip
         self.cascades = None
-        if shading is not None and passes.casters and passes.box is not None:
+        casters = passes.casters or (native is not None and native.casters)
+        if shading is not None and casters and passes.box is not None:
             self._shadow(size, camera, shading[1].sun, passes)
         sky_drawn = self._lit(size, camera, shading, passes) if shading is not None else False
         textures = dict(zip(("gNormal", "gAlbedo", "gMaterial", "gDepth", "gLit"),
@@ -237,11 +244,12 @@ class GameFrame:
         self.composite.draw(target, textures, uniforms, depth_test=not finish, depth_func="<=")
 
     def _record(self, fbo, models: list, size, camera: gs.Camera, targets: int, fill=None, shared=None,
-                clear: bool = True) -> None:  # fmt: skip
+                clear: bool = True, external=None) -> None:  # fmt: skip
         """One pass of ``models`` (``gamedraw.GameModel``) into ``fbo``, its depth cleared to the engine's far (0)."""
 
         draw_models(self.ctx, fbo, models, lambda m, rp, sig, batch: m.prepare(rp, sig, batch, camera, fill, shared),
-                    lambda m, cb: m.draw(cb, size), targets=targets, depth=0.0, clear=clear)  # fmt: skip
+                    lambda m, cb: m.draw(cb, size), targets=targets, depth=0.0, clear=clear,
+                    external=external)  # fmt: skip
 
     def _lit(self, size, camera: gs.Camera, shading: tuple, passes: Passes) -> bool:
         """The deferred shading, the copies and the transparent pass, then the visible sky and haze over the lit
@@ -279,12 +287,16 @@ class GameFrame:
             self.info = storage_buffer(self.ctx.rhi, gameshadow.INFO_BYTES * gameshadow.COUNT)
         fit = passes.fit if passes.fit is not None and not passes.fit.error else None
         side, used = self.shadow.size, self.shadow_cascades
+        read = False  # the analysis copies its result out this frame: the buffer is left as a copy's source
         if fit is not None:
+            read = fit.read_back
             fit.run(self.ctx, self.depth, size, camera, sun, self.info)
             self.cascades = gameshadow.Cascades((), gs.light_travel(sun), camera.shadow_distance, True, side, used)
         else:
             self.cascades = replace(gameshadow.fit(camera, passes.box, sun), size=side, used=used)
-        self.shadow.render(passes.casters, camera, self.cascades, self.info, passes.ground)
+        native, cascades, info = passes.native, self.cascades, (self.info, read)
+        external = (lambda cb: native.shadow(cb, camera, cascades, info, side)) if native is not None else None
+        self.shadow.render(passes.casters, camera, self.cascades, self.info, passes.ground, external)
 
     def _shading(self, size, camera: gs.Camera, shading: DeferredShading, sky: Sky, clusters=None, passes=None,
                  clouds=None):  # fmt: skip

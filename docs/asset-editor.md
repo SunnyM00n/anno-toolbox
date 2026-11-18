@@ -143,7 +143,8 @@ archive holds is read as the game reads it and compared asset by asset (values s
 and removed assets, with the finest form that gives the archive's asset back). Its text files become texts per language
 (2070, 1404 and 1701: every `id=text` line that differs or is new; 2205: the entries of the XML files). Every other
 member (models, textures, sounds) is written under `imported-archives/<name>/` in the workspace and carried: **Write
-the game's own files** puts it into the archive again. What the change set cannot hold is listed in the summary (a text
+the game's own files** puts it into the archive again. The folder is emptied before each import, so importing an archive
+again carries its files only. What the change set cannot hold is listed in the summary (a text
 that was removed, an asset in two places). A member that names a place outside the mod (`..`, a drive) is left out and
 listed.
 

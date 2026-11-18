@@ -92,3 +92,15 @@ def test_the_model_configs_of_a_game_by_its_suffix():
     paths = ["a/x.cfg", "a/y.mcf", "a/z.rdm"]
     assert ct.model_configs(paths, "anno117") == ["a/x.cfg"]
     assert ct.model_configs(paths, "anno1701") == ["a/y.mcf"]
+
+
+def test_a_level_without_materials_lists_none_and_a_blank_number_reads_as_0():
+    """An empty level was read as the material 0 (the level's own element counted as a number), and a number left
+    blank raised: the config did not open."""
+    text = ("<Config><ConfigType>MODEL</ConfigType><MaterialLODInfos><i><i>1</i><i> </i></i><i></i><i>\n</i>"
+            "</MaterialLODInfos><Materials><Config><ConfigType>MATERIAL</ConfigType><Name>a</Name></Config><Config>"
+            "<ConfigType>MATERIAL</ConfigType><Name>b</Name></Config></Materials></Config>")  # fmt: skip
+    model = ct.read_tree(text)
+    assert ct.material_lods(model) == [[1, 0], [], []]
+    assert [n.name for n in ct.materials_at(model, 0).values()] == ["b", "a"]
+    assert [n.name for n in ct.materials_at(model, 1).values()] == ["a", "b"]  # none given: the numbers in order

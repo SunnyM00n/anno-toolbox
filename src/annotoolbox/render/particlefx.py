@@ -120,11 +120,14 @@ class Effect:
 
     def at(self, seconds: float, speed: float = 1.0) -> Sprites:
         """The particles alive ``seconds`` into the strip (it repeats), played at ``speed`` times its own pace;
-        positions, sizes and colours are blended between ticks."""
-        if not len(self.start):
+        positions, sizes and colours are blended between ticks. A strip without a frame time stands at its first
+        tick; a time before the strip's start is the same moment of the pass before."""
+        if not len(self.start) or self.frame_count <= 0:
             return _no_sprites()
-        ticks = seconds * 1000.0 * speed / self.frame_ms
-        frame, blend = int(ticks) % self.frame_count, ticks % 1.0
+        ticks = seconds * 1000.0 * speed / self.frame_ms if self.frame_ms > 0 else 0.0
+        if not math.isfinite(ticks):
+            ticks = 0.0
+        frame, blend = math.floor(ticks) % self.frame_count, ticks % 1.0
         age = (frame - self.start) % self.frame_count
         alive = age < self.count
         if not alive.any():

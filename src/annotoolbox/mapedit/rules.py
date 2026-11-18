@@ -11,9 +11,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..infra.i18n import N_, tr
+from .placing import overlap
 from .template import KIND_FIXED, KIND_SLOT, KIND_START, SIZE_CONTINENTAL, SIZES, TYPES, Element
 
-ERROR, WARNING = N_("error"), N_("warning")
+ERROR, WARNING = N_("common.error_lower"), N_("common.warning_lower")
 MODDED_GAMES = ("anno117", "anno1800")  # the games with map templates
 POOL_TYPES = (0, 7)  # Normal and Volcanic slots draw from the pool by size; starters, third parties, pirates otherwise
 
@@ -40,22 +41,18 @@ class Facts:
     joined: Callable[[int, int], bool] = lambda _i, _j: False  # two islands of a complex, still as designed
 
 
-def _overlap(a: tuple, b: tuple) -> bool:
-    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
-
-
 def _inside(box: tuple, area: tuple) -> bool:
     return area[0] <= box[0] and area[1] <= box[1] and box[2] <= area[2] and box[3] <= area[3]
 
 
 def _name(e: Element) -> str:
     if e.kind == KIND_START:
-        return tr("the start position at {x}, {z}", x=e.x, z=e.z)
+        return tr("maps.start_position_x_z", x=e.x, z=e.z)
     if e.kind == KIND_SLOT:
-        return tr("the {size} slot at {x}, {z}", size=tr(SIZES[min(e.size, 4)]), x=e.x, z=e.z)
+        return tr("maps.size_slot_x_z", size=tr(SIZES[min(e.size, 4)]), x=e.x, z=e.z)
     return tr(
-        "{island} at {x}, {z}",
-        island=e.island_label or e.map_file_path.rsplit("/", 1)[-1] or tr("an island"),
+        "maps.island_at_x_z",
+        island=e.island_label or e.map_file_path.rsplit("/", 1)[-1] or tr("maps.an_island"),
         x=e.x,
         z=e.z,
     )
@@ -67,19 +64,19 @@ def _places(f: Facts) -> list[Finding]:
     for n, (i, a) in enumerate(boxes):
         for j, b in boxes[n + 1 :]:
             mass = f.continental(f.elements[i]) or f.continental(f.elements[j])  # islands may lie on its box (TAMPER)
-            if _overlap(a, b) and not mass and not f.joined(i, j):
-                text = tr("{a} and {b} overlap", a=_name(f.elements[i]), b=_name(f.elements[j]))
+            if overlap(a, b) and not mass and not f.joined(i, j):
+                text = tr("islands.a_and_b_overlap", a=_name(f.elements[i]), b=_name(f.elements[j]))
                 out.append(Finding(WARNING, text, (i, j)))
     x0, z0, x1, z1 = f.playable
     for i, e in enumerate(f.elements):
         box = f.land(e) or (e.x, e.z, e.x, e.z)
         cx, cz = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2  # half in the border is the community's line
         if not (x0 <= cx <= x1 and z0 <= cz <= z1):
-            out.append(Finding(WARNING, tr("{what} lies outside the playable area", what=_name(e)), (i,)))
+            out.append(Finding(WARNING, tr("maps.lies_outside_playable_area", what=_name(e)), (i,)))
         if e.kind == KIND_START:  # a fixed island's bay may hold a start (vanilla does): slots only
             for j, b in boxes:
                 if f.elements[j].kind == KIND_SLOT and b[0] < e.x < b[2] and b[1] < e.z < b[3]:
-                    text = tr("{start} lies inside {island}", start=_name(e), island=_name(f.elements[j]))
+                    text = tr("maps.start_lies_inside_island", start=_name(e), island=_name(f.elements[j]))
                     out.append(Finding(WARNING, text, (i, j)))
     return out
 
@@ -88,31 +85,27 @@ def _template_rules(f: Facts) -> list[Finding]:
     out = []
     starts = [i for i, e in enumerate(f.elements) if e.kind == KIND_START]
     if not starts:
-        out.append(Finding(ERROR, tr("the map has no start position: no player's ships can start")))
+        out.append(Finding(ERROR, tr("maps.map_no_start_position_players")))
     continental = [i for i, e in enumerate(f.elements) if f.continental(e)]
     if len(continental) > 1:
-        out.append(
-            Finding(
-                WARNING, tr("more than one continental island: the game draws them with glitches"), tuple(continental)
-            )
-        )
+        out.append(Finding(WARNING, tr("maps.more_one_continental_island_game"), tuple(continental)))
     slots = Counter((e.type, e.size) for e in f.elements if e.kind == KIND_SLOT and e.type in POOL_TYPES)
     for (type_id, size), count in sorted(slots.items()):
         have = f.pool.get((type_id, size), 0)
         if f.pool and count > have:
             text = tr(
-                "{count} {type} slots of size {size}, the pool holds {have} such islands: the generator may leave the rest empty",
+                "maps.slots_size_pool_holds_such",
                 count=count,
-                type=tr(TYPES.get(type_id, "Normal")),
+                type=tr(TYPES.get(type_id, TYPES[0])),
                 size=tr(SIZES[min(size, 4)]),
                 have=have,
             )
             out.append(Finding(WARNING, text))
     x0, z0, x1, z1 = f.playable
     if not (0 <= x0 < x1 <= f.size[0] and 0 <= z0 < z1 <= f.size[1]):
-        out.append(Finding(ERROR, tr("the playable area does not lie inside the map")))
+        out.append(Finding(ERROR, tr("maps.playable_area_not_lie_inside")))
     if f.size[0] != f.size[1]:
-        out.append(Finding(WARNING, tr("the map is not square: no map of the game is")))
+        out.append(Finding(WARNING, tr("maps.map_not_square_no_game")))
     return out
 
 
@@ -121,9 +114,7 @@ def check(f: Facts) -> list[Finding]:
     out = _places(f)
     for i, e in enumerate(f.elements):
         if e.kind == KIND_FIXED and e.map_file_path and not f.exists(e.map_file_path):
-            out.append(
-                Finding(ERROR, tr("{island}: its file is not in the game or the project", island=_name(e)), (i,))
-            )
+            out.append(Finding(ERROR, tr("maps.file_not_game_project", island=_name(e)), (i,)))
     if f.game in MODDED_GAMES:
         out += _template_rules(f)
     return sorted(out, key=lambda x: x.severity != ERROR)

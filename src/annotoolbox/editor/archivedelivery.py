@@ -86,7 +86,7 @@ def _package_2070(files, written, settings, _log, _tree=None) -> dict[str, bytes
 def _install_2070(built: Path, settings, log: Log) -> str:
     patch = (built / isd_build.PATCH).read_bytes()
     isd_build.install_patch(Path(settings.anno2070), patch, patch_backup(settings), log)
-    return tr("installed: start a new game in {game}", game="Anno 2070")
+    return tr("islands.installed_start_new_game", game="Anno 2070")
 
 
 def _restore_2070(settings, log: Log) -> bool:
@@ -124,10 +124,10 @@ def _install_old(key: str):
     def install(built: Path, settings, log: Log) -> str:
         archives = {p.relative_to(built).as_posix(): p.read_bytes() for p in built.rglob("*.rda")}
         if not archives:
-            raise RuntimeError(tr("nothing built yet: build the project first"))
+            raise RuntimeError(tr("common.nothing_built_yet_build_project"))
         folder = Path(getattr(settings, key))
         oldenginebuild.install_archives(key, folder, archives, old_engine_backups(settings, key), log)
-        return tr("installed: start a new game in {game}", game=installs.GAMES[key].name)
+        return tr("islands.installed_start_new_game", game=installs.GAMES[key].name)
 
     return install
 
@@ -173,18 +173,18 @@ def _old_index_backup(settings) -> Path | None:
 def _install_ready_2205(settings) -> None:
     target = target_2205(settings)
     if not settings.patch2205.strip() or not target.is_absolute() or not installs.GAMES["anno2205"].is_install(target):
-        raise RuntimeError(tr("set the Anno 2205 folder to patch (Games and folders) to an absolute path to install"))
+        raise RuntimeError(tr("islands.set_anno_2205_folder_patch"))
 
 
 def _install_2205(built: Path, settings, log: Log) -> str:
     _install_ready_2205(settings)
     a7m_edit2205.install(built, target_2205(settings), _old_index_backup(settings), log)
-    return tr("installed into {target}: start a new game", target=target_2205(settings))
+    return tr("islands.installed_start_new_game_lower", target=target_2205(settings))
 
 
 def _restore_2205(settings, log: Log) -> bool:
     if not settings.patch2205.strip():
-        raise RuntimeError(tr("the Anno 2205 folder to patch is not set (Games and folders)"))
+        raise RuntimeError(tr("islands.anno_2205_folder_patch_not"))
     return a7m_edit2205.uninstall(Path(settings.patch2205), _old_index_backup(settings), log)
 
 
@@ -225,7 +225,7 @@ class IslandDelivery:
     def ready(self, settings) -> None:
         """Raise ``RuntimeError`` when the game's folder is not set to an install."""
         if not self.game.is_install(Path(getattr(settings, self.key))):
-            raise RuntimeError(tr("{game} not found: set its folder (Games and folders)", game=self.game.name))
+            raise RuntimeError(tr("islands.not_found_set_folder_games", game=self.game.name))
 
     def project_delivery(self) -> Delivery:
         """The suite's view of the record: the parts' merged files packed, the built folder installed."""
@@ -236,28 +236,28 @@ class IslandDelivery:
         return Delivery(package, lambda project, settings, log: self.install(project.build_dir, settings, log))
 
 
-WHAT_ONE = {"islands": N_("island"), "sessions": N_("session")}
+WHAT_ONE = {"islands": N_("islands.island_lower"), "sessions": N_("islands.session_lower")}
 
 ISLAND_DELIVERIES = {
     d.key: d
     for d in (
         IslandDelivery(
-            "anno2070", N_("islands"), "anno2070-patch", _tree_2070, _edited_2070, _package_2070, _install_2070,
-            _restore_2070, _is_ours_2070, N_("Restore the game's own patch9.rda"),
+            "anno2070", N_("common.islands_lower"), "anno2070-patch", _tree_2070, _edited_2070, _package_2070, _install_2070,
+            _restore_2070, _is_ours_2070, N_("islands.restore_games_own_patch9_rda"),
         ),
         IslandDelivery(
-            "anno1404", N_("islands"), "anno1404-archives", _tree_old("anno1404"), oldenginebuild.edited_1404,
+            "anno1404", N_("common.islands_lower"), "anno1404-archives", _tree_old("anno1404"), oldenginebuild.edited_1404,
             _package_old("anno1404"), _install_old("anno1404"), _restore_old("anno1404"), _is_ours_old("anno1404"),
-            N_("Restore the game's own archives"),
+            N_("islands.restore_games_own_archives"),
         ),
         IslandDelivery(
-            "anno1701", N_("islands"), "anno1701-archives", _tree_old("anno1701"), oldenginebuild.edited_1701,
+            "anno1701", N_("common.islands_lower"), "anno1701-archives", _tree_old("anno1701"), oldenginebuild.edited_1701,
             _package_old("anno1701"), _install_old("anno1701"), _restore_old("anno1701"), _is_ours_old("anno1701"),
-            N_("Restore the game's own archives"),
+            N_("islands.restore_games_own_archives"),
         ),
         IslandDelivery(
-            "anno2205", N_("sessions"), a7m_edit2205.OUT_NAME, _tree_2205, a7m_edit2205.edited_members, _package_2205,
-            _install_2205, _restore_2205, _is_ours_2205, N_("Restore the game's own file.db"), _install_ready_2205,
+            "anno2205", N_("islands.sessions"), a7m_edit2205.OUT_NAME, _tree_2205, a7m_edit2205.edited_members, _package_2205,
+            _install_2205, _restore_2205, _is_ours_2205, N_("islands.restore_games_own_file_db"), _install_ready_2205,
         ),
     )
 }  # fmt: skip

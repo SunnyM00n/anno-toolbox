@@ -77,8 +77,10 @@ def set_object(o: filedb.Tag, change: dict) -> None:
 
 
 def _tags(isl: Session2205) -> dict[str, filedb.Tag]:
+    """The object lists of the session by group (none in a scene without objects)."""
     gom = isl.gm.find("GameObjectManager")
-    return {g: gom.path(f"{g}/objects") for g in a7m_session.OBJECT_GROUPS if gom.path(f"{g}/objects") is not None}
+    lists = {g: gom.path(f"{g}/objects") if gom is not None else None for g in a7m_session.OBJECT_GROUPS}
+    return {g: objs for g, objs in lists.items() if objs is not None}
 
 
 def _referenced(isl: Session2205) -> set[bytes]:
@@ -191,12 +193,21 @@ def _new_prop(entry: dict) -> filedb.Tag:
 
 
 def _set_prop(p: filedb.Tag, change: dict) -> None:
-    for name, fmt in (("position", "<3f"), ("rotation", "<4f")):
-        if name in change:
-            p.find(name.capitalize()).data = struct.pack(fmt, *map(float, change[name]))
+    """A prop edit on its item; a ``Rotation`` or ``Scale`` the item does not store (the game's default) is added."""
+    packed = {
+        name.capitalize(): struct.pack(fmt, *map(float, change[name]))
+        for name, fmt in (("position", "<3f"), ("rotation", "<4f"))
+        if name in change
+    }
     if "scale" in change:
         s = change["scale"]
-        p.find("Scale").data = struct.pack("<3f", *(map(float, s) if isinstance(s, list) else (float(s),) * 3))
+        packed["Scale"] = struct.pack("<3f", *(map(float, s) if isinstance(s, list) else (float(s),) * 3))
+    for name, data in packed.items():
+        attr = p.find(name)
+        if attr is not None:
+            attr.data = data
+        else:
+            p.children.append(filedb.Attrib(name, data))
 
 
 def apply_props(isl: Session2205, edits: dict, report: dict) -> None:
@@ -265,11 +276,11 @@ def edited_members(files, edits_dir: Path, log: Callable[[str], None] = print) -
         edits = islandedits.load(path)
         source = edits.get("source")
         if not source:
-            log(tr("{name}: no source session, skipped", name=path.name))
+            log(tr("islands.no_source_session_skipped", name=path.name))
             continue
         isl = Session2205(files, source)
         report = apply(isl, edits)
-        log(tr("{source}: {report}", source=source, report={k: v for k, v in report.items() if v}))
+        log(tr("islands.source_report", source=source, report={k: v for k, v in report.items() if v}))
         for name in report["members"]:
             members[isl.member_paths[name]] = member_bytes(isl, name)
         members.update(isl.new_files)
@@ -285,7 +296,7 @@ def pack(members: dict[str, bytes], index_raw: bytes) -> dict[str, bytes]:
     entries = RdaArchive.from_bytes(archive).entries
     for path in members:
         if index.entry(path) is None:
-            raise ValueError(tr("the game's archive index has no entry {path}: not a file of this install", path=path))
+            raise ValueError(tr("islands.games_archive_index_no_entry", path=path))
         index.point(path, ARCHIVE, entries[path])
     return {ARCHIVE: archive, FILE_DB: index.write()}
 
@@ -294,15 +305,13 @@ def build(files, index_raw: bytes, edits_dir: Path, out: Path, log: Callable[[st
     """Write every 2205 session with edits into ``out``: our archive (the changed members) and the game's archive
     index pointing at them (``out/maindata``). ``index_raw``: the game's own ``file.db``. Returns the sessions."""
     if not out.is_absolute() or out.name != OUT_NAME:  # a folder that is removed: only ever the build's own
-        raise ValueError(
-            tr("refusing to rebuild {out}: not an absolute path ending in {name}", out=out, name=repr(OUT_NAME))
-        )
+        raise ValueError(tr("islands.refusing_rebuild_not_absolute_path", out=out, name=repr(OUT_NAME)))
     members, written = edited_members(files, edits_dir, log)
     if out.exists():
         shutil.rmtree(out)
     (out / "maindata").mkdir(parents=True)
     if not members:
-        log(tr("no edit changes a session: nothing written"))
+        log(tr("islands.no_edit_changes_session_nothing"))
         return []
     for rel, data in pack(members, index_raw).items():
         (out / rel).write_bytes(data)
@@ -326,9 +335,9 @@ def install(built: Path, game: Path, old_backup: Path | None = None, log: Callab
     """Put the built archive into ``game`` (its install folder) through the shared delivery, which keeps the game's
     own index first and points it at the UI's archive too when that is installed."""
     if not (built / ARCHIVE).is_file():
-        raise RuntimeError(tr("nothing built yet: build the edited sessions first"))
+        raise RuntimeError(tr("islands.nothing_built_yet_build_edited"))
     delivery2205.install(game, ARCHIVE, built / ARCHIVE, log, (old_backup,) if old_backup else ())
-    log(tr("start a new game of the session to see the edits"))
+    log(tr("islands.start_new_game_session_see"))
 
 
 def uninstall(game: Path, old_backup: Path | None = None, log: Callable[[str], None] = print) -> bool:

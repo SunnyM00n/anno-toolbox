@@ -10,19 +10,19 @@ compiler is a Windows DLL); elsewhere ``find`` raises ``DxcMissing``.
 from __future__ import annotations
 
 import ctypes
+import json
 import os
-from dataclasses import dataclass, field
+import threading
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .com import HRESULT, POINTER, Guid, blob_bytes, c_void_p, file_version, method, release
+from .i18n import N_, english, tr
 from .tools import candidates
 
 DXC_ENV = "ANNO_DXC_DIR"
 GAME_DXC_DIR = Path("Bin") / "Win64"
-WHERE_TO_GET = (
-    "dxcompiler.dll and dxil.dll: the Anno 117 install's Bin/Win64, or Microsoft's open-source release "
-    "https://github.com/microsoft/DirectXShaderCompiler/releases (v1.8.2405, the game's) in tools/dxc/ or ANNO_DXC_DIR"
-)
+WHERE_TO_GET = N_("common.dxc_where_get")  # the id of the sentence that says where they are from
 # DXC_OUT_KIND
 OUT_OBJECT, OUT_ERRORS, OUT_HLSL, OUT_REFLECTION = 1, 2, 6, 8
 # D3D_SHADER_INPUT_TYPE, by number
@@ -33,7 +33,27 @@ INPUT_TYPES = (
 )  # fmt: skip
 
 
-class DxcMissing(RuntimeError):
+class CompilerMissing(RuntimeError):
+    """No shader compiler that loads: its text is in the interface language (a greyed-out look shows it as the
+    reason), ``english`` the same sentence for a log or the command line."""
+
+    def __init__(self, text: str, english: str = "") -> None:
+        super().__init__(text)
+        self.english = english or text
+
+    @classmethod
+    def of(cls, ident: str, where: str, failed: list[Exception] | tuple = (), **fields: object) -> CompilerMissing:
+        """The sentence of the string id ``ident`` with the sentence ``where`` (an id) that says where the compiler is
+        from, and why each copy ``failed`` to load."""
+
+        def said(text, in_english: bool) -> str:
+            whys = "".join(f"; {getattr(e, 'english', e) if in_english else e}" for e in failed)
+            return text(ident, where=text(where), failed=whys, **fields)
+
+        return cls(said(tr, False), said(english, True))
+
+
+class DxcMissing(CompilerMissing):
     pass
 
 
@@ -142,12 +162,36 @@ class Reflection:
         return f"{(self.version >> 4) & 0xF}_{self.version & 0xF}"
 
 
+def reflection_json(refl: Reflection) -> bytes:
+    """A reflection as JSON, to keep beside its bytecode (``reflection_of_json`` reads it back equal)."""
+    return json.dumps(asdict(refl), separators=(",", ":")).encode("utf-8")
+
+
+def _variable(d: dict) -> Variable:
+    return Variable(**{**d, "members": [_variable(m) for m in d["members"]]})
+
+
+def reflection_of_json(data: bytes) -> Reflection:
+    """The reflection ``reflection_json`` kept, equal to the one the compiler gives (its signatures as tuples)."""
+    d = json.loads(data)
+    return Reflection(
+        d["version"],
+        [Binding(**b) for b in d["bindings"]],
+        [ConstantBuffer(c["name"], c["size"], [_variable(v) for v in c["variables"]]) for c in d["cbuffers"]],
+        [tuple(s) for s in d["inputs"]],
+        [tuple(s) for s in d["outputs"]],
+    )
+
+
+_threads = threading.local()  # per thread: folder -> its own ``Dxc`` (``Dxc.for_thread``)
+
+
 class Dxc:
     """A loaded compiler: ``compile`` and ``preprocess`` HLSL, ``reflect`` DXIL."""
 
     def __init__(self, folder: Path) -> None:
         if os.name != "nt":
-            raise DxcMissing("DXC is a Windows DLL here: " + WHERE_TO_GET)
+            raise DxcMissing.of(N_("common.dxc_windows_dll_here"), WHERE_TO_GET)
         self.folder = folder
         try:  # dxcompiler loads dxil.dll by name: loaded first, from the same folder, it is found
             self._dxil = ctypes.WinDLL(str(folder / "dxil.dll"))
@@ -161,7 +205,7 @@ class Dxc:
         if create(CLSID_COMPILER, IID_COMPILER3, ctypes.byref(self._compiler)) or create(
             CLSID_UTILS, IID_UTILS, ctypes.byref(self._utils)
         ):
-            raise DxcMissing(f"{folder}: DxcCreateInstance failed")
+            raise DxcMissing.of(N_("common.folder_dxc_create_instance_failed"), WHERE_TO_GET, folder=folder)
 
     @classmethod
     def find(cls, anno117: str | Path | None = None) -> Dxc:
@@ -176,12 +220,25 @@ class Dxc:
             try:
                 return cls(path.parent)
             except DxcMissing as e:
-                failed.append(str(e))
-        raise DxcMissing("no DXC found: " + WHERE_TO_GET + "".join(f"; {why}" for why in failed))
+                failed.append(e)
+        raise DxcMissing.of(N_("common.no_dxc_found"), WHERE_TO_GET, failed)
 
     def version(self) -> str:
-        """The compiler's file version, as Windows reports it."""
-        return file_version(self.folder / "dxcompiler.dll")
+        """The compiler's file version, as Windows reports it (read once)."""
+        if getattr(self, "_version", None) is None:
+            self._version = file_version(self.folder / "dxcompiler.dll")
+        return self._version
+
+    def for_thread(self) -> Dxc:
+        """This thread's instance of the same compiler, made once per thread: DXC's objects serve one thread at a
+        time, so workers that each hold their own compile side by side (shader-compile.md 6)."""
+        own = getattr(_threads, "compilers", None)
+        if own is None:
+            own = _threads.compilers = {}
+        found = own.get(self.folder)
+        if found is None:
+            found = own[self.folder] = Dxc(self.folder)
+        return found
 
     def _run(self, source: str, args: list[str]) -> tuple[int, int]:
         """Compile with DXC's arguments; returns (status, result object), the caller releases the result."""
@@ -245,25 +302,25 @@ class Dxc:
 
 def read_reflection(refl: int) -> Reflection:
     desc = _ShaderDesc()
-    method(refl, 3, POINTER(_ShaderDesc))(refl, ctypes.byref(desc))
+    method(refl, 3, POINTER(_ShaderDesc), held=True)(refl, ctypes.byref(desc))
     bindings = []
     for i in range(desc.resources):
         b = _BindDesc()
-        method(refl, 6, ctypes.c_uint, POINTER(_BindDesc))(refl, i, ctypes.byref(b))
+        method(refl, 6, ctypes.c_uint, POINTER(_BindDesc), held=True)(refl, i, ctypes.byref(b))
         kind = INPUT_TYPES[b.type] if b.type < len(INPUT_TYPES) else str(b.type)
         bindings.append(Binding(b.name.decode(), kind, b.bind_point, b.bind_count, b.space, b.flags))
     cbuffers = []
     for i in range(desc.cbuffers):
-        cb = method(refl, 4, ctypes.c_uint, restype=c_void_p)(refl, i)
+        cb = method(refl, 4, ctypes.c_uint, restype=c_void_p, held=True)(refl, i)
         bd = _BufferDesc()
-        method(cb, 0, POINTER(_BufferDesc))(cb, ctypes.byref(bd))
+        method(cb, 0, POINTER(_BufferDesc), held=True)(cb, ctypes.byref(bd))
         buffer = ConstantBuffer(bd.name.decode(), bd.size)
         for j in range(bd.variables):
-            var = method(cb, 1, ctypes.c_uint, restype=c_void_p)(cb, j)
+            var = method(cb, 1, ctypes.c_uint, restype=c_void_p, held=True)(cb, j)
             vd = _VariableDesc()
-            method(var, 0, POINTER(_VariableDesc))(var, ctypes.byref(vd))
+            method(var, 0, POINTER(_VariableDesc), held=True)(var, ctypes.byref(vd))
             variable = Variable(vd.name.decode(), vd.offset, vd.size)
-            _fill_type(variable, method(var, 1, restype=c_void_p)(var))
+            _fill_type(variable, method(var, 1, restype=c_void_p, held=True)(var))
             buffer.variables.append(variable)
         cbuffers.append(buffer)
     return Reflection(
@@ -280,16 +337,16 @@ class _TypeDesc(ctypes.Structure):
 def _fill_type(variable: Variable, rtype: int, depth: int = 0) -> None:
     """A variable's type and, for a structure, its members (ID3D12ShaderReflectionType)."""
     td = _TypeDesc()
-    if not rtype or method(rtype, 0, POINTER(_TypeDesc))(rtype, ctypes.byref(td)) or depth > 8:
+    if not rtype or method(rtype, 0, POINTER(_TypeDesc), held=True)(rtype, ctypes.byref(td)) or depth > 8:
         return
     variable.type = (td.name or b"").decode()
     variable.rows, variable.columns, variable.elements = td.rows, td.columns, td.elements
     variable.row_major = td.cls == 2
     for i in range(td.members):
-        sub = method(rtype, 1, ctypes.c_uint, restype=c_void_p)(rtype, i)
-        name = method(rtype, 3, ctypes.c_uint, restype=ctypes.c_char_p)(rtype, i)
+        sub = method(rtype, 1, ctypes.c_uint, restype=c_void_p, held=True)(rtype, i)
+        name = method(rtype, 3, ctypes.c_uint, restype=ctypes.c_char_p, held=True)(rtype, i)
         sd = _TypeDesc()
-        method(sub, 0, POINTER(_TypeDesc))(sub, ctypes.byref(sd))
+        method(sub, 0, POINTER(_TypeDesc), held=True)(sub, ctypes.byref(sd))
         member = Variable((name or b"").decode(), sd.offset, 0)
         _fill_type(member, sub, depth + 1)
         variable.members.append(member)
@@ -299,7 +356,7 @@ def _signature(refl: int, index: int, count: int) -> list[tuple[str, int, int]]:
     out = []
     for i in range(count):
         p = _SignatureDesc()
-        method(refl, index, ctypes.c_uint, POINTER(_SignatureDesc))(refl, i, ctypes.byref(p))
+        method(refl, index, ctypes.c_uint, POINTER(_SignatureDesc), held=True)(refl, i, ctypes.byref(p))
         out.append((p.semantic.decode(), p.index, p.register))
     return out
 

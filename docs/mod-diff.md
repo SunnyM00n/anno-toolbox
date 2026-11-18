@@ -96,7 +96,11 @@ that a merge appends, a `replace` of a block, and a value set through a path tha
 - **Conflicts**: one row per conflict with its kind, target, path, the mods and their values in order, the winner and
   what decided it. A double click jumps to the target.
 - **Dropped**: what the loader would log or skip (the `engine.Event`s), per mod, file and line, and the notes of the
-  report (conditions on other mods, GUIDs added again, how 1800's set was made).
+  report (conditions on other mods, GUIDs added again, how 1800's set was made). A game file that is not valid XML is
+  one such line per patch of it (`badbase`), and the run goes on with the other files; an archive member that is no
+  XML where the game's file is (or the reverse) is compared by its bytes. The words of ours in a conflict's values
+  (`added`, `3 value(s)`, `12 bytes`) and what decided it are shown in the interface's language; the export keeps
+  the English ones.
 - The status line counts what the run found. The work runs off the window's thread, with progress, and a run in
   progress can be left by closing the window.
 
@@ -153,7 +157,8 @@ the game's code) and what is inferred are in `docs/engine-modloader.md` "Anno 18
   file's name for 1800, and "Conflicts in a profile" means "every mod that is on" (`modloader.activations`,
   `jobs.profile_order`).
 - A `.zip` in a mods folder holds mods in 1800 (a `modinfo.json` at its root, or a folder with one; a folder of folders
-  is a collection). It is **read in place** (`modloader/zipmods.py`; nothing is unpacked). The files, sizes, includes
+  is a collection). It is **read in place** (`modloader/zipmods.py`; nothing is unpacked, and the archive is open
+  only while one member is read, so it can be moved or replaced while the window shows its mods). The files, sizes, includes
   and carried files of a zip mod come from the archive, the report is the same as a folder's, and the carried files'
   source reads `archive.zip|path inside`. Give a zip by its path (the menu of a field's `...` button has
   **Choose a .zip of mods...** under 1800) or by the ModID of a mod in a zip of the game's mods folders. A profile

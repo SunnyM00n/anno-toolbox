@@ -232,6 +232,21 @@ def test_edit_that_matches_nothing_is_reported():
     assert report["unmatched"] == ["river 7", "lake 3", "coast line 2"]
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"points": [[1, 0, 1]], "widths": [1]},  # one point is no line
+        {"points": [[1, 0, 1], [2, 0, 2]]},  # no widths
+        {"points": [[1, 0, 1], [2, 0, 2]], "widths": [1]},  # one width short
+    ],
+)
+def test_a_river_edit_that_cannot_be_a_line_is_listed_and_leaves_the_island_as_it_was(change):
+    data = water_island()
+    isl = isd_edit.Island2070(data)
+    assert isl.apply({"rivers": {"0": change}}, {})["unmatched"] == ["river 0"]
+    assert isl.write() == data
+
+
 def test_the_1404_logic_grid_follows_height_edits():
     root = isd2070.parse(isd_bytes())
     manager = root.path("m_GOPManager/m_GRIDManager")

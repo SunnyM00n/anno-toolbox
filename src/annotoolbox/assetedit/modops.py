@@ -77,7 +77,7 @@ def render(doc: AssetDocument, layout: Layout | None = None) -> dict[str, str]:
     """The patch files of the change set, by their path in the game's tree."""
     layout = layout or LAYOUTS[doc.changes.game]
     if not layout.patch_target:
-        raise ValueError(tr("{game} has no mod loader: write its files whole (native)", game=layout.name))
+        raise ValueError(tr("assets.no_mod_loader_write_files", game=layout.name))
     ops = [new_asset_op(doc, g) for g in new_order(doc.changes)]
     for guid in sorted(doc.changes.assets):
         if guid in doc.index.by_guid and guid not in doc.changes.removed:
@@ -142,9 +142,7 @@ def write_mod(
     mod_id = check_folder_name(doc.changes.mod_id)
     folder = Path(mods) / mod_id
     if folder.resolve() in {Path(c.folder).resolve() for c in doc.changes.carry}:
-        raise ValueError(
-            tr("{folder} is the folder the change set was imported from: write the mod to another one", folder=folder)
-        )
+        raise ValueError(tr("assets.folder_change_set_imported_write", folder=folder))
     _check_ours(folder, mod_id)
     written = {**render(doc, layout), "modinfo.json": info(doc, layout)}
     folder.parent.mkdir(parents=True, exist_ok=True)
@@ -167,9 +165,9 @@ def _check_ours(folder: Path, mod_id: str) -> None:
     if old is None or old.mod_id != mod_id:
         raise InstallError(
             tr(
-                "the folder {folder} in the mods folder holds another mod ({mod}): not replaced",
+                "common.folder_mods_holds_another_mod",
                 folder=folder.name,
-                mod=old.mod_id if old else tr("no mod"),
+                mod=old.mod_id if old else tr("common.no_mod"),
             )
         )
 

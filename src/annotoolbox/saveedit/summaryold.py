@@ -35,7 +35,7 @@ def _world(root):
 
 
 def _islands(world) -> Table:
-    table = Table([N_("Island"), N_("Name"), N_("File"), N_("Position"), N_("Size")])
+    table = Table([N_("islands.island"), N_("common.name"), N_("common.file"), N_("saves.position"), N_("saves.size")])
     islands = world.find("Islands") if world is not None else None
     for number, value in enumerate((c for c in islands.children if c.name == "v") if islands is not None else [], 1):
         config = value.find("IslandConfig") or value
@@ -50,7 +50,7 @@ def _players(world) -> Table | None:
     infos = world.path("GameData/PlayerInfos") if world is not None else None
     if infos is None:
         return None
-    table = Table([N_("Player"), N_("Type"), N_("Profile"), N_("Colour")])
+    table = Table([N_("saves.player"), N_("ui.type"), N_("mods.profile"), N_("common.colour")])
     for number, value in enumerate(c for c in infos.children if c.name == "v"):
         table.rows.append([str(number), _first(value, "m_Type"), _first(value, "m_Profile"), _first(value, "m_Color")])
     return table
@@ -61,20 +61,20 @@ def summarize(save: SaveFile) -> Summary:
     part = save.parts[0] if save.parts else None
     world = _world(part.tree()) if part is not None and part.tree() is not None else None
     if world is None:
-        s.note(N_("No world was found in this save: it is shown as a tree, read only."))
+        s.note(N_("saves.no_world_found_save_shown"))
         return s
-    sec = s.section(N_("Save"))
+    sec = s.section(N_("common.save"))
     sec.rows += [
-        (N_("Game"), "Anno 1404" if save.game == "anno1404" else "Anno 1701"),
-        (N_("Saved game"), _first(world, "m_IsSaveGame")),
-        (N_("World name"), _first(world, "m_Name")),
-        (N_("World size"), _size(world)),
+        (N_("common.game"), "Anno 1404" if save.game == "anno1404" else "Anno 1701"),
+        (N_("saves.saved_game"), _first(world, "m_IsSaveGame")),
+        (N_("saves.world_name"), _first(world, "m_Name")),
+        (N_("saves.world_size"), _size(world)),
     ]
-    s.sections.append(Section(N_("Islands"), table=_islands(world)))
+    s.sections.append(Section(N_("common.islands"), table=_islands(world)))
     players = _players(world)
     if players is not None:
-        s.sections.append(Section(N_("Players"), table=players))
-    s.note(N_("Only the world is read; no save of this game was available to pin the rest of its layout."))
+        s.sections.append(Section(N_("saves.players"), table=players))
+    s.note(N_("saves.only_world_read_no_save"))
     return s
 
 

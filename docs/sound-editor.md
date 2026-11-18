@@ -123,6 +123,9 @@ effects and the music are Vorbis, so put a long clip in as Vorbis where you can.
 
 ## The waveform
 
+A bank picked in the list, the clip of a picked Sound and the clip **Play** plays are read and decoded off the
+window's thread; the bank or the Sound asked for last is the one shown or played, an older answer is dropped.
+
 Picking a Sound or a music track draws its clip above the facts: the peaks of the samples (the lowest and highest
 sample of each pixel column, both channels together), with the clip's length and format under it. The clip is the one
 the **Play** button would play: an edit's, or else the bank's, or else the loose file. It is decoded in the same way

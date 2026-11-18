@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass
 
 from .com import Guid, method, release
+from .i18n import tr
 
 LEVELS = (0xC200, 0xC100, 0xC000, 0xB100, 0xB000)  # D3D_FEATURE_LEVEL 12_2 .. 11_0
 FEATURE_LEVELS, OPTIONS5 = 2, 27  # D3D12_FEATURE
@@ -80,8 +81,9 @@ class Support:
     def text(self) -> str:
         if self.why:
             return self.why
-        rt = f"ray tracing tier {self.ray_tracing}" if self.ray_tracing else "no ray tracing"
-        return f"feature level {self.feature_level}, {rt}"
+        if self.ray_tracing:
+            return tr("common.feature_level_ray_tracing_tier", level=self.feature_level, tier=self.ray_tracing)
+        return tr("common.feature_level_no_ray_tracing", level=self.feature_level)
 
 
 class _Levels(ctypes.Structure):
@@ -100,17 +102,17 @@ def _check(device: int, feature: int, data) -> bool:
 def probe() -> Support:
     """The default adapter's Direct3D 12 support (the one Qt's views draw with unless told otherwise)."""
     if os.name != "nt":
-        return Support(why="Direct3D 12 is Windows only")
+        return Support(why=tr("common.direct3d_12_windows_only"))
     try:
         d3d12 = ctypes.WinDLL("d3d12")  # Windows adds the extension
     except OSError as e:
-        return Support(why=f"no Direct3D 12: {e}")
+        return Support(why=tr("common.no_direct3d_12_error", error=str(e)))
     iid = Guid.of(IID_DEVICE)
     device = ctypes.c_void_p()
     create = d3d12.D3D12CreateDevice
     create.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
     if create(None, 0xB000, ctypes.byref(iid), ctypes.byref(device)) or not device:
-        return Support(why="no Direct3D 12 device")
+        return Support(why=tr("common.no_direct3d_12_device"))
     try:
         wanted = (ctypes.c_uint * len(LEVELS))(*LEVELS)
         levels = _Levels(len(LEVELS), wanted, 0)

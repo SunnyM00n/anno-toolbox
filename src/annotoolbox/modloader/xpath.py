@@ -20,6 +20,7 @@ from .xpathparse import DESCEND, XPathError, parse
 
 PLAIN = re.compile(r"[\w .:;,+\-]+")  # a literal whose bytes in the file are the literal itself
 ARITHMETIC = frozenset({"+", "-", "*", "div", "mod"})
+NODE_SET_ARGUMENT = frozenset({"count", "sum"})
 NUMERIC = frozenset({"number", "sum", "count", "round", "floor", "ceiling", "string-length", "position", "last"})
 
 
@@ -105,6 +106,11 @@ def _needles(step) -> tuple[bytes, ...]:
             elif test and isinstance(test[1], float) and test[1] == int(test[1]):
                 out.append(str(int(test[1])).encode())
     return tuple(out)
+
+
+def _ends_at_guid(key: str) -> bool:
+    """Whether a key path ends with the elements ``Standard/GUID`` (what ``PatchDoc.guid_holders`` has indexed)."""
+    return key == "Standard/GUID" or key.endswith("/Standard/GUID")
 
 
 def _conjuncts(pred):
@@ -195,7 +201,7 @@ class _Eval:
         test = step[1]
         tag = test[1] if test[0] == "name" and test[1] != "*" else None
         key = _key_test(step[2][0]) if step[2] and tag else None
-        by_guid = key and isinstance(key[1], str) and PLAIN.fullmatch(key[1]) and key[0].endswith("Standard/GUID")
+        by_guid = key and isinstance(key[1], str) and PLAIN.fullmatch(key[1]) and _ends_at_guid(key[0])
         hold = _needles(step)
         out = []
         for n in nodes:
@@ -363,7 +369,12 @@ class _Eval:
         if name == "position":
             return float(pos)
         vals = [self.value(a, node, pos, size) for a in args]
-        return _call(self, name, vals, node)
+        if name in NODE_SET_ARGUMENT and not (vals and isinstance(vals[0], list)):
+            raise XPathError(f"{name}() takes a node set")
+        try:
+            return _call(self, name, vals, node)
+        except IndexError as exc:  # an argument the function reads is not there
+            raise XPathError(f"{name}() is given {len(vals)} argument(s), too few") from exc
 
 
 def _cmp(op: str, x, y, flip: bool = False) -> bool:

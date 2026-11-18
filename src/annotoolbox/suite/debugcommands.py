@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..infra.i18n import N_, tr
+from ..infra.i18n import N_, english, tr
 
 GAME = "anno117"
 HISTORY_LIMIT = 50
@@ -20,10 +20,10 @@ FAVOURITES = "favourites"
 PERCENT, GUID, FLAG = "percent", "guid", "flag"  # the argument kinds: 0 to 100, an asset's GUID, on or off
 ECONOMY, VIEWS, SELECTION, SPAWN = "economy", "views", "selection", "spawn"
 CATEGORIES = {
-    ECONOMY: N_("Economy and build"),
-    VIEWS: N_("Views and display"),
-    SELECTION: N_("Selected objects"),
-    SPAWN: N_("Spawn and test"),
+    ECONOMY: N_("common.economy_build"),
+    VIEWS: N_("common.views_display"),
+    SELECTION: N_("common.selected_objects"),
+    SPAWN: N_("common.spawn_test"),
 }
 TAG_USED, TAG_LISTED = "used", "listed"  # called by a mod of ours in a game, or only declared (debug-palette 1)
 
@@ -52,9 +52,9 @@ class Command:
     tag: str = TAG_LISTED
 
 
-_PERCENT = ArgSpec("percentage", PERCENT, N_("Percent"))
-_GUID = ArgSpec("guid", GUID, N_("Asset GUID"))
-_ON = ArgSpec("value", FLAG, N_("On"))
+_PERCENT = ArgSpec("percentage", PERCENT, N_("common.percent"))
+_GUID = ArgSpec("guid", GUID, N_("common.asset_guid"))
+_ON = ArgSpec("value", FLAG, N_("common.on"))
 _G = "Cheat.GlobalCheats:"
 _S = "Cheats:"
 
@@ -64,51 +64,51 @@ def _toggle(id_, category, title, effect, method, state="", tag=TAG_LISTED) -> C
 
 
 _COMMANDS: tuple[Command, ...] = (
-    _toggle("ignore_building_costs", ECONOMY, N_("Ignore building costs"), N_("building costs are not charged"),
+    _toggle("ignore_building_costs", ECONOMY, N_("common.ignore_building_costs"), N_("common.building_costs_not_charged"),
         "ToggleIgnoreBuildingCosts", "IgnoreBuildingCosts"),
-    _toggle("ignore_fertilities", ECONOMY, N_("Ignore fertilities"), N_("every building produces on any ground"),
+    _toggle("ignore_fertilities", ECONOMY, N_("common.ignore_fertilities"), N_("common.every_building_produces_any_ground"),
         "ToggleIgnoreFertilities", "IgnoreFertilities"),
-    _toggle("ignore_threats", ECONOMY, N_("Ignore threats"), N_("threats do not affect the player"), "ToggleIgnoreThreats", "IgnoreThreats"),
-    _toggle("upgrade_check", ECONOMY, N_("Skip the upgrade check"), N_("buildings upgrade without their requirements"),
+    _toggle("ignore_threats", ECONOMY, N_("common.ignore_threats"), N_("common.threats_not_affect_player"), "ToggleIgnoreThreats", "IgnoreThreats"),
+    _toggle("upgrade_check", ECONOMY, N_("common.skip_upgrade_check"), N_("common.buildings_upgrade_without_requirements"),
         "ToggleUpgradeCheck", "", TAG_USED),
-    _toggle("unlock_all", ECONOMY, N_("Unlock everything"), N_("every unlock is open for the human players"),
+    _toggle("unlock_all", ECONOMY, N_("common.unlock_everything"), N_("common.every_unlock_open_human_players"),
         "ToggleUnlockAllForHumans", "", TAG_USED),
-    _toggle("productivity", ECONOMY, N_("Cheat productivity"), N_("productivity is raised by the game's cheat"),
+    _toggle("productivity", ECONOMY, N_("common.cheat_productivity"), N_("common.productivity_raised_games_cheat"),
         "ToggleProductivity", "IsProductivityCheated"),
-    _toggle("incidents", ECONOMY, N_("Switch incidents"), N_("incidents (fires, plagues) are turned off or on"),
+    _toggle("incidents", ECONOMY, N_("common.switch_incidents"), N_("common.incidents_fires_plagues_turned_off"),
         "ToggleIncidents", "IncidentsDisabled"),
-    _toggle("happy_days", ECONOMY, N_("Switch happy days"), N_("the happy days events are turned off or on"), "ToggleHappyDaysDisabled"),
-    _toggle("super_ship_speed", ECONOMY, N_("Super ship speed"), N_("ships sail very fast"), "ToggleSuperShipSpeed", "SuperShipSpeedEnabled"),
-    _toggle("undiscovered", ECONOMY, N_("Reveal the map"), N_("undiscovered areas are shown as discovered"),
+    _toggle("happy_days", ECONOMY, N_("common.switch_happy_days"), N_("common.happy_days_events_turned_off"), "ToggleHappyDaysDisabled"),
+    _toggle("super_ship_speed", ECONOMY, N_("common.super_ship_speed"), N_("common.ships_sail_very_fast"), "ToggleSuperShipSpeed", "SuperShipSpeedEnabled"),
+    _toggle("undiscovered", ECONOMY, N_("common.reveal_map"), N_("common.undiscovered_areas_shown_discovered"),
         "DisableUndiscovered", "IsUndiscoveredDisabled"),
-    _toggle("win_lose", ECONOMY, N_("No win or lose"), N_("the win and lose conditions are switched off"),
+    _toggle("win_lose", ECONOMY, N_("common.no_win_lose"), N_("common.win_lose_conditions_switched_off"),
         "DisableWinLoseConditions", "IsWinLoseConditionsDisabled"),
-    _toggle("construction_ai", ECONOMY, N_("Construction AI"), N_("the construction helper AI is switched on or off"),
+    _toggle("construction_ai", ECONOMY, N_("common.construction_ai"), N_("common.construction_helper_ai_switched_off"),
         "ToggleConstructionAIEnabled", "ConstructionAIEnabled"),
-    _toggle("attack_view", VIEWS, N_("Attack debug view"), N_("shows what the attack logic sees"), "ToggleAttackDebugView", "IsAttackDebugView"),
-    _toggle("los_view", VIEWS, N_("Line-of-sight view"), N_("shows the line-of-sight debug view"), "ToggleLOSDebugView", "IsLOSDebugView"),
-    _toggle("debug_zoom", VIEWS, N_("Debug camera zoom"), N_("the camera may zoom further than in play"), "ToggleUseDebugCameraZoomLevels"),
-    _toggle("letterboxing", VIEWS, N_("No letterboxing"), N_("cinematic black bars are switched off"), "ToggleLetterboxingDisabled"),
-    _toggle("banners", VIEWS, N_("Block banners"), N_("banner notifications are blocked"), "ToggleBlockBannerNotifications"),
-    _toggle("debug_drawings", VIEWS, N_("Hide debug drawings"), N_("the debug drawings are suppressed"), "ToggleSuppressDebugDrawings"),
-    Command("heal_selected", SELECTION, N_("Heal selected"), N_("heals the selected objects by a percentage"),
+    _toggle("attack_view", VIEWS, N_("common.attack_debug_view"), N_("common.shows_what_attack_logic_sees"), "ToggleAttackDebugView", "IsAttackDebugView"),
+    _toggle("los_view", VIEWS, N_("common.line_sight_view"), N_("common.shows_line_sight_debug_view"), "ToggleLOSDebugView", "IsLOSDebugView"),
+    _toggle("debug_zoom", VIEWS, N_("common.debug_camera_zoom"), N_("common.camera_zoom_further_play"), "ToggleUseDebugCameraZoomLevels"),
+    _toggle("letterboxing", VIEWS, N_("common.no_letterboxing"), N_("common.cinematic_black_bars_switched_off"), "ToggleLetterboxingDisabled"),
+    _toggle("banners", VIEWS, N_("common.block_banners"), N_("common.banner_notifications_blocked"), "ToggleBlockBannerNotifications"),
+    _toggle("debug_drawings", VIEWS, N_("common.hide_debug_drawings"), N_("common.debug_drawings_suppressed"), "ToggleSuppressDebugDrawings"),
+    Command("heal_selected", SELECTION, N_("common.heal_selected"), N_("common.heals_selected_objects_percentage"),
         f"{_S}HealSelectedObjects({{percentage}})", (_PERCENT,)),
-    Command("damage_selected", SELECTION, N_("Damage selected"), N_("damages the selected objects by a percentage"),
+    Command("damage_selected", SELECTION, N_("common.damage_selected"), N_("common.damages_selected_objects_percentage"),
         f"{_S}DamageSelectedObjects({{percentage}})", (_PERCENT,)),
-    Command("invincible_selected", SELECTION, N_("Invincible selected"), N_("makes the selected objects invincible or mortal"),
+    Command("invincible_selected", SELECTION, N_("common.invincible_selected"), N_("common.makes_selected_objects_invincible_mortal"),
         f"{_S}SetSelectedObjectsInvincible({{value}})", (_ON,)),
-    Command("destroy_selected", SELECTION, N_("Destroy selected"), N_("destroys the selected objects"),
+    Command("destroy_selected", SELECTION, N_("common.destroy_selected"), N_("common.destroys_selected_objects"),
         f"{_S}DestroySelectedObjects()", (), "", True),
-    Command("spawn_object", SPAWN, N_("Spawn an object"), N_("spawns the asset at the player"), f"{_S}SpawnGameObject({{guid}})", (_GUID,)),
-    Command("build_mode", SPAWN, N_("Build mode for an asset"), N_("starts the build mode for the building"),
+    Command("spawn_object", SPAWN, N_("common.spawn_object"), N_("common.spawns_asset_player"), f"{_S}SpawnGameObject({{guid}})", (_GUID,)),
+    Command("build_mode", SPAWN, N_("common.build_mode_asset"), N_("common.starts_build_mode_building"),
         f"{_S}StartBuildMode({{guid}})", (_GUID,)),
-    Command("show_notification", SPAWN, N_("Show a notification"), N_("plays a notification asset"), f"{_S}ShowNotification({{guid}})", (_GUID,)),
-    Command("show_text_popup", SPAWN, N_("Show a text popup"), N_("opens a text popup asset"), f"{_S}ShowTextPopup({{guid}})", (_GUID,)),
-    Command("show_collectables", SPAWN, N_("Show all collectables"), N_("shows or hides every collectable"),
+    Command("show_notification", SPAWN, N_("common.show_notification"), N_("common.plays_notification_asset"), f"{_S}ShowNotification({{guid}})", (_GUID,)),
+    Command("show_text_popup", SPAWN, N_("common.show_text_popup"), N_("common.opens_text_popup_asset"), f"{_S}ShowTextPopup({{guid}})", (_GUID,)),
+    Command("show_collectables", SPAWN, N_("common.show_all_collectables"), N_("common.shows_hides_every_collectable"),
         f"{_S}ShowAllCollectables({{value}})", (_ON,)),
-    Command("fps_view", VIEWS, N_("Frame rate view"), N_("shows or hides the frame rate"), f"{_S}ToggleFpsView()"),
-    Command("debug_ui", VIEWS, N_("Debug UI"), N_("shows or hides the debug UI"), f"{_S}ToggleDebugUI()"),
-    Command("version_label", VIEWS, N_("Version label"), N_("shows or hides the version label"), f"{_S}ToggleVersionLabel()"),
+    Command("fps_view", VIEWS, N_("common.frame_rate_view"), N_("common.shows_hides_frame_rate"), f"{_S}ToggleFpsView()"),
+    Command("debug_ui", VIEWS, N_("common.debug_ui"), N_("common.shows_hides_debug_ui"), f"{_S}ToggleDebugUI()"),
+    Command("version_label", VIEWS, N_("common.version_label"), N_("common.shows_hides_version_label"), f"{_S}ToggleVersionLabel()"),
 )  # fmt: skip
 _BY_GAME = {GAME: {c.id: c for c in _COMMANDS}}
 
@@ -121,9 +121,9 @@ def commands(game: str = GAME) -> dict[str, Command]:
 def category_title(category: str) -> str:
     """The category's name in the interface language."""
     if category == FAVOURITES:
-        return tr("Favourites")
+        return tr("common.favourites")
     if category == CHEATS:
-        return tr("The game's own cheats")
+        return tr("common.games_own_cheats")
     return tr(CATEGORIES[category])
 
 
@@ -133,23 +133,21 @@ def check_values(command: Command, values: dict) -> tuple[dict, str]:
     names = {a.name for a in command.args}
     extra = sorted(set(values) - names)
     if extra:
-        return {}, tr("{command}: unexpected argument {name}", command=command.id, name=extra[0])
+        return {}, tr("common.command_unexpected_argument_name", command=command.id, name=extra[0])
     typed: dict = {}
     for arg in command.args:
         if arg.name not in values:
-            return {}, tr("{command}: {name} is missing", command=command.id, name=arg.name)
+            return {}, tr("common.command_name_is_missing", command=command.id, name=arg.name)
         value = values[arg.name]
         if arg.kind == FLAG and isinstance(value, bool):
             typed[arg.name] = value
         elif arg.kind in (PERCENT, GUID) and isinstance(value, int) and not isinstance(value, bool):
             limit = 100 if arg.kind == PERCENT else 1 << 53
             if not 0 <= value <= limit:
-                return {}, tr(
-                    "{command}: {name} must be between 0 and {limit}", command=command.id, name=arg.name, limit=limit
-                )
+                return {}, tr("common.must_between_0", command=command.id, name=arg.name, limit=limit)
             typed[arg.name] = value
         else:
-            return {}, tr("{command}: {name} is not a valid {kind}", command=command.id, name=arg.name, kind=arg.kind)
+            return {}, tr("common.command_name_not_valid_kind", command=command.id, name=arg.name, kind=arg.kind)
     return typed, ""
 
 
@@ -172,7 +170,8 @@ def find(game: str, text: str = "", category: str = "", favourites: tuple[str, .
             continue
         if category and category != FAVOURITES and command.category != category:
             continue
-        haystack = " ".join((command.id, command.title, command.effect, tr(command.title), tr(command.effect))).lower()
+        english_words = (english(command.title), english(command.effect))  # found by either language's words
+        haystack = " ".join((command.id, *english_words, tr(command.title), tr(command.effect))).lower()
         if all(word in haystack for word in words):
             found.append(command)
     return found

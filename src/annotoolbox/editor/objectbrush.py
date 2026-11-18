@@ -57,7 +57,7 @@ class ObjectBrush:
     def begin(self, x: float, z: float) -> int:
         self.last = None
         if self._change is None:
-            self._change = one_change(self.session, tr("spray"))
+            self._change = one_change(self.session, tr("islands.spray"))
             self._change.__enter__()
         return self.to(x, z)
 

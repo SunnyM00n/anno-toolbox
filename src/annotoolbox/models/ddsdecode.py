@@ -235,7 +235,11 @@ class DdsFile:
         else:
             kind = f"{self._pf[1][0]}-bit"
         self.kind, self._start = kind, start
-        self.info = DdsInfo(width, height, max(1, mips), faces, kind, srgb, self.depth)
+        # a header may claim anything: no more levels than the size halves to, no more faces than the file has bytes
+        mips = min(max(1, mips), max(width, height).bit_length())
+        if faces > len(data):
+            raise UnsupportedDds(f"{faces} faces in a file of {len(data)} bytes")
+        self.info = DdsInfo(width, height, mips, faces, kind, srgb, self.depth)
         self._offsets = []
         at = start
         for _face in range(faces):
@@ -280,14 +284,20 @@ class DdsFile:
             raise IndexError(f"no slice {z} of level {mip}")
         return self._offsets[face * self.info.mips + mip] + z * self._size(*self.size_of(mip))
 
-    def level(self, mip: int = 0, face: int = 0, z: int = 0) -> np.ndarray:
-        """One mip level of one face (of a volume: its slice ``z``) as ``(height, width, 4)`` uint8 RGBA."""
+    def _whole(self, mip: int, face: int, z: int) -> int:
+        """Where a level that is there in full starts: ``IndexError`` for a level or face the file has none of,
+        ``UnsupportedDds`` for one the file ends inside."""
         if not (0 <= mip < self.info.mips and 0 <= face < self.info.faces):
             raise IndexError(f"no level {mip} of face {face}")
-        width, height = self.size_of(mip)
         offset = self._offset(mip, face, z)
-        if len(self.data) < offset + self._size(width, height):
+        if len(self.data) < offset + self._size(*self.size_of(mip)):
             raise UnsupportedDds("the file is shorter than its header says")
+        return offset
+
+    def level(self, mip: int = 0, face: int = 0, z: int = 0) -> np.ndarray:
+        """One mip level of one face (of a volume: its slice ``z``) as ``(height, width, 4)`` uint8 RGBA."""
+        width, height = self.size_of(mip)
+        offset = self._whole(mip, face, z)
         if self.kind == "BC7":
             return decode_bc7(self.data, width, height, offset)
         if self.kind == "BC6H":
@@ -309,13 +319,13 @@ class DdsFile:
         below 0 when signed)."""
         if self.kind == "BC6H":
             width, height = self.size_of(mip)
-            rgb = decode_bc6h(self.data, width, height, self._offset(mip, face, z), self.signed)
+            rgb = decode_bc6h(self.data, width, height, self._whole(mip, face, z), self.signed)
             return np.concatenate([rgb, np.ones((height, width, 1), np.float32)], axis=2)
         if self.kind not in PLAIN or PLAIN[self.kind][0] not in ("<f2", "<f4"):
             return self.level(mip, face, z).astype(np.float32) / 255.0
         width, height = self.size_of(mip)
         dtype, channels, to, _scale = PLAIN[self.kind]
-        offset = self._offset(mip, face, z)
+        offset = self._whole(mip, face, z)
         raw = np.frombuffer(self.data, dtype, width * height * channels, offset).reshape(height, width, channels)
         out = np.zeros((height, width, 4), np.float32)
         out[..., 3] = 1.0

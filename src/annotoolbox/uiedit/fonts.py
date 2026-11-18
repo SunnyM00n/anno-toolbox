@@ -1,6 +1,6 @@
 """The game's own fonts for the preview, and a label's text laid out as the label's fields ask: a text style's
 localized font followed to its font file (``data/fonts/...``) and loaded into Qt, then lines broken at the text
-plane's width, cut with an ellipsis or by character, spaced by the style's leading and letter spacing.
+plane's width, cut with an ellipsis or by character, spaced by the style's leading.
 
 ``GameFonts(files)`` resolves a localized font (``family``); ``lay_out(text, style, width)`` gives the lines and
 their size. docs/ui/fonts.md is the font chain, docs/ui/117/layout.md "Labels" the overflow modes.
@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QByteArray
-from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF
+from PySide6.QtGui import QFont, QFontMetricsF
 
 from ..formats import phoenixedit
-from . import fields
+from ..suite.gamefonts import FontRegistry
+from . import fields, gamelanguages
 from .labels import TextStyle
 
 FALLBACK = "Georgia"  # a system serif where the game's font cannot be read
@@ -33,24 +33,16 @@ class GameFonts:
 
     def __init__(self, files) -> None:
         self.files = files
+        self.registry = FontRegistry(files.tree.read)
         self._faces: dict[tuple[str, str], FontFace] = {}
-        self._by_path: dict[str, str | None] = {}
 
     def _load(self, path: str) -> str | None:
         """The family of a font file of the game, loaded once; None when it cannot be read."""
-        path = path.replace("\\", "/").lower()
-        if path not in self._by_path:
-            family = None
-            try:
-                data = self.files.tree.read(path)
-            except (OSError, KeyError):
-                data = None
-            if data:
-                fid = QFontDatabase.addApplicationFontFromData(QByteArray(data))
-                families = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
-                family = families[0] if families else None
-            self._by_path[path] = family
-        return self._by_path[path]
+        return self.registry.face(path).family
+
+    def notes(self) -> list[str]:
+        """Why a font is drawn in a stand-in, one line each (for the Checks list)."""
+        return self.registry.notes()
 
     def family(self, guid: str | None, language: str = "english") -> FontFace:
         """The face a localized font (a ``LocalizedFont`` GUID) draws with in ``language``."""
@@ -84,7 +76,7 @@ class GameFonts:
             return self.stand_in()
         font, scale = fields.get(lf, "DefaultFont"), float(fields.get(lf, "ScalingFactor", 1.0) or 1.0)
         for exc in phoenixedit.objects(lf, "LanguagesExceptions"):
-            if str(fields.get(exc, "Language", "")).lower() == language.lower():
+            if gamelanguages.same(language, str(fields.get(exc, "Language", ""))):  # "Simplified Chinese"
                 font = fields.get(exc, "FontException") or font
                 scale = float(fields.get(exc, "ScalingFactor", scale) or scale)
         ft = self.files.root(font) if font else None
@@ -94,14 +86,13 @@ class GameFonts:
 
 
 def qfont(style: TextStyle) -> QFont:
-    """The Qt font of a style: its family (the game's, else a stand-in), pixel size, weight, slant and spacing."""
+    """The Qt font of a style: its family (the game's, else a stand-in), pixel size, weight and slant. The game's
+    ``LetterSpacing`` (0 to 25) widens no text by a measurable amount (layout.md "Fonts"), so it is left out."""
     font = QFont(style.family or FALLBACK)
     font.setStyleHint(QFont.StyleHint.Serif)
     font.setPixelSize(max(1, round(style.size)))
     font.setBold(style.bold)
     font.setItalic(style.italic)
-    if style.letter_spacing:  # thousandths of an em, as the studio's tracking (inferred from the values 0 to 50)
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, style.size * style.letter_spacing / 1000.0)
     return font
 
 
@@ -109,11 +100,14 @@ def qfont(style: TextStyle) -> QFont:
 class Lines:
     lines: list[str]
     width: float  # the widest line
-    height: float
-    line_height: float
+    height: float  # the first line's height, then a step for each further line
+    line_height: float  # the step from one line to the next: the style's leading times its size
+    first: float = 0.0  # the first line's height: the font's own (ascent plus descent)
 
 
 def _wrap(text: str, metrics: QFontMetricsF, width: float) -> list[str]:
+    """``text`` in lines no wider than ``width``: broken at blanks, and a word wider than the plane inside the word
+    (the game breaks it too: layout.md "The text probe")."""
     out = []
     for para in text.split("\n"):
         line = ""
@@ -121,11 +115,23 @@ def _wrap(text: str, metrics: QFontMetricsF, width: float) -> list[str]:
             trial = f"{line} {word}" if line else word
             if line and metrics.horizontalAdvance(trial) > width:
                 out.append(line)
-                line = word
-            else:
-                line = trial
+                trial = word
+            *full, line = _pieces(trial, metrics, width)
+            out += full
         out.append(line)
     return out
+
+
+def _pieces(word: str, metrics: QFontMetricsF, width: float) -> list[str]:
+    """A word as the pieces that fit ``width``, one character at least in each."""
+    out = []
+    while len(word) > 1 and metrics.horizontalAdvance(word) > width:
+        n = len(word) - 1
+        while n > 1 and metrics.horizontalAdvance(word[:n]) > width:
+            n -= 1
+        out.append(word[:n])
+        word = word[n:]
+    return [*out, word]
 
 
 def _cut(line: str, metrics: QFontMetricsF, width: float, ellipsis: bool) -> str:
@@ -140,6 +146,7 @@ def _cut(line: str, metrics: QFontMetricsF, width: float, ellipsis: bool) -> str
 def lay_out(text: str, style: TextStyle, width: float, height: float = 0.0) -> Lines:
     """``text`` broken and cut as the label's overflow modes say inside a plane of ``width`` (and ``height``)."""
     metrics = QFontMetricsF(qfont(style))
+    first = metrics.height()  # the game: the font's own height, then leading x size a line (layout.md "Fonts")
     line_height = style.size * (style.leading or 1.2)
     if style.wrap and width > 0:
         lines = _wrap(text, metrics, width)
@@ -147,10 +154,10 @@ def lay_out(text: str, style: TextStyle, width: float, height: float = 0.0) -> L
         lines = text.split("\n")
     if width > 0 and style.cut in ("character", "ellipsis"):
         lines = [_cut(line, metrics, width, style.cut == "ellipsis") for line in lines]
-    if height > 0 and style.vcut and len(lines) * line_height > height + 0.5:
-        keep = max(1, int(height // line_height))
+    if height > 0 and style.vcut and first + (len(lines) - 1) * line_height > height + 0.5:
+        keep = max(1, int((height + 0.5 - first) // line_height) + 1)
         lines = lines[:keep]
         if style.vcut == "ellipsis":
             lines[-1] = _cut(lines[-1] + ELLIPSIS, metrics, width or 1e9, True)
     widest = max((metrics.horizontalAdvance(line) for line in lines), default=0.0)
-    return Lines(lines, widest, line_height * max(1, len(lines)), line_height)
+    return Lines(lines, widest, first + line_height * max(0, len(lines) - 1), line_height, first)

@@ -10,15 +10,12 @@ from pathlib import Path
 
 import pytest
 from tests.fakes import fake_save117
+from tests.test_saveedit import rows, section
 
 from annotoolbox.assetedit.schema import DataSet, Schema, ValueSpec
 from annotoolbox.formats import savegame2070, storage117
+from annotoolbox.infra.i18n import tr
 from annotoolbox.saveedit import container, names, records, summary
-
-
-def section(s, title: str):
-    return next(x for x in s.sections if x.title == title)
-
 
 # The storages
 
@@ -139,14 +136,14 @@ def test_an_old_game_save_shows_its_world(tmp_path: Path):
     packed.write_bytes(savegame2070.pack(world))
     for path in (plain, packed):
         s = summary.summarize(container.open_file(path, "anno1404"))
-        assert dict(section(s, "Save").rows)["World size"] == "384 x 384"
+        assert rows(section(s, "Save"))["World size"] == "384 x 384"
         assert section(s, "Islands").table.rows == [["1", "Home", "data/levels/n.isd", "16, 32", "80 x 80"]]
         assert section(s, "Players").table.rows == [["0", "1", "7", "3"]]
-        assert s.sections[-1].title == "Parts"
+        assert tr(s.sections[-1].title) == "Parts"
     older = b"<WorldConfig><m_Width>192</m_Width><m_Height>192</m_Height><Islands><k>1</k><v><m_Name>X</m_Name></v></Islands></WorldConfig>"
     plain.write_bytes(older)
     s = summary.summarize(container.open_file(plain, "anno1701"))
-    assert dict(section(s, "Save").rows)["World size"] == "192 x 192" and section(s, "Islands").table.rows[0][1] == "X"
+    assert rows(section(s, "Save"))["World size"] == "192 x 192" and section(s, "Islands").table.rows[0][1] == "X"
     plain.write_bytes(b"<Other/>")
     assert summary.summarize(container.open_file(plain, "anno1701")).notes
 
@@ -154,11 +151,13 @@ def test_an_old_game_save_shows_its_world(tmp_path: Path):
 def test_an_1800_save_is_read_with_117s_tags_and_a_2205_one_as_an_outline(tmp_path: Path):
     path = fake_save117(tmp_path / "P" / "a.a7s")
     s = summary.summarize(container.open_file(path, "anno1800"))
-    assert dict(section(s, "Save").rows)["Profile"] == "Tester" and any("117" in text for text, _ in s.notes)
+    assert rows(section(s, "Save"))["Profile"] == "Tester" and any("117" in text for text, _ in s.notes)
     tags = {(row[0], row[2]) for row in section(s, "Documents").table.rows}
     assert ("data.a7s", "MetaGameManager") in tags and ("header.a7s", "CorporationProfile") in tags
     other = summary.summarize(container.open_file(path, "anno2205"))
-    assert [x.title for x in other.sections] == ["Documents", "Parts"] and not any(r.rows for r in other.sections[:1])
+    assert [tr(x.title) for x in other.sections] == ["Documents", "Parts"] and not any(
+        r.rows for r in other.sections[:1]
+    )
 
 
 def test_names_are_in_the_interface_language_and_english_where_it_has_none(monkeypatch):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from . import animations, fields
-from .panels import TYPE_CODES, parse, show
+from .panels import TYPE_CODES, parse, show, whole
 from .tweens import TARGETS
 
 LABEL_W, ROW_H, KEY_R = 170.0, 20.0, 5.0
@@ -37,18 +37,19 @@ VALUE_CODES = {"e613cfd0": fields.FLOAT, "e86c4065": fields.VEC2, "7563a113": fi
                "7ab8a12e": fields.BOOL, "21fb1be8": fields.I32, "fc284752": fields.U32, "dda23f23": fields.U32,
                "5da1d9a7": fields.STRING, "eabeeed5": fields.I64, "376db26f": fields.U64}  # fmt: skip
 COLOR_TRACK = "ab390ed2"
+DELETE_KEYS = (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
 TWEEN_COLUMNS = 8  # Tween, Start, End, Duration, Delay, Ease, Loops, Yoyo (named by ``_tween_headers``)
 
 
 def _tween_headers() -> list[str]:
-    return [tr("Tween"), tr("Start", context="tween"), tr("End"), tr("Duration"), tr("Delay"), tr("Ease"),
-            tr("Loops"), tr("Yoyo")]  # fmt: skip
+    return [tr("ui.tween"), tr("ui.tween.start"), tr("ui.end"), tr("ui.duration"), tr("ui.delay"), tr("ui.ease"),
+            tr("ui.loops"), tr("ui.yoyo")]  # fmt: skip
 
 
 def parse_key_value(kind: str, text: str):
     """A key's value from text for a track of type ``kind`` (a colour track takes ``r, g, b``)."""
     if kind == COLOR_TRACK:
-        parts = [int(float(p)) for p in text.replace(",", " ").split()]
+        parts = [whole(p) for p in text.replace(",", " ").split()]
         return tuple((parts + [255, 255, 255])[:3])
     return parse(text, VALUE_CODES.get(kind, fields.FLOAT))
 
@@ -152,8 +153,15 @@ class KeyCanvas(QWidget):
         if row >= 0 and i < 0:
             self.added.emit(row, round(self.t_of(event.position().x()), 3))
 
+    def event(self, event) -> bool:
+        """Del with a key picked is this widget's: the window's shortcut of the same key removes the selected element."""
+        if event.type() == QEvent.Type.ShortcutOverride and event.key() in DELETE_KEYS and self.current[1] >= 0:
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.current[1] >= 0:
+        if event.key() in DELETE_KEYS and self.current[1] >= 0:
             self.removed.emit(*self.current)
         else:
             super().keyPressEvent(event)
@@ -170,14 +178,14 @@ class SequenceEditor(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.canvas = KeyCanvas()
-        self.hint = QLabel(tr("Pick an animation in States and events; double-click a track to add a key."))
-        self.time_edit = QLineEdit(placeholderText=tr("time (s)"))
-        self.value_edit = QLineEdit(placeholderText=tr("value"))
+        self.hint = QLabel(tr("ui.pick_animation_states_events_double"))
+        self.time_edit = QLineEdit(placeholderText=tr("ui.time_s"))
+        self.value_edit = QLineEdit(placeholderText=tr("common.value_lower"))
         self.interp = QComboBox()
         self.interp.addItems(list(animations.INTERPOLATORS))
-        self.apply = QPushButton(tr("Apply to the key"))
+        self.apply = QPushButton(tr("ui.apply_to_key"))
         form = QHBoxLayout()
-        for w in (QLabel(tr("Key:")), self.time_edit, self.value_edit, self.interp, self.apply):
+        for w in (QLabel(tr("ui.key")), self.time_edit, self.value_edit, self.interp, self.apply):
             form.addWidget(w)
         self.tweens = QTableWidget(0, TWEEN_COLUMNS)
         self.tweens.setHorizontalHeaderLabels(_tween_headers())
@@ -208,10 +216,9 @@ class SequenceEditor(QWidget):
         self.animation = animation
         tracks = animation.tracks if animation is not None else []
         self.canvas.set_tracks(tracks, [describe(t) for t in tracks], animation.seconds if animation else 1.0)
-        self.hint.setText(tr("{name}: {n} tracks, {seconds:.2f} s; double-click a track to add a key, drag a key to "
-                             "move it, Del removes it.", name=animation.name, n=len(tracks), seconds=animation.seconds)
+        self.hint.setText(tr("ui.tracks_s_double_click_track", name=animation.name, n=len(tracks), seconds=animation.seconds)
                           if animation else
-                          tr("Pick an animation in States and events; double-click a track to add a key."))  # fmt: skip
+                          tr("ui.pick_animation_states_events_double"))  # fmt: skip
         self._show_key()
         self._fill_tweens(list(tweens), eases or {})
 
@@ -264,7 +271,7 @@ class SequenceEditor(QWidget):
             t = float(self.time_edit.text())
             value = None if track.is_event else parse_key_value(track.kind, self.value_edit.text())
         except ValueError:
-            self.hint.setText(tr("That value does not read: numbers, or x, y, z."))
+            self.hint.setText(tr("ui.value_not_read_numbers_x"))
             return
         self.set_key.emit(track.node, key.node, t, value, self.interp.currentIndex())
 

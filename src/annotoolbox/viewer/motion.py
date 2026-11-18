@@ -102,7 +102,8 @@ class Bob:
             v = _qrotate((-qx, -qy, -qz, qw), v)
         t = np.identity(4)
         t[:3, 3] = v
-        return np.linalg.inv(self.local) @ t @ self.local
+        back = _unplaced(self.local)
+        return back @ t @ self.local if back is not None else np.identity(4)
 
 
 CLOCK_HANDS = (5, 6, 7)  # the alignments of the hour, minute and second hand
@@ -146,6 +147,15 @@ def hand_angle(kind: int, clock: tuple[int, int, int]) -> float:
 def on_the_clock(steps) -> bool:
     """Whether a part's steps hold a clock hand (the view draws again when the clock ticks)."""
     return any(isinstance(s, Align) and s.kind in CLOCK_HANDS for s in steps)
+
+
+def _unplaced(local: np.ndarray) -> np.ndarray | None:
+    """The inverse of a node's own placement; None for a node scaled to nothing (it draws nothing: its step is left
+    out)."""
+    try:
+        return np.linalg.inv(local)
+    except np.linalg.LinAlgError:
+        return None
 
 
 def _qrotate(q, v: np.ndarray) -> np.ndarray:
@@ -208,8 +218,9 @@ def at_time(
         elif isinstance(step, Spin | Bob):
             m = m @ step.matrix(env.seconds(step.when, seconds))
         elif isinstance(step, Align):
-            if env.states is None or not step.when or env.states.bits & step.when:
-                m = m @ np.linalg.inv(step.local) @ _aligned(step, env)
+            back = _unplaced(step.local)
+            if back is not None and (env.states is None or not step.when or env.states.bits & step.when):
+                m = m @ back @ _aligned(step, env)
         elif hasattr(step, "at_time"):  # a path of its own (viewer.figures.Walk)
             m = m @ step.at_time(seconds)
         else:

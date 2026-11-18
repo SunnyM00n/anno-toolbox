@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 from ..sources import icons2070, loca2070
-from . import richtext
+from . import fontsloca, richtext
 from .gui2070 import (
     Background,
     Templates,
@@ -218,6 +218,11 @@ class OldGui:
             if name:
                 out[name] = Font(name, item.findtext("FontFamilyName") or "", number(item.findtext("FontSize"), 12.0),
                                  int(number(item.findtext("Weight"), 400)), item.findtext("FontFileName") or "")  # fmt: skip
+        if not out:  # 1404 and 1701 keep the table in their localisation files
+            out = {
+                n: Font(n, family, size, weight)
+                for n, family, size, weight in fontsloca.read(self.tree.paths, self.read)
+            }
         return out
 
     def font_file(self, font: Font) -> bytes | None:

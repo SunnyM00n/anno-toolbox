@@ -9,7 +9,7 @@ from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPersistentModelInde
 from ..infra.i18n import N_, tr
 from . import nodes
 
-HEADERS = (N_("Name"), N_("Bytes"), N_("Value"))
+HEADERS = (N_("common.name"), N_("saves.bytes"), N_("common.value"))
 
 
 class SaveTreeModel(QAbstractItemModel):

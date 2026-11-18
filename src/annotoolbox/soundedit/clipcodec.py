@@ -49,11 +49,11 @@ def availability(version: int) -> dict[str, str]:
     """Per codec: "" when ``encode`` can write it for a bank of ``version``, else what is missing."""
     out = {"pcm": "", "adpcm": ""}
     if not bnkgraph.layout(version).vorbis_known:
-        out["vorbis"] = tr("the Wwise Vorbis layout of this bank version is not known")
+        out["vorbis"] = tr("sound.wwise_vorbis_layout_bank_version")
     elif find_tool("ffmpeg") is None:
-        out["vorbis"] = tr("ffmpeg is not installed (put it on the PATH or into the tools folder)")
+        out["vorbis"] = tr("sound.ffmpeg_not_installed_put_path")
     elif wwvorbis.Library.find() is None:
-        out["vorbis"] = tr("{file} is not in the tools folder", file=wwvorbis.LIBRARY_FILE)
+        out["vorbis"] = tr("sound.not_tools_folder", file=wwvorbis.LIBRARY_FILE)
     else:
         out["vorbis"] = ""
     return out
@@ -89,7 +89,7 @@ def _wav_chunks(data: bytes) -> tuple[bytes, bytes]:
     found = riff.chunks(data)
     fmt, body = found.get(b"fmt ", b""), found.get(b"data", b"")
     if len(fmt) < 16 or not body:
-        raise _NotReadHere(tr("the WAV has no format or no data chunk"))
+        raise _NotReadHere(tr("sound.wav_no_format_data_chunk"))
     return fmt, body
 
 
@@ -99,7 +99,7 @@ def _read_wav(data: bytes) -> Clip:
     if tag == 0xFFFE and len(fmt) >= 26:  # extensible: the real tag opens the sub-format
         tag = struct.unpack_from("<H", fmt, 24)[0]
     if not 1 <= channels <= MAX_CHANNELS:
-        raise ClipError(tr("{channels} channels: only mono and stereo clips are used", channels=channels))
+        raise ClipError(tr("sound.channels_only_mono_stereo_clips", channels=channels))
     return Clip(_to_16(body, tag, bits, channels), rate, channels)
 
 
@@ -120,12 +120,10 @@ def _to_16(body: bytes, tag: int, bits: int, channels: int = 1) -> array.array:
         floats = array.array("f" if bits == 32 else "d")
         floats.frombytes(body)
         if not all(map(math.isfinite, floats)):
-            raise ClipError(tr("the WAV holds samples that are not numbers (NaN or infinity)"))
+            raise ClipError(tr("sound.wav_holds_samples_not_numbers"))
         out.extend(max(-32768, min(32767, round(v * 32767))) for v in floats)
     else:
-        raise _NotReadHere(
-            tr("a WAV of format {tag} with {bits} bits is not read (PCM and float WAVs are)", tag=tag, bits=bits)
-        )
+        raise _NotReadHere(tr("sound.wav_format_bits_not_read", tag=tag, bits=bits))
     return out
 
 
@@ -135,17 +133,15 @@ def _decoded(data: bytes, name: str) -> Clip:
         try:
             return _read_wav(tools.ffmpeg_bytes(data, ["-c:a", "pcm_s16le"]))
         except tools.ToolError as exc:
-            raise ClipError(tr("ffmpeg cannot read the file: {error}", error=str(exc)[:200])) from exc
+            raise ClipError(tr("sound.ffmpeg_cannot_read_file", error=str(exc)[:200])) from exc
     try:
         import miniaudio
     except ImportError:
-        raise ClipError(
-            tr("{value} is not a WAV: install ffmpeg or miniaudio to read other formats", value=name or "the file")
-        ) from None
+        raise ClipError(tr("sound.not_wav_install_ffmpeg_miniaudio", value=name or "the file")) from None
     try:
         decoded = miniaudio.decode(data, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=2, sample_rate=48000)
     except miniaudio.DecodeError as exc:
-        raise ClipError(tr("miniaudio cannot read the file: {exc}", exc=exc)) from exc
+        raise ClipError(tr("sound.miniaudio_cannot_read_file", exc=exc)) from exc
     return Clip(array.array("h", decoded.samples), 48000, 2)
 
 
@@ -155,10 +151,10 @@ def _decoded(data: bytes, name: str) -> Clip:
 def encode(clip: Clip, codec: str, version: int) -> bytes:
     """The ``.wem`` of a clip in ``codec`` for a bank of ``version``; a ``ClipError`` says what is missing."""
     if codec not in CODECS:
-        raise ClipError(tr("no codec {codec}: {value}", codec=repr(codec), value=", ".join(CODECS)))
+        raise ClipError(tr("sound.no_codec_value", codec=repr(codec), value=", ".join(CODECS)))
     missing = availability(version).get(codec, "")
     if missing:
-        raise ClipError(tr("{codec} cannot be written: {missing}", codec=codec, missing=missing))
+        raise ClipError(tr("sound.codec_cannot_written_missing", codec=codec, missing=missing))
     if codec == "pcm":
         return bnk.pcm_wem(clip.samples, clip.rate, clip.channels)
     if codec == "adpcm":
@@ -168,7 +164,7 @@ def encode(clip: Clip, codec: str, version: int) -> bytes:
         config = bnkgraph.layout(version).vorbis_channels
         return wwvorbis.encode(clip.samples.tobytes(), clip.channels, clip.rate, library, ffmpeg, config=config)
     except wwvorbis.WemError as exc:
-        raise ClipError(tr("Wwise Vorbis: {exc}", exc=exc)) from exc
+        raise ClipError(tr("sound.wwise_vorbis_exc", exc=exc)) from exc
 
 
 def adpcm_wem(clip: Clip) -> bytes:

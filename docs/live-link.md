@@ -16,7 +16,7 @@ side's own code outside the game. Nothing was tried in a game. Not built: the co
 (section 9.4). The steps and estimates are in `roadmap.md` "The live link".
 
 Note: designed on 2026-11-07. The transport, the reloads of assets, texts, scenes, models and effects, select, jump,
-read, the live widget dump, the panel and the Anno 1800 hand-over were built on 2026-11-12.
+read, the panel and the Anno 1800 hand-over were built on 2026-11-12.
 
 ## 1. What the game can reload while it runs
 
@@ -184,12 +184,13 @@ Protocol version 1. Requests from the suite:
 | `select` | `object` (an object id) or `guid` (the first or next object of that asset in the current session) | `ok` with the object |
 | `jump` | `object`, or `session` and `position` | `ok` |
 | `read` | `guid` and `fields` (value paths such as `Building/BuildCost`), or `object` and fields from a fixed list | the values as the game holds them now |
-| `subscribe` / `unsubscribe` | `topics`: `selection`, `reload`, `session`, `log` | `ok` |
+| `subscribe` / `unsubscribe` | `topics`: `selection`, `reload`, `session`, `log`, `ui.scene` (section 18) | `ok` |
 | `ping`, `bye` | - | `pong`; the link closes |
 
 Events from the game: `selection` (the selected objects: id, GUID, name, session), `edit.request` (the player pressed
 "edit this object": the suite opens the object's asset, the island editor its island), `reload` (a reload the player
-started by hand, so the suite knows the game is current), `session` (entered, left), `log` (new mod loader lines).
+started by hand, so the suite knows the game is current), `session` (entered, left), `log` (new mod loader lines),
+`ui.scene` (a UI scene opened or closed: its state's and its file's name, section 18).
 
 Anything else is refused with `unknown`. A message the game build cannot serve is answered `unavailable`.
 
@@ -207,7 +208,6 @@ Anything else is refused with `unknown`. A message the game build cannot serve i
      when the link cannot come up);
    - `log/helper-library.log`, the helper library's log (past 8 MB it becomes `log/helper-library.old.log`, one older
      file kept);
-   - `log/ui-dump/*.json`, the live widget trees `ui.dump` asks for (section 10.2);
    - the save `livelink.a8s` in the profile's save folder (`accounts/<account>/<profile>/`), written by the game's
      own save for `reload.session` and loaded again, overwritten by the next one.
 
@@ -337,8 +337,7 @@ Note: the seam was built on 2026-11-09.
   answers. The reloads run on the game's own frame, as a key binding would (section 1). It also brings the model and
   effect reload of section 1.3 up for the link (`live_link_models=1`, default), so `reload.models` and
   `reload.effects` need no second switch. It runs in a game without the Anno 2070 mod: any mod can be edited live.
-- **Scenes, widget values, the panel, Anno 1800** (the second round; section 10): `reload.scenes`, the new request
-  `ui.dump`, the game link panel behind the status bar, reloads asked from a window that never block it, and the
+- **Scenes, widget values, the panel, Anno 1800** (the second round; section 10): `reload.scenes`, the game link panel behind the status bar, reloads asked from a window that never block it, and the
   start file for Anno 1800's open-in-editor command.
 - **A stand-in game for tests** (`tests/fakegame.py`): the same protocol in Python, over a socket pair or a real named
   pipe; the client's tests (`tests/test_linkclient.py`) run against it.
@@ -346,8 +345,7 @@ Note: the seam was built on 2026-11-09.
 ### 9.2 Switching it on and using it
 
 1. In the helper library's settings (`<Documents>/Anno 117 - Pax Romana/log/helper-library.ini`) set `live_link=1`.
-   Optional: `live_link_models=0` (no model and effect reload), `live_link_ui=0` (no `ui.dump`),
-   `live_link_edit_key` (a virtual-key code, default 69 = E; the key with Ctrl+Shift sends the selected object to
+   Optional: `live_link_models=0` (no model and effect reload), `live_link_edit_key` (a virtual-key code, default 69 = E; the key with Ctrl+Shift sends the selected object to
    the suite; 0 none), and `live_link_selection_ms` and `live_link_log_ms` (how often the selection and the loader's
    log are looked at, 500).
 2. Start the game with your mod enabled, then start the suite. The status bar says "game link: anno117 <build>"
@@ -373,12 +371,12 @@ an unknown name or an argument outside its type is refused.
 | `reload.ambient` | the ambient settings read again | `ok` at once (no confirmation) |
 | `reload.models`, `reload.effects` | the model and effect reload of section 1.3 for each path, models first | `done` when any file went through (`data.files`: reloaded, handed, skipped as not loaded, refused, with its time and reason), `skipped` when none was loaded, `refused`, `busy` after 30 s of waiting |
 | `reload.scenes` | the game's own scene reload for the UI states in `states` (the suite names them: a scene file is named after its state, a widget file is looked up in the scenes that place it); the screens are left and entered again, so an open panel loses its scroll and typed text | `done` when the scenes are loaded (the sentence names the states, and the names that are no state of the game), `skipped` when no state is named or the UI did not start it in 10 s, `busy` while a reload runs or a session loads |
-| `ui.dump` | writes the live widget tree of the open scenes of `states` (none: every open scene) to the game's `log/ui-dump/` | `ok`, `data.files`: the file names; `skipped` when no such scene is open |
 | `reload.banks` | each named bank (`banks`: the bank's name, as its `.bnk` file is named) is unloaded and loaded again through the sound engine's own calls (a whole bank first, a prepared one when that is refused); the Init bank is never touched | `done` when any bank went through (`data.banks`: per bank its id, the sound engine's result and `reloaded`, `not unloaded`, `not loaded again`, `refused`, `no answer`), `refused`, `skipped` when no answer came in 10 s |
 | `reload.session` | the game saves under the name `livelink`, the file is awaited, the game loads it again (its island files are read anew) | `done` once the load was asked for, `skipped` when no save file appeared in 30 s, `busy` while a session loads |
 | `select` | selects the object `object`, or the first object of the asset `guid` in the current session | `ok`; `skipped` when the session has none |
 | `jump` | the camera to `object`, to the session whose GUID is `session`, or to `position` (three numbers) inside that session | `ok`; a `position` without its `session` is `refused` |
 | `read` | the values of `fields` of an asset (`guid`) as the game holds them now; of an object only from a fixed list (`GUID`, `ID`, `SessionGuid`, `Direction`, `Visible`, `IsBlueprint`, `Health/CurrentHitPoints`, `Position/x`, `Position/y`, `Position/z`) | `ok`, `data.values`; `unavailable` when the game hands back no text |
+| `ui.values` | what the widgets of one open UI scene show now: of the UI states in `states` whose scene is open, the widgets of the widget file `file` (its GUID; none: the scene file's own widgets), each with only its text, image id, visibility and own property values (section 17) | `ok`, `data.scenes`; `skipped` when no named scene is open or the file is not in them; `unavailable` on a build whose widget classes the helper does not know |
 | `debug.list` | which commands of the palette's catalogue the game binds right now and the cheats it registers itself; only with `live_link_commands=1` (section 13) | `ok`, `data.commands`: id to `available` and `state` (true, false or null), `data.cheats`: names |
 | `debug.run` | one command of the catalogue with its typed `values`; the game maps the id to a fixed call and runs it | `done` (`data.state` where the game can read the toggle back), `refused`, `busy`, `unavailable` for a method the build does not bind |
 | `debug.cheat` | one of the cheats the game itself registers, by `name`, which must be on the game's list at that moment | `done`, `refused`, `busy`, `unavailable` |
@@ -391,7 +389,9 @@ One request runs at a time (`busy`), and more than about ten a second are `busy`
   selected (one object; the game says which of several);
 - `edit.request`: Ctrl+Shift+E in the game (`game`, `object`, `guid`, `session`);
 - `reload`: a mod pass the player started by hand, noticed from the loader's log;
-- `log`: new loader lines.
+- `log`: new loader lines;
+- `ui.scene`: a UI state with a scene opened or closed, its name and its scene file's name (section 18; topic
+  `ui.scene`, sent only when subscribed).
 
 `reload.banks` is answered `unavailable` by a game build whose sound calls the library does not know, and so is
 `reload.scenes`. The suite then shows the manual route of section 6. A changed `.bnk` file of a mod becomes a
@@ -431,24 +431,22 @@ One request runs at a time (`busy`), and more than about ten a second are `busy`
    it belongs to is open: "game reloaded: scenes", the screen works afterwards, an open panel starts again, our own
    panels (the UI binding) show their values again within a second. A widget file in a scene that is not open: the
    answer is `skipped`. A scene of a state that is not in the game: the sentence names it.
-11. The UI editor's "Take the live values from the running game" with a scene open in the game: the dump file appears
-    in `log/ui-dump/`, the "Game dump" dock lists the differences against the preview.
-12. The panel: click the status bar's game link: the rows, the game's log lines while it is open, "Connect now" with the
+11. The panel: click the status bar's game link: the rows, the game's log lines while it is open, "Connect now" with the
     game started after the suite, "Reload assets and texts".
-13. Anno 1800: in the panel "Anno 1800: open in the editor ..." with the game's folder, then the game's own command with an
+12. Anno 1800: in the panel "Anno 1800: open in the editor ..." with the game's folder, then the game's own command with an
     object selected: the asset opens in the asset editor.
-14. A reload asked while a long mod pass runs: the asking app's window stays usable and says "game link: reloading ..."
+13. A reload asked while a long mod pass runs: the asking app's window stays usable and says "game link: reloading ..."
     and then the answer.
-15. Banks (R3): a mod with its own sound bank; change the bank, install, `livelink.current().reload(livelink.BANKS, ["data/sound/<name>.bnk"], "<mod>")`
+14. Banks (R3): a mod with its own sound bank; change the bank, install, `livelink.current().reload(livelink.BANKS, ["data/sound/<name>.bnk"], "<mod>")`
     in a console: `reloaded` and the new sound plays the next time it starts (a looping sound stays silent until it is started
     again). A prepared bank: the answer's `prepared` is true. The log line of the library names each step's result.
-16. The session reload (R4): `reload.session` in a session: a save called `livelink` appears in the profile's folder, the game loads it
+15. The session reload (R4): `reload.session` in a session: a save called `livelink` appears in the profile's folder, the game loads it
     and a changed island file shows. Confirm that the save command and the load command ran (`Game:Save`, `Game:Load`: a wrong
     name is a Lua error in the game's log and the answer is `skipped` after 30 s), that no popup holds the save, and what the
     save's quota does to a second reload.
-17. `select` with a `guid` (a building of the session): the first object is selected; if `skipped` although one stands there,
+16. `select` with a `guid` (a building of the session): the first object is selected; if `skipped` although one stands there,
     the object group the game hands back is not indexed like a table (the log shows the Lua error).
-18. `jump` with `session` and `position`: the camera moves (the game's own debug camera command).
+17. `jump` with `session` and `position`: the camera moves (the game's own debug camera command).
 
 ### 9.6 The companion mod
 
@@ -485,15 +483,7 @@ A scene file new to the mod makes the suite run the mod pass first (the loader h
 the reload every widget is a new object: the library's own UI binding forgets what it wrote and found, and writes its
 values again.
 
-### 10.2 Live widget values
-
-`ui.dump` asks the game for a dump of the live widget tree of the open scenes (the UI dump probe's walk: rectangles,
-visibility, the properties the game's own readers give). The files land in `log/ui-dump/` under Documents, and the
-answer names them. The UI editor's "Take the live values from the running game" opens the one for the open file in
-its "Game dump" dock (`uiedit/gamedump`), the same view as the manual "Compare with a game dump". `live_link_ui=0`
-leaves it out.
-
-### 10.3 The panel
+### 10.2 The panel
 
 Clicking the status bar's game link opens `suite/linkpanel`: the connection, the reloads the game takes, the mods the
 game has enabled, the session file, the game's latest log lines (the panel subscribes to them while it is open),
@@ -503,7 +493,7 @@ The debug-command palette is described in `debug-palette.md`. It sends the game'
 debug commands as typed ids; the requests it needs from this link are listed in its section 5. The shell opens it
 from the status bar.
 
-### 10.4 Asking without waiting
+### 10.3 Asking without waiting
 
 A reload answers after the game's confirmation, which can take as long as a mod pass.
 `linkannounce.announce_in_background` runs the announcement on the suite's background thread when a game is
@@ -511,7 +501,7 @@ connected. It says "game link: reloading ..." at once, and the answer's sentence
 instant and runs where it is. The asset editor's build, the mod manager's profile switches and removals and the panel
 use it. The UI editor's save and the install paths already run off the window's thread or send nothing.
 
-### 10.5 Anno 1800
+### 10.4 Anno 1800
 
 1800 keeps a developer command that starts `Tools/ToolOne/launch.bat -startGUID <guid>` for the selected object.
 `suite/linkhandover` writes a `launch.bat` there that leaves the GUID in a request file under the suite's data folder
@@ -522,7 +512,7 @@ game folder whose path has no space (the suite refuses to write it elsewhere). T
 at once (the game never reads its output). The suite never offers 1800's own data reload as a way to reload that
 game: it swaps the asset database beside a running session with no check of the session, a pause or a save.
 
-### 10.6 The library's public edition
+### 10.5 The library's public edition
 
 The link module, its framing and checks and the command runner are one self-contained cut of the library (the core,
 the UI frame entry, the command call and the module; no gameplay module). That cut is published as the **link
@@ -600,7 +590,7 @@ loads.
 Host test: the link's engine side with stand-ins for the game runs against the suite's client over the real pipe
 (confirmation, silent drop, busy, refusal, one request at a time, the stall warning, the pause and the speed set
 again, the speed left alone when paused already or outside a session, a pause that never lands, busy over a
-scheduled scenario action; `tests/test_linkstability.py` is the suite's half).
+scheduled scenario action; the stability guards at the end of `tests/test_linkclient.py` are the suite's half).
 
 To check in a game:
 
@@ -665,14 +655,14 @@ behind the same second opt-in as the debug commands (`live_link_commands=1`) and
   `refused` with the game's reason. Only a module that just listens to the game's events and can put back what it
   changed is switchable. One that changes the game at start, adds assets or changes the engine's own work is not. A
   module that changes the simulation is never switched in a game of several players. The answer is `busy` while the
-  game is not quiet, as in section 13. Switchable: the UI dump probe, the farm growth (switched off, every growing
+  game is not quiet, as in section 13. Switchable: the farm growth (switched off, every growing
   field is set grown on its next steps) and the production module (switched off, its productivity corrections are
   taken off the farms on its next steps).
 - **Client**: `modules_list()` and `modules_set(module, on)` on the link. **Panel**: the game link panel's "List
   modules" fills a small list, one tick per module. A module that cannot be switched is greyed, and its reason is
   the tooltip.
-- **To check in a game**: that the list names every module with its class as the start log does, that switching the
-  UI dump off and on again changes its key's behaviour and nothing else, and that a module that may not be switched
+- **To check in a game**: that the list names every module with its class as the start log does, that switching a
+  switchable module off and on again changes its behaviour and nothing else, and that a module that may not be switched
   says why.
 
 Note: built on 2026-11-14; the list of switchable modules is of that date.
@@ -680,13 +670,12 @@ Note: built on 2026-11-14; the list of switchable modules is of that date.
 ## 15. The link helper (built and host-tested, nothing run in a game)
 
 The game side of the link is a download of its own: the **link helper**. It is a `version.dll` for Anno 117 that
-holds the link, the reload of models, model configs and effect files, and the live widget walk of `ui.dump`, and
-nothing else.
+holds the link, the reload of models, model configs and effect files, and nothing else.
 Its source is in the Toolbox's repository (`native/livelink/`, with its own README). Each release builds it on
 GitHub's Windows runner and attaches `version.dll`, `live-link-SHA256SUMS` and a build attestation to the release page.
 The build is reproducible, so a copy built from the same tag with the same compiler has the same checksum.
 
-- **One game build.** The helper supports Anno 117 update 3.0 (`Anno117.exe` of 392218104 bytes). At start it
+- **One game build.** The helper supports Anno 117 update 3.0.1 (`Anno117.exe` of 388925432 bytes). At start it
   compares the running executable's file size, time stamp and image size with the build it was made for. On any
   other build it stays inert: it forwards the system's version calls, as Windows' own `version.dll` would, its log
   says `library inert`, and the game runs as without it. A game update therefore needs a new release of the helper.
@@ -700,7 +689,233 @@ The build is reproducible, so a copy built from the same tag with the same compi
   something in the game says instead what to do by hand: Shift+F3 with the hot reload mod for assets and texts, a
   restart for the rest (section 6). The game link panel's search answers "no game answered". Nothing else changes:
   every editor works without the helper.
+- **The Toolbox tells about a new helper.** The update check (`installer.md` "Updates") compares the release's
+  `live-link-SHA256SUMS` with the SHA256 of the installed `Bin\Win64\version.dll` when it is ours (the marker text of
+  its log is in the file, or it is the last release's helper), else with the hash the last release had. A difference
+  shows a notice in the status bar with a link to the release page. The program never downloads or installs the
+  helper: it goes into the game's folder, so the person fetches it, verifies it and copies it. Not seen with a real
+  release yet.
 - **To check in a game**: that the helper loads beside a clean install and the start log ends with the link's lines,
   that the Toolbox connects, and that a second game build leaves it inert.
 
 Note: built on 2026-11-15.
+
+## 16. Anno 1800 and Anno 2205 (the helper's core and the Toolbox's client are built; nothing tried in a game)
+
+The link helper was looked at for the two other games of the same engine family. It was read from the games' files,
+and none of it was tried in a game. 16.1 says what is built since; the tables below are the plan for the rest.
+
+**Installing works the same way in both.** Both games load a `version.dll` from their executable folder at start:
+1800 asks for it itself, 2205 through two of its own libraries. Each game gets a helper of its own, made for its one
+game build, with the same build check as 117's (an unknown build leaves it inert). 2205 is no longer updated, so its
+helper would never need a new build. 1800's subscription build and 2205's are not supported (as with 117).
+
+**What each game will offer** (the plan; "title screen" means no session is open):
+
+| Request | Anno 117 (built) | Anno 1800 (planned) | Anno 2205 (planned, after more research) |
+|---|---|---|---|
+| assets and texts | in a session and at the title screen | **at the title screen only**: 1800's own data reload replaces the asset database while a session runs without the checks 117's has, so in a session the suite says "save, quit to the title, reload, load" (the game itself reloads mods only when its mod browser closes, at the title screen) | at the title screen only, from the game's archive index or loose files (2205 has no mod folder) |
+| models and model configs | yes | yes: 1800 keeps the same reload handlers | configs yes; models no (2205 keeps no model reload) |
+| effect files | yes | yes, includes followed by the game itself | not known yet |
+| UI scenes | yes | not known: 1800 has a UI reload command whose effect is untested; until then `unavailable` | not known (2205's interface is Flash) |
+| sound banks | yes | planned, the same sound engine | not known yet |
+| the session (islands) | save and load | planned | yes: 2205 has a session reload of its own |
+| select an object | yes | no: the game has no "select this object" call; `unavailable` | no |
+| jump | yes | yes, to an object or a position | partly (around an object; by id not known) |
+| read, the selection event, "edit this object" | yes | yes, through the game's script values | yes, through the game's script calls |
+
+**2205's helper changes nothing in the game's code.** It works only through the game's own script interpreter and its
+start script, so it needs one small start file installed by the suite besides the helper. That design is not read to the
+end yet.
+
+**Without a helper**, today:
+
+- 1800: the one-way "open in the editor" of section 10.4; for data, leave a session and reopen the mod browser, or
+  restart.
+- 2205: two of the game's own script calls can be bound to keys in its `key.config`, `session.reloadSession()` (the
+  current session again) and `game.reloadData()` (the data; at the title screen only, for the same reason as 1800).
+  Not tried.
+
+**The Toolbox's side** (planned): the client finds the game by the session file in that game's own Documents folder
+and takes the game from the welcome, so the asset editor opens the right game; the panel and the manual routes say
+the game's own way. A release attaches one helper per game, each as its own download, and the update check compares
+each with the helper in that game's folder.
+
+Order and size: the shared core first, then the Toolbox client, then 1800 (about 46 agent hours to a helper with
+every request but the UI reload, 49 to 52 with it), then 2205 after its research (about 10 hours of research, then 25
+to 35).
+
+Probes that need no code (not run):
+
+1. 1800: `TextSources.TextSourceRoots.UIBindings.ReloadUI()` from a key binding or a mod's script in a session: does
+   the interface reload?
+2. 1800: change a value of an enabled mod, open and close the mod browser at the title screen: does the value show?
+3. 2205: the 117 link helper copied beside `Anno2205.exe`: does its log (`helper-library.log` under 117's Documents
+   folder) get the line that it stays inert? That proves the helper is loaded.
+4. 2205: `session.reloadSession()` and `game.reloadData()` on keys in `key.config`: what each reloads, and whether the
+   game stays stable afterwards.
+
+Note: researched on 2026-11-16.
+
+### 16.1 What the core and the Toolbox brought (2026-11-17; host-tested with the game stubbed)
+
+**The helper's core is per game.** Everything the core had fixed to Anno 117 now sits in one small header per game
+(`game117.h`, `game1800.h`, `game2205.h`, chosen by `game.h`): the game's folder under Documents (where the log, the
+settings file and the session file live), the pipe's name, the id the welcome gives (`anno117`, `anno1800`,
+`anno2205`, the Toolbox's game keys), the game's own log and the mod loader's files, and whether an engine side
+exists. Each game has its build header with the build check (`build117.h`, `build1800.h`, `build2205.h`): the
+executable's file size, link time stamp and image size. The build script has a target per game (`build.cmd`,
+`build.cmd 1800`, `build.cmd 2205`); its tests run once per game.
+
+**For 1800 and 2205 the helper has no engine side yet**: its target table is empty. It checks the build, and then it
+does what needs no game address: it opens the pipe and the session file, names the game in the welcome (no reload
+kind, no mod), answers `ping`, `subscribe` and `bye`, and answers every other request with `unavailable`. The
+subscription builds of both games are another size and stay inert. The 2205 build check reads the file's size and the
+header's plain values and touches nothing else of the executable; 2205's helper never patches its code.
+
+**The Toolbox's client knows the game.** It looks for the session file of each game in that game's own Documents
+folder (Anno 117, Anno 1800, Anno 2205; the first game that answers is linked) and checks that the pipe, the session
+file and the welcome all name the same game. The status bar and the debug palette say `linked to Anno 1800 (build
+...)` and so on, the game panel names that game's session file, and the asset editor takes the game from the link. The
+manual route has each game's own words when no link is up or the game takes no reload: 117's Shift+F3 and restarts, 1800's
+mod list at its title screen (the one-way open in the editor of section 10.4 stays as it was), 2205's restart or a key
+for its data reload (not tried), and "save and load" for a session in each.
+
+**What is open**: everything that needs an engine address (the plan's steps for 1800 and 2205 above), and the
+first try in a game: the proxy route in 2205 (probe 3 above) and, with the new 1800 and 2205 helpers, the line in
+the helper's log that the link came up without an engine side and the Toolbox's "linked to ..." for it.
+
+## 17. Live widget values: `ui.values` (host-tested with the game stubbed, nothing run in a game)
+
+The UI editor's **Take the live values from the running game** ([`ui-editor.md`](ui-editor.md), "Live values")
+fills the open scene's preview with what the game shows in it now. The request asks for those values only.
+
+**The request.** `ui.values` with `states` (required: the UI states whose scenes show the open file; the Toolbox names
+them as for the scene reload, section 10.1) and `file` (the GUID of the widget file the editor has open; left out
+when the open file is a scene file, whose own widgets are asked). The game looks at those states only, and only at
+a state whose scene is open now.
+
+**The answer.** `ok` with
+
+```json
+{"file": "<guid or null>",
+ "scenes": [{"state": "HUD", "cut": false,
+             "widgets": [{"guid": "...", "crc": "1a2b3c4d", "name": "Amount", "visible": true,
+                          "text": "1,234 t", "image": "data/ui/...", "values": {"7": 2.5}}]}],
+ "cut": false}
+```
+
+- The widgets are those the open file places itself: in the scene, the first instance of the widget file (`file`),
+  and in it every widget the file holds, but not the widgets of another widget file placed inside it (those belong
+  to that file). A widget file placed twice is answered for its first instance.
+- Per widget: `guid` (the instance's GUID in the file), `crc` (the CRC of its name, as the file stores it) and `name`,
+  which the editor matches its elements by; `visible`, the widget's own Visible as the game holds it; `text`, a
+  label's text when the game has filled it; `image`, the picture an image widget draws by id (its `DynamicImageId`:
+  a file path, an icon's or a portrait's id); `values`, the widget's own property values by UniqueId, numbers,
+  switches and texts only. An asset a binding assigned to a widget comes as such a number (its GUID), and so does a
+  portrait's GUID where the file keeps one in its own properties.
+- **Never answered**: a widget's class, its other built-in properties, its stored fields, flags, matrices and
+  rectangles, the hashes of fields, the scene's load state, a widget of another file or of another scene, a value of
+  another kind (a vector, a colour, a game object). A property that holds a game object is left out: the game object
+  behind it is not read. No picture is sent, only the reference the widget draws.
+- `skipped` when no named state is a UI state of the game, when none of them has its scene open, or when the file is
+  not placed in the open scenes. `refused` for a `file` that is no GUID. `unavailable` when the helper does not know
+  the widget classes of this game build (the welcome then does not list `values`), and with `live_link_values=0` in
+  the helper library's settings.
+
+**The guards.** As the other requests: refused in a multiplayer game, `busy` while a session loads, a save is
+written, the session changes or an asset reload runs, one request at a time. The values are read on the game's UI
+frame, under the scene's own lock, and nothing is written: every read is guarded, so a widget that cannot be read is
+left out with what it holds. The answer is at most 100 KB and 2,000 widgets; past either it ends with the widget
+that no longer fits and says `"cut": true`. Measured against the game's own 136 scenes (their widget trees as laid
+out in the game, 2026-11-17): the largest file any of them places has 146 widgets and comes to about 36 KB in this
+form, a widget holds at most 42 property values, and a scene at most 18,974 widgets (the walk looks at up to 40,000).
+
+**How the editor uses it.** Each widget's text replaces the label's sample text, `visible` and `image` replace the
+element's Visible and dynamic image, and `values` replace the instance's property values, all matched by the
+instance GUID, else by the name CRC. A widget that matches no element is left out.
+
+**What the Toolbox stores.** Every answer taken is recorded on the modder's own computer, one file per game and
+UI file, in `ui-values/<game>/` below the Toolbox's workspace (or its data folder in `%LOCALAPPDATA%` without one).
+A recording holds the answer's widgets with the keys above and nothing else, the game build the link reported, the
+time and the states asked. Taking the values again replaces it. It is never written into a project or a mod. No
+image is stored: icons and portraits are read from the modder's install when the preview draws them. The cases this
+leaves open are listed below.
+
+**To check in a game** (none of it was run):
+
+1. Open a scene in the UI editor that the game shows (the HUD in a session), take the live values: the preview
+   shows the game's texts; the helper's log has a line `values of <state>: n widget(s) looked at, m answered`.
+2. A widget file placed in that scene: only its widgets change; a file in no open scene: `skipped`.
+3. A label the game hides, and an image with an icon or a portrait: the preview hides it and draws that picture.
+4. The pictures the game makes at run time: the game's own scenes name most pictures by their file
+   (`data\ui\fhd\...`, `data\ui\2kimages\...`), but some by an id of a texture it made itself (`rtt_<n>`, `tex_<n>`:
+   a render target, a composed portrait), and no file of the install holds those. The editor's "List what the game
+   assigned" marks them; the preview draws its stand-in for them. A small local copy of such a picture would need its
+   pixels from the running game, which the link does not read: none is kept.
+5. The guards: busy while loading a session, refused in a game of several players.
+
+Note: built on 2026-11-17.
+
+## 18. Following the game's scenes: the `ui.scene` event (host-tested with the game stubbed, nothing run in a game)
+
+The UI editor's **game mirror** ([`ui-editor.md`](ui-editor.md), "The game mirror") shows the scenes the game has open
+now, stacked as the game shows them, each filled with its live values (section 17). To know which scenes those are it
+follows one event, `ui.scene`: the game says when a UI state with a scene opens or closes, and nothing else.
+
+**Switching it on.** The suite subscribes to the topic `ui.scene` (`subscribe` with `topics: ["ui.scene"]`) while the
+mirror is open and not paused, and unsubscribes when it pauses or closes. A game that sends the event lists `follow`
+in its welcome; with `live_link_follow=0` in the helper library's settings it does not, and a subscription to the
+topic is accepted but never answered with an event.
+
+**The event.** One per change, in the order the game made them:
+
+```json
+{"event": "ui.scene",
+ "data": {"change": "opened", "state": "ConstructionMenu", "scene": "constructionmenuscene",
+          "parent": "HUD", "depth": 5, "order": 12, "window": [2560, 1440]}}
+```
+
+- `change`: `opened` or `closed`.
+- `state`: the UI state's own name (as in `ui-states.txt`); `scene`: the name of its scene file, as the game names it
+  (the state's name in lower case with `scene` after it, as the game's scene files are named).
+- `parent` and `depth`: the state's parent state and how deep it sits in the state tree (an `opened` event only).
+- `order`: a number that grows with every opening the game side saw, so that a later opening has a higher one; a
+  `closed` event repeats the number of its opening. The scenes are stacked by it: a scene opened later is drawn over
+  one opened earlier (the game's draw order of scenes is taken to be the order of state activation, *inferred*, not
+  measured). Scenes the game already had open
+  when the subscription began come first, all at once, sorted by `depth`, then by the state's id.
+- `window`: the size of the game window's drawing area in pixels, when the game side can read it (the mirror lays
+  the scenes out at that size).
+
+**Never carried**: a widget, a value, a text, an object, a GUID of the scene's content, an address, the state's
+handlers or data. The values of a scene come only through `ui.values` (section 17), with its own guards.
+
+**Rates and guards.** The game side looks at its UI states on its UI frame, at most every 250 ms
+(`live_link_scene_ms`, at least 100), and only while a client is connected and subscribed. It reads only whether
+each state is open and has a scene, its name and its parent's, and it changes nothing. A new subscription (or a new
+client) starts from nothing, so its first events name every scene already open: a client that may have missed events
+(the game drops events when the client does not read) subscribes again to get the whole set. At most 64 events are
+sent per look; the rest follow on the next look.
+
+**The Toolbox's polling.** While the mirror follows, it asks `ui.values` for the shown scenes, one request at a time,
+at most four a second in all, and slower while the values do not change (down to one a second per scene), never
+while a request still waits. So the link's own limit (about ten requests a second) is never reached by the mirror.
+
+**The edit loop** (the mirror's "Push edits to the game"): an edit of a scene or widget file the game has open is
+kept in the project, written into the installed copy of the project's mod (its own folder in the mods folder, only
+when that folder holds the project's mod), and sent as `reload.scenes` (section 10.1). After `done` the mirror takes
+the values of that scene again. A reload resets what the player had open in that scene (its scroll, a typed text).
+Nothing else changes in the game: the push is the scene reload the link already has.
+
+**To check in a game** (none of it was run):
+
+1. With the mirror open in a session: the HUD's scenes appear, each laid out at the game window's size.
+2. Open a building's menu, the construction menu, the diplomacy screen: each appears over the others as it opens and
+   goes when it closes; the helper's log has no `could not be read` lines.
+3. A tooltip or a popup: whether it opens a state of its own (and so appears) or lives inside another scene.
+4. That the stacking by `order` is the game's: a popup opened after a menu is drawn over it in the game too.
+5. Pause the mirror: the helper's log shows the unsubscribe and no more looks; resume: every open scene again.
+6. Push an edit of the construction menu's scene: the game reloads it, the mirror shows the edit with live values.
+
+Note: designed and built on 2026-11-17.

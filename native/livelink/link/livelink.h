@@ -3,6 +3,10 @@
 #ifndef LIVELINK_H
 #define LIVELINK_H
 
+#include "livevalues_logic.h"
+#include <stddef.h>
+#include <stdint.h>
+
 /* the targets the link needs (the dormant start resolves them first), whether the switch live_link is on, the install
    (1 when the pipe is open), and the end: the session file is deleted */
 const int *hlib_live_link_targets(int *n);
@@ -20,5 +24,17 @@ int hlib_live_link_edit_selected(void);
    answer: a session loads, a save is written, the session changes, an asset reload holds; needs_assets adds a pending
    scenario action (a request that replaces the asset database would overwrite it). */
 const char *hlib_live_link_busy(int needs_assets);
+/* The live widget values (mod_livevalues.c, request ui.values; docs/live-link.md section 17): the targets the walk
+   needs, whether this build's widget classes are the ones it reads, and the answer's data for the named UI states
+   (names of 64 characters at most) and the open file (its GUID, NULL: the scene's own widgets). The scenes answered,
+   -1 when it is not in place; *unknown: names that are no UI state, *open: named states whose open scene was walked. */
+const int *hlib_live_link_values_targets(int *n);
+int hlib_live_link_values_ready(void);
+int hlib_live_link_values_now(void *ui, char (*states)[64], int n, const uint8_t *file, char *data, size_t cap,
+                              int *unknown, int *open);
+/* Following the open scenes (mod_livevalues.c, the ui.scene event; docs/live-link.md section 18): the UI states that
+   are open and have a scene, each with its name, its parent's and its depth; how many, -1 when they could not be
+   read this time (the client keeps what it was told) */
+int hlib_live_link_scenes_now(void *ui, LsOpen *out, int cap);
 
 #endif

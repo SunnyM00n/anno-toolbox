@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import weakref
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +34,9 @@ class A7mViewer(othermaterials.OtherMaterials, IslandEditor):
     library, a blank island (``clear``) without its objects and props. Its edits, ground included, are built back
     into the island (``formats.a7m.edit1800``)."""
 
-    _assets: dict[int, AssetModels] = {}  # per tree: its assets (assets.xml is 290 MB in 1800), read once
+    # the last tree's assets, read once (assets.xml is 290 MB in 1800): (the tree, its assets). The tree by a weak
+    # reference: an id() is given again once a tree is gone (another install folder, the other game's tree)
+    _game_assets: tuple = (None, None)
     ASSETS = ASSETS_1800
     FINE_MAX = 512  # tiles: a bigger map (a 2205 session, 1024) is read at one height sample per tile
     EDITABLE = a7mread.OBJECT_GROUPS  # the groups formats.a7m.edit1800 edits
@@ -61,19 +64,18 @@ class A7mViewer(othermaterials.OtherMaterials, IslandEditor):
 
     def game_assets(self) -> AssetModels:
         """The game's assets, read once per tree (``assetmodels``); raises ``KeyError`` or ``OSError`` without them."""
-        key = id(self.tree)
-        if key not in A7mViewer._assets:
-            A7mViewer._assets = {key: AssetModels.read(self.tree.read_bytes, self.ASSETS)}
-        return A7mViewer._assets[key]
+        tree, found = A7mViewer._game_assets
+        if tree is None or tree() is not self.tree:
+            found = AssetModels.read(self.tree.read_bytes, self.ASSETS)
+            A7mViewer._game_assets = (weakref.ref(self.tree), found)
+        return found
 
     def _models(self, placed: list[dict]) -> list[str]:
         """Per placed object its model config, or "" (a marker)."""
         try:
             assets = self.game_assets()
         except (OSError, KeyError) as exc:  # no asset file where the game keeps it: markers only
-            self.notes.append(
-                tr("no {game} assets.xml, the objects are markers: {error}", game=self.game.name, error=exc)
-            )
+            self.notes.append(tr("islands.no_assets_xml_objects_markers", game=self.game.name, error=exc))
             return [o["cfg"] for o in placed]
         return [o["cfg"] or assets.first_model(o["guid"]) for o in placed]
 
@@ -172,7 +174,7 @@ class A7mViewer(othermaterials.OtherMaterials, IslandEditor):
         except (OSError, KeyError) as exc:  # no asset file: the island's own models only
             self.notes.append(
                 tr(
-                    "no {game} assets.xml, the library lists this island's models: {error}",
+                    "islands.no_assets_xml_library_lists",
                     game=self.game.name,
                     error=exc,
                 )
@@ -210,7 +212,9 @@ class A6mViewer(A7mViewer):
         out, paths, seen = super().objects(), self.view.folder_paths(), {}
         for item, o in zip(out, self.view.objects(), strict=True):
             item["key"] = unique_key(item["key"], seen)
-            item["folder_path"] = tr("folder {path}", path=" / ".join(map(str, paths.get(o["folder"], [o["folder"]]))))
+            item["folder_path"] = tr(
+                "islands.folder_path", path=" / ".join(map(str, paths.get(o["folder"], [o["folder"]])))
+            )
         return out
 
     def props(self) -> list[dict]:

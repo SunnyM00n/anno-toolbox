@@ -31,23 +31,28 @@ from ...islands import regions
 from ...othergames import installs
 from ...suite import features, theme
 from ...suite.settings import THEMES, Settings
+from ...suite.widgets import access_keys, access_letters
 from .. import archivedelivery, editorapp
 from ..editlists import group_rows
-from ..islandgroups import OTHER
+from ..islandgroups import OTHER, OTHER_TITLE
 
-OPTIONAL_INSTALL = N_("{game} install (optional)")
-REQUIRED_INSTALL = N_("{game} install")  # the optional one, for an application that needs the game
+OPTIONAL_INSTALL = N_("islands.game_install_optional")
+REQUIRED_INSTALL = N_("islands.game_install")  # the optional one, for an application that needs the game
 FOLDERS = (  # (settings key, label text; the {game} place takes the name of ``installs.GAMES[key]``)
-    ("anno117", N_("Anno 117 install")),
-    ("anno2070", N_("Anno 2070 install")),
+    ("anno117", N_("islands.anno_117_install")),
+    ("anno2070", N_("islands.anno_2070_install")),
     *((key, OPTIONAL_INSTALL) for key in installs.GAMES if key not in ("anno117", "anno2070")),
-    ("mods", N_("Anno 117 mods folder")),
-    ("mods1800", N_("Anno 1800 mods folder (Build and install copies there)")),
-    ("patch2205", N_("Anno 2205 folder to patch (Build and install changes its maindata/file.db)")),
-    ("workspace", N_("Workspace")),
+    ("mods", N_("islands.anno_117_mods_folder")),
+    ("mods1800", N_("islands.anno_1800_mods_folder_build")),
+    ("patch2205", N_("islands.anno_2205_folder_patch_build")),
+    ("workspace", N_("islands.workspace")),
 )
 GROUP_ROLE = Qt.ItemDataRole.UserRole + 1  # on the header rows of a grouped list
-THEME_LABELS = {"system": N_("System (follows Windows)"), "light": N_("Light"), "dark": N_("Dark")}
+THEME_LABELS = {
+    "system": N_("islands.system_follows_windows"),
+    "light": N_("islands.light"),
+    "dark": N_("islands.dark"),
+}
 GAME_NAMES = {k: g.name for k, g in installs.GAMES.items()}
 
 
@@ -85,12 +90,12 @@ class SettingsDialog(QDialog):
 
     def __init__(self, settings: Settings, parent=None, games: tuple[str, ...] | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Games and folders"))
+        self.setWindowTitle(tr("islands.title.games_folders"))
         self.edits: dict[str, QLineEdit] = {}
         form = QFormLayout()
         for key, label in folders_for(games):
             edit = QLineEdit(getattr(settings, key))
-            pick = QPushButton(tr("Browse…"))
+            pick = QPushButton(tr("islands.browse"))
             pick.clicked.connect(lambda _=False, e=edit: self._pick(e))
             row = QHBoxLayout()
             row.addWidget(edit, 1)
@@ -101,16 +106,16 @@ class SettingsDialog(QDialog):
         for key in THEMES:
             self.theme.addItem(tr(THEME_LABELS[key]), key)
         self.theme.setCurrentIndex(max(0, self.theme.findData(settings.theme)))
-        form.addRow(tr("Theme"), self.theme)
+        form.addRow(tr("islands.theme"), self.theme)
         self.language = QComboBox()
         for code, name in languages().items():
             self.language.addItem(name, code)  # i18n: ok (each language's own name)
         self.language.setCurrentIndex(max(0, self.language.findData(settings.language)))
-        self.language.setToolTip(tr("The language of the apps' windows; a change applies when an app is next started"))
-        form.addRow(tr("Language"), self.language)
+        self.language.setToolTip(tr("islands.tip.language_apps_windows_change_applies"))
+        form.addRow(tr("common.language"), self.language)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Save).setText(tr("Save"))
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("Cancel"))
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText(tr("common.save"))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("common.cancel"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
@@ -119,7 +124,7 @@ class SettingsDialog(QDialog):
         self.resize(760, 0)
 
     def _pick(self, edit: QLineEdit) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("Choose a folder"), edit.text())
+        folder = QFileDialog.getExistingDirectory(self, tr("islands.choose_folder"), edit.text())
         if folder:
             edit.setText(folder)
 
@@ -135,18 +140,21 @@ class IslandList(QWidget):
     """A list of islands with a search; ``actions`` (label, callback(value)[, enabled]) act on the selected
     one. ``rows``: names, or (shown text, value, tooltip) triples. ``group_of(value)``: the group a row belongs
     to; the rows then sit under group headers that a click folds (the search unfolds the groups it finds in).
-    ``disabled``: the values of rows that are listed but cannot be picked (greyed, the tooltip says why)."""
+    ``disabled``: the values of rows that are listed but cannot be picked (greyed, the tooltip says why).
+    ``avoid``: the access keys the window around it has given away (its menu bar's): no button takes one."""
 
     LIMIT = 2000  # rows shown at once: the search narrows the rest
 
-    def __init__(self, rows: list, actions: list, note: str = "", group_of=None, order=(), disabled=()) -> None:
+    def __init__(
+        self, rows: list, actions: list, note: str = "", group_of=None, order=(), disabled=(), avoid: str = ""
+    ) -> None:
         super().__init__()
         self.rows = [(r.rsplit("/", 1)[-1], r, r) if isinstance(r, str) else r for r in rows]
         self.names = [r[1] for r in self.rows]
         self.group_of, self.order, self.disabled = group_of, order, frozenset(disabled)
         self.problems: dict = {}  # value -> why it did not open (``mark``): listed all the same
         self.collapsed: set[str] = set()
-        self.search = QLineEdit(placeholderText=tr("search"))
+        self.search = QLineEdit(placeholderText=tr("common.search"))
         self.list = QListWidget()
         layout = QVBoxLayout(self)
         if note:
@@ -157,8 +165,9 @@ class IslandList(QWidget):
         layout.addWidget(self.list, 1)
         row = QHBoxLayout()
         self.buttons = []
-        for action in actions:
-            label, act = action[:2]
+        keyed = access_keys((a[0] for a in actions), avoid)  # each button: Alt and a letter of its own
+        for action, label in zip(actions, keyed, strict=True):
+            act = action[1]
             b = QPushButton(label)
             b.setEnabled(action[2] if len(action) > 2 else True)
             b.clicked.connect(lambda _=False, act=act: self._act(act))
@@ -200,7 +209,7 @@ class IslandList(QWidget):
     def _add_row(self, text: str, value, tip: str) -> None:
         if value in self.problems:
             reason = self.problems[value]
-            text, tip = tr("{text}  ·  cannot be opened: {reason}", text=text, reason=reason), reason
+            text, tip = tr("islands.text_cannot_opened_reason", text=text, reason=reason), reason
         item = QListWidgetItem(text)
         item.setData(Qt.ItemDataRole.UserRole, value)
         item.setToolTip(tip)
@@ -209,7 +218,7 @@ class IslandList(QWidget):
         self.list.addItem(item)
 
     def _add_header(self, group: str, count: int, closed: bool) -> None:
-        shown = tr(group) if group == OTHER else group  # the one group name that is ours, not a game's
+        shown = tr(OTHER_TITLE) if group == OTHER else group  # the one group name that is ours, not a game's
         item = QListWidgetItem(f"{'▸' if closed else '▾'}  {shown}  ({count})")
         item.setData(GROUP_ROLE, group)
         colors = theme.colors()  # not the palette: the style sheet paints the list's own
@@ -236,11 +245,19 @@ class IslandList(QWidget):
             act(value)
 
 
+def taken_keys(main) -> str:
+    """The access keys the window's menu bar and ribbon tabs carry: a button beside them takes none of these."""
+    ribbon = getattr(main, "ribbon", None)
+    tabs = [ribbon.bar.tabText(k) for k in range(ribbon.bar.count())] if ribbon is not None else []
+    return access_letters([*(a.text() for a in main.menuBar().actions()), *tabs])
+
+
 class GameTab(QWidget):
     """One game: its Native, Edited and From-other-games islands."""
 
     def __init__(self, main, key: str, entry: dict) -> None:
         super().__init__()
+        self.key = key
         layout = QVBoxLayout(self)
         if entry.get("note"):
             note = QLabel(entry["note"])
@@ -248,69 +265,69 @@ class GameTab(QWidget):
             layout.addWidget(note)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
-        build_note = (
-            "" if entry["buildable"] else tr("Builds: not available for this game yet (the edit file is kept).")
-        )
+        taken = taken_keys(main)
+        build_note = "" if entry["buildable"] else tr("islands.builds_not_available_game_yet")
         native_kind = {"anno117": "anno117", "anno2070": "anno2070"}.get(key, key)
         groups, order = entry.get("groups", {}), entry.get("group_order", ())
         native_group = (lambda v: groups.get(v) or groups.get(file_stem(v)) or OTHER) if groups else None
-        native_actions = [(tr("Edit"), lambda n: main.open(native_kind, n, wait=False))]
+        native_actions = [(tr("common.edit"), lambda n: main.open(native_kind, n, wait=False))]
         if key in editorapp.BLANKABLE:  # a blank island: this one with its objects taken off (``App.open_blank``)
-            native_actions.append((tr("New blank island"), lambda n: main.open_blank(key, n)))
-            native_actions.append((tr("New island (shaped)"), lambda n: main.open_blank(key, n, shaped=True)))
+            native_actions.append((tr("islands.new_blank_island"), lambda n: main.open_blank(key, n)))
+            native_actions.append((tr("islands.new_island_shaped"), lambda n: main.open_blank(key, n, shaped=True)))
         if offers_ports(key, entry["native"]):  # another region, the other game, an extension's (islandconvert)
-            native_actions.append((tr("Port to region / game…"), lambda n: main.convert_region(key, n)))
+            native_actions.append((tr("islands.port_to_region_game"), lambda n: main.convert_region(key, n)))
         if key == "anno117":  # a new island from scratch at a grid size asked for (blankisland)
-            native_actions.append((tr("New island…"), lambda _n: main.open_blank117()))
+            native_actions.append((tr("islands.new_island_dots"), lambda _n: main.open_blank117()))
         if key == "anno2070":  # the same in 2070's own island form (formats.isd.blank)
-            native_actions.append((tr("New island…"), lambda _n: main.open_blank2070()))
+            native_actions.append((tr("islands.new_island_dots"), lambda _n: main.open_blank2070()))
         self.native = IslandList(
             entry["native"], native_actions,
-            tr("Opening one starts an edit of it; the game's own file is never changed: the edits go into an edit file."),
-            native_group, order,
+            tr("islands.opening_one_starts_edit_games"),
+            native_group, order, avoid=taken,
         )  # fmt: skip
         edited_rows = [
             (
                 e["name"],
                 e.get("open", e["source"]),
-                e["source"] + (" · " + tr("saved as {target}", target=e["target"]) if e.get("target") else ""),
+                e["source"] + (" · " + tr("islands.saved_as_target", target=e["target"]) if e.get("target") else ""),
             )
             for e in entry["edited"]
         ]
-        edit_actions = [(tr("Edit"), lambda src: main.open(native_kind, src, wait=False))]
+        edit_actions = [(tr("common.edit"), lambda src: main.open(native_kind, src, wait=False))]
         if key in editorapp.BUILDABLE:
-            install = tr("Build && install into 2070") if key == "anno2070" else tr("Build && install")
+            install = tr("islands.build_install_2070") if key == "anno2070" else tr("common.build_install")
             edit_actions += [
                 (install, lambda _s: main.build_kind(key, True)),
-                (tr("Build"), lambda _s: main.build_kind(key, False)),
+                (tr("common.build"), lambda _s: main.build_kind(key, False)),
             ]
         else:
-            edit_actions += [(tr("Build (not available yet)"), lambda _s: None, False)]
-        self.edited = IslandList(edited_rows, edit_actions, build_note, native_group, order)
+            edit_actions += [(tr("islands.build_not_available_yet"), lambda _s: None, False)]
+        self.edited = IslandList(edited_rows, edit_actions, build_note, native_group, order, avoid=taken)
         conv_rows = [
             (c["name"] + "  ·  "
-             + tr("from {game} {source}", game=GAME_NAMES.get(c["source_game"], c["source_game"]), source=c["source"])
-             + ("  ·  " + tr("hand edits") if c.get("edited") else ""),
+             + tr("islands.from_game_source", game=GAME_NAMES.get(c["source_game"], c["source_game"]), source=c["source"])
+             + ("  ·  " + tr("islands.hand_edits") if c.get("edited") else ""),
              c["name"],
-             tr("built {time}", time=datetime.fromtimestamp(c["built"]).strftime("%Y-%m-%d %H:%M")) if c.get("built") else c["name"])
+             tr("islands.built_time", time=datetime.fromtimestamp(c["built"]).strftime("%Y-%m-%d %H:%M")) if c.get("built") else c["name"])
             for c in entry["converted"]
         ]  # fmt: skip
         converted_groups = {c["name"]: c["group"] for c in entry["converted"] if c.get("group")}
         rebuild = [
-            (tr("Rebuild && install"), lambda n: main.rebuild(n, True)),
-            (tr("Rebuild"), lambda n: main.rebuild(n, False)),
+            (tr("islands.rebuild_install"), lambda n: main.rebuild(n, True)),
+            (tr("islands.rebuild"), lambda n: main.rebuild(n, False)),
         ]
         self.converted = IslandList(
             conv_rows,
-            [(tr("Edit"), lambda n: main.open("built", n, wait=False)), *(rebuild if features.extensions(features.BUILDERS) else [])],
-            tr("Islands built for this game from another one (your workspace's builds)."),
+            [(tr("common.edit"), lambda n: main.open("built", n, wait=False)), *(rebuild if features.extensions(features.BUILDERS) else [])],
+            tr("islands.islands_built_game_another_one"),
             (lambda v: converted_groups.get(v)) if converted_groups else None,
             sorted({*converted_groups.values()} - {OTHER}),
+            avoid=taken,
         )  # fmt: skip
-        self.tabs.addTab(self.native, tr("Native ({n})", n=len(entry["native"])))
-        self.tabs.addTab(self.edited, tr("Edited ({n})", n=len(entry["edited"])))
+        self.tabs.addTab(self.native, tr("islands.native_n", n=len(entry["native"])))
+        self.tabs.addTab(self.edited, tr("islands.edited_n", n=len(entry["edited"])))
         if entry["converted"] or features.extensions(features.BUILDERS):  # an edition without a build has none to list
-            self.tabs.addTab(self.converted, tr("From other games ({n})", n=len(entry["converted"])))
+            self.tabs.addTab(self.converted, tr("islands.other_games_n", n=len(entry["converted"])))
         self.lists = (self.native, self.edited, self.converted)
         if main.installed.get(key):
             b = QPushButton(tr(archivedelivery.ISLAND_DELIVERIES[key].restore_label))

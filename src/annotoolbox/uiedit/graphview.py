@@ -61,7 +61,7 @@ class BindingGraph(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self._ops: dict[int, bindings.Binding] = {}
-        self.empty_text = tr("No bindings.")
+        self.empty_text = tr("ui.no_bindings")
 
     def show_graph(self, shown: list[bindings.Binding], describe: Callable[[bindings.End], str]) -> None:
         """Draw the bindings as source, operator and target boxes in three columns, joined by lines."""
@@ -122,12 +122,12 @@ class BindingGraph(QGraphicsView):
         if b is None:
             return
         menu = QMenu(self)
-        ops = menu.addMenu(tr("Change the operator"))
+        ops = menu.addMenu(tr("ui.menu.change_operator"))
         for family, members in operators.families().items():
-            sub = ops.addMenu(tr(family))
+            sub = ops.addMenu(tr(operators.FAMILY_LABELS[family]))
             for op in members:
                 act = sub.addAction(op.name, lambda h=op.hash, b=b: self.change.emit(b.node, h))
                 act.setToolTip(tr(op.doc))
                 act.setEnabled(op.inputs[0] <= len(b.sources) <= op.inputs[1])
-        menu.addAction(tr("Remove the binding"), lambda: self.remove.emit(b.node))
+        menu.addAction(tr("ui.remove_binding"), lambda: self.remove.emit(b.node))
         menu.exec(event.globalPos())

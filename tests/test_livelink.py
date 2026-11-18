@@ -12,7 +12,8 @@ import pytest
 from tests.fakes import FakeLink
 from tests.test_uiedit import WIDGET, ui_tree  # noqa: F401 - the fixture and the file it holds
 
-from annotoolbox.suite import linkannounce, linkroute, links, livelink, project
+from annotoolbox.infra.i18n import tr
+from annotoolbox.suite import linkannounce, linkclient, linkroute, links, livelink, project
 
 
 @pytest.fixture
@@ -88,7 +89,7 @@ def test_the_registry_gives_every_app_one_link_and_tells_the_window_when_it_chan
     remove = livelink.on("status", seen.append)
     assert livelink.current() is link
     livelink.use(FakeLink(game="anno1800", build="9"))
-    assert seen[-1].text == "game link: anno1800 9"
+    assert seen[-1].text == "linked to Anno 1800 (build 9)"
     livelink.reset()
     assert seen[-1].connected is False
     remove()
@@ -153,7 +154,7 @@ def test_an_app_announces_a_change_and_gets_a_sentence_for_its_status_line(link)
 def test_without_a_game_the_notice_is_the_manual_route():
     livelink.reset()
     notice = linkannounce.announce((livelink.ASSETS, livelink.TEXTS), mod="m")
-    assert not notice.sent and notice.text == livelink.MANUAL[livelink.ASSETS]
+    assert not notice.sent and notice.text == tr(livelink.MANUAL[livelink.ASSETS])
     notice = linkannounce.announce_files("m", ["a.rdm", "b.fx"])
     assert "Ctrl+Shift+R" in notice.text and not notice.sent
     assert linkannounce.announce_files("m", ["readme.txt"]).text == "no file the game reloads changed"
@@ -253,9 +254,11 @@ def test_the_suite_window_shows_the_link_and_routes_an_edit_request_to_the_asset
     s.save(path)
     livelink.reset()
     window = shell.SuiteWindow(list(apps.BUILTIN), s, path)
-    assert window.link_label.text() == "game link: not connected"
+    assert window.link_label.text() == (
+        "game link: not connected" if linkclient.supported() else "Live link: Windows only"
+    )
     fake = livelink.use(FakeLink(game="anno117", build="3.0"))
-    assert window.link_label.text() == "game link: anno117 3.0"
+    assert window.link_label.text() == "linked to Anno 117 (build 3.0)"
     release = threading.Event()
     real_open = assetwindow.assetgame.open_game
 
@@ -369,7 +372,7 @@ def test_a_reload_asked_from_a_window_does_not_block_it_and_is_said_when_answere
     notice = linkannounce.announce_in_background(
         background, said.append, lambda: linkannounce.announce((livelink.ASSETS,), mod="m")
     )
-    assert notice is None and said == ["game link: reloading ..."] and link.names == []
+    assert notice is None and said == ["game link: reloading …"] and link.names == []
     work, callback = background.jobs[0]
     callback(work())
     assert said[-1] == "game reloaded: assets" and link.names == ["reload.assets"]
@@ -393,8 +396,9 @@ def test_the_game_link_panel_says_what_the_status_bar_cannot(link, tmp_path, mon
     qt = QApplication.instance() or QApplication([])
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(linkpanel.gametree, "user_dir", lambda _key: tmp_path)  # never the real Documents' session file
     text = dict(linkpanel.rows(link))
-    assert text["Connection"].startswith("game link:") and "not there" in text["The game's session file"]
+    assert text["Connection"].startswith("linked to ") and "not there" in text["The game's session file"]
     assert text["The game takes"] != "none"
     dialog = linkpanel.LinkDialog()
     link.player(livelink.LOG, {"lines": ["Patching completed in 2s"]})
@@ -408,37 +412,6 @@ def test_the_game_link_panel_says_what_the_status_bar_cannot(link, tmp_path, mon
     assert "Patching completed" in dialog.log.toPlainText()
     dialog.close()
     qt.processEvents()
-
-
-def test_the_ui_editor_holds_the_dump_the_game_wrote_on_request(link, tmp_path, monkeypatch):
-    pytest.importorskip("PySide6")
-    import json
-
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.sources import gametree
-    from annotoolbox.suite.settings import Settings
-    from annotoolbox.uiedit import dumpview, uiwindow
-    from annotoolbox.uiedit.uiwindow import UiWindow
-
-    qt = QApplication.instance() or QApplication([])
-    folder = tmp_path / "log" / "ui-dump"
-    folder.mkdir(parents=True)
-    (folder / "20261112-1-maintitlescene.json").write_text(
-        json.dumps({"probe": "ui_dump", "scene": "maintitlescene", "state": "MainTitle", "widgets": []}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(gametree, "user_dir", lambda _game: tmp_path)
-    window = UiWindow(Settings(workspace=str(tmp_path / "ws"), project=str(tmp_path / "proj")))
-    dumpview.live_dumped(window, livelink.Reply(livelink.OK, "", {"files": ["20261112-1-maintitlescene.json"]}))
-    window.background.join()  # the dump is read off the window's thread
-    qt.processEvents()
-    assert window.dump_panel.dump is not None and window.dump_panel.dump.state == "MainTitle"
-    dumpview.live_dumped(window, livelink.Reply(livelink.SKIPPED, "no open scene"))
-    assert "no open scene" in window.statusBar().currentMessage()
-    window.close()
-    qt.processEvents()
-    assert uiwindow  # the module the monkeypatch reaches through gametree
 
 
 def test_an_edit_request_for_a_game_without_a_folder_asks_for_it_and_scans_nothing(

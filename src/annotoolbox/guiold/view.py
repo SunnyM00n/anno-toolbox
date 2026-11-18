@@ -11,7 +11,6 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
-    QFontDatabase,
     QFontMetricsF,
     QImage,
     QPainter,
@@ -34,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from ..models import ddsdecode
+from ..suite import gamefonts
 from ..suite.background import Background
 from . import files as oldfiles
 from . import richtext, scene
@@ -433,17 +433,17 @@ class OldGuiPage(QWidget):
         self._wanted: tuple | None = None  # (file, state, screen) asked for last: an older one is not shown
         self.state = QComboBox()
         self.state.addItems(scene.STATES)
-        self.state.setToolTip(tr("The state the widgets are drawn in, where their background has it"))
+        self.state.setToolTip(tr("ui.tip.state_widgets_drawn_where_background"))
         self.screen = QComboBox()
         self.screen.addItems(list(scene.SCREENS))
-        self.screen.setToolTip(tr("The screen's aspect: the dialog placed in its visible space (1024 high)"))
-        self.find = QLineEdit(placeholderText=tr("find a dialog, template or background"))
+        self.screen.setToolTip(tr("ui.tip.screens_aspect_dialog_placed_visible"))
+        self.find = QLineEdit(placeholderText=tr("ui.find_dialog_template_background"))
         self.list = QTreeWidget()
-        self.list.setHeaderLabels([tr("File"), tr("Kind")])
+        self.list.setHeaderLabels([tr("common.file"), tr("ui.kind")])
         self.stage = Stage(self.atlases)
         self.stage.files = self.files
         self.inspector = QTreeWidget()
-        self.inspector.setHeaderLabels([tr("Property"), tr("Value")])
+        self.inspector.setHeaderLabels([tr("ui.property"), tr("common.value")])
         left = QWidget()
         lay = QVBoxLayout(left)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -468,7 +468,7 @@ class OldGuiPage(QWidget):
     def fill(self) -> None:
         self.list.clear()
         words = self.find.text().lower().split()
-        groups = {"dialog": tr("Dialogs"), "template": tr("Templates"), "background": tr("Backgrounds")}
+        groups = {"dialog": tr("ui.dialogs"), "template": tr("assets.templates"), "background": tr("ui.backgrounds")}
         tops = {k: QTreeWidgetItem(self.list, [v, ""]) for k, v in groups.items()}
         for path, entry in sorted(self.files.entries.items()):
             if "__custom" in path or (words and not all(w in path for w in words)):
@@ -523,7 +523,7 @@ class OldGuiPage(QWidget):
         self.stage.show(None)
         if isinstance(result, Exception):
             self.root = None
-            self._fill_inspector([(tr("Error"), f"{type(result).__name__}: {result}")])
+            self._fill_inspector([(tr("ui.error"), f"{type(result).__name__}: {result}")])
         elif entry.kind == "dialog":
             self.root = result
             self.stage.show(result)
@@ -542,15 +542,18 @@ class OldGuiPage(QWidget):
     def _load_faces(self, root: scene.Node) -> bool:
         """The font files the dialog's fonts name (read by ``_read``), loaded into the page once (Qt's font database:
         the window's thread). Whether a face was new."""
-        new = False
-        for font in {n.font for n in root.walk() if n.font is not None and n.font.file}:
-            if font.file in self.stage.faces:
-                continue
-            data = self._font_data.pop(font.file, None)
-            ident = QFontDatabase.addApplicationFontFromData(data) if data else -1
-            families = QFontDatabase.applicationFontFamilies(ident) if ident >= 0 else []
-            self.stage.faces[font.file] = families[0] if families else ""
-            new = new or bool(families)
+        new, notes = False, {}
+        for font in {n.font for n in root.walk() if n.font is not None}:
+            if not font.file:  # a Windows family the game names and ships no file for (1404, 1701, 2070's console)
+                notes.setdefault(font.name, tr("common.font_system_family", name=font.family or font.name))
+            elif font.file not in self.stage.faces:
+                data = self._font_data.pop(font.file, None)
+                family = gamefonts.load(data) if data else None
+                self.stage.faces[font.file] = family or ""
+                new = new or bool(family)
+            if font.file and not self.stage.faces.get(font.file):
+                notes.setdefault(font.name, tr("common.font_not_in_install", font=font.file))
+        self.stage.setToolTip("\n".join(notes.values()))  # why a font is a system one
         return new
 
     def inspect(self, node: scene.Node | None) -> None:
@@ -563,24 +566,24 @@ class OldGuiPage(QWidget):
         w = node.widget
         x, y, width, height = node.rect
         head = [
-            (tr("Kind"), w.kind),
-            (tr("Name"), w.path_id),
-            (tr("Unique id"), w.uid if w.uid is not None else ""),
-            (tr("Templates"), ", ".join(w.templates)),
-            (tr("Rectangle"), f"{x:g}, {y:g}, {width:g} x {height:g}"),
-            (tr("Text"), node.text),
-            (tr("Background"), node.background),
-            (tr("Visible"), tr("yes") if node.visible else tr("no")),
+            (tr("ui.kind"), w.kind),
+            (tr("common.name"), w.path_id),
+            (tr("ui.unique_id"), w.uid if w.uid is not None else ""),
+            (tr("assets.templates"), ", ".join(w.templates)),
+            (tr("ui.rectangle"), f"{x:g}, {y:g}, {width:g} x {height:g}"),
+            (tr("assets.text"), node.text),
+            (tr("ui.background"), node.background),
+            (tr("ui.visible"), tr("mods.yes") if node.visible else tr("mods.no")),
         ]
-        events = [(tr("Event {type}", type=e.type), e.slot) for e in w.events]
+        events = [(tr("ui.event_type", type=e.type), e.slot) for e in w.events]
         return [*head, *events, *node.props.items()]
 
     def _template_rows(self, path: str) -> list[tuple[str, object]]:
         w = self.files.dialog(path)
         return [
-            (tr("Kind"), w.kind),
-            (tr("Name"), w.path_id),
-            (tr("Templates"), ", ".join(w.templates)),
+            (tr("ui.kind"), w.kind),
+            (tr("common.name"), w.path_id),
+            (tr("assets.templates"), ", ".join(w.templates)),
             *w.props.items(),
         ]
 

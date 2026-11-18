@@ -42,12 +42,12 @@ def check(props: dict, ranges: dict | None = None) -> list[str]:
     out = []
     for key, value in props.items():
         if key not in NODES:
-            out.append(tr("{key} is not a property of the island (one of {names})", key=key, names=", ".join(NODES)))
+            out.append(tr("islands.not_property_island_one", key=key, names=", ".join(NODES)))
         elif int(value) != value or not ranges[key][0] <= value <= ranges[key][1]:
             low, high = ranges[key]
             out.append(
                 tr(
-                    "{name} {value}: the game's islands use whole numbers from {low} to {high}",
+                    "islands.games_islands_use_whole_numbers",
                     name=NODES[key],
                     value=value,
                     low=low,

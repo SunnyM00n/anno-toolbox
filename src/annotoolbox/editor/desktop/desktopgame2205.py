@@ -114,9 +114,7 @@ class GameIsland2205(GameIsland1800):
             loader.forget(job)
             del self.reading[key]
             if isinstance(got, Exception):
-                self.r._message(
-                    tr("a normal page of the session: {reason}", reason=f"{type(got).__name__}: {got}"[:300])
-                )
+                self.r._message(tr("islands.normal_page_session", reason=f"{type(got).__name__}: {got}"[:300]))
             terrain.add_page(key, got if isinstance(got, tuple) else None)
 
     def busy(self) -> int:

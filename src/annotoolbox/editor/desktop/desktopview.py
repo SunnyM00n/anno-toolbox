@@ -83,9 +83,9 @@ class IslandControls(GizmoControls, OverlayDraw):
         self._drag = None
         self._hot = None
         self.fov, self.speed = 45.0, 1.0  # the status bar's FOV (degrees) and Speed, kept from island to island
-        self.fps_label = QLabel(tr("FPS: {n}", n=0), self, objectName="hud")
+        self.fps_label = QLabel(tr("islands.fps_n", n=0), self, objectName="hud")
         self.coord_label = QLabel("", self, objectName="hud")
-        self.hint_label = QLabel(tr("Open an island: pick one in the Islands panel."), self, objectName="hud")
+        self.hint_label = QLabel(tr("islands.open_island_pick_one_islands"), self, objectName="hud")
         for label in (self.fps_label, self.coord_label, self.hint_label):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.coord_label.hide()
@@ -129,8 +129,10 @@ class IslandControls(GizmoControls, OverlayDraw):
         """Back to the empty view (the sky), the island's resources freed."""
         self._release_renderer()
         self.session = self.editor = self.selected = self.water_sel = self.pick = self.cursor_hit = None
-        self.checks, self._drag, self._hover = {}, None, None
+        self.checks, self._drag, self._hover, self._hot, self._press = {}, None, None, None, None
         self.group.detach()
+        self.placer.reset()
+        self.placer.panel = None  # the closed island's list (and through it the island) is let go
         self.coord_label.hide()
         self.hint_label.show()
         self._place_hud()
@@ -192,14 +194,16 @@ class IslandControls(GizmoControls, OverlayDraw):
 
     def _hud(self) -> None:
         if failed := getattr(self, "failed", ""):  # a frame that raised draws nothing: say why, not a blank view
-            self.fps_label.setText(tr("The view cannot draw: {error}", error=failed))  # also after a single frame
+            self.fps_label.setText(tr("islands.view_cannot_draw", error=failed))  # also after a single frame
             self.fps_label.adjustSize()
             return
         if self._painted and self._frame_times:
             fps = f"{len(self._frame_times) / max(1e-6, sum(self._frame_times)):.0f}"
             memory = gpuinfo.video_memory()  # the card's own and the system memory it maps for this process
             used = (memory.local + memory.shared) / 2**30 if memory is not None else 0.0
-            text = tr("FPS: {n}, {gb} GB graphics memory", n=fps, gb=number(used, 1)) if used else tr("FPS: {n}", n=fps)
+            text = (
+                tr("islands.fps_gb_graphics_memory", n=fps, gb=number(used, 1)) if used else tr("islands.fps_n", n=fps)
+            )
             self.fps_label.setText(text)
             self.fps_label.adjustSize()
             self._painted = False
@@ -215,7 +219,7 @@ class IslandControls(GizmoControls, OverlayDraw):
                 self.coord_label.hide()
             else:
                 x, y, z = self.from_view(hit)
-                self.coord_label.setText(tr("({x}, {z})\nheight {y}", x=f"{x:.0f}", z=f"{z:.0f}", y=number(y, 2)))
+                self.coord_label.setText(tr("islands.x_z_height_y", x=f"{x:.0f}", z=f"{z:.0f}", y=number(y, 2)))
                 self.coord_label.adjustSize()
                 self.coord_label.show()
                 self._place_hud()
@@ -270,7 +274,7 @@ class IslandControls(GizmoControls, OverlayDraw):
         self.gizmo.axes_only = None
         self.toolChanged.emit(name)
         if name in ("place", "spray") and not self.pick:
-            self.status.emit(tr("pick a model in the library"))
+            self.status.emit(tr("islands.pick_model_library"))
         self.update()
 
     def set_pick(self, pick: dict | None) -> None:
@@ -500,7 +504,7 @@ class IslandControls(GizmoControls, OverlayDraw):
         if self.gizmo.mode == "rotate":
             self.gizmo.tilt = not self.gizmo.tilt
         self.gizmo.mode = "rotate"
-        self.status.emit(tr("rotate: tilt (about the model's own axes)") if self.gizmo.tilt else tr("rotate: turn"))
+        self.status.emit(tr("islands.rotate_tilt_about_models_own") if self.gizmo.tilt else tr("islands.rotate_turn"))
 
     def river_selected(self) -> bool:
         return self.tool == "water" and bool(self.water_sel) and "river" in self.water_sel
@@ -568,20 +572,28 @@ class IslandControls(GizmoControls, OverlayDraw):
     def hide_menu(self, at, e: Entry | None) -> None:
         menu, hid = QMenu(self), self.hidden
         if e is not None:
-            menu.addAction(tr("Hide this object"), lambda: (hid.entries.add(e), self.apply_hidden()))
+            menu.addAction(tr("islands.hide_object"), lambda: (hid.entries.add(e), self.apply_hidden()))
             g, t = group_key(e.base), type_of(e.base)
             label = label_of(e.base)
             if g in hid.groups:
-                menu.addAction(tr("Show all {name}", name=label), lambda: (hid.groups.discard(g), self.apply_hidden()))
+                menu.addAction(
+                    tr("islands.show_all_name", name=label), lambda: (hid.groups.discard(g), self.apply_hidden())
+                )
             else:
-                menu.addAction(tr("Hide all {name}", name=label), lambda: (hid.groups.add(g), self.apply_hidden()))
+                menu.addAction(
+                    tr("islands.hide_all_name", name=label), lambda: (hid.groups.add(g), self.apply_hidden())
+                )
             if t in hid.types:
-                menu.addAction(tr("Show category {name}", name=t), lambda: (hid.types.discard(t), self.apply_hidden()))
+                menu.addAction(
+                    tr("islands.show_category_name", name=t), lambda: (hid.types.discard(t), self.apply_hidden())
+                )
             else:
-                menu.addAction(tr("Hide category {name}", name=t), lambda: (hid.types.add(t), self.apply_hidden()))
+                menu.addAction(
+                    tr("islands.hide_category_name", name=t), lambda: (hid.types.add(t), self.apply_hidden())
+                )
         if hid.count():
             menu.addAction(
-                tr("Show everything hidden ({n})", n=hid.count()), lambda: (hid.clear(), self.apply_hidden())
+                tr("islands.show_everything_hidden", n=hid.count()), lambda: (hid.clear(), self.apply_hidden())
             )
         if not menu.isEmpty():
             menu.exec(at)
@@ -602,6 +614,25 @@ class IslandControls(GizmoControls, OverlayDraw):
         self.placer.ghost()
 
 
+def collect_dropped(ctx) -> None:
+    """A moderngl context keeps the GPU objects nothing holds any more for ``free_dropped``. Left as it comes it
+    frees nothing: every closed island's buffers and maps, and each replaced batch's, stayed on the GPU for as long
+    as the window lived. (QRhi's objects free themselves.)"""
+    ctx.gc_mode = "context_gc"
+
+
+def free_dropped(ctx) -> int:
+    """Free what ``ctx`` (current) collected since the last call; how many GPU objects. moderngl's own ``gc()``
+    stops at an object that was also released by hand."""
+    freed = 0
+    while ctx.objects:
+        release = getattr(ctx.objects.popleft(), "release", None)
+        if release is not None:
+            release()
+            freed += 1
+    return freed
+
+
 class IslandView3D(IslandControls, QOpenGLWidget):
     """The view on moderngl (OpenGL)."""
 
@@ -615,8 +646,10 @@ class IslandView3D(IslandControls, QOpenGLWidget):
         import moderngl
 
         self.ctx = moderngl.create_context()
+        collect_dropped(self.ctx)
 
     def paintGL(self) -> None:
+        free_dropped(self.ctx)  # what was let go of since the last frame
         dpr = self.devicePixelRatioF()
         w, h = max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr))
         self._frame(self.ctx, self.ctx.detect_framebuffer(self.defaultFramebufferObject()), w, h)

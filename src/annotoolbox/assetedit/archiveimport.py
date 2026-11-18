@@ -10,12 +10,12 @@ puts it back into the archive the build makes. ``docs/asset-editor.md``, "Open a
 from __future__ import annotations
 
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 from ..formats.rda import RdaArchive, RdaError
 from ..infra.i18n import tr
-from ..modloader.patchdoc import PatchDoc
 from ..othergames.index2205 import FILE_DB, ArchiveIndex
 from ..sources import loca2070
 from ..sources.overlay import normalize
@@ -67,7 +67,7 @@ def _members(archive: Path, index: ArchiveIndex | None = None) -> dict[str, byte
         named = index.paths_in(archive.name) if index is not None else {}
         return {normalize(named.get(entry.offset, path)): rda.read_entry(entry) for path, entry in rda.entries.items()}
     except (RdaError, OSError, ValueError) as exc:
-        raise ValueError(tr("{path} is not an archive that reads: {error}", path=archive, error=exc)) from exc
+        raise ValueError(tr("assets.not_archive_reads", path=archive, error=exc)) from exc
 
 
 def _line_texts(game: Game, language: str, files: dict[str, bytes], result: modimport.Imported) -> None:
@@ -127,17 +127,19 @@ def import_archive(
     a 2205 patch (its entry names the members). ValueError when it is no archive."""
     say = progress or (lambda _text: None)
     archive = Path(archive)
-    say(tr("reading {name}", name=archive.name))
+    say(tr("assets.reading_name", name=archive.name))
     members = _members(archive, index if index is not None else index_for(game, archive))
     changes = ChangeSet(game.layout.key, _mod_id(archive), archive.stem, "0.1.0")
     result = modimport.Imported(changes, [], archive=archive.name)
     asset_files = {p.lower() for p in game.index.files}
-    say(tr("comparing with the game"))
+    say(tr("assets.comparing_game"))
     for path in sorted(members.keys() & asset_files):
-        modimport.assets_against(game, PatchDoc.load(members[path]), result, path)
+        doc = modimport.load_or_report(members[path], path, result)
+        if doc is not None:
+            modimport.assets_against(game, doc, result, path)
     used = _texts(game, members, result) | (members.keys() & asset_files)
     if not (members.keys() & asset_files):
-        result.lost.append(tr("the archive holds none of the game's asset files"))
+        result.lost.append(tr("assets.archive_holds_none_games_asset"))
     _carry(members, used, carry_to, result)
     return result
 
@@ -147,10 +149,12 @@ def _mod_id(archive: Path) -> str:
 
 
 def _carry(members: dict[str, bytes], used: set[str], folder: Path, result: modimport.Imported) -> None:
-    """Every member the change set does not write itself, kept as a file under ``folder``."""
+    """Every member the change set does not write itself, kept as a file under ``folder``, which is emptied first:
+    the whole folder is carried, so a file an earlier import of the archive left would be built into the mod."""
+    shutil.rmtree(folder, ignore_errors=True)
     rest = {p: d for p, d in members.items() if p not in used}
     for path in [p for p in rest if ".." in p.split("/") or ":" in p]:  # a member must stay inside the folder
-        result.lost.append(tr("{path} is left out: it names a place outside the mod", path=path))
+        result.lost.append(tr("assets.left_out_names_place_outside", path=path))
         del rest[path]
     for path, data in rest.items():
         dest = folder / path

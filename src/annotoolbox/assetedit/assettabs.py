@@ -41,12 +41,13 @@ class BalancingPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.doc, self.guids = None, []
+        self.shown: list[str] = []  # the value paths of the table's columns as it was last filled
         self.store: ViewStore | None = None  # the saved views of the game open (``views.ViewStore``)
         layout = QVBoxLayout(self)
-        self.columns = QLineEdit(placeholderText=tr("value paths, comma separated: Building/Upkeep, Product/Price"))
-        self.saved = QComboBox(toolTip=tr("the saved views: pick one to take its columns"))
-        self.save_button = QPushButton(tr("Save view…"), toolTip=tr("keep these columns under a name"))
-        self.delete_button = QPushButton(tr("Delete view"), toolTip=tr("forget the picked view"))
+        self.columns = QLineEdit(placeholderText=tr("assets.value_paths_comma_separated_building"))
+        self.saved = QComboBox(toolTip=tr("assets.tip.saved_views_pick_one_take"))
+        self.save_button = QPushButton(tr("assets.save_view_dots"), toolTip=tr("assets.tip.keep_columns_under_name"))
+        self.delete_button = QPushButton(tr("assets.delete_view"), toolTip=tr("assets.tip.forget_picked_view"))
         bar = QHBoxLayout()
         for widget in (self.columns, self.saved, self.save_button, self.delete_button):
             bar.addWidget(widget, 1 if widget is self.columns else 0)
@@ -69,7 +70,7 @@ class BalancingPanel(QWidget):
     def _list_views(self) -> None:
         self.saved.blockSignals(True)
         self.saved.clear()
-        self.saved.addItem(tr("(saved views)"), "")
+        self.saved.addItem(tr("assets.saved_views"), "")
         for name in self.store.names if self.store is not None else ():
             self.saved.addItem(self.store.views[name].label(), name)
         self.saved.blockSignals(False)
@@ -87,7 +88,7 @@ class BalancingPanel(QWidget):
             return None
         if name is None:
             current = self.saved.currentData() or ""
-            name, ok = QInputDialog.getText(self, tr("Save view"), tr("Name of the view:"), text=current)
+            name, ok = QInputDialog.getText(self, tr("assets.save_view"), tr("assets.name_view"), text=current)
             if not ok:
                 return None
         template = self.doc.template(self.guids[0]) if self.doc is not None and self.guids else ""
@@ -112,12 +113,12 @@ class BalancingPanel(QWidget):
 
     def fill(self) -> None:
         self.table.blockSignals(True)
-        cols = self.paths()
+        cols = self.shown = self.paths()
         rows = balancing.grid(self.doc, self.guids, cols) if self.doc and cols else []
         self.table.clear()
         self.table.setColumnCount(len(cols) + 1)
         self.table.setRowCount(len(rows))
-        self.table.setHorizontalHeaderLabels([tr("Asset"), *cols])
+        self.table.setHorizontalHeaderLabels([tr("common.asset"), *cols])
         for r, (guid, name, cells) in enumerate(rows):
             head = QTableWidgetItem(f"{name} ({guid})")
             head.setFlags(head.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -128,7 +129,7 @@ class BalancingPanel(QWidget):
                 item.setToolTip(
                     cell.origin
                     + (
-                        " · " + tr("the game's: {value}", value=cell.was or tr("(none)"))
+                        " · " + tr("assets.the_games_value", value=cell.was or tr("common.none_in_brackets"))
                         if cell.was is not None
                         else ""
                     )
@@ -143,7 +144,7 @@ class BalancingPanel(QWidget):
         if item.column() == 0:
             return
         guid = self.table.item(item.row(), 0).data(Qt.ItemDataRole.UserRole)
-        self.doc.set_value(guid, self.paths()[item.column() - 1], item.text())
+        self.doc.set_value(guid, self.shown[item.column() - 1], item.text())  # not the line being typed in
 
 
 class TextPanel(QWidget):
@@ -158,12 +159,12 @@ class TextPanel(QWidget):
         row = QHBoxLayout()
         self.language = QComboBox()
         self.language.addItems(languages)
-        row.addWidget(QLabel(tr("Language")))
+        row.addWidget(QLabel(tr("common.language")))
         row.addWidget(self.language)
         row.addStretch(1)
         layout.addLayout(row)
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels([tr("Value"), tr("Text id"), tr("Text")])
+        self.table.setHorizontalHeaderLabels([tr("common.value"), tr("assets.text_id"), tr("assets.text")])
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, 1)
         self.words = QLabel()
@@ -204,11 +205,11 @@ class TextPanel(QWidget):
 
     def _count(self, rows, game: dict[str, str], edited: dict[str, str]) -> str:
         """The words of this asset's texts, and of the picked group's assets when it is more than this one."""
-        text = tr("{n} words in this asset's texts", n=report.words_of(rows))
+        text = tr("assets.words_assets_texts", n=report.words_of(rows))
         group = self.group()
         if len(group) > 1:
             text += " · " + tr(
-                "{n} words in the {count} assets of the group",
+                "assets.words_assets_group",
                 n=report.group_words(self.doc, group, game, edited),
                 count=len(group),
             )
@@ -232,14 +233,18 @@ class IconPanel(QWidget):
         self.picture = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.number = QSpinBox(maximum=0)  # which icon of the entry (0: the first); one past the last adds one
         self.atlas, self.tile = QSpinBox(maximum=100000), QSpinBox(maximum=100000)
-        self.set_button = QPushButton(tr("Set this icon"))
+        self.set_button = QPushButton(tr("assets.set_icon"))
         self.set_button.clicked.connect(self._set)
         self.doc: AssetDocument | None = None
         self.guid: int | None = None
         self.editor = QWidget()
         row = QHBoxLayout(self.editor)
         self.number.valueChanged.connect(lambda _n: self._show())
-        for text, box in ((tr("icon"), self.number), (tr("atlas file id"), self.atlas), (tr("tile"), self.tile)):
+        for text, box in (
+            (tr("assets.icon"), self.number),
+            (tr("assets.atlas_file_id"), self.atlas),
+            (tr("assets.tile"), self.tile),
+        ):
             row.addWidget(QLabel(text))
             row.addWidget(box)
         row.addWidget(self.set_button)
@@ -271,11 +276,11 @@ class IconPanel(QWidget):
             self.tile.setValue(ref.index)
         key = icons.atlas_key(guid, position) if ref is not None and position else ""
         key = key or (self.source.key_of(doc, guid) if shown else "")
-        self.path.setText(self.source.describe(key) if key else tr("this asset names no icon file"))
+        self.path.setText(self.source.describe(key) if key else tr("assets.asset_names_no_icon_file"))
         pix = self.source.picture(key)
         self.picture.setPixmap(pix)
         if key and pix.isNull():
-            self.picture.setText(tr("(no picture of this path in the game's files)"))
+            self.picture.setText(tr("assets.no_picture_path_games_files"))
 
 
 class TemplatePanel(QTreeWidget):
@@ -283,14 +288,14 @@ class TemplatePanel(QTreeWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setHeaderLabels([tr("Template value"), tr("Default")])
+        self.setHeaderLabels([tr("assets.template_value"), tr("assets.default")])
         self.setColumnWidth(0, 320)
 
     def present(self, doc: AssetDocument, guid: int | None) -> None:
         self.clear()
         t = doc.schema.templates.get(doc.template(guid)) if guid is not None else None
         if t is None:
-            self.addTopLevelItem(QTreeWidgetItem([tr("(no template)"), ""]))
+            self.addTopLevelItem(QTreeWidgetItem([tr("assets.no_template"), ""]))
             return
         top = QTreeWidgetItem([f"{t.name}  ({' / '.join(t.group)})", ""])
         self.addTopLevelItem(top)
@@ -311,7 +316,7 @@ class UsagePanel(QWidget):
         layout = QVBoxLayout(self)
         self.users = QListWidget()
         self.diff = QTableWidget(0, 3)
-        self.diff.setHorizontalHeaderLabels([tr("Value"), tr("Game"), tr("Edited")])
+        self.diff.setHorizontalHeaderLabels([tr("common.value"), tr("common.game"), tr("assets.edited")])
         self.diff.horizontalHeader().setStretchLastSection(True)
         self.users_label, self.diff_label = QLabel(), QLabel()
         for w in (self.users_label, self.users, self.diff_label, self.diff):
@@ -322,16 +327,18 @@ class UsagePanel(QWidget):
         self.users.clear()
         self.diff.setRowCount(0)
         if guid is None or not doc.exists(guid):
+            self.users_label.clear()
+            self.diff_label.clear()
             return
         users = compare.usage(doc, guid)
-        self.users_label.setText(tr("{n} assets name {guid}", n=len(users), guid=guid))
+        self.users_label.setText(tr("assets.n_assets_name_guid", n=len(users), guid=guid))
         for u in users[:2000]:
             item = QListWidgetItem(f"{doc.name(u)} ({u}) · {doc.template(u)}")
             item.setData(Qt.ItemDataRole.UserRole, u)
             self.users.addItem(item)
         rows = compare.diff_asset(doc, guid)
         self.diff_label.setText(
-            tr("{n} values differ from the game's", n=len(rows)) if guid in doc.index.by_guid else tr("new")
+            tr("assets.values_differ_games", n=len(rows)) if guid in doc.index.by_guid else tr("assets.new")
         )
         for d in rows:
             r = self.diff.rowCount()
@@ -357,7 +364,7 @@ class FindingsList(QListWidget):
             item.setData(Qt.ItemDataRole.UserRole, f.guid)
             self.addItem(item)
         if not findings:
-            self.addItem(tr("no findings"))
+            self.addItem(tr("assets.no_findings"))
 
 
 class HistoryList(QListWidget):
@@ -372,9 +379,12 @@ class HistoryList(QListWidget):
         self.doc = doc
         stack = doc.undo
         self.clear()
-        self.addItem(tr("(as opened)"))
+        self.addItem(tr("common.as_opened"))
         self.addItems(
-            [lab + ("  · " + tr("saved") if k + 1 == stack.clean else "") for k, lab in enumerate(stack.labels())]
+            [
+                lab + ("  · " + tr("common.saved") if k + 1 == stack.clean else "")
+                for k, lab in enumerate(stack.labels())
+            ]
         )
         self.setCurrentRow(stack.index)
 

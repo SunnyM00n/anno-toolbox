@@ -1,5 +1,6 @@
-"""The live link's debug commands on the suite's side (docs/live-link.md section 5 and 13, docs/debug-palette.md section 5):
-the typed ``values`` argument, the three requests, the client's methods and the refusals before anything is sent."""
+"""The live link's requests behind the game's debug switch, on the suite's side: the debug commands (docs/live-link.md
+section 5 and 13, docs/debug-palette.md section 5: the typed ``values``, the three requests, the refusals before
+anything is sent) and the game side's modules (section 5 and 14: the list, the switch, the panel's rows)."""
 
 from __future__ import annotations
 
@@ -7,30 +8,28 @@ import pytest
 from tests import fakegame
 from tests.fakegame import FakeGame
 
-from annotoolbox.suite import debugcommands, linkclient, livelink
+from annotoolbox.suite import debugcommands, livelink
 from annotoolbox.suite import linkprotocol as proto
 
-
-def connect(game: FakeGame):
-    channel, game = fakegame.pair(game)
-    link = linkclient.PipeLink(channel)
-    assert link.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
-    return link, game
+MODULES = [
+    {"name": "trees", "class": "experimental", "on": True, "switchable": False, "why": "it places layers"},
+    {"name": "farms", "class": "dev", "on": False, "switchable": True, "why": ""},
+]
 
 
 @pytest.fixture
 def link():
-    mine, game = connect(FakeGame(kinds=livelink.CAPABILITIES))
-    game.debug_table = {
+    """A link to a game with the debug switch on: three commands bound, one cheat, two modules."""
+    mine = fakegame.connect(FakeGame(kinds=livelink.CAPABILITIES))
+    mine.game.debug_table = {
         "ignore_building_costs": {"available": True, "state": False},
         "heal_selected": {"available": True, "state": None},
         "destroy_selected": {"available": False, "state": None},
     }
-    game.cheats = ["Fast_Build"]
-    mine.game = game
+    mine.game.cheats = ["Fast_Build"]
+    mine.game.modules = [dict(m) for m in MODULES]
     yield mine
-    mine.close()
-    game.drop()
+    fakegame.disconnect(mine)
 
 
 def test_the_three_requests_and_the_values_kind_are_a_closed_set():
@@ -90,20 +89,17 @@ def test_a_cheat_is_sent_by_name_and_the_game_checks_it_against_its_own_list(lin
     assert link.game.requests[-1] == ("debug.cheat", {"name": "Other"})
 
 
-def test_a_game_without_the_second_opt_in_says_so_and_gets_nothing():
-    mine, game = connect(FakeGame())  # the welcome names no "debug"
+def test_a_game_without_the_second_opt_in_says_so_and_gets_no_debug_or_module_request():
+    mine = fakegame.connect()  # the welcome names no "debug"
     try:
         assert not mine.supports(livelink.DEBUG)
         reply = mine.debug_run("fps_view")
         assert reply.status == livelink.UNAVAILABLE and "live_link_commands=1" in reply.message
-        assert (
-            mine.debug_list().status == livelink.UNAVAILABLE
-            and mine.debug_cheat("Fast_Build").status == livelink.UNAVAILABLE
-        )
-        assert [n for n, _ in game.requests if n.startswith("debug.")] == []
+        for refused in (mine.debug_list(), mine.debug_cheat("Fast_Build"), mine.modules_set("farms", True)):
+            assert refused.status == livelink.UNAVAILABLE
+        assert [n for n, _ in mine.game.requests if n.startswith(("debug.", "modules."))] == []
     finally:
-        mine.close()
-        game.drop()
+        fakegame.disconnect(mine)
 
 
 def test_without_a_game_a_command_is_recorded_not_sent():
@@ -114,3 +110,49 @@ def test_without_a_game_a_command_is_recorded_not_sent():
         idle.debug_run("nonsense").status == livelink.REFUSED and len(idle.sent) == 1
     )  # refused before it is recorded
     assert "fps_view" in debugcommands.commands()
+
+
+# the game side's modules
+
+
+def test_the_two_module_requests_take_a_name_and_a_true_switch_only():
+    assert proto.check_request("modules.list", {}) == ""
+    assert proto.check_request("modules.set", {"module": "farm_growth", "on": False}) == ""
+    for bad in ({"module": "farm_growth", "on": 1}, {"module": "a b", "on": True}, {"module": "x"}, {"on": True}):
+        assert proto.check_request("modules.set", bad), bad
+    assert proto.check_request("modules.list", {"module": "x"})
+
+
+def test_the_module_list_and_the_switch_and_a_refusal_with_its_reason(link):
+    listed = link.modules_list()
+    assert listed.ok and [m["name"] for m in listed.data["modules"]] == ["trees", "farms"]
+    done = link.modules_set("farms", True)
+    assert done.status == livelink.DONE and done.data == {"module": "farms", "on": True}
+    assert link.game.modules[1]["on"] is True
+    refused = link.modules_set("trees", False)
+    assert refused.status == livelink.REFUSED and "layers" in refused.message
+    assert ("modules.set", {"module": "trees", "on": False}) in link.game.requests
+
+
+def test_the_panel_lists_each_module_ticked_when_it_runs_and_greyed_when_it_cannot_switch():
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.suite import linkpanel
+
+    data = {"modules": [*MODULES, {"class": "game"}]}  # one without a name: left out
+    items = linkpanel.module_items(data)
+    assert items == [
+        ("trees", "trees (experimental)", True, False, "it places layers"),
+        ("farms", "farms (dev)", False, True, ""),
+    ]
+    assert linkpanel.module_items({"modules": "x"}) == [] and linkpanel.module_items(None) == []
+    qt = QApplication.instance() or QApplication([])
+    dialog = linkpanel.LinkDialog()
+    dialog._fill_modules(livelink.Reply(livelink.OK, "", data))
+    trees, dump = dialog.modules.item(0), dialog.modules.item(1)
+    assert trees.checkState() == Qt.CheckState.Checked and not trees.flags() & Qt.ItemFlag.ItemIsEnabled
+    assert dump.checkState() == Qt.CheckState.Unchecked and dump.flags() & Qt.ItemFlag.ItemIsEnabled
+    dialog.close()
+    qt.processEvents()

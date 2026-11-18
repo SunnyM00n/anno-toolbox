@@ -312,6 +312,7 @@ after the mesh and the material. glTF to `.gr2` and back: [`../rdm-gltf.md`](../
 - 1701's `.info` footprints (`models/info1701.py`);
 - the object builder opening 1701's `.ocf` / `.mcf` / `.info`;
 - the writer (64-bit, tangent frames), glTF both ways, and the config and info file that place a written file;
+- `.gr2` to `.rdm` for 2070, 2205, 1800 and 117, without a glTF ([`../rdm-gltf.md`](../rdm-gltf.md), "Granny to RDM"; 2026-11-17);
 - tests in `tests/test_granny_rig.py` and `tests/test_efc1701.py` (synthetic, and gated on `ANNO1404_DIR` /
   `ANNO1701_DIR`).
 

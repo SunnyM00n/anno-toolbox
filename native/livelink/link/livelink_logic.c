@@ -349,7 +349,7 @@ static const ArgSpec A_BANKS[] = {{"mod", A_NAME, 0}, {"banks", A_NAMES, 1}};
 static const ArgSpec A_SELECT[] = {{"object", A_INT, 0}, {"guid", A_INT, 0}};
 static const ArgSpec A_JUMP[] = {{"object", A_INT, 0}, {"session", A_NAME, 0}, {"position", A_NUMBERS, 0}};
 static const ArgSpec A_READ[] = {{"guid", A_INT, 0}, {"object", A_INT, 0}, {"fields", A_FIELDS, 1}};
-static const ArgSpec A_UIDUMP[] = {{"states", A_NAMES, 0}};
+static const ArgSpec A_VALUES_ARG[] = {{"states", A_NAMES, 1}, {"file", A_NAME, 0}};
 static const ArgSpec A_DBG_RUN[] = {{"command", A_NAME, 1}, {"values", A_VALUES, 0}};
 static const ArgSpec A_DBG_CHEAT[] = {{"name", A_NAME, 1}};
 static const ArgSpec A_MOD_SET[] = {{"module", A_NAME, 1}, {"on", A_BOOL, 1}};
@@ -369,7 +369,7 @@ static const ReqSpec REQS[] = {
     {"select", A_SELECT, N(A_SELECT)},
     {"jump", A_JUMP, N(A_JUMP)},
     {"read", A_READ, N(A_READ)},
-    {"ui.dump", A_UIDUMP, N(A_UIDUMP)},
+    {"ui.values", A_VALUES_ARG, N(A_VALUES_ARG)},
     {"debug.list", NULL, 0},
     {"debug.run", A_DBG_RUN, N(A_DBG_RUN)},
     {"debug.cheat", A_DBG_CHEAT, N(A_DBG_CHEAT)},
@@ -473,6 +473,7 @@ static int store(const Ctx *c, const ArgSpec *a, int at) {
         else if (!strcmp(a->key, "command")) copy(r->command, sizeof r->command, buf), r->has_command = 1;
         else if (!strcmp(a->key, "name")) copy(r->cheat, sizeof r->cheat, buf), r->has_cheat = 1;
         else if (!strcmp(a->key, "module")) copy(r->module, sizeof r->module, buf), r->has_module = 1;
+        else if (!strcmp(a->key, "file")) copy(r->file, sizeof r->file, buf), r->has_file = 1;
         else copy(r->nonce, sizeof r->nonce, buf);
         return 1;
     case A_NUMBERS:
@@ -684,7 +685,9 @@ int ll_welcome_json(char *out, size_t cap, const char *game, const char *build, 
         if (!first) put(&b, ",");
         put_str(&b, ll_kind_name(bit)), first = 0;
     }
-    if (kinds_bits & LL_KIND_DEBUG) put(&b, first ? "" : ","), put_str(&b, "debug");
+    if (kinds_bits & LL_KIND_DEBUG) put(&b, first ? "" : ","), put_str(&b, "debug"), first = 0;
+    if (kinds_bits & LL_KIND_VALUES) put(&b, first ? "" : ","), put_str(&b, "values"), first = 0;
+    if (kinds_bits & LL_KIND_FOLLOW) put(&b, first ? "" : ","), put_str(&b, "follow"), first = 0;
     put(&b, "],\"mods\":[");
     for (int i = 0; i < nmods; i++) {
         if (i) put(&b, ",");
@@ -771,12 +774,13 @@ int ll_topic_bit(const char *name) {
     if (!strcmp(name, "reload")) return LL_TOPIC_RELOAD;
     if (!strcmp(name, "session")) return LL_TOPIC_SESSION;
     if (!strcmp(name, "log")) return LL_TOPIC_LOG;
+    if (!strcmp(name, "ui.scene")) return LL_TOPIC_SCENE;
     return 0;
 }
 
 const char *ll_topic_name(int bit) {
     return bit == LL_TOPIC_SELECTION ? "selection" : bit == LL_TOPIC_RELOAD ? "reload"
-           : bit == LL_TOPIC_SESSION ? "session" : bit == LL_TOPIC_LOG ? "log" : "?";
+           : bit == LL_TOPIC_SESSION ? "session" : bit == LL_TOPIC_LOG ? "log" : bit == LL_TOPIC_SCENE ? "ui.scene" : "?";
 }
 
 void ll_rate_init(LLRate *r, uint64_t now_ms) { r->tokens = LL_RATE_BURST, r->last_ms = now_ms; }
@@ -799,8 +803,8 @@ int ll_kind_of_request(const char *type) {
     } t[] = {{"reload.assets", LL_KIND_ASSETS}, {"reload.texts", LL_KIND_TEXTS}, {"reload.scenes", LL_KIND_SCENES},
              {"reload.ambient", LL_KIND_AMBIENT}, {"reload.models", LL_KIND_MODELS}, {"reload.effects", LL_KIND_EFFECTS},
              {"reload.banks", LL_KIND_BANKS}, {"reload.session", LL_KIND_SESSION}, {"select", LL_KIND_SELECT},
-             {"jump", LL_KIND_JUMP}, {"read", LL_KIND_READ}, {"ui.dump", LL_KIND_UIDUMP},
-             {"debug.list", LL_KIND_DEBUG}, {"debug.run", LL_KIND_DEBUG}, {"debug.cheat", LL_KIND_DEBUG},
+             {"jump", LL_KIND_JUMP}, {"read", LL_KIND_READ},
+             {"ui.values", LL_KIND_VALUES}, {"debug.list", LL_KIND_DEBUG}, {"debug.run", LL_KIND_DEBUG}, {"debug.cheat", LL_KIND_DEBUG},
              {"modules.list", LL_KIND_DEBUG}, {"modules.set", LL_KIND_DEBUG}};
     for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
         if (!strcmp(t[i].name, type)) return t[i].kind;
@@ -820,8 +824,9 @@ const char *ll_kind_name(int bit) {
     case LL_KIND_SELECT: return "select";
     case LL_KIND_JUMP: return "jump";
     case LL_KIND_READ: return "read";
-    case LL_KIND_UIDUMP: return "uidump";
     case LL_KIND_DEBUG: return "debug";
+    case LL_KIND_VALUES: return "values";
+    case LL_KIND_FOLLOW: return "follow";
     default: return "?";
     }
 }

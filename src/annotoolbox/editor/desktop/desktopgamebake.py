@@ -91,9 +91,6 @@ class PaintedMaps:
             self._kept = (g.ids.copy(), g.alphas.copy())
         self.committed = (g.ids.copy(), g.alphas.copy())
 
-    def _ok(self, strokes: list) -> list:
-        return [st for st in strokes if int(st.get("material", -1)) in self.order and int(st["material"]) < 32]
-
     def _box(self, strokes: list) -> tuple[int, int, int, int]:
         """The alpha texels (x0, z0, x1, z1: block aligned, one block wider) the strokes reach."""
         from ..groundedit import stroke_box
@@ -115,8 +112,10 @@ class PaintedMaps:
     def update(self, committed: list, current: dict | None) -> list[tuple[int, int, int, int]]:
         """The maps for the committed strokes and the one in progress; returns the boxes (alpha texels) whose words
         may have changed."""
-        committed, changed = self._ok(committed), []
-        current = (self._ok([current]) or [None])[0] if current is not None and current.get("points") else None
+        from ..groundedit import painted_strokes
+
+        committed, changed = painted_strokes(committed, self.order), []
+        current = (painted_strokes([current], self.order) or [None])[0] if current is not None else None
         if self.committed is None:
             if not committed and current is None:
                 return []  # nothing painted yet: the maps are the file's
@@ -180,7 +179,7 @@ class IslandBake:
             return False
         got = self.r.loader.get(GROUND_JOB, self._ground)
         if isinstance(got, Exception):
-            self.r._message(tr("the game's ground bake: {reason}", reason=f"{type(got).__name__}: {got}"[:300]))
+            self.r._message(tr("islands.games_ground_bake", reason=f"{type(got).__name__}: {got}"[:300]))
         if not isinstance(got, tuple) or got[0] is None:
             if got is not None:
                 self._bake_stages = None
@@ -206,7 +205,7 @@ class IslandBake:
 
     def _drop_bake(self, why: str) -> None:
         """The game's bake failed (said once): our own bake from now on, the nodes made again without its arrays."""
-        self.r._message(tr("the game's ground bake: {reason}", reason=why[:300]))
+        self.r._message(tr("islands.games_ground_bake", reason=why[:300]))
         for name in self.bake.arrays:
             self.terrain.textures.pop(name, None)
         self.bake.release()

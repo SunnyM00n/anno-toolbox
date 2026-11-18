@@ -22,6 +22,7 @@ from .records import (
     option_ref,
     stamp,
     text_ref,
+    u16,
     u32,
     u64,
     utf8,
@@ -50,23 +51,23 @@ def _guid(node, path: str = "") -> object:
 def _enum(tag) -> str:
     """A ``Setup...`` option: ``value/id`` (u16), "" when it has none."""
     data = _data(tag, "value/id")
-    return str(struct.unpack_from("<H", data)[0]) if data and len(data) >= 2 else ""
+    return str(u16(data)) if data and len(data) >= 2 else ""
 
 
 def version_rows(s: Summary, meta, top) -> None:
-    sec = s.section(N_("Save"))
+    sec = s.section(N_("common.save"))
     sec.rows += [
-        (N_("Game"), _value(meta, "CorporationVersionName", utf16)),
-        (N_("File version"), _value(meta, "CorporationFileVersion")),
-        (N_("Save name"), _value(meta, "CorporationSaveGameName", utf16)),
-        (N_("Profile"), _value(top, "SavegameProfileDisplayName", utf16)),
-        (N_("Last changed"), stamp(u64(_data(meta, "LastModTime") or b""))),
-        (N_("Started"), stamp(u64(_data(top, "CreationTimeStamp") or b""))),
-        (N_("Saved"), stamp(u64(_data(top, "WallTimeOnSave") or b""))),
-        (N_("Play time"), duration(u64(_data(top, "SavedActivePlaytime") or b""))),
-        (N_("Money in the load list"), _value(top, "TotalMoney", i32)),
-        (N_("Population in the load list"), _value(top, "TotalPopulation", i32)),
-        (N_("Modded"), _value(top, "WasModded", lambda d: d[0] if d else 0) or "0"),
+        (N_("common.game"), _value(meta, "CorporationVersionName", utf16)),
+        (N_("saves.file_version"), _value(meta, "CorporationFileVersion")),
+        (N_("saves.save_name"), _value(meta, "CorporationSaveGameName", utf16)),
+        (N_("mods.profile"), _value(top, "SavegameProfileDisplayName", utf16)),
+        (N_("saves.last_changed"), stamp(u64(_data(meta, "LastModTime") or b""))),
+        (N_("saves.started"), stamp(u64(_data(top, "CreationTimeStamp") or b""))),
+        (N_("islands.saved"), stamp(u64(_data(top, "WallTimeOnSave") or b""))),
+        (N_("saves.play_time"), duration(u64(_data(top, "SavedActivePlaytime") or b""))),
+        (N_("saves.money_load_list"), _value(top, "TotalMoney", i32)),
+        (N_("saves.population_load_list"), _value(top, "TotalPopulation", i32)),
+        (N_("saves.modded"), _value(top, "WasModded", lambda d: d[0] if d else 0) or "0"),
     ]
     history = top.find("SavegameHistory") if top is not None else None
     builds = [
@@ -74,7 +75,7 @@ def version_rows(s: Summary, meta, top) -> None:
     ]
     if builds:
         sec.rows.append(
-            (N_("Game builds that saved it"), f"{len(builds)}, last {builds[-1][1]} ({stamp(builds[-1][0])})")
+            (N_("saves.game_builds_saved"), f"{len(builds)}, last {builds[-1][1]} ({stamp(builds[-1][0])})")
         )
 
 
@@ -84,24 +85,25 @@ def mods_rows(s: Summary, top) -> None:
     for entry in mods.children if mods is not None else []:
         if isinstance(entry, filedb.Tag):
             s.mods.append(ModEntry(_value(entry, "ModID", utf8), _value(entry, "ModVersion", utf8)))
-    table = Table([N_("Mod"), N_("Version")], [[m.mod_id, m.version] for m in s.mods])
-    sec = Section(N_("Mods"), table=table)
+    table = Table([N_("mods.mod"), N_("common.version")], [[m.mod_id, m.version] for m in s.mods])
+    sec = Section(N_("common.mods"), table=table)
     options = info.find("Options") if info is not None else None
     for entry in options.children if options is not None else []:
         if isinstance(entry, filedb.Tag):
-            sec.rows.append((N_("Option"), f"{_value(entry, 'Option', utf8)} = {_value(entry, 'Value', utf8)}"))
+            sec.rows.append((N_("saves.option"), f"{_value(entry, 'Option', utf8)} = {_value(entry, 'Value', utf8)}"))
     s.sections.append(sec)
     dlcs = top.find("ActiveDLCs") if top is not None else None
-    guids = [u32(a.data) for a in (dlcs.findall("DLC") if dlcs is not None else [])]
-    s.section(N_("Save")).rows.append((N_("DLCs"), guid_ref(*guids) if guids else "-"))
+    found = dlcs.findall("DLC") if dlcs is not None else []
+    guids = [u32(a.data) for a in found if isinstance(a, filedb.Attrib)]
+    s.section(N_("common.save")).rows.append((N_("saves.dlcs"), guid_ref(*guids) if guids else "-"))
 
 
 def setup_rows(s: Summary, top) -> None:
-    sec = s.section(N_("Game setup"))
+    sec = s.section(N_("mods.game_setup"))
     sec.rows += [
-        (N_("Difficulty preset"), _guid(top, "DifficultyPreset")),
-        (N_("Seed"), _value(top, "GameSeed")),
-        (N_("Start province"), _guid(top, "DefaultStartProvince")),
+        (N_("saves.difficulty_preset"), _guid(top, "DifficultyPreset")),
+        (N_("saves.seed"), _value(top, "GameSeed")),
+        (N_("saves.start_province"), _guid(top, "DefaultStartProvince")),
     ]
     for child in top.children if top is not None else []:
         if isinstance(child, filedb.Tag) and child.name.startswith("Setup") and child.find("value") is not None:
@@ -133,18 +135,34 @@ def _per_participant(node) -> dict[int, object]:
 
 
 def _players(s: Summary, top, data_root) -> None:
-    table = Table([N_("Slot"), N_("Company"), N_("Colour"), N_("Logo"), N_("Portrait"), N_("Rival profile")])
+    table = Table(
+        [
+            N_("saves.slot"),
+            N_("saves.company"),
+            N_("common.colour"),
+            N_("saves.logo"),
+            N_("saves.portrait"),
+            N_("saves.rival_profile"),
+        ]
+    )
     slots = top.find("SetupSlots") if top is not None else None
     for slot in slots.findall("Slot") if slots is not None else []:
         table.rows.append([
-            _value(slot, "ID/id", lambda d: struct.unpack_from("<H", d)[0] if len(d) >= 2 else 0),
+            _value(slot, "ID/id", u16),
             _value(slot, "CompanyName", utf8), _guid(slot, "ColorGuid"), _guid(slot, "LogoGuid"),
             _guid(slot, "PortraitGuid"), _guid(slot, "SecondPartyProfile"),
         ])  # fmt: skip
-    s.sections.append(Section(N_("Players"), table=table))
+    s.sections.append(Section(N_("saves.players"), table=table))
     money = money_by_participant(data_root)
     population = _per_participant(data_root.path("MetaGameManager/PopulationManager/MaxReachedPopulationCount/Data"))
-    people = Table([N_("Participant"), N_("Money"), N_("Highest population reached"), N_("Other goods held")])
+    people = Table(
+        [
+            N_("saves.participant"),
+            N_("saves.money"),
+            N_("saves.highest_population_reached"),
+            N_("saves.other_goods_held"),
+        ]
+    )
     held = meta_goods(data_root)
     for guid in sorted(set(money) | set(population)):
         reached = _reached(population.get(guid))
@@ -156,7 +174,7 @@ def _players(s: Summary, top, data_root) -> None:
                 goods_ref(held.get(guid, [])),
             ]  # fmt: skip
         )
-    s.sections.append(Section(N_("Participants"), table=people))
+    s.sections.append(Section(N_("saves.participants"), table=people))
 
 
 def meta_goods(data_root) -> dict[int, list[tuple[int, int]]]:
@@ -187,7 +205,9 @@ def _quests(s: Summary, data_root) -> None:
     quests = data_root.path("MetaGameManager/QuestManager")
     if quests is None:
         return
-    table = Table([N_("Participant"), N_("Quest log entries"), N_("Quests started"), N_("Quests ended")])
+    table = Table(
+        [N_("saves.participant"), N_("saves.quest_log_entries"), N_("saves.quests_started"), N_("saves.quests_ended")]
+    )
     entries = _per_participant(quests.path("QuestEntryHandler/QuestEntries/Data"))
     lines = _per_participant(quests.path("StoryLines/Data"))
     for guid in sorted(set(entries) | set(lines)):
@@ -199,18 +219,18 @@ def _quests(s: Summary, data_root) -> None:
             guid_ref(guid), str(len(log.children)) if log is not None else "",
             str(len(created.children)) if created is not None else "", str(len(ended.children)) if ended is not None else "",
         ])  # fmt: skip
-    sec = Section(N_("Quests"), table=table)
+    sec = Section(N_("saves.quests"), table=table)
     campaign = quests.find("CampaignHandler")
     if campaign is not None:
         progress = _data(campaign, "CampaignProgress")
         solved = campaign.find("SolvedComponentGUIDs")
         sec.rows += [
-            (N_("Campaign chapter"), _value(campaign, "ActiveChapter/id", lambda d: struct.unpack_from("<H", d)[0])),
+            (N_("saves.campaign_chapter"), _value(campaign, "ActiveChapter/id", u16)),
             (
-                N_("Campaign progress"),
+                N_("saves.campaign_progress"),
                 f"{struct.unpack_from('<f', progress)[0]:.0%}" if progress and len(progress) == 4 else "",
             ),
-            (N_("Campaign steps solved"), str(len(solved.children)) if solved is not None else ""),
+            (N_("saves.campaign_steps_solved"), str(len(solved.children)) if solved is not None else ""),
         ]
     s.sections.append(sec)
 
@@ -221,13 +241,15 @@ def session_entries(data_root) -> list[tuple[int, object]]:
 
 
 def _sessions(s: Summary, data_root) -> None:
-    table = Table([N_("Session"), N_("Map template type"), N_("Seed"), N_("Session document (bytes)")])
+    table = Table(
+        [N_("islands.session"), N_("saves.map_template_type"), N_("saves.seed"), N_("saves.session_document_bytes")]
+    )
     for guid, entry in session_entries(data_root):
         blob = _data(entry, "SessionData/BinaryData") or b""
         desc = entry.find("SessionDesc")
         table.rows.append([guid_ref(guid), _guid(desc, "MapGeneratorSettings/MapTemplateType"),
                            _value(desc, "MapGeneratorSettings/RandomSeed"), f"{len(blob):,}"])  # fmt: skip
-    s.sections.append(Section(N_("Sessions"), table=table))
+    s.sections.append(Section(N_("saves.sessions"), table=table))
 
 
 def summarize(save: SaveFile) -> Summary:
@@ -237,6 +259,9 @@ def summarize(save: SaveFile) -> Summary:
     header = save.part("header.a7s").tree() if save.part("header.a7s") else None
     top = header.find("CorporationProfile") if header is not None else None
     data_root = save.part("data.a7s").tree()
+    if not isinstance(data_root, filedb.Tag):  # a damaged part: the header's rows are still the save's
+        s.note(N_("saves.world_state_not_read"))
+        data_root = filedb.Tag("")
     version_rows(s, meta, top)
     mods_rows(s, top)
     setup_rows(s, top)
@@ -244,7 +269,7 @@ def summarize(save: SaveFile) -> Summary:
     _quests(s, data_root)
     _sessions(s, data_root)
     if top is None:
-        s.note(N_("The save has no readable header: only the world state is summarised."))
+        s.note(N_("saves.save_no_readable_header_only"))
     return s
 
 
@@ -301,18 +326,19 @@ def islands(save: SaveFile, say=lambda _t, **_p: None) -> Section:
     """Per session: its map template and every island area with its owner and the goods its storage tracks."""
     table = Table(
         [
-            N_("Session"),
-            N_("Area"),
-            N_("Owner profile"),
-            N_("City name"),
-            N_("Goods tracked"),
-            N_("Stock"),
-            N_("Trade storage"),
+            N_("islands.session"),
+            N_("saves.area"),
+            N_("saves.owner_profile"),
+            N_("saves.city_name"),
+            N_("saves.goods_tracked"),
+            N_("saves.stock"),
+            N_("saves.trade_storage"),
         ]
     )
-    sec = Section(N_("Islands"), table=table)
-    for guid, entry in session_entries(save.part("data.a7s").tree()):
-        say(N_("reading session {guid}"), guid=guid)
+    sec = Section(N_("common.islands"), table=table)
+    data_root = save.part("data.a7s").tree()
+    for guid, entry in session_entries(data_root) if isinstance(data_root, filedb.Tag) else []:
+        say(N_("saves.reading_session_guid"), guid=guid)
         doc = _data(entry, "SessionData/BinaryData") or b""
         if filedb.version(doc) != 3:
             continue
@@ -321,6 +347,6 @@ def islands(save: SaveFile, say=lambda _t, **_p: None) -> Section:
             continue
         template = manager.path("MapTemplate/Filename")
         if template is not None:
-            sec.rows.append((N_("Map template"), f"{guid}: {utf16(template.value(doc))}"))
+            sec.rows.append((N_("saves.map_template"), f"{guid}: {utf16(template.value(doc))}"))
         table.rows += _area_rows(doc, manager, guid)
     return sec

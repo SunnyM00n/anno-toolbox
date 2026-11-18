@@ -72,14 +72,14 @@ def apply(gm: filedb.Tag, cells: dict, template: filedb.Tag | None = None) -> di
     areas = manager.find("HerdAreas") if manager is not None else None
     template = next((c for c in (areas.children if areas is not None else []) if isinstance(c, filedb.Tag)), template)
     if tag is None or areas is None or template is None:
-        report["unmatched"].append(tr("no herd grid on this island"))
+        report["unmatched"].append(tr("islands.no_herd_grid_island"))
         return report
     roam = bits_array(tag)
     free = free_tiles(gm, roam.shape)
     for name, value in sorted(cells.items()):
         cell = cell_key(name, roam.shape[0])
         if cell is None or (value and not free[cell[1], cell[0]]):
-            report["unmatched"].append(tr("herd tile {key}", key=name))
+            report["unmatched"].append(tr("islands.herd_tile_key", key=name))
             continue
         x, z = cell
         report["tiles"] += int(roam[z, x] != bool(value))

@@ -24,11 +24,11 @@ from ..infra.i18n import N_
 from ..suite import linkscenes
 from . import elements, fields
 
-KIND_NAMES = {"WI": N_("widget file"), "SC": N_("scene"), "IM": N_("image"), "EN": N_("enum"),
-              "CP": N_("component"), "BE": N_("widget type"), "EF": N_("effect"), "TA": N_("image atlas"),
-              "VI": N_("video"), "PA": N_("palette"), "FT": N_("font"), "FD": N_("font data"),
-              "TS": N_("text style"), "LF": N_("localized font"), "EC": N_("font fallback"),
-              "FF": N_("font family"), "LG": N_("language group")}  # fmt: skip  # shown through tr(name)
+KIND_NAMES = {"WI": N_("ui.widget_file"), "SC": N_("ui.scene"), "IM": N_("ui.image"), "EN": N_("ui.enum_lower"),
+              "CP": N_("ui.component"), "BE": N_("ui.widget_type"), "EF": N_("ui.effect"), "TA": N_("ui.image_atlas"),
+              "VI": N_("ui.video"), "PA": N_("ui.palette_lower"), "FT": N_("common.font"), "FD": N_("ui.font_data"),
+              "TS": N_("ui.text_style"), "LF": N_("ui.localized_font"), "EC": N_("ui.font_fallback"),
+              "FF": N_("ui.font_family"), "LG": N_("ui.language_group")}  # fmt: skip  # shown through tr(name)
 EDITABLE = {"WI", "SC"}  # the kinds the element tree and the preview work on; the others open in the properties
 GAMEDATA = "data/ui/studio/gamedata/"  # the History Editions keep their UI files here, scenes with a ``.scene`` suffix
 STUDIO = "data/ui/studio/"  # ... and the editor's JSON documents of them, ``<folder>/<name>_<file guid>.json``

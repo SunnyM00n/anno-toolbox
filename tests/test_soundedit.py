@@ -12,6 +12,7 @@ from tests.test_bnkgraph import OLD, action, container, event, node_base, sound,
 
 from annotoolbox.exporting import banks
 from annotoolbox.formats import bnk, bnkgraph, bnkmusic, wemadpcm
+from annotoolbox.infra.i18n import tr
 from annotoolbox.soundedit import clipcodec, containers, nodebase, outputs
 from annotoolbox.soundedit.bankdoc import BankDoc
 from annotoolbox.soundedit.registry import EditError
@@ -404,13 +405,31 @@ def test_the_outline_lists_events_the_hierarchy_and_music():
     from annotoolbox.soundedit import outline
 
     doc = doc_of(135)
-    lists = outline.outline(doc)
+    lists = {tr(title): rows for title, rows in outline.outline(doc).items()}
     assert [r.id for r in lists["Events"]] == [1, 2, 3]
     tops = {r.id: [c.id for c in r.children] for r in lists["Sounds and containers"]}
     assert tops == {20: [11, 12], 30: [13, 14], 40: [15]}
     assert "pitch" not in " ".join(outline.describe(doc, 11)) and outline.describe(doc, 20)[1].startswith("parent none")
     doc.do("set_props", id=11, props={0: -3.0})
     assert "volume (dB): -3" in outline.describe(doc, 11)
+
+
+def test_the_outline_looks_a_child_up_by_the_index_not_by_a_walk_of_every_object():
+    from annotoolbox.soundedit import outline
+
+    class Counted(list):
+        walks = 0
+
+        def __iter__(self):
+            Counted.walks += 1
+            return super().__iter__()
+
+    doc = doc_of(172)
+    edges = sum(len(node.children) for node in doc.graph.values())
+    doc.bank.hirc = Counted(doc.bank.hirc)
+    outline.outline(doc)
+    # one walk more per child made a bank of thousands of objects freeze the window at every edit
+    assert edges == 5 and Counted.walks <= 6
 
 
 def test_saving_keeps_the_files_in_the_project_and_announces_banks(tmp_path):
@@ -435,7 +454,13 @@ def test_saving_keeps_the_files_in_the_project_and_announces_banks(tmp_path):
     }
 
 
-def test_the_window_lists_a_bank_and_edits_through_the_forms(monkeypatch):
+BANK_PATH = "data/sound/generatedsoundbanks/windows/9.bnk"
+
+
+@pytest.fixture
+def sound_window(monkeypatch):
+    """The Sound window offscreen with nothing open (a test sets its ``doc`` or opens a bank); deleted afterwards. The other
+    sound tests import it (with ``bank_window``): one setup for every test of the window."""
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
@@ -445,11 +470,27 @@ def test_the_window_lists_a_bank_and_edits_through_the_forms(monkeypatch):
 
     QApplication.instance() or QApplication([])
     window = SoundWindow(Settings())
-    path = "data/sound/generatedsoundbanks/windows/9.bnk"
-    files = {path: bank_bytes(172)}
+    window.sync = True  # the reads on the test's thread; the off-thread test turns it off
+    yield window
+    window.deleteLater()
+
+
+def bank_window(window, monkeypatch, version: int = 172, project_folder=None):
+    """The fixture's sound window with the test bank of ``version`` open (and a project in ``project_folder``)."""
+    if project_folder is not None:
+        from annotoolbox.suite import project as suite_project
+
+        project = suite_project.Project(project_folder, mod_id="m")
+        monkeypatch.setattr(window, "project", lambda: project)
+    files = {BANK_PATH: bank_bytes(version)}
     window.tree, window.key = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t"), "anno117"
     window._fill_banks()
-    window.open_bank(path)
+    window.open_bank(BANK_PATH)
+    return window
+
+
+def test_the_window_lists_a_bank_and_edits_through_the_forms(sound_window, monkeypatch):
+    window = bank_window(sound_window, monkeypatch, 172)
     window.outline.expandAll()
     window.outline.setCurrentItem(window.outline.topLevelItem(1).child(0).child(0))  # sound 11
     window.volume.setValue(-4)
@@ -512,24 +553,13 @@ def test_an_edit_that_fails_halfway_with_any_error_leaves_the_bank_as_it_was():
         registry.EDITS.pop("_breaks_halfway", None)
 
 
-def test_a_save_after_undoing_everything_takes_the_earlier_files_out_of_the_project(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
+def test_a_save_after_undoing_everything_takes_the_earlier_files_out_of_the_project(
+    sound_window, monkeypatch, tmp_path
+):
     from annotoolbox.soundedit import projectpart
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite import project as suite_project
-    from annotoolbox.suite.settings import Settings
 
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
-    project = suite_project.Project(tmp_path, mod_id="m")
-    monkeypatch.setattr(window, "project", lambda: project)
-    path = "data/sound/generatedsoundbanks/windows/9.bnk"
-    files = {path: bank_bytes(172)}
-    window.tree, window.key = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t"), "anno117"
-    window.open_bank(path)
+    window = bank_window(sound_window, monkeypatch, 172, tmp_path)
+    project = window.project()
     window.selected = 11
     window._edit("set_props", id=11, props={0: -4.0})
     assert window.statusBar().currentMessage().startswith("change the settings done")  # the label, not the name
@@ -540,23 +570,13 @@ def test_a_save_after_undoing_everything_takes_the_earlier_files_out_of_the_proj
     assert projectpart.EDITS.saved_files(project) == {}
 
 
-def test_unkept_edits_are_asked_about_before_another_bank_opens_or_the_window_closes(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication, QMessageBox
+def test_unkept_edits_are_asked_about_before_another_bank_opens_or_the_window_closes(
+    sound_window, monkeypatch, tmp_path
+):
+    window = bank_window(sound_window, monkeypatch, 172, tmp_path)
+    path, project = BANK_PATH, window.project()
+    from PySide6.QtWidgets import QMessageBox  # after the window: the helper skips the test without Qt
 
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite import project as suite_project
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
-    project = suite_project.Project(tmp_path, mod_id="m")
-    monkeypatch.setattr(window, "project", lambda: project)
-    path = "data/sound/generatedsoundbanks/windows/9.bnk"
-    files = {path: bank_bytes(172)}
-    window.tree, window.key = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t"), "anno117"
-    window.open_bank(path)
     window.doc.do("set_props", id=11, props={0: -4.0})
     answers, shown = [QMessageBox.StandardButton.Cancel], []
     monkeypatch.setattr(QMessageBox, "question", lambda *_a, **_k: answers[0])
@@ -609,20 +629,8 @@ def test_media_the_index_lists_but_cannot_be_read_is_reported_not_dropped_silent
     assert doc.unreadable == [5555]
 
 
-def test_the_settings_form_writes_only_what_was_changed(monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite.settings import Settings
-
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
-    path = "data/sound/generatedsoundbanks/windows/9.bnk"
-    files = {path: bank_bytes(NEW)}
-    window.tree, window.key = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t"), "anno117"
-    window.open_bank(path)
+def test_the_settings_form_writes_only_what_was_changed(sound_window, monkeypatch):
+    window = bank_window(sound_window, monkeypatch, NEW)
     window.doc.do("set_props", id=11, props={nodebase.prop_id(NEW, "volume"): 40.0})  # beyond the box's 24 dB
     window._select(11)
     window.pitch.setValue(100)
@@ -639,7 +647,7 @@ def test_every_edit_has_a_label_for_the_status_line():
 
     assert registry.EDITS and set(registry.EDITS) == set(registry.LABELS)
     assert registry.label("set_props") == "change the settings"
-    assert all("_" not in text for text in registry.LABELS.values())
+    assert all("_" not in tr(text) for text in registry.LABELS.values())
     assert registry.label("not_an_edit") == "not_an_edit"
 
 
@@ -674,3 +682,94 @@ def test_splice_replaces_a_span_of_an_objects_payload():
     obj = doc.obj(11)
     doc.splice(obj, 2, 4, b"\xaa\xbb\xcc")
     assert doc.obj(11).payload == obj.payload[:2] + b"\xaa\xbb\xcc" + obj.payload[4:]
+
+
+def test_a_clip_that_does_not_read_is_said_by_play_not_raised(sound_window, monkeypatch):
+    window = bank_window(sound_window, monkeypatch)
+
+    def broken(_obj_id):
+        raise OSError("the archive is gone")
+
+    monkeypatch.setattr(window, "_media_of", broken)
+    window._play()
+    assert "the archive is gone" in window.statusBar().currentMessage()
+    monkeypatch.setattr(window, "_media_of", lambda _obj_id: None)
+    window._play()
+    assert window.statusBar().currentMessage() == tr("sound.nothing_play_here_pick_sound")
+    window.close()
+
+
+def test_a_bank_a_waveform_and_a_played_clip_are_read_off_the_window_thread(sound_window, monkeypatch, tmp_path):
+    import threading
+
+    from PySide6.QtWidgets import QApplication
+
+    window = bank_window(sound_window, monkeypatch)
+    window.sync = False
+    monkeypatch.setattr(window, "_cache", lambda: tmp_path)
+    release, readers, started = threading.Event(), [], []
+    files = {BANK_PATH: bank_bytes(172), "other.bnk": bank_bytes(172, bank_id=7)}
+
+    def read(path):
+        readers.append(threading.current_thread())
+        assert release.wait(30)
+        return files[path]
+
+    def settle():
+        release.set()
+        window.background.join()
+        QApplication.processEvents()
+        release.clear()
+
+    window.tree = gametree.GameTree("t", read, files, lambda p: "t")
+    before = window.doc
+    window.open_bank(BANK_PATH)
+    window.open_bank("other.bnk")  # picked while the first is read: the one asked for last is shown
+    assert window.doc is before and "other.bnk" in window.statusBar().currentMessage()
+    settle()
+    assert readers and threading.main_thread() not in readers
+    assert window.doc is not before and window.doc.path == "other.bnk"
+
+    media = window._media_of
+    monkeypatch.setattr(window, "_media_of", lambda obj: (read(BANK_PATH), media(obj))[1])
+    monkeypatch.setattr(window.player, "start", started.append)
+    del readers[:]
+    window._select(11)
+    assert window.wave.shape is None and window.wave.message == tr("sound.reading_clip")
+    window._play()
+    assert not started and window.statusBar().currentMessage() == tr("sound.reading_clip")
+    settle()
+    assert len(readers) == 2 and threading.main_thread() not in readers
+    assert window.wave.shape is not None and [p.parent for p in started] == [tmp_path] and started[0].is_file()
+    window.close()
+
+
+@pytest.mark.parametrize("answers", [[("Weather", False)], [("Weather", True), ("Rain, Sun", False)]])
+def test_a_new_group_cancelled_at_any_question_asks_no_more_and_adds_nothing(sound_window, monkeypatch, answers):
+    from PySide6.QtWidgets import QInputDialog
+
+    window = bank_window(sound_window, monkeypatch)
+    left = list(answers)
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *_a, **_k: (_a[3][0], True))  # a state group
+    monkeypatch.setattr(QInputDialog, "getText", lambda *_a, **_k: left.pop(0))  # an IndexError: asked once more
+    window._new_group()
+    assert left == [] and not window.doc.changed and "Weather" not in window.statusBar().currentMessage()
+    window.close()
+
+
+def test_the_played_clips_go_into_the_workspace_cache_not_the_temp_folder(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.assetedit import assetgame
+    from annotoolbox.soundedit.soundwindow import SoundWindow
+    from annotoolbox.suite.settings import Settings
+
+    QApplication.instance() or QApplication([])
+    window = SoundWindow(Settings(workspace=str(tmp_path / "workspace")))
+    try:
+        folder = assetgame.cache_dir(tmp_path / "workspace") / "sounds"  # the folder the other apps' clips share
+        assert window._cache() == folder and window.old.cache == folder
+    finally:
+        window.deleteLater()

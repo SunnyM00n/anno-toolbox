@@ -26,7 +26,6 @@ class WorldMenu:
         return self.window.settings.apps.setdefault(APP, {})
 
     def toggled(self) -> None:
-        self._settings()["world_scene"] = self.window.world_action.isChecked()
         self.apply()
 
     def _chosen(self, key: str | None, value: str = "") -> None:
@@ -40,7 +39,7 @@ class WorldMenu:
     def pick(self) -> None:
         """A picture file as the scene."""
         name, _ = QFileDialog.getOpenFileName(
-            self.window, tr("Pick a picture of the scene"), "", "Pictures (*.png *.jpg *.jpeg *.bmp)"
+            self.window, tr("ui.pick_picture_scene"), "", "Pictures (*.png *.jpg *.jpeg *.bmp)"
         )  # i18n: ok (a file filter)
         if name:
             self._chosen("world_picture", name)
@@ -52,22 +51,22 @@ class WorldMenu:
         """A model config of the open game, drawn by the viewer's renderer as the scene."""
         from . import worldrender  # the renderers are loaded with their first use, not with the editor's start
 
-        self._pick("world_model", lambda game: worldrender.configs(game.tree), tr("A model of the game"),
-                   tr("The model drawn behind the UI:"), tr("this game has no model configs"))  # fmt: skip
+        self._pick("world_model", lambda game: worldrender.configs(game.tree), tr("ui.model_game"),
+                   tr("ui.model_drawn_behind_ui"), tr("ui.game_no_model_configs"))  # fmt: skip
 
     def pick_island(self) -> None:
         """An island of the open game, drawn by the island editor's renderer as the scene."""
         from . import worldrender
 
         settings = self.window.settings
-        self._pick("world_island", lambda game: worldrender.islands(settings, game.key), tr("An island of the game"),
-                   tr("The island drawn behind the UI:"), tr("this game has no islands the island editor opens"))  # fmt: skip
+        self._pick("world_island", lambda game: worldrender.islands(settings, game.key), tr("ui.island_game"),
+                   tr("ui.island_drawn_behind_ui"), tr("ui.game_no_islands_island_editor"))  # fmt: skip
 
     def _pick(self, key: str, listed, title: str, label: str, none: str) -> None:
         """The game's files of a kind, listed off the window's thread, one of them picked as the scene."""
         window, game = self.window, self.window.game
         if game is None:
-            window.statusBar().showMessage(tr("File > Open game first: the scene is one of its files"))
+            window.statusBar().showMessage(tr("ui.file_gt_open_game_first"))
             return
 
         def got(names) -> None:
@@ -87,13 +86,17 @@ class WorldMenu:
         if self.still is not None or any(self._settings().get(k) for k in CHOICES[1:]):
             self.apply()
 
+    def close(self) -> None:
+        """The window closes: a model or island still being drawn is dropped with its view."""
+        if self.still is not None:
+            self.still.cancel()
+            self.still = None
+
     def apply(self) -> None:
         """Put the scene behind the preview (the model or island drawn, the picked picture, else the stand-in), or take
         it away; a model or island still being drawn is dropped."""
         window, settings = self.window, self._settings()
-        if self.still is not None:
-            self.still.cancel()
-            self.still = None
+        self.close()
         if not window.world_action.isChecked():
             window.preview.set_world(None)
             return
@@ -117,7 +120,7 @@ class WorldMenu:
         window, game = self.window, self.window.game
         if window.preview.world is None:
             window.preview.set_world(worldscene.stand_in())
-        window.statusBar().showMessage(tr("drawing {path} behind the UI ...", path=path))
+        window.statusBar().showMessage(tr("ui.drawing_behind_ui", path=path))
         if key == "world_model":
             subject = worldrender.Model(game.tree, game.key, path)
         else:
@@ -128,10 +131,10 @@ class WorldMenu:
                 return  # another scene was chosen meanwhile, or the switch turned off
             self.still = None
             if isinstance(result, Exception):
-                window.statusBar().showMessage(tr("the scene was not drawn: {error}", error=result))
+                window.statusBar().showMessage(tr("ui.scene_not_drawn", error=result))
                 return
             window.preview.set_world(result)
-            window.statusBar().showMessage(tr("{path} is the scene behind the UI", path=path))
+            window.statusBar().showMessage(tr("ui.scene_behind_ui", path=path))
 
         still = self.still = worldrender.Still(subject, done)
         still.start()

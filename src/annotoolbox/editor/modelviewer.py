@@ -126,9 +126,9 @@ class ConfigModels:
         try:
             model = self.model_config(cfg)
         except Exception as exc:  # a config the reader does not take: a marker, said in the Log
-            return tr("the config does not read: {error}", error=f"{type(exc).__name__}: {exc}")
+            return tr("islands.config_not_read", error=f"{type(exc).__name__}: {exc}")
         if not model.pieces and not model.leaves and not model.files:
-            return tr("the config names no mesh")
+            return tr("islands.config_names_no_mesh")
         found = [self._mesh_problem(p.mesh) for p in model.pieces]
         return found[0] if all(found) and not model.leaves and not model.files else ""
 
@@ -137,14 +137,14 @@ class ConfigModels:
         problems, bad = self._model_state()[:2]
         notes = []
         for title, rows in (
-            (N_("{n} model configs drawn as markers"), sorted((c, why) for c, why in problems.items() if why)),
-            (N_("{n} meshes left out of the models"), sorted((m, why) for m, why in bad.items() if why)),
+            (N_("islands.model_configs_drawn_markers"), sorted((c, why) for c, why in problems.items() if why)),
+            (N_("islands.meshes_left_out_models"), sorted((m, why) for m, why in bad.items() if why)),
         ):
             if rows:
                 notes.append(tr(title, n=len(rows)))
-                notes += [tr("  {name}: {why}", name=name, why=why) for name, why in rows[:NOTES_LISTED]]
+                notes += [tr("islands.name_why", name=name, why=why) for name, why in rows[:NOTES_LISTED]]
                 if len(rows) > NOTES_LISTED:
-                    notes.append(tr("  ... and {n} more", n=len(rows) - NOTES_LISTED))
+                    notes.append(tr("islands.and_n_more", n=len(rows) - NOTES_LISTED))
         return notes
 
     def model(self, cfg: str) -> dict:
@@ -173,7 +173,7 @@ class ConfigModels:
         tree = self.tree2070
         found, left = load_efc(tree.read_text(path), path, self.textures_of(path))
         for why in left:
-            note = tr("effect left out: {why}", why=why)
+            note = tr("islands.effect_left_out", why=why)
             if note not in self.notes:
                 self.notes.append(note)
         return found
@@ -186,7 +186,7 @@ class ConfigModels:
         """A leaf cluster's cards (``<cfg>|leaves<index>``), which the view turns to the camera."""
         found = leaves_ref(ref)
         if found is None:
-            raise FileNotFoundError(tr("{ref} is not a leaf cluster", ref=ref))
+            raise FileNotFoundError(tr("islands.not_leaf_cluster", ref=ref))
         return leaf_cards(self.tree2070.read_text(found[0]), found[1])
 
 
@@ -200,7 +200,7 @@ class RdmModels(ConfigModels):
     def _mesh_problem(self, mesh: str) -> str:
         bad = self._model_state()[1]
         if mesh not in bad:
-            bad[mesh] = "" if self.tree2070.exists(mesh) else tr("not in the game's files")
+            bad[mesh] = "" if self.tree2070.exists(mesh) else tr("islands.not_games_files")
         return bad[mesh] and f"{mesh}: {bad[mesh]}"
 
     def _piece_parts(self, piece: Piece) -> list[dict]:
@@ -215,5 +215,5 @@ class RdmModels(ConfigModels):
                 try:
                     write_atomic(out, rdm_to_glb(self.tree2070.read_bytes(rdm), int(material)))
                 except (RdmReadError, ValueError) as exc:
-                    raise FileNotFoundError(tr("cannot read the mesh {ref}: {error}", ref=ref, error=exc)) from exc
+                    raise FileNotFoundError(tr("islands.cannot_read_mesh", ref=ref, error=exc)) from exc
         return out.read_bytes()

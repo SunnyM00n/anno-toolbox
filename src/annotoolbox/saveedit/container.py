@@ -31,7 +31,7 @@ class Part:
     _tree: object = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def tree(self):
+    def tree(self) -> filedb.Tag | bintree.Tree | isd2070.Node | None:
         """The document's tree (``filedb.Tag``, ``bintree.Tree`` or ``isd2070.Node``), None for pictures and bytes."""
         with self._lock:
             if self._tree is None and self.kind in (FILEDB, BINTREE, TAGTREE):
@@ -84,7 +84,7 @@ def kind_of(doc: bytes) -> str:
     return FILEDB
 
 
-def read_document(doc: bytes, kind: str):
+def read_document(doc: bytes, kind: str) -> filedb.Tag | bintree.Tree | isd2070.Node:
     if kind == FILEDB:
         return filedb.read(doc)
     if kind == BINTREE:

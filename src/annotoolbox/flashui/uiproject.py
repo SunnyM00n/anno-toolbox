@@ -44,7 +44,7 @@ class Project:
         """The edit file at ``path``; a ``ValueError`` when it is not one (or not JSON)."""
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict) or data.get("format") != FORMAT:
-            raise ValueError(tr("{path}: not a Flash UI edit file of format {format}", path=path, format=FORMAT))
+            raise ValueError(tr("ui.not_flash_ui_edit_file", path=path, format=FORMAT))
         edits = {m: [feuedit.Edit.from_json(e) for e in es] for m, es in data.get("movies", {}).items()}
         return cls(path, edits, dict(data.get("files", {})), dict(data.get("icons", {})))
 
@@ -60,7 +60,7 @@ class Project:
     def save(self, path: Path | None = None) -> Path:
         self.path = path or self.path
         if self.path is None:
-            raise ValueError(tr("the edit file has no path yet"))
+            raise ValueError(tr("ui.edit_file_no_path_yet"))
         data = self.to_json()
         write_atomic(self.path, (json.dumps(data, indent=1, ensure_ascii=False) + "\n").encode("utf-8"))
         self.saved = data
@@ -129,19 +129,19 @@ def _icons(project: Project, ui: ui2205.UiFiles) -> dict[str, bytes]:
         from PIL import Image
     except ImportError as e:
         if project.icons:
-            raise RuntimeError(tr("replacing an atlas icon needs Pillow: pip install pillow")) from e
+            raise RuntimeError(tr("ui.replacing_atlas_icon_needs_pillow")) from e
         return {}
     pictures: dict[str, Image.Image] = {}
     for name, file in project.icons.items():
         found = ui.atlas_entry(name)
         if found is None:
-            raise ValueError(tr("no atlas has an icon {name!r}", name=name))
+            raise ValueError(tr("ui.no_atlas_icon", name=name))
         atlas, entry = found
         icon = Image.open(project.source(file)).convert("RGBA")
         if icon.size != (entry.width, entry.height):
             raise ValueError(
                 tr(
-                    "{file}: {width}x{height}, the icon {name} is {icon_width}x{icon_height}",
+                    "ui.x_icon",
                     file=file,
                     width=icon.size[0],
                     height=icon.size[1],

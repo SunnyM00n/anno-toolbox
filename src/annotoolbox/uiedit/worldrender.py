@@ -202,7 +202,7 @@ class Still(QObject):
         """Read the subject (off the window's thread unless ``wait``), then draw it on ``backend`` (``device()``)."""
         backend = backend or device()
         if backend is None:
-            self.done(RuntimeError(tr("no Direct3D or OpenGL device can draw the scene here")))
+            self.done(RuntimeError(tr("ui.no_direct3d_opengl_device_draw")))
             return
         self.background.run(self.subject.read, lambda got: self._read(got, backend), wait)
 
@@ -237,9 +237,7 @@ class Still(QObject):
                 self.view.picture(*self.size)  # what loaded during the framing frame is drawn in the next
                 self._finish(worldscene.from_image(self.view.picture(*self.size), self.subject.key))
             elif time.monotonic() - self.started > self.subject.wait:
-                raise RuntimeError(
-                    tr("the scene's files did not come in within {n} minutes", n=round(self.subject.wait / 60))
-                )
+                raise RuntimeError(tr("ui.scenes_files_not_come_within", n=round(self.subject.wait / 60)))
         except (RuntimeError, ValueError) as error:
             self._finish(error)
 

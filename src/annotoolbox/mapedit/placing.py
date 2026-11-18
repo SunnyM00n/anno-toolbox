@@ -14,10 +14,10 @@ from .template import KIND_FIXED, KIND_START, Element, snap
 
 Box = tuple[int, int, int, int]
 MIRRORS = {
-    "x": N_("across the north-south line"),
-    "z": N_("across the east-west line"),
-    "xz": N_("across both lines (four quarters)"),
-    "point": N_("through the centre (a half turn)"),
+    "x": N_("maps.across_north_south_line"),
+    "z": N_("maps.across_east_west_line"),
+    "xz": N_("maps.across_both_lines_four_quarters"),
+    "point": N_("maps.through_centre_half_turn"),
 }
 
 
@@ -35,7 +35,8 @@ def grid(e: Element, edge: int) -> Box:
     return (e.x, e.z, e.x + edge, e.z + edge)
 
 
-def _overlap(a: Box, b: Box) -> bool:
+def overlap(a: Box, b: Box) -> bool:
+    """Whether two boxes share ground (touching edges do not)."""
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
@@ -54,7 +55,7 @@ def complexes(elements: list[Element], edge_of: Callable[[Element], int]) -> lis
 
     for n, i in enumerate(fixed):
         for j in fixed[n + 1 :]:
-            if _overlap(boxes[i], boxes[j]):
+            if overlap(boxes[i], boxes[j]):
                 parent[root(i)] = root(j)
     groups: dict[int, list[int]] = {}
     for i in fixed:

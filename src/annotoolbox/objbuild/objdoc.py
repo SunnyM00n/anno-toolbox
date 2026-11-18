@@ -86,20 +86,18 @@ def _saved(doc: Doc, read: str, held: Held, notes: list[str]) -> tuple[Doc, str]
     whole, patch = held(read), held(read + ".xml")
     if whole is not None:
         if patch is not None:
-            notes.append(
-                tr("{path}: the project holds a patch beside the whole file; the whole file is read", path=read)
-            )
+            notes.append(tr("objects.project_holds_patch_beside_whole", path=read))
         try:
             saved = Doc.read(whole, read)
             if not saved.root.children:
-                raise ValueError(tr("no config in it"))
+                raise ValueError(tr("objects.no_config"))
         except ValueError as exc:
-            notes.append(tr("{path} in the project does not open: {error}", path=read, error=exc))
+            notes.append(tr("objects.project_not_open", path=read, error=exc))
             return doc, ""
         return replace(doc, root=saved.root, exact=saved.exact, newline=saved.newline), WHOLE
     if patch is not None and read.endswith(cfgpatch.PATCHED) and doc.exact:
         patched, warnings = cfgpatch.apply_patch(doc, patch)
-        notes += [tr("{path}.xml: {warning}", path=read, warning=w) for w in warnings]
+        notes += [tr("objects.path_xml_warning", path=read, warning=w) for w in warnings]
         return patched, PATCH
     return doc, ""
 
@@ -154,7 +152,7 @@ class ObjectDoc:
     @property
     def title(self) -> str:
         main = self.main
-        shared = tr(" (the baked copy {name})", name=main.read) if main.read != main.asked else ""
+        shared = tr("objects.baked_copy_name", name=main.read) if main.read != main.asked else ""
         return main.asked.rsplit("/", 1)[-1] + shared
 
     def apply(self, role: str, *edits: Edit) -> None:

@@ -3,9 +3,9 @@ that game uses (117: DXC to DXIL on Direct3D 12; 2205, 2070, 1404, 1701, 1800: F
 compiler, the backend and our reading of that game's frame are there, else our plain look (viewer.md "Looks"); with the
 backend that look needs, the frame's parts as switches and the choice remembered per game.
 
-``options(game, found, backends, choice)`` is the entry (no Qt, no GPU); ``GAMES`` says per game how far its path is
-built, ``part_on`` whether a pass draws a part, ``find_compiler`` finds the compiler, ``Choice`` is what
-``Settings.rendering`` keeps per game, ``hardware_env`` the hardware setting for Qt. docs/viewer.md; tool-suite.md 21.
+``options(game, found, backends, choice)`` is the entry (no Qt, no GPU; texts in the interface language); ``GAMES``
+says how far a game's path is built, ``part_on`` whether a pass draws a part, ``find_compiler`` finds the compiler,
+``Choice`` is what ``Settings.rendering`` keeps, ``hardware_env`` Qt's hardware setting. viewer.md; tool-suite.md 21.
 """
 
 from __future__ import annotations
@@ -13,23 +13,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..infra.i18n import N_
+from ..infra.i18n import N_, tr
 
 DXC, FXC = "dxc", "fxc"
 # the frame's parts a native path can draw, as switches; a game lists each with "yes" or why it does not draw it
 FEATURES = {
-    "shadows": N_("Sun shadows"),
-    "sky": N_("The sky's light"),
-    "atmosphere": N_("The visible sky and haze"),
-    "clouds": N_("Clouds"),
-    "lights": N_("Local lights"),
-    "transparent": N_("Transparent pass"),
-    "water": N_("Water"),
-    "waves": N_("Ocean waves"),
-    "post": N_("Post chain (tone map, grade)"),
-    "eye": N_("Eye adaptation"),
-    "ssao": N_("Ambient occlusion"),
-    "ssr": N_("Screen-space reflections"),
+    "shadows": N_("common.sun_shadows"),
+    "sky": N_("common.skys_light"),
+    "atmosphere": N_("common.visible_sky_haze"),
+    "clouds": N_("common.clouds"),
+    "lights": N_("common.local_lights"),
+    "transparent": N_("common.transparent_pass"),
+    "water": N_("common.water"),
+    "waves": N_("common.ocean_waves"),
+    "post": N_("common.post_chain_tone_map_grade"),
+    "eye": N_("common.eye_adaptation"),
+    "ssao": N_("common.ambient_occlusion"),
+    "ssr": N_("common.screen_space_reflections"),
 }
 YES = "yes"
 NOT_YET = "not yet"
@@ -38,8 +38,17 @@ NOT_YET = "not yet"
 NONE_2205 = "the game draws none"
 # 2205 traces its screen-space reflections on rivers and lakes only: none under a model (shader-compile.md 11)
 RIVERS_2205 = "the game traces them on rivers and lakes only"
+ONLY_NATIVE = "only with the game's own shaders"  # a part's state under our plain look
+# a part's state other than YES (a key the code compares) -> the string id of the reason a view shows
+STATUS_TEXTS = {
+    NOT_YET: N_("common.not_yet"),
+    NONE_2205: N_("common.game_draws_none"),
+    RIVERS_2205: N_("common.game_traces_rivers_lakes_only"),
+    ONLY_NATIVE: N_("common.only_with_games_own_shaders"),
+}
 PLAIN = "editor"  # our plain look: the editor's shading, the fallback of every game
-PLAIN_LABEL = "Our plain look"
+PLAIN_LABEL = N_("common.our_plain_look")
+APIS = {"d3d12": "Direct3D 12", "d3d11": "Direct3D 11"}  # a backend as a label names it
 NATIVE = "shaders"
 SOFTWARE_ENV = "QSG_RHI_PREFER_SOFTWARE_RENDERER"  # Qt's widgets read it when they make their device
 
@@ -55,7 +64,7 @@ class NativeGame:
     backend: str
     built: bool
     features: dict = field(default_factory=dict)
-    note: str = ""
+    note: str = ""  # the string id of what the path draws, "" none
     library: str = ""  # the compiler build the game used, when it is not the newest (2070: d3dcompiler_43)
     pass_class: str = ""  # "module:Class" of the viewer's pass that draws it ("viewer.fxcpass:FxcPass"), "" none
     off: tuple = ()  # the parts the game itself leaves off: offered, switched off until the user turns them on
@@ -73,39 +82,25 @@ GAMES = {
     "anno1800": NativeGame("anno1800", "Anno 1800", FXC, "d3d11", True,
                            _features(shadows=YES, sky=YES, atmosphere=YES, clouds=YES, lights=YES, transparent=YES,
                                      post=YES, water=YES, eye=YES, ssao=YES, waves=YES, ssr=YES),
-                           note="forward renderer, shader model 5.0 as shipped (its 5.1 set is for Direct3D 12): "
-                           "model_pbr's materials, its shadow cascades, its ambient occlusion, prefiltered sky cubes, "
-                           "the visible sky with its cloud box, haze, local lights, blended pass, model water with the "
-                           "engine's small waves and screen-space reflections, bloom, tone map and colour grade; its eye adaptation, which the game "
-                           "leaves off; its sea with the small and large waves in place of the view's ground",
+                           note=N_("common.own_shaders_draw_anno1800"),
                            pass_class="viewer.forwardpass:ForwardPass1800", off=("eye", "waves")),
     "anno2205": NativeGame("anno2205", "Anno 2205", FXC, "d3d11", True,
                            _features(shadows=YES, sky=YES, atmosphere=YES, clouds=YES, lights=YES, transparent=YES,
                                      water=YES, post=YES, ssao=NONE_2205, ssr=RIVERS_2205, waves=YES),
-                           note="forward renderer: model_pbr's materials, sun and fill lights of its ambient setting, its "
-                           "shadow map, sky cubes, the visible sky with its sky box, haze, cloud shadows, model "
-                           "water, particles, bloom and tone map; its sea with the ordinary waves in place of the "
-                           "view's ground, off until turned on",
+                           note=N_("common.own_shaders_draw_anno2205"),
                            pass_class="viewer.forwardpass:ForwardPass", off=("waves",)),
     "anno2070": NativeGame("anno2070", "Anno 2070", FXC, "d3d11", True,
                            _features(shadows=YES, atmosphere=YES, clouds=YES, lights=YES, transparent=YES, post=YES,
                                      water=YES, waves=YES),
-                           note="its Direct3D 11 path (shader model 5), deferred: its shadow, sky, lights, blended pass, "
-                           "bloom, model water and cloth; its sea with the ocean's waves in place of the view's ground, "
-                           "off until turned on",
+                           note=N_("common.own_shaders_draw_anno2070"),
                            library="d3dcompiler_43", pass_class="viewer.fxcpass:FxcPass", off=("waves",)),
     "anno1404": NativeGame("anno1404", "Anno 1404", FXC, "d3d11", True,
                            _features(shadows=YES, atmosphere=YES, clouds=YES, post=YES, water=YES, waves=YES),
-                           note="its Direct3D 10 path (shader model 4) on Direct3D 11: model.fx forward lit, its shadow, "
-                           "scattered sky, model water, post sequence and player colour; its sea's projected grid in "
-                           "place of the view's ground, off until turned on",
+                           note=N_("common.own_shaders_draw_anno1404"),
                            library="d3dcompiler_43", pass_class="viewer.fxcpass1404:FxcPass1404", off=("waves",)),
     "anno1701": NativeGame("anno1701", "Anno 1701", FXC, "d3d11", True,
                            _features(shadows=YES, atmosphere=YES, clouds=YES, water=YES, waves=YES),
-                           note="its Direct3D 9 effects compiled as shader model 4 on Direct3D 11: mesh.fx forward lit, "
-                           "fogged, its shadow, sky dome, clouds, a model's water sheet and player colour; the "
-                           "fixed-function stage stood in for; its sea's projected grid in place of the view's "
-                           "ground, off until turned on",
+                           note=N_("common.own_shaders_draw_anno1701"),
                            library="d3dcompiler_43", pass_class="viewer.fxcpass1701:FxcPass1701", off=("waves",)),
 }  # fmt: skip
 
@@ -153,18 +148,18 @@ def find_compiler(game: str, folder: str | Path | None) -> Found:
     """The compiler a game's own shaders need, looked for as the loaders do (the game's own first)."""
     native = GAMES.get(game)
     if native is None or not native.compiler:
-        return Found(why="no shaders of its own are drawn for this game")
+        return Found(why=tr("common.no_own_shaders_drawn_game"))
     try:
         if native.compiler == DXC:
             from ..infra import dxc
 
             c = dxc.Dxc.find(anno117=folder)
-            where = "the game's" if folder and Path(folder) in c.folder.parents else str(c.folder)
+            where = tr("common.the_games") if folder and Path(folder) in c.folder.parents else str(c.folder)
             return Found(f"DXC {c.version()} ({where})")
         from ..infra import fxc
 
         c = fxc.Fxc.find(folder, native.library)
-        return Found(f"FXC {c.version()} ({'the game' + chr(39) + 's' if c.is_games() else str(c.path.parent)})")
+        return Found(f"FXC {c.version()} ({tr('common.the_games') if c.is_games() else str(c.path.parent)})")
     except Exception as e:  # the loaders' Missing errors, or an OS without the DLLs
         return Found(why=str(e))
 
@@ -199,12 +194,17 @@ class LookOption:
 class FeatureOption:
     key: str
     label: str
-    status: str  # YES, or why it is not drawn
+    status: str  # YES, or the key of why it is not drawn (NOT_YET, ...)
     on: bool
 
     @property
     def enabled(self) -> bool:
         return self.status == YES
+
+    @property
+    def status_text(self) -> str:
+        """``status`` as a view shows it, in the interface language."""
+        return status_text(self.status)
 
 
 @dataclass(frozen=True)
@@ -231,22 +231,31 @@ class Options:
 
 
 def native_label(game: str) -> str:
+    """The label of the look "the game's own shaders" for ``game``: its title, compiler and API."""
     g = GAMES.get(game)
     if g is None:
-        return "The game's own shaders"
-    api = {"d3d12": "Direct3D 12", "d3d11": "Direct3D 11"}[g.backend]
-    return f"{g.title}'s own shaders ({g.compiler.upper()}, {api})"
+        return tr("common.games_own_shaders")
+    return tr("common.title_own_shaders_compiler_api", title=g.title, compiler=g.compiler.upper(), api=APIS[g.backend])
+
+
+def status_text(status: str) -> str:
+    """A frame part's state as a view shows it: the reason in the interface language (``YES`` and a state without a
+    text as they are)."""
+    return tr(STATUS_TEXTS[status]) if status in STATUS_TEXTS else status
 
 
 def _native_why(native: NativeGame | None, found: Found, backends: set[str]) -> str:
+    """Why the game's own shaders cannot draw ("" when they can), in the interface language."""
     if native is None:
-        return "this game has no shaders of its own the viewer reads"
+        return tr("common.game_no_shaders_viewer_reads")
     if not native.built:
-        return f"{native.title}'s own shaders: {NOT_YET} ({native.note})" if native.note else NOT_YET
+        if not native.note:
+            return status_text(NOT_YET)
+        return tr("common.title_own_shaders_not_yet", title=native.title, note=tr(native.note))
     if not found.text:
-        return found.why or "the shader compiler was not found"
+        return found.why or tr("common.shader_compiler_not_found")
     if native.backend not in backends:
-        return f"needs {native.backend}, which this machine or window cannot draw with"
+        return tr("common.needs_backend_cannot_draw", backend=native.backend)
     return ""
 
 
@@ -258,7 +267,7 @@ def options(game: str, found: Found, backends: set[str], choice: Choice | None =
     choice = choice or Choice()
     native = GAMES.get(game)
     why = _native_why(native, found, backends)
-    looks = [LookOption(NATIVE, native_label(game), not why, why), LookOption(PLAIN, PLAIN_LABEL, True)]
+    looks = [LookOption(NATIVE, native_label(game), not why, why), LookOption(PLAIN, tr(PLAIN_LABEL), True)]
     look = NATIVE if not why else PLAIN
     if choice.look and any(o.key == choice.look and o.enabled for o in looks):
         look = choice.look
@@ -268,11 +277,11 @@ def options(game: str, found: Found, backends: set[str], choice: Choice | None =
         backend = native.backend  # the game's compiled shaders run on one API only
     features = []
     for key, label in FEATURES.items():
-        status = native.features.get(key, NOT_YET) if native and look == NATIVE else "only with the game's own shaders"
+        status = native.features.get(key, NOT_YET) if native and look == NATIVE else ONLY_NATIVE
         default = not (native and key in native.off)
         features.append(FeatureOption(key, label, status, bool(choice.features.get(key, default))))
     return Options(game, tuple(looks), look, backend, needed, tuple(features),
-                   found.text or found.why, build, native.note if native else "")  # fmt: skip
+                   found.text or found.why, build, tr(native.note) if native and native.note else "")  # fmt: skip
 
 
 def exe_version(folder: str | Path | None) -> str:
@@ -301,7 +310,7 @@ def apply_hardware(hardware: bool) -> None:
     os.environ.update(hardware_env(hardware))
 
 
-_SUPPORT: list = []
+_SUPPORT: list = []  # the adapter as probed, asked once
 
 
 def gpu_support() -> str:
@@ -309,10 +318,9 @@ def gpu_support() -> str:
     if not _SUPPORT:
         from ..infra import gpuinfo
 
-        found = gpuinfo.probe()
-        used = "; not used: QRhi has no ray-tracing API (the games' non-ray-traced techniques draw)"
-        _SUPPORT.append(found.text() + (used if found.ray_tracing else ""))
-    return _SUPPORT[0]
+        _SUPPORT.append(gpuinfo.probe())
+    found = _SUPPORT[0]
+    return tr("common.support_ray_tracing_not_used", support=found.text()) if found.ray_tracing else found.text()
 
 
 @dataclass(frozen=True)
@@ -326,7 +334,7 @@ class Adapter:
     ray_tracing: str = ""
 
     def text(self) -> str:
-        kind = "software" if self.software else "hardware"
+        kind = tr("common.adapter_software") if self.software else tr("common.adapter_hardware")
         extra = "".join(f", {x}" for x in (self.feature_level, self.ray_tracing) if x)
         return f"{self.name} ({kind}, {self.backend}{extra})"
 

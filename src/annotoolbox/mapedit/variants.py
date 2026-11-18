@@ -24,9 +24,9 @@ class Level:
 
 
 LEVELS = (
-    Level("easy", N_("easy"), "Large"),
-    Level("medium", N_("medium"), "Medium"),
-    Level("hard", N_("hard"), "Small"),
+    Level("easy", N_("maps.easy"), "Large"),
+    Level("medium", N_("maps.medium"), "Medium"),
+    Level("hard", N_("maps.hard"), "Small"),
 )
 
 

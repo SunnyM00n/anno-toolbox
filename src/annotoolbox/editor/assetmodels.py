@@ -20,20 +20,30 @@ from ..sources.overlay import normalize
 
 
 class Reason:
-    """Why an object has no model of its own to draw (the Checks tab groups its findings by these)."""
+    """Why an object has no model of its own to draw (the Checks tab groups its findings by these): data, kept in
+    English in an entry; ``describe`` shows one."""
 
-    NO_ASSET = N_("the game has no asset with this GUID")
-    NO_MODEL = N_("its asset names no model")
-    PLACEHOLDER = N_("its asset only names an editor placeholder")
-    UNREADABLE = N_("its model config cannot be read")
-    EMPTY = N_("its model config draws nothing (a decal or an effect the view does not show)")
+    NO_ASSET = "the game has no asset with this GUID"
+    NO_MODEL = "its asset names no model"
+    PLACEHOLDER = "its asset only names an editor placeholder"
+    UNREADABLE = "its model config cannot be read"
+    EMPTY = "its model config draws nothing (a decal or an effect the view does not show)"
+
+
+SHOWN = {
+    Reason.NO_ASSET: N_("islands.game_no_asset_guid"),
+    Reason.NO_MODEL: N_("islands.asset_names_no_model"),
+    Reason.PLACEHOLDER: N_("islands.asset_only_names_editor_placeholder"),
+    Reason.UNREADABLE: N_("islands.model_config_cannot_read"),
+    Reason.EMPTY: N_("islands.model_config_draws_nothing_decal"),
+}
 
 
 def describe(why: str) -> str:
     """A reason as the interface language says it (a reason may carry a detail after a colon)."""
-    for reason in (Reason.NO_ASSET, Reason.NO_MODEL, Reason.PLACEHOLDER, Reason.UNREADABLE, Reason.EMPTY):
+    for reason, shown in SHOWN.items():
         if why == reason or why.startswith(reason + ":"):
-            return tr(reason) + why[len(reason) :]
+            return tr(shown) + why[len(reason) :]
     return why
 
 

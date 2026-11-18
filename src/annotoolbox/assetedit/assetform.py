@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -40,13 +41,14 @@ from .values import OWN, Layers
 from .xmltree import parse, to_text
 
 ORIGINS = {
-    "own": N_("own"),
-    "base": N_("base {source}"),
-    "template": N_("template"),
-    "default": N_("default"),
+    "own": N_("assets.own"),
+    "base": N_("assets.base_source"),
+    "template": N_("assets.template"),
+    "default": N_("assets.default_lower"),
     "none": "",
 }
 OPEN_FIRST = 3  # blocks open when an asset is shown
+PLAIN = ""  # the one column of a list or an array whose items the schema gives no values: the item's own text
 
 
 def origin_text(origin: str, source: int | None) -> str:
@@ -111,7 +113,7 @@ class AssetForm(QScrollArea):
         self.hidden: set[str] = set()  # the open asset's template's secondary values
         self.original_layers: Layers | None = None
         self.opened: set[str] = set()
-        self._show(QLabel(tr("Pick an asset in the tree."), alignment=Qt.AlignmentFlag.AlignCenter))
+        self._show(QLabel(tr("assets.pick_asset_tree"), alignment=Qt.AlignmentFlag.AlignCenter))
 
     def _show(self, widget: QWidget) -> None:
         old = self.takeWidget()
@@ -121,11 +123,12 @@ class AssetForm(QScrollArea):
 
     def show_asset(self, doc: AssetDocument, guid: int | None) -> None:
         """Show ``guid`` (None: nothing); the same asset again keeps its open blocks."""
+        self._commit_pending()
         if guid != self.guid:
             self.opened = set()
         self.doc, self.guid = doc, guid
         if guid is None or not doc.exists(guid):
-            self._show(QLabel(tr("Pick an asset in the tree."), alignment=Qt.AlignmentFlag.AlignCenter))
+            self._show(QLabel(tr("assets.pick_asset_tree"), alignment=Qt.AlignmentFlag.AlignCenter))
             return
         self.layers = doc.layers(guid)
         self.original_layers = doc.layers(guid, original=True) if self.original else None
@@ -136,7 +139,7 @@ class AssetForm(QScrollArea):
         base = doc.base_of(guid)
         head = QLabel(  # i18n: ok (markup around names)
             f"<b>{doc.name(guid)}</b> · {guid} · {doc.template(guid)}"
-            + (" · " + tr("base {guid}", guid=base) if base else "")
+            + (" · " + tr("assets.base_guid", guid=base) if base else "")
         )
         layout.addWidget(head)
         self.blocks: dict[str, Block] = {}
@@ -149,6 +152,13 @@ class AssetForm(QScrollArea):
                 block.set_open(True)
         layout.addStretch(1)
         self._show(box)
+
+    def _commit_pending(self) -> None:
+        """A field still being typed in takes its text now, while the form is still its asset's: left to the rebuild,
+        the text would go to the asset shown next."""
+        focus, shown = QApplication.focusWidget(), self.widget()
+        if focus is not None and shown is not None and shown.isAncestorOf(focus):
+            focus.clearFocus()
 
     def refresh(self) -> None:
         if self.doc is not None:
@@ -206,29 +216,29 @@ class AssetForm(QScrollArea):
     def _left_out_text(left_out: dict[str, int]) -> str:
         parts = []
         if left_out["secondary"]:
-            parts.append(tr("{n} secondary template value(s)", n=left_out["secondary"]))
+            parts.append(tr("assets.n_secondary_template_values", n=left_out["secondary"]))
         if left_out["condition"]:
-            parts.append(tr("{n} value(s) whose conditions do not hold", n=left_out["condition"]))
-        return tr("not shown (View menu): {parts}", parts=", ".join(parts))
+            parts.append(tr("assets.values_whose_conditions_not_hold", n=left_out["condition"]))
+        return tr("assets.not_shown_view_menu", parts=", ".join(parts))
 
     def _raw_rows(self, form: QFormLayout, path: tuple[str, ...]) -> None:
-        form.addRow(QLabel(tr("<i>not in the schema</i>")), self._xml_field(path))
+        form.addRow(QLabel(tr("assets.not_schema")), self._xml_field(path))
 
     def _label(self, spec: ValueSpec, path: tuple[str, ...]) -> QWidget:
         found = self.layers.lookup(path)
         label = QLabel(f"<b>{spec.name}</b>" if found.origin == OWN else spec.name)
         tip = [
             spec.description or "",
-            f"{spec.type}" + (" " + tr("of {data_set}", data_set=spec.data_set) if spec.data_set else ""),
+            f"{spec.type}" + (" " + tr("assets.of_data_set", data_set=spec.data_set) if spec.data_set else ""),
         ]
         if len(path) == 2 and path[1] in self.hidden:
-            tip.append(tr("a secondary value of the asset's template"))
+            tip.append(tr("assets.secondary_value_assets_template"))
         if len(path) == 2 and not visibility.is_shown(self.doc.schema, self.layers, *path):
-            tip.append(tr("its visibility conditions do not hold for this asset"))
+            tip.append(tr("assets.visibility_conditions_not_hold_asset"))
         if spec.borrowed:
-            tip.append(tr("(the description is Anno 1800's)"))
+            tip.append(tr("assets.description_anno_1800s"))
         if spec.written:
-            tip.append(tr("(the description was written for this editor, not taken from the game)"))
+            tip.append(tr("assets.description_written_editor_not_taken"))
         label.setToolTip("\n".join(t for t in tip if t))
         label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         label.customContextMenuRequested.connect(lambda _at, p=path, lab=label: self._menu(p, lab))
@@ -236,7 +246,7 @@ class AssetForm(QScrollArea):
 
     def _menu(self, path: tuple[str, ...], label: QWidget) -> None:
         menu = QMenu(self)
-        act = menu.addAction(tr("Reset value"), lambda: self.doc.reset_value(self.guid, "/".join(path)))
+        act = menu.addAction(tr("assets.reset_value"), lambda: self.doc.reset_value(self.guid, "/".join(path)))
         act.setEnabled(self.layers.lookup(path).origin == OWN)
         menu.exec(label.mapToGlobal(label.rect().bottomLeft()))
 
@@ -260,6 +270,7 @@ class AssetForm(QScrollArea):
             editor.activated.connect(lambda _i, e=editor, p=path: self._set(p, e.currentText()))
         else:
             editor = QLineEdit(found.text)
+            editor.setReadOnly(spec.read_only)
             editor.editingFinished.connect(lambda e=editor, p=path: self._set(p, e.text()))
             if kind == "flags":
                 line.addWidget(editor, 1)
@@ -280,8 +291,8 @@ class AssetForm(QScrollArea):
         line.addWidget(badge)
         was = self._was(path, kind)
         if was is not None:
-            line.addWidget(QLabel(was, objectName="original", toolTip=tr("the game's own value")))
-        reset = QToolButton(text="↺", toolTip=tr("reset the value to what the asset inherits"))
+            line.addWidget(QLabel(was, objectName="original", toolTip=tr("assets.tip.games_own_value")))
+        reset = QToolButton(text="↺", toolTip=tr("assets.tip.reset_value_what_asset_inherits"))
         reset.setEnabled(found.origin == OWN)
         reset.clicked.connect(lambda _c=False, p=path: self.doc.reset_value(self.guid, "/".join(p)))
         line.addWidget(reset)
@@ -296,8 +307,12 @@ class AssetForm(QScrollArea):
             same = (to_text(before.element) if before.element is not None else "") == (
                 to_text(now.element) if now.element is not None else ""
             )
-            return None if same else tr("game: differs")
-        return None if before.text == now.text else tr("game: {value}", value=before.text or tr("(none)"))
+            return None if same else tr("assets.game_differs")
+        return (
+            None
+            if before.text == now.text
+            else tr("assets.game_value", value=before.text or tr("common.none_in_brackets"))
+        )
 
     def _names(self, spec: ValueSpec) -> list[str]:
         ds = self.doc.schema.data_sets.get(spec.data_set)
@@ -308,7 +323,7 @@ class AssetForm(QScrollArea):
             self.doc.set_value(self.guid, "/".join(path), text)
 
     def _flags_button(self, spec: ValueSpec, edit: QLineEdit, path: tuple[str, ...]) -> QWidget:
-        button = QToolButton(text="…", toolTip=tr("pick the flags"))
+        button = QToolButton(text="…", toolTip=tr("assets.tip.pick_flags"))
         button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(button)
         on = set(filter(None, edit.text().split(";")))
@@ -321,7 +336,7 @@ class AssetForm(QScrollArea):
         return button
 
     def _jump_button(self, edit: QLineEdit) -> QWidget:
-        button = QToolButton(text="→", toolTip=tr("show this asset"))
+        button = QToolButton(text="→", toolTip=tr("assets.tip.show_asset"))
         button.clicked.connect(lambda: edit.text().strip().isdigit() and self.jump.emit(int(edit.text())))
         if edit.text().strip().isdigit() and self.doc.exists(int(edit.text())):
             edit.setToolTip(self.doc.name(int(edit.text())))
@@ -329,7 +344,7 @@ class AssetForm(QScrollArea):
 
     def _asset_buttons(self, edit: QLineEdit, spec: ValueSpec, path: tuple[str, ...]) -> QWidget:
         """The picker (a search over the assets the value may name) and the jump to the one named."""
-        pick = QToolButton(text="…", toolTip=tr("pick an asset the value may name"))
+        pick = QToolButton(text="…", toolTip=tr("assets.tip.pick_asset_value_name"))
 
         def choose() -> None:
             guid = picker.pick_asset(self, self.doc, spec)
@@ -344,7 +359,7 @@ class AssetForm(QScrollArea):
         return box
 
     def _colour_button(self, edit: QLineEdit, path: tuple[str, ...]) -> QWidget:
-        button = QToolButton(text="…", toolTip=tr("pick a colour (alpha included)"))
+        button = QToolButton(text="…", toolTip=tr("assets.tip.pick_colour_alpha_included"))
         swatch = picker.from_argb(edit.text())
         button.setStyleSheet(f"QToolButton {{ border-left: 12px solid {swatch.name()}; }}")
 
@@ -358,7 +373,7 @@ class AssetForm(QScrollArea):
         return button
 
     def _file_button(self, edit: QLineEdit, spec: ValueSpec, path: tuple[str, ...]) -> QWidget:
-        button = QToolButton(text="…", toolTip=tr("pick one of the game's files"))
+        button = QToolButton(text="…", toolTip=tr("assets.tip.pick_one_games_files"))
 
         def choose() -> None:
             found = picker.pick_file(self, self.doc.files.paths, spec)
@@ -369,12 +384,12 @@ class AssetForm(QScrollArea):
         button.clicked.connect(lambda _c=False: choose())
         if not links.available(links.VIEW_FILE):
             return button
-        view = QToolButton(text=tr("View"), toolTip=tr("show the file in the viewer"))
+        view = QToolButton(text=tr("assets.view"), toolTip=tr("assets.tip.show_file_viewer"))
         view.clicked.connect(
             lambda _c=False: edit.text().strip() and links.view_file(self.doc.changes.game, edit.text())
         )
         box = _Buttons()
-        export = QToolButton(text=tr("Export"), toolTip=tr("export the file (as stored, or converted) from the viewer"))
+        export = QToolButton(text=tr("common.export"), toolTip=tr("assets.tip.export_file_stored_converted_viewer"))
         export.clicked.connect(
             lambda _c=False: edit.text().strip() and links.export_files(self.doc.changes.game, [edit.text().strip()])
         )
@@ -388,13 +403,13 @@ class AssetForm(QScrollArea):
         found = self.layers.lookup(path)
         edit = QPlainTextEdit(to_text(found.element) if found.element is not None else f"<{path[-1]} />")
         edit.setFixedHeight(90)
-        apply = QPushButton(tr("Apply"))
+        apply = QPushButton(tr("common.apply"))
 
         def done() -> None:
             try:
                 el = parse(edit.toPlainText())
             except ET.ParseError as exc:
-                apply.setToolTip(tr("not XML: {exc}", exc=exc))
+                apply.setToolTip(tr("assets.tip.not_xml_exc", exc=exc))
                 return
             self.doc.set_block(self.guid, "/".join(path), el)
 
@@ -409,7 +424,7 @@ class AssetForm(QScrollArea):
     def _table(self, spec: ValueSpec, path: tuple[str, ...], element: ET.Element | None) -> QWidget:
         """A list (one row per ``Item``) or an array (one row per data set item) as a table; any edit, an added or a
         removed row replaces the whole block (a list cannot be patched shorter)."""
-        cols = [s.name for s in spec.items] or [tr("value")]
+        cols = [s.name for s in spec.items] or [PLAIN]
         if spec.kind == "array":
             rows = self._names(spec) or [c.tag for c in (element if element is not None else [])]
             items = [element.find(r) if element is not None else None for r in rows]
@@ -428,7 +443,7 @@ class AssetForm(QScrollArea):
         lay.addWidget(table)
         if spec.kind == "list":
             buttons = QHBoxLayout()
-            add, remove = QPushButton(tr("Add item")), QPushButton(tr("Remove item"))
+            add, remove = QPushButton(tr("assets.add_item")), QPushButton(tr("assets.remove_item"))
             add.clicked.connect(lambda: self._add_item(path, element, spec))
             remove.clicked.connect(lambda: self._remove_item(path, element, table.currentRow()))
             buttons.addWidget(add)
@@ -444,7 +459,7 @@ class AssetForm(QScrollArea):
         sample = defaults.find("/".join(path[1:])) if defaults is not None and len(path) > 1 else None
         for child in sample if sample is not None else []:  # a new item's defaults (DefaultContainerValues)
             item.append(copy.deepcopy(child))
-        self.doc.set_block(self.guid, "/".join(path), out, label=tr("{name}: item added", name=path[-1]))
+        self.doc.set_block(self.guid, "/".join(path), out, label=tr("assets.name_item_added", name=path[-1]))
 
     def _remove_item(self, path: tuple[str, ...], element: ET.Element | None, row: int) -> None:
         items = element.findall("Item") if element is not None else []
@@ -452,17 +467,17 @@ class AssetForm(QScrollArea):
             return
         out = copy.deepcopy(element)
         out.remove(out.findall("Item")[row])
-        self.doc.set_block(self.guid, "/".join(path), out, label=tr("{name}: item removed", name=path[-1]))
+        self.doc.set_block(self.guid, "/".join(path), out, label=tr("assets.name_item_removed", name=path[-1]))
 
 
 def _filled_table(rows: list[str], cols: list[str], items: list[ET.Element | None]) -> QTableWidget:
     """One table row per item, one column per field; a nested block shows as XML and cannot be edited in a cell."""
     table = QTableWidget(len(rows), len(cols))
-    table.setHorizontalHeaderLabels(cols)
+    table.setHorizontalHeaderLabels([col or tr("common.value_lower") for col in cols])
     table.setVerticalHeaderLabels(rows)
     for r, item in enumerate(items):
         for c, col in enumerate(cols):
-            cell = item.find(col) if item is not None else None
+            cell = item if col == PLAIN else item.find(col) if item is not None else None
             nested = cell is not None and len(cell) > 0
             text = to_text(cell) if nested else (cell.text or "").strip() if cell is not None else ""
             widget = QTableWidgetItem(text)
@@ -477,25 +492,36 @@ def _rebuilt_block(
     spec: ValueSpec, path: tuple[str, ...], element: ET.Element | None, table: QTableWidget, rows: list[str],
     cols: list[str],
 ) -> ET.Element:  # fmt: skip
-    """The block the table now says: a copy of ``element`` with the edited cells written into it."""
+    """The block the table now says: a copy of ``element`` with the edited cells written into it. What a cell does
+    not show (a nested block, a value the schema does not know) stays as the copy has it."""
     out = copy.deepcopy(element) if element is not None else ET.Element(path[-1])
     out.tag = path[-1]
-    if spec.kind == "list":
-        for old in out.findall("Item"):
-            out.remove(old)
+    is_list = spec.kind == "list"
+    items = out.findall("Item") if is_list else []
     for r in range(table.rowCount()):
-        tag = "Item" if spec.kind == "list" else rows[r]
-        node = out.find(tag) if spec.kind == "array" else None
+        node = (items[r] if r < len(items) else None) if is_list else out.find(rows[r])
         if node is None:
-            node = ET.SubElement(out, tag)
+            node = ET.SubElement(out, "Item" if is_list else rows[r])
         for c, col in enumerate(cols):
             cell = table.item(r, c)
             if cell is not None and not cell.flags() & Qt.ItemFlag.ItemIsEditable:
                 continue  # kept from the copy
-            child = node.find(col)
-            text = cell.text() if cell is not None else ""
-            if text and child is None:
-                child = ET.SubElement(node, col)
-            if child is not None:
-                child.text = text
+            _write_cell(node, col, cell.text() if cell is not None else "", drop_empty=is_list)
     return out
+
+
+def _write_cell(node: ET.Element, col: str, text: str, drop_empty: bool) -> None:
+    """One cell's text into its row's element: the child ``col`` (made when there is text), or the element's own
+    text for ``PLAIN``; ``drop_empty``: an emptied child is taken out (a list item lists only what it sets)."""
+    if col == PLAIN:
+        node.text = text
+        return
+    child = node.find(col)
+    if child is None and text:
+        child = ET.SubElement(node, col)
+    if child is None:
+        return
+    if drop_empty and not text:
+        node.remove(child)
+    else:
+        child.text = text

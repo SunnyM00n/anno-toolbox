@@ -171,13 +171,13 @@ class GroundDraw:
             tex.filter = (0x2600, 0x2600)  # NEAREST
             g["slots2070"], g["side2070"], g["per2070"] = tex, side, info70["per"]
         elif isinstance(got, Exception):
-            self._message(tr("no 2070 look: {reason}", reason=got))
+            self._message(tr("islands.no_2070_look", reason=got))
 
     def _materials(self, meta: dict) -> list[dict]:
         mats = {}
         try:
             mats = {m["id"]: m for m in self.editor.materials()}
-        except Exception:
+        except Exception:  # the set does not read: the island's own list stands (the gallery says why)
             pass
         return [{**m, **mats.get(m["id"], {})} for m in meta["materials"]] + [
             m for i, m in mats.items() if i not in {x["id"] for x in meta["materials"]}

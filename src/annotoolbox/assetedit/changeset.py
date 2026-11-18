@@ -85,7 +85,7 @@ class ChangeSet:
         for guid in range(lo, hi + 1):
             if guid not in taken and guid not in self.new:
                 return guid
-        raise ValueError(tr("the GUID range {lo}-{hi} is full", lo=lo, hi=hi))
+        raise ValueError(tr("assets.guid_range_full", lo=lo, hi=hi))
 
     # the file
     def outside_range(self) -> list[int]:
@@ -106,7 +106,7 @@ class ChangeSet:
         if data.get("format", FORMAT) > FORMAT:
             raise ValueError(
                 tr(
-                    "change set format {format} is newer than this editor's ({current})",
+                    "assets.change_set_format_newer_editors",
                     format=data["format"],
                     current=FORMAT,
                 )

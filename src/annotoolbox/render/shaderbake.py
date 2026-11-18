@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -119,15 +120,18 @@ def find_qsb() -> Path | None:
 
 
 def _run(qsb: Path, args: list[str]) -> str:
-    done = subprocess.run(
-        [str(qsb), *args],
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-        timeout=120,
-        check=False,
-        **NO_WINDOW,  # a console tool: the windowed program would flash a console for every shader
-    )
+    try:
+        done = subprocess.run(
+            [str(qsb), *args],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=120,
+            check=False,
+            **NO_WINDOW,  # a console tool: the windowed program would flash a console for every shader
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:  # it did not start or never ended: the callers' one error
+        raise BakeError(f"Qt's shader baker did not run ({type(exc).__name__}: {exc})") from exc
     if done.returncode != 0:
         raise BakeError((done.stdout + done.stderr).strip())
     return done.stdout
@@ -152,11 +156,12 @@ def _layout(info: dict) -> tuple[dict[str, Member], int]:
     return {}, 0
 
 
-def _bake_stage(qsb: Path, source: str, suffix: str, scratch: Path) -> tuple[bytes, dict]:
+def _bake_stage(qsb: Path, source: str, suffix: str, scratch: Path, reflect: bool = True) -> tuple[bytes, dict]:
+    """One stage baked, and (``reflect``) the baker's reflection of it."""
     src, out = scratch / f"shader.{suffix}", scratch / f"shader.{suffix}.qsb"
     src.write_text(source, encoding="utf-8", newline="\n")
     _run(qsb, [*TARGETS, "-o", str(out), str(src)])
-    return out.read_bytes(), reflection(_run(qsb, ["-d", str(out)]))
+    return out.read_bytes(), reflection(_run(qsb, ["-d", str(out)])) if reflect else {}
 
 
 def bake(ported: Ported) -> Baked:
@@ -167,13 +172,62 @@ def bake(ported: Ported) -> Baked:
     key = buildcache.digest(VERSION, " ".join(TARGETS), ported.vertex, ported.fragment)
     files = buildcache.get_files(NAMESPACE, key)
     if files is None:
-        with tempfile.TemporaryDirectory(prefix="qsb-") as tmp:
+        # the two stages side by side (the baker is a program of its own); the uniform block is the vertex
+        # stage's, so only it is read back (a first start bakes every program of the view's look on its thread)
+        with tempfile.TemporaryDirectory(prefix="qsb-") as tmp, ThreadPoolExecutor(2) as pool:
+            fragment = pool.submit(_bake_stage, qsb, ported.fragment, "frag", Path(tmp), False)
             vert, vinfo = _bake_stage(qsb, ported.vertex, "vert", Path(tmp))
-            frag, _ = _bake_stage(qsb, ported.fragment, "frag", Path(tmp))
+            frag = fragment.result()[0]
         files = {"vert": vert, "frag": frag, "layout": json.dumps(vinfo).encode("utf-8")}
         buildcache.put_files(NAMESPACE, key, files)
     members, size = _layout(json.loads(files["layout"]))
     return Baked(files["vert"], files["frag"], members, size)
+
+
+DXBC_FLAGS = 0  # QRhi's Direct3D backends compile a stage's HLSL with no flags (Qt 6.12)
+
+
+@functools.cache
+def _system_compiler():
+    """Windows' own D3DCompiler 47, the one QRhi's Direct3D backends load (None where it does not load)."""
+    from ..infra import fxc
+
+    try:
+        return fxc.Fxc.windows()
+    except (fxc.FxcMissing, OSError):
+        return None
+
+
+def dxbc(hlsl: bytes, entry: str, profile: str, wait: bool = False) -> bytes | None:
+    """A baked stage's HLSL compiled to DXBC as QRhi's Direct3D backends compile it when a pipeline is made (Windows'
+    compiler, ``DXBC_FLAGS``), kept in the build cache: a later start makes the pipeline without compiling. Not kept
+    yet: compiled now with ``wait``, else in the background for the next start and None (QRhi compiles it itself
+    this time, as before: the window's thread never compiles more than it did). None too where no compiler loads or
+    it refuses the text."""
+    compiler = _system_compiler()
+    if compiler is None:
+        return None
+    key = buildcache.digest(VERSION, "dxbc", compiler.version(), profile, entry, hlsl)
+    kept = buildcache.get(NAMESPACE, key)
+    if kept is not None or not buildcache.enabled():
+        return kept
+    if not wait:
+        _background().submit(_compile_dxbc, compiler, key, hlsl, entry, profile)
+        return None
+    return _compile_dxbc(compiler, key, hlsl, entry, profile)
+
+
+@functools.cache
+def _background() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(1, thread_name_prefix="dxbc")
+
+
+def _compile_dxbc(compiler, key: str, hlsl: bytes, entry: str, profile: str) -> bytes | None:
+    done = compiler.compile(hlsl.decode("utf-8", "replace"), entry, profile, flags=DXBC_FLAGS)
+    if not done.ok:
+        return None
+    buildcache.put(NAMESPACE, key, done.object)
+    return done.object
 
 
 def bake_compute(source: str) -> bytes:

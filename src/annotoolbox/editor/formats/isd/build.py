@@ -73,7 +73,7 @@ def edited_files(
         edits = islandedits.load(path)
         source = edits.get("source")
         if not source or not tree.exists(source):
-            log(tr("{name}: no source island, skipped", name=path.name))
+            log(tr("islands.no_source_island_skipped", name=path.name))
             continue
         isl = Island2070(tree.read_bytes(source))
         report = isl.apply(edits, types)
@@ -84,7 +84,7 @@ def edited_files(
             files[far] = far_view(isl.island, tree.read_bytes(far))
         log(f"{source}: " + count_line(report))
         for miss in report["unmatched"]:
-            log(tr("  not found: {name}", name=miss))
+            log(tr("islands.not_found_name", name=miss))
     return files, written
 
 
@@ -140,11 +140,11 @@ def install_patch(install: Path, patch: bytes, backup: Path, log: Callable[[str]
     target = install / PATCH
     if target.is_file() and not is_ours(target):
         gamebackups.keep(target, backup)
-        log(tr("kept the game's {file} as {backup}", file=PATCH, backup=backup))
+        log(tr("islands.kept_games_file_backup", file=PATCH, backup=backup))
     elif target.is_file() and not backup.is_file():
         raise gamebackups.no_copy(target, backup)
     write_atomic(target, patch)
-    log(tr("wrote {target}", target=target))
+    log(tr("islands.wrote_target", target=target))
     return target
 
 
@@ -152,12 +152,10 @@ def uninstall_patch(install: Path, backup: Path, log: Callable[[str], None] = pr
     """Put the game's own patch9.rda back."""
     target = install / PATCH
     if not is_ours(target):
-        log(tr("{target} is the game's own; nothing to undo", target=target))
+        log(tr("islands.games_own_nothing_undo", target=target))
         return False
     if not backup.is_file():
-        raise FileNotFoundError(
-            tr("no copy of the game's {file} at {backup}: verify the files in the launcher", file=PATCH, backup=backup)
-        )
+        raise FileNotFoundError(tr("islands.no_copy_games_verify_files", file=PATCH, backup=backup))
     copy_atomic(backup, target)
-    log(tr("restored the game's {file}", file=PATCH))
+    log(tr("islands.restored_games_file", file=PATCH))
     return True

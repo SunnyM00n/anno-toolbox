@@ -4,6 +4,7 @@
 (an older copy of the same ModID is replaced: the old one goes to the recycle bin only after the new one is in place);
 ``remove_mod`` takes a mod folder out, to the recycle bin. A failure is an ``InstallError`` with a sentence. Nothing
 is written outside the mods folder; a folder that is half done starts with ``.`` so the loader never sees it.
+An error ``progress`` raises stops the install between two steps, the mods placed until then in ``placed``.
 ``docs/mod-manager.md`` "Install and remove". Stdlib only.
 """
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 import os
 import tempfile
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from ..modloader.modswap import STAGING, InstallError, Trash, check_folder_name,
 
 MAX_ZIP_BYTES = 16 * 1024**3
 SEARCH_DEPTH = 2  # how far below a folder or zip a mod's ``modinfo`` is looked for
+Progress = Callable[[str], None]  # a step's sentence, "" for a mere look whether to go on; it may raise to stop
 
 
 @dataclass
@@ -47,49 +50,57 @@ def find_mod_folders(source: Path) -> list[Path]:
     return []
 
 
-def install_path(source: Path, mods_dir: Path, anno: int | None, trash: Trash = recycle) -> list[Installed]:
+def install_path(
+    source: Path,
+    mods_dir: Path,
+    anno: int | None,
+    trash: Trash = recycle,
+    progress: Progress | None = None,
+    placed: list[Installed] | None = None,
+) -> list[Installed]:
     """Install every mod at ``source`` (a folder, a folder of mods or a ``.zip``) into ``mods_dir``. ``anno``: the
-    game's number in ``modinfo`` (117: 8); a mod that says another is refused with the loader's words."""
+    game's number in ``modinfo`` (117: 8); a mod that says another is refused with the loader's words. ``placed``:
+    the list the result is built in, so a caller that is stopped or fails knows what is in."""
     source, mods_dir = Path(source), Path(mods_dir)
+    job = _Job(trash, progress or (lambda _text: None), [] if placed is None else placed)
     if source.is_file() and source.suffix.lower() == ".zip":
-        return _install_zip(source, mods_dir, anno, trash)
+        return _install_zip(source, mods_dir, anno, job)
     if not source.is_dir():
-        raise InstallError(tr("{path} is neither a folder nor a .zip", path=source))
+        raise InstallError(tr("mods.neither_folder_nor_zip", path=source))
     if source.parent.resolve() == mods_dir.resolve() or source.resolve() == mods_dir.resolve():
-        raise InstallError(tr("that mod is in the mods folder already"))
+        raise InstallError(tr("mods.mod_mods_folder_already"))
     if source.resolve() in mods_dir.resolve().parents:
-        raise InstallError(tr("the mods folder is inside that folder: pick the mod's own folder"))
+        raise InstallError(tr("mods.mods_folder_inside_pick_own"))
     plans = _plan_all([(f, f.name, True) for f in _folders(source)], mods_dir, anno)
-    return _place_all(plans, mods_dir, trash, move=False)
+    return _place_all(plans, mods_dir, job, move=False)
 
 
 def _folders(source: Path) -> list[Path]:
     found = find_mod_folders(source)
     if not found:
-        raise InstallError(
-            tr("no modinfo.json in {name} or the folders just below it: it is not a mod", name=source.name)
-        )
+        raise InstallError(tr("mods.no_modinfo_json_folders_just", name=source.name))
     return found
 
 
-def _install_zip(path: Path, mods_dir: Path, anno: int | None, trash: Trash) -> list[Installed]:
+def _install_zip(path: Path, mods_dir: Path, anno: int | None, job: _Job) -> list[Installed]:
     mods_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=STAGING + "zip-", dir=mods_dir) as tmp:
         root = Path(tmp) / "unpacked"
-        _extract(path, root)
+        job.progress(tr("mods.unpacking_name", name=path.name))
+        _extract(path, root, job.progress)
         found = _folders(root)
         plans = _plan_all([(f, path.stem if f == root else f.name, f != root) for f in found], mods_dir, anno)
-        return _place_all(plans, mods_dir, trash, move=True)
+        return _place_all(plans, mods_dir, job, move=True)
 
 
-def _extract(path: Path, into: Path) -> None:
+def _extract(path: Path, into: Path, progress: Progress = lambda _text: None) -> None:
     try:
         with zipfile.ZipFile(path) as zf:
             infos = zf.infolist()
             if sum(i.file_size for i in infos) > MAX_ZIP_BYTES:
                 raise InstallError(
                     tr(
-                        "{name} unpacks to more than {size} GiB: not installed",
+                        "mods.unpacks_more_gib_not_installed",
                         name=path.name,
                         size=MAX_ZIP_BYTES >> 30,
                     )
@@ -104,18 +115,27 @@ def _extract(path: Path, into: Path) -> None:
                 ):
                     raise InstallError(
                         tr(
-                            "{name} holds a file outside its own folder ({file}): not installed",
+                            "mods.holds_file_outside_own_folder",
                             name=path.name,
                             file=info.filename,
                         )
                     )
-            zf.extractall(into)
+            for info in infos:
+                progress("")
+                zf.extract(info, into)
     except zipfile.BadZipFile as exc:
-        raise InstallError(tr("{name} is not a readable zip: {reason}", name=path.name, reason=exc)) from exc
+        raise InstallError(tr("mods.not_readable_zip", name=path.name, reason=exc)) from exc
     except OSError as exc:
-        raise InstallError(
-            tr("{name} could not be unpacked: {reason}", name=path.name, reason=exc.strerror or exc)
-        ) from exc
+        raise InstallError(tr("mods.could_not_unpacked", name=path.name, reason=exc.strerror or exc)) from exc
+
+
+@dataclass
+class _Job:
+    """What one install carries through its steps."""
+
+    trash: Trash
+    progress: Progress
+    placed: list[Installed]
 
 
 @dataclass
@@ -134,21 +154,21 @@ def _plan_one(folder: Path, name: str, mods_dir: Path, anno: int | None, own_nam
     folder's own name is not usable or the folder is the whole zip), and it does not overwrite another mod."""
     mod, why = read_mod(folder, anno)
     if mod is None:
-        raise InstallError(tr("{name} is not a mod the loader takes: {why}", name=folder.name, why=why))
+        raise InstallError(tr("mods.name_not_mod_loader_takes", name=folder.name, why=why))
     name = name if own_name and name and not parked(name) else mod.mod_id
     check_folder_name(name)
     dest = mods_dir / name
     if os.path.abspath(dest.parent) != os.path.abspath(mods_dir):
-        raise InstallError(tr("{name!r} would leave the mods folder: not installed", name=name))
+        raise InstallError(tr("mods.leave_mods_folder_not_installed", name=name))
     plan = _Plan(folder, mod, dest)
     if os.path.lexists(dest):
         old, _ = read_mod(dest, anno)
         if old is None or old.mod_id != mod.mod_id:
             raise InstallError(
                 tr(
-                    "the folder {name} in the mods folder holds another mod ({mod}): not replaced",
+                    "mods.folder_mods_holds_another_mod",
                     name=name,
-                    mod=old.mod_id if old else tr("no mod"),
+                    mod=old.mod_id if old else tr("common.no_mod"),
                 )
             )
         plan.replaced = True
@@ -158,7 +178,7 @@ def _plan_one(folder: Path, name: str, mods_dir: Path, anno: int | None, own_nam
             if twin is not None and twin.mod_id == mod.mod_id:
                 plan.notes.append(
                     tr(
-                        "the folder {name} has the same ModID: the loader keeps the higher version silently",
+                        "mods.folder_same_modid_loader_keeps",
                         name=other.name,
                     )
                 )
@@ -181,7 +201,7 @@ def _plan_all(items: list[tuple[Path, str, bool]], mods_dir: Path, anno: int | N
         if key in seen:
             problems.append(
                 tr(
-                    "{first} and {second} would both go to the folder {folder}",
+                    "mods.both_go_folder",
                     first=plan.folder.name,
                     second=seen[key].name,
                     folder=plan.dest.name,
@@ -189,21 +209,22 @@ def _plan_all(items: list[tuple[Path, str, bool]], mods_dir: Path, anno: int | N
             )
         seen[key] = plan.folder
     if problems:
-        raise InstallError("; ".join(problems) + (": " + tr("nothing was installed") if len(items) > 1 else ""))
+        raise InstallError("; ".join(problems) + (": " + tr("mods.nothing_installed") if len(items) > 1 else ""))
     return plans
 
 
-def _place_all(plans: list[_Plan], mods_dir: Path, trash: Trash, move: bool) -> list[Installed]:
+def _place_all(plans: list[_Plan], mods_dir: Path, job: _Job, move: bool) -> list[Installed]:
     mods_dir.mkdir(parents=True, exist_ok=True)
-    done: list[Installed] = []
+    done = job.placed
     for plan in plans:
+        job.progress(tr("mods.installing_name", name=plan.mod.mod_id))
         try:
-            done.append(_place(plan, mods_dir, trash, move))
+            done.append(_place(plan, mods_dir, job, move))
         except InstallError as exc:
             if done:
                 raise InstallError(
                     tr(
-                        "{reason} (already installed: {names})",
+                        "mods.reason_already_installed_names",
                         reason=exc,
                         names=", ".join(d.mod_id for d in done),
                     )
@@ -212,10 +233,15 @@ def _place_all(plans: list[_Plan], mods_dir: Path, trash: Trash, move: bool) -> 
     return done
 
 
-def _place(plan: _Plan, mods_dir: Path, trash: Trash, move: bool) -> Installed:
+def _place(plan: _Plan, mods_dir: Path, job: _Job, move: bool) -> Installed:
     """Copy (or move) the folder into place through a staging folder in ``mods_dir`` (``modswap.place_folder``)."""
+
+    def look(_folder: str, _names: list[str]) -> tuple[()]:
+        job.progress("")  # once per folder copied: where a stop ends the copy, the staging folder removed
+        return ()
+
     result = Installed(plan.mod.mod_id, plan.dest, plan.replaced, list(plan.notes))
-    result.notes += place_folder(plan.folder, plan.dest, trash, move=move)
+    result.notes += place_folder(plan.folder, plan.dest, job.trash, move=move, ignore=look)
     return result
 
 
@@ -225,14 +251,12 @@ def remove_mod(folder: Path, roots: list[Path], trash: Trash = recycle) -> str:
     as the link: the folder it points to is not touched."""
     folder = Path(os.path.abspath(folder))
     if not any(_same(folder.parent, r) for r in roots) or not folder.is_dir():
-        raise InstallError(tr("{path} is not a mod folder of a mods folder: not removed", path=folder))
+        raise InstallError(tr("mods.not_mod_folder_mods_removed", path=folder))
     try:
         where = trash(folder)
     except OSError as exc:
-        raise InstallError(
-            tr("{name} could not be removed: {reason}", name=folder.name, reason=exc.strerror or exc)
-        ) from exc
-    return str(where) if where else tr("the recycle bin")
+        raise InstallError(tr("mods.could_not_removed", name=folder.name, reason=exc.strerror or exc)) from exc
+    return str(where) if where else tr("mods.recycle_bin")
 
 
 def _same(a: Path, b: Path) -> bool:

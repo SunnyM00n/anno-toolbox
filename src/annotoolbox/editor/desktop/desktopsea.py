@@ -193,7 +193,7 @@ class IslandSea:
     def fail(self, exc: Exception) -> None:
         """Said once on the message line; the view's own sea from then on."""
         self.error = True
-        self.r._message(tr("the game's sea: {reason}", reason=f"{type(exc).__name__}: {exc}"[:300]))
+        self.r._message(tr("islands.games_sea_reason", reason=f"{type(exc).__name__}: {exc}"[:300]))
 
     def draw(self, f, opts, t: dict, camera, size: tuple[int, int]) -> bool:
         """The sea into the view's frame ``t`` (single-sampled: its depth is read) after its opaque parts; False when

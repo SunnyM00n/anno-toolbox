@@ -12,10 +12,10 @@ from .records import Section, Summary, Table
 
 def parts_section(save: SaveFile) -> Section:
     """The archive's parts: name, packing, what the document is, its size."""
-    table = Table([N_("Archive part"), N_("Packed as"), N_("Holds"), N_("Bytes")])
+    table = Table([N_("saves.archive_part"), N_("saves.packed_as"), N_("saves.holds"), N_("saves.bytes")])
     for p in save.parts:
         table.rows.append([p.name, p.packing, p.kind + (f" ({p.error})" if p.error else ""), f"{len(p.doc):,}"])
-    return Section(N_("Parts"), [(N_("Archive"), f"RDA {save.archive}" if save.archive else "-")], table)
+    return Section(N_("viewer.parts"), [(N_("saves.archive"), f"RDA {save.archive}" if save.archive else "-")], table)
 
 
 def summarize(save: SaveFile) -> Summary:
@@ -30,7 +30,7 @@ def summarize(save: SaveFile) -> Summary:
         out = summaryold.summarize(save)
     else:
         out = Summary(save.game)
-        out.note(N_("No sample of this game's saves pinned its layout: it is shown as a tree, read only."))
+        out.note(N_("saves.no_sample_games_saves_pinned"))
     out.sections.append(parts_section(save))
     return out
 

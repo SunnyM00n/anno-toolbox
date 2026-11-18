@@ -266,12 +266,23 @@ def qt():
     return QApplication.instance() or QApplication([])
 
 
-def test_the_window_shows_each_kind_of_file_and_follows_links(qt, game, tmp_path):
+def viewer_window(tmp_path):
     from annotoolbox.suite.settings import Settings
     from annotoolbox.viewer.viewerwindow import ViewerWindow
 
-    window = ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
+    return ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
+
+
+@pytest.fixture
+def window(qt, game, tmp_path):
+    """The viewer's window on the synthetic game, closed after the test."""
+    window = viewer_window(tmp_path)
     window.set_tree(game)
+    yield window
+    window.close()
+
+
+def test_the_window_shows_each_kind_of_file_and_follows_links(window):
     window.open_path(HOUSE)
     assert window.pages.currentWidget() is window.model and window.scene.config == SHARED
     assert window.parts.topLevelItem(0).childCount() == 3  # Files, Models, Sequences
@@ -291,7 +302,68 @@ def test_the_window_shows_each_kind_of_file_and_follows_links(qt, game, tmp_path
     assert window.current == BANK
     window.open_path("data/not/there.cfg")
     assert window.current == BANK
-    window.close()
+
+
+HOOK = "data/base/graphics/props/hook.rdm"
+WALL = "data/base/graphics/walls/wall_diff_0.dds"
+
+
+@pytest.mark.parametrize("path", [HOOK, HOUSE])
+def test_a_model_opened_or_reloaded_again_draws_again(window, path):
+    window.open_path(path)
+    window.open_path(path)  # the Checks panel met the scene of the same file: compared as the object, not by value
+    assert window.pages.currentWidget() is window.model and window.checks.topLevelItemCount() == 2
+    window.lod_actions[0].trigger()
+    assert window.pages.currentWidget() is window.model
+
+
+def test_another_game_starts_without_the_open_file_and_the_way_back_of_the_one_before(window, game, tmp_path):
+    window.open_path(HOOK)
+    window.open_path(WALL)
+    (tmp_path / "mod").mkdir()
+    window.set_tree(game.over(tmp_path / "mod"))  # the same game with a mod laid over it: the way back stays
+    assert (window.current, window.scene, window.history) == ("", None, [HOOK])
+    assert window.parts.topLevelItemCount() == 0
+    window.back()
+    assert window.current == HOOK and window.scene is not None
+    (tmp_path / "other" / "data").mkdir(parents=True)
+    (tmp_path / "other" / "data" / "a.txt").write_text("a", encoding="utf-8")
+    other = gametree.loose_tree(tmp_path / "other", "Anno 1800")
+    other.game = "anno1800"
+    window.set_tree(other)
+    assert (window.current, window.scene, window.history) == ("", None, [])
+    window.lod_actions[1].trigger()  # nothing of the game before is reloaded
+    window.back()
+    assert window.current == "" and window.pages.currentWidget() is window.message
+
+
+def test_a_file_opened_from_a_search_stays_revealed_when_the_search_would_have_run(qt, game):
+    files = browser.FileBrowser()
+    files.set_tree(game)
+    files.search.setText("hook")  # the search waits for the typing to stop
+    files.reveal(HOOK)
+    assert not files._timer.isActive()  # had it run, it would have built the tree anew, closed
+    assert files.view.currentIndex().data(browser.PATH_ROLE) == HOOK
+
+
+def test_a_picture_that_does_not_read_says_so_in_its_facts_and_a_list_that_cannot_be_written_too(
+    window, tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QFileDialog
+
+    from annotoolbox.viewer import referencetools, textureview
+
+    assert textureview.describe(b"no picture")[0][0] == "format" and len(textureview.describe(b"")) == 1
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path), ""))  # a folder: no file
+    monkeypatch.setattr(referencetools.refgraph, "unreferenced_csv", lambda *a: "path")
+    window.references.graph = object()
+    window.references.export_csv()
+    assert "was not written" in window.statusBar().currentMessage()
+    window.statusBar().clearMessage()
+    window.model.resize(8, 8)
+    window.pages.setCurrentWidget(window.model)
+    window._save_picture()
+    assert "was not written" in window.statusBar().currentMessage()
 
 
 def test_another_app_opens_a_file_in_the_viewer_through_the_suite(qt, game, tmp_path):
@@ -509,12 +581,7 @@ def test_a_root_the_clip_does_not_name_stands_at_the_origin_and_other_joints_kee
     assert np.allclose(world[2][:3, 3], (0, 1.4, 0))  # the spine keeps its bind offset above the pelvis
 
 
-def test_the_view_switches_come_back_on_and_the_hardware_entry_flips(qt, game, tmp_path):
-    from annotoolbox.suite.settings import Settings
-    from annotoolbox.viewer.viewerwindow import ViewerWindow
-
-    window = ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
-    window.set_tree(game)
+def test_the_view_switches_come_back_on_and_the_hardware_entry_flips(window):
     shadows = window.toggles["shadows"]
     shadows.trigger()
     assert window.model.state.shadows is False
@@ -527,15 +594,9 @@ def test_the_view_switches_come_back_on_and_the_hardware_entry_flips(qt, game, t
     was = window.settings.hardware
     hardware.trigger()
     assert window.settings.hardware is (not was)
-    window.close()
 
 
-def test_condition_bits_are_held_by_hand_from_the_view_menu(qt, game, tmp_path):
-    from annotoolbox.suite.settings import Settings
-    from annotoolbox.viewer.viewerwindow import ViewerWindow
-
-    window = ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
-    window.set_tree(game)
+def test_condition_bits_are_held_by_hand_from_the_view_menu(window, game):
     window._show_model(modelscene.build(game, PROP, "anno117"))
     window.bits_menu.aboutToShow.emit()
     texts = [a.text() for a in window.bits_menu.actions() if a.text()]
@@ -546,21 +607,18 @@ def test_condition_bits_are_held_by_hand_from_the_view_menu(qt, game, tmp_path):
     assert next(a for a in window.bits_menu.actions() if a.text() == "Bit 3: Selected").isChecked()
     next(a for a in window.bits_menu.actions() if a.text() == "&Release all").trigger()
     assert window.held == 0 and not window.model.state.states.bits
-    window.close()
 
 
 def test_a_model_config_opens_in_the_object_builder_from_the_files_menu(qt, game, tmp_path):
     from annotoolbox.suite import links
-    from annotoolbox.suite.settings import Settings
-    from annotoolbox.viewer.viewerwindow import ViewerWindow
 
-    alone = ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
+    alone = viewer_window(tmp_path)
     assert not alone.edit_action.isVisible()  # no object builder beside it: no entry
     alone.close()
     asked = []
     links.provide(links.EDIT_OBJECT, lambda g, p: asked.append((g, p)) or True)
     try:
-        window = ViewerWindow(Settings(workspace=str(tmp_path / "ws")), None)
+        window = viewer_window(tmp_path)
         window.set_tree(game)
         assert window.edit_action.isVisible()
         window.current = "data/a/b.fbx"
@@ -649,3 +707,34 @@ def test_the_offscreen_picture_waits_only_for_the_parts_the_state_shows(qt, monk
     image = modelview.rhi_picture(None, scene, state, (8, 8), "d3d11", wait=30.0)
     assert framed == [True] and image == ("picture", 1) and time.monotonic() - start < 5.0
     assert drawn == [0, 0, 1, 1]  # a frame loading, the framing frame, then two quiet ones
+
+
+def test_a_folder_of_loose_files_is_listed_off_the_windows_thread(qt, window, tmp_path, monkeypatch):
+    """Listing an unpacked game's hundreds of thousands of files held the window; it now runs in the background, the
+    status line says so, and a folder that cannot be listed says why."""
+    import threading
+
+    folder = tmp_path / "loose"
+    (folder / "data").mkdir(parents=True)
+    (folder / "data" / "a.xml").write_text("<a/>", encoding="utf-8")
+    listed, real = [], gametree.loose_tree
+
+    def loose_tree(path):
+        listed.append(threading.current_thread())
+        return real(path)
+
+    monkeypatch.setattr(gametree, "loose_tree", loose_tree)
+    game = window.tree.game
+    window.open_folder(folder)
+    assert "loose" in window.statusBar().currentMessage() and window.tree.name != "loose"  # still the game's
+    window.background.join()
+    qt.processEvents()
+    assert listed and listed[0] is not threading.main_thread()
+    assert window.tree.name == "loose" and window.tree.game == game and window.tree.exists("data/a.xml")
+
+    def refused(path):
+        raise PermissionError("no access")
+
+    monkeypatch.setattr(gametree, "loose_tree", refused)
+    window.open_folder(folder, wait=True)
+    assert "no access" in window.statusBar().currentMessage() and window.tree.name == "loose"

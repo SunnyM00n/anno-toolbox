@@ -89,7 +89,7 @@ class HandleTool(QObject):
         self.drawing, self.draft = on, []
         self.drawing_changed.emit(on)
         if on:
-            self.host.say(tr("click the ground to draw the footprint; double-click or Enter finishes, Esc cancels"))
+            self.host.say(tr("common.click_ground_draw_footprint_double"))
         self.overlay.update()
 
     # geometry
@@ -242,9 +242,9 @@ class HandleTool(QObject):
         self.drawing_changed.emit(False)
         doc = obj.doc("ifo") if obj is not None else None
         if obj is not None and doc is None:
-            self.host.say(tr("this object has no info file to draw a footprint in"))
+            self.host.say(tr("common.object_no_info_file_draw"))
         elif doc is not None and self.area is None and areaedit.has_footprint(doc):
-            self.host.say(tr("the object has a footprint: select it to draw it again"))
+            self.host.say(tr("common.object_footprint_select_draw_again"))
         elif doc is not None and len(points) >= areaedit.MIN_POINTS:
             if self.area is not None:
                 self.host.apply("ifo", *areaedit.replace_points(self.area, points))
@@ -274,7 +274,7 @@ class HandleTool(QObject):
         if self._remove is not None and event.button() == Qt.MouseButton.RightButton:
             edit, self._remove = areaedit.remove_point(self.area, self._remove), None
             if edit is None:
-                self.host.say(tr("a polygon keeps three points"))
+                self.host.say(tr("common.polygon_keeps_three_points"))
             else:
                 self.host.apply("ifo", edit)
             return True

@@ -1,15 +1,17 @@
-"""The Toolbox's interface language: ``tr`` marks and looks up a string, ``trn`` a count, ``N_`` marks one that is
-translated later, ``number`` formats a number. Pure Python, no Qt, so the apps and the command line share it.
+"""The Toolbox's interface language: ``tr`` shows the text of a string id, ``trn`` a count's, ``N_`` marks an id that
+is shown later, ``number`` formats a number. Pure Python, no Qt, so the apps and the command line share it.
 
 ``use(code)`` selects the language (the suite settings' ``language``; ``ANNO_TOOLBOX_LANG`` overrides it). A language
-is one file, ``infra/lang/<code>.json``: sections by app, each a sorted list of source text -> translation. The design
-is in ``docs/tool-suite.md`` section 25; ``scripts/check_i18n.py`` compares the files with the code and with English.
+is one file, ``infra/lang/<code>.json``: sections by app, each a sorted list of id -> text; an id a language lacks is
+shown in English. The design is in ``docs/tool-suite.md`` section 25; ``scripts/check_i18n.py`` compares the files
+with the code and with each other.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import string
 from collections.abc import Sequence
 from pathlib import Path
@@ -18,15 +20,23 @@ DEFAULT = "en"
 LANG_DIR = Path(__file__).with_name("lang")
 ENV_VAR = "ANNO_TOOLBOX_LANG"
 META = "meta"  # the section of a language file that holds its own name ({"name": "Deutsch"}), not strings
+ID = re.compile(r"[a-z][a-z0-9]*(\.[a-z0-9_]+)+")  # <section>.<name>, or <section>.<group>.<name>
 
+Entry = str | list[str]
 _active = DEFAULT
-_catalog: dict[str, str | list[str]] = {}
+_catalog: dict[str, Entry] | None = None  # the active language's strings, read at the first lookup
+_english: dict[str, Entry] = {}  # the default language's, shown for an id the active one lacks
 _missing: set[str] = set()
 
 
-def catalog_key(text: str, context: str = "") -> str:
-    """The key a catalog files a source text under: the text itself, ``context|text`` when a context tells apart."""
-    return f"{context}|{text}" if context else text
+def is_id(text: str) -> bool:
+    """Whether a text has the shape of a string id (``saves.emperor``, ``islands.menu.file``)."""
+    return ID.fullmatch(text) is not None
+
+
+def section_of(ident: str) -> str:
+    """The section of a language file an id is filed in: its first part."""
+    return ident.split(".", 1)[0]
 
 
 def read_file(code: str) -> dict[str, dict]:
@@ -35,9 +45,9 @@ def read_file(code: str) -> dict[str, dict]:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
 
-def load_catalog(code: str) -> dict[str, str | list[str]]:
-    """A language's strings, the sections flattened (a text in two sections has one translation: ``check_i18n``)."""
-    merged: dict[str, str | list[str]] = {}
+def load_catalog(code: str) -> dict[str, Entry]:
+    """A language's strings, id -> text (a count's is ``[singular, plural]``), the sections flattened."""
+    merged: dict[str, Entry] = {}
     for section, entries in read_file(code).items():
         if section != META:
             merged.update(entries)
@@ -67,15 +77,20 @@ def dump_file(sections: dict[str, dict]) -> str:
     return "{\n" + ",\n".join(out) + "\n}\n"
 
 
+def _load(code: str) -> None:
+    global _active, _catalog, _english
+    _english = load_catalog(DEFAULT)
+    _catalog = _english if code == DEFAULT else load_catalog(code)
+    _active = code
+    _missing.clear()
+
+
 def use(code: str | None = None) -> str:
     """Select the interface language (``None``: the environment's, else the default); returns the code in effect."""
-    global _active, _catalog
     code = (os.environ.get(ENV_VAR) or code or DEFAULT).strip().lower()
     if code not in languages():
         code = DEFAULT
-    _active = code
-    _catalog = {} if code == DEFAULT else load_catalog(code)
-    _missing.clear()
+    _load(code)
     return code
 
 
@@ -84,47 +99,59 @@ def current() -> str:
 
 
 def missing() -> frozenset[str]:
-    """Keys looked up in the active language that its catalog lacks (shown in English); for tests and checks."""
+    """What was looked up without an entry in the active language (shown in English, or as it is when English has
+    none either); for tests and checks."""
     return frozenset(_missing)
 
 
-def _entry(key: str, text: str) -> str | list[str]:
-    if _active == DEFAULT:
-        return text
-    found = _catalog.get(key)
+def _entry(ident: str) -> Entry:
+    """An id's entry in the active language, else English's, else the id itself (a text that is no id passes)."""
+    if _catalog is None:
+        _load(_active)
+    found = _catalog.get(ident)
     if found is None:
-        _missing.add(key)
-        return text
+        _missing.add(ident)
+        found = _english.get(ident, ident)
     return found
 
 
-def tr(text: str, /, *, context: str = "", **fields: object) -> str:
-    """The text in the interface language; ``fields`` fill its ``{name}`` places (without fields the text is as is)."""
-    found = _entry(catalog_key(text, context), text)
+def tr(ident: str, /, **fields: object) -> str:
+    """The text of a string id in the interface language; ``fields`` fill its ``{name}`` places (without fields the
+    text is as it is in the file)."""
+    found = _entry(ident)
     shown = found if isinstance(found, str) else found[0]
     return shown.format(**fields) if fields else shown
 
 
-def trn(one: str, other: str, n: int, /, *, context: str = "", **fields: object) -> str:
-    """``one`` for a count of 1, else ``other``, in the interface language; ``{n}`` is the count. The catalog entry
-    of ``one`` is a list ``[singular, plural]`` (German and English share the rule)."""
-    found = _entry(catalog_key(one, context), one if n == 1 else other)
+def trn(ident: str, n: int, /, **fields: object) -> str:
+    """The text of a count's id: its entry is ``[singular, plural]``, the singular for 1 (German and English share
+    the rule); ``{n}`` is the count."""
+    found = _entry(ident)
     if isinstance(found, list):
         found = found[0] if n == 1 else found[1]
     return found.format(n=n, **fields)
+
+
+def english(ident: str, /, **fields: object) -> str:
+    """The English text of an id whatever the interface language is: for a log line, a file or the command line."""
+    if _catalog is None:
+        _load(_active)
+    found = _english.get(ident, ident)
+    shown = found if isinstance(found, str) else found[0]
+    return shown.format(**fields) if fields else shown
 
 
 def alternatives(items: Sequence[str]) -> str:
     """``items`` as one phrase of choices (``a or b or c``), in the interface language's word and word order."""
     joined = ""
     for item in items:
-        joined = tr("{a} or {b}", a=joined, b=item) if joined else item
+        joined = tr("common.a_or_b", a=joined, b=item) if joined else item
     return joined
 
 
-def N_(text: str) -> str:
-    """Mark a string that is translated where it is shown (``tr(variable)``), for tables built at import time."""
-    return text
+def N_(ident: str) -> str:
+    """Mark a string id that is shown later (``tr(variable)``), for tables built at import time."""
+    return ident
 
 
 def places(text: str) -> set[str]:

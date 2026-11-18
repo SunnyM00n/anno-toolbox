@@ -381,3 +381,46 @@ def test_an_edit_of_the_placing_block_saves_the_config_with_the_effect(tree117):
     assert effect.files.read(SHARED) == effect.model.doc.to_bytes()
     plan = saving.plan(effect, saving.REPLACE)
     assert set(plan.files) == {RDP_PATH, SHARED + ".xml"} and b"TimeScale" in plan.files[SHARED + ".xml"]
+
+
+def test_the_effect_asked_for_last_is_the_one_shown(qt, tree117, tmp_path, monkeypatch):
+    """Two files opened one after the other: the first one's late result does not replace the second."""
+    window = window_on(tree117, tmp_path)
+    jobs = []
+    monkeypatch.setattr(window.background, "run", lambda work, done, wait=False: jobs.append((work, done)))
+    assert window.open_path(RDP_PATH) and window.open_path("data/base/fx/empty.rdp")
+    (first, show_first), (second, show_second) = jobs
+    show_second(second())
+    show_first(first())  # the slower one comes in last
+    assert window.effect.path == "data/base/fx/empty.rdp"
+    window.close()
+
+
+def test_the_kinds_to_add_are_the_effects_games_not_the_browsed_ones(qt, tree2070, tree1701, tmp_path):
+    window = window_on(tree2070, tmp_path)
+    window.open_path(EFC)
+    window.set_tree(tree1701)  # another game browsed while the 2070 effect stays open
+    donors = window.game_kinds()
+    assert list(window._donors) == ["anno2070"] and donors and all(tree2070.exists(d.path) for d in donors)
+    window.close()
+
+
+def test_a_save_the_project_cannot_take_is_said_and_stays_unsaved(qt, tree117, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from annotoolbox.particleedit.saving import Plan
+    from annotoolbox.suite.project import EditsFolder
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("no room")
+
+    said = []
+    monkeypatch.setattr(EditsFolder, "save_announced", refuse)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: said.append(text))
+    window = window_on(tree117, tmp_path)
+    window.open_path(RDP_PATH)
+    window.tint((1.0, 0.0, 0.0, 1.0))
+    window.write(Plan("new", {"data/base/fx/mine.rdp": b"x"}))
+    assert "no room" in said[0] and window.effect.undo.dirty
+    window.effect.undo.mark_clean()
+    window.close()

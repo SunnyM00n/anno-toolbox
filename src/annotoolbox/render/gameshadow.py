@@ -247,8 +247,9 @@ class ShadowMap:
         self.texture = texture if texture is not None else ctx.depth_renderbuffer((size, size))
         self.fbo = ctx.framebuffer([], self.texture)
 
-    def render(self, casters: list, camera: gs.Camera, cascades: Cascades, info, ground=None) -> None:
-        """The casters into the cascades; ``ground`` (``gameframe.Ground``): the terrain the bent models read."""
+    def render(self, casters: list, camera: gs.Camera, cascades: Cascades, info, ground=None, external=None) -> None:
+        """The casters into the cascades; ``ground`` (``gameframe.Ground``): the terrain the bent models read;
+        ``external(cb)``: the native backend's casters, recorded first (``nativepass.draw_pass``)."""
         size = (self.size, self.size)
         shared = {"cShadowInformation": info, **(ground.maps if ground is not None else {})}
         terrain = ground.fill() if ground is not None else None
@@ -276,7 +277,7 @@ class ShadowMap:
             words = getattr(m, "words", None)
             m.draw(cb, size, len(words) if words is not None else COUNT * getattr(m, "instances", 1))
 
-        draw_models(self.ctx, self.fbo, casters, prepare, draw, before=before, targets=0, depth=0.0)
+        draw_models(self.ctx, self.fbo, casters, prepare, draw, before=before, targets=0, depth=0.0, external=external)
 
     def release(self) -> None:
         self.fbo.release()

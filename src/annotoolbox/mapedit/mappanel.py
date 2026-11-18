@@ -26,12 +26,16 @@ from PySide6.QtWidgets import (
 )
 
 from ..infra.i18n import N_, tr
-from .mapdialogs import pick_guid, with_guid
+from .mapdialogs import guid_list, pick_guid, with_guid
 from .template import KIND_FIXED, KIND_SLOT, KIND_START, SIZES, SNAP, TYPES
 from .worlds import BITS_1701
 
-KIND_NAMES = {KIND_FIXED: N_("fixed island"), KIND_SLOT: N_("random slot"), KIND_START: N_("start position")}
-BIT_TITLES = (N_("culture bits (1701)"), N_("fertility bits (1701)"), N_("resource bits (1701)"))
+KIND_NAMES = {
+    KIND_FIXED: N_("maps.fixed_island"),
+    KIND_SLOT: N_("maps.random_slot"),
+    KIND_START: N_("maps.start_position"),
+}
+BIT_TITLES = (N_("maps.culture_bits_1701"), N_("maps.fertility_bits_1701"), N_("maps.resource_bits_1701"))
 LIMIT = 16384  # the largest coordinate the boxes take (TAMPER's largest map is 8192)
 
 
@@ -50,13 +54,13 @@ class MapPanel(QWidget):
         self._apply_element, self._apply_map = apply_element, apply_map
         self.random = False  # the map is an older game's random-map template (its slots have edges and climates)
         self.game = ""
-        self.kind = QLabel(tr("nothing selected"))
+        self.kind = QLabel(tr("islands.nothing_selected"))
         self.x, self.z = _spin(), _spin()
         self.size = QComboBox()
         self.size.addItems([tr(s) for s in SIZES])
         self.clime = _spin(1, 0)
         self.clime.setMaximum(255)
-        self.details = QPushButton(tr("Mine slots and fertilities..."))
+        self.details = QPushButton(tr("maps.mine_slots_fertilities"))
         self.details.clicked.connect(details)
         self.type = QComboBox()
         for key, name in TYPES.items():
@@ -65,19 +69,19 @@ class MapPanel(QWidget):
         self.rotation90.addItems(["0°", "90°", "180°", "270°"])  # i18n: ok
         self.map_file_path = QLineEdit()
         self.island_label = QLineEdit()
-        self.fertility_guids = QLineEdit(placeholderText=tr("GUIDs, separated by commas"))
-        self.pick_fertility = QToolButton(text="...", toolTip=tr("add one of the game's fertilities"))
+        self.fertility_guids = QLineEdit(placeholderText=tr("maps.guids_separated_commas"))
+        self.pick_fertility = QToolButton(text="…", toolTip=tr("maps.tip.add_one_games_fertilities"))
         self.pick_fertility.clicked.connect(self._pick_fertility)
         self.fertility_names: dict[int, str] = {}  # the open game's ``Fertility`` assets
         self.bits = {name: _spin(1, 0) for name in BITS_1701}  # 1701's placeholder bits
         for box in self.bits.values():
             box.setMaximum(2**31 - 1)
-        self.randomize_fertilities = QCheckBox(tr("RandomizeFertilities"))
-        self.rotation90.setToolTip(tr("quarter turns of the island, counter-clockwise seen from above"))
-        self.map_file_path.setToolTip(tr("the island file this place holds"))
-        self.island_label.setToolTip(tr("the name the island is known by in the map"))
-        self.fertility_guids.setToolTip(tr("the fertilities the island has, as GUIDs"))
-        self.randomize_fertilities.setToolTip(tr("the game deals the fertilities when a game starts"))
+        self.randomize_fertilities = QCheckBox(tr("maps.randomizefertilities"))
+        self.rotation90.setToolTip(tr("maps.tip.quarter_turns_island_counter_clockwise"))
+        self.map_file_path.setToolTip(tr("maps.tip.island_file_place_holds"))
+        self.island_label.setToolTip(tr("maps.tip.name_island_known_map"))
+        self.fertility_guids.setToolTip(tr("maps.tip.fertilities_island_guids"))
+        self.randomize_fertilities.setToolTip(tr("maps.tip.game_deals_fertilities_when_starts"))
         self.map_w, self.map_h = _spin(64, 64), _spin(64, 64)
         self.area = [_spin(4, 0) for _ in range(4)]
         self.initial = [_spin(4, 0) for _ in range(4)]
@@ -87,45 +91,45 @@ class MapPanel(QWidget):
 
     def _build(self) -> None:
         lay = QVBoxLayout(self)
-        sel = QGroupBox(tr("Selection"))
+        sel = QGroupBox(tr("islands.selection"))
         form = QFormLayout(sel)
         form.addRow(self.kind)
-        form.addRow(tr("x (east)"), self.x)
-        form.addRow(tr("z (north)"), self.z)
-        form.addRow(tr("size"), self.size)
-        form.addRow(tr("climate bits"), self.clime)
+        form.addRow(tr("maps.x_east"), self.x)
+        form.addRow(tr("maps.z_north"), self.z)
+        form.addRow(tr("viewer.size"), self.size)
+        form.addRow(tr("maps.climate_bits"), self.clime)
         for name, title in zip(BITS_1701, BIT_TITLES, strict=True):
             form.addRow(tr(title), self.bits[name])
-        form.addRow(tr("type"), self.type)
-        form.addRow(tr("Rotation90"), self.rotation90)
-        form.addRow(tr("MapFilePath"), self.map_file_path)
-        form.addRow(tr("IslandLabel"), self.island_label)
+        form.addRow(tr("sound.type"), self.type)
+        form.addRow(tr("maps.rotation90"), self.rotation90)
+        form.addRow(tr("maps.mapfilepath"), self.map_file_path)
+        form.addRow(tr("maps.islandlabel"), self.island_label)
         fertility_row = QHBoxLayout()
         fertility_row.addWidget(self.fertility_guids)
         fertility_row.addWidget(self.pick_fertility)
-        form.addRow(tr("FertilityGuids"), fertility_row)
+        form.addRow(tr("maps.fertilityguids"), fertility_row)
         form.addRow(self.randomize_fertilities)
         form.addRow(self.details)
-        apply = QPushButton(tr("Apply to the selection"))
+        apply = QPushButton(tr("maps.apply_to_selection"))
         apply.clicked.connect(self._element_values)
         form.addRow(apply)
         lay.addWidget(sel)
-        box = QGroupBox(tr("Map"))
+        box = QGroupBox(tr("maps.map"))
         mform = QFormLayout(box)
         size_row = QHBoxLayout()
         size_row.addWidget(self.map_w)
         size_row.addWidget(self.map_h)
-        mform.addRow(tr("size (x, z)"), size_row)
-        for title, boxes in ((tr("playable area"), self.area), (tr("initial playable area"), self.initial)):
+        mform.addRow(tr("maps.size_x_z"), size_row)
+        for title, boxes in ((tr("maps.playable_area"), self.area), (tr("maps.initial_playable_area"), self.initial)):
             row = QHBoxLayout()
             for b in boxes:
                 row.addWidget(b)
             mform.addRow(title, row)
-        apply_map = QPushButton(tr("Apply to the map"))
+        apply_map = QPushButton(tr("maps.apply_to_map"))
         apply_map.clicked.connect(self._map_values)
         mform.addRow(apply_map)
         lay.addWidget(box)
-        lay.addWidget(QLabel(tr("Checks (double-click selects)")))
+        lay.addWidget(QLabel(tr("maps.checks_double_click_selects")))
         lay.addWidget(self.findings, 1)
 
     def show_element(self, e, size: int | None = None) -> None:
@@ -151,7 +155,7 @@ class MapPanel(QWidget):
         ):
             w.setEnabled(e is not None)
         if e is None:
-            self.kind.setText(tr("nothing selected"))
+            self.kind.setText(tr("islands.nothing_selected"))
             return
         self.kind.setText(tr(KIND_NAMES[e.kind]))
         self.x.setValue(e.x)
@@ -182,7 +186,7 @@ class MapPanel(QWidget):
             w.setEnabled(e.kind == KIND_FIXED)
 
     def _pick_fertility(self) -> None:
-        guid = pick_guid(self, tr("A fertility of the island"), self.fertility_names)
+        guid = pick_guid(self, tr("maps.fertility_island"), self.fertility_names)
         if guid is not None:
             self.fertility_guids.setText(with_guid(self.fertility_guids.text(), guid))
 
@@ -206,9 +210,9 @@ class MapPanel(QWidget):
 
     def _element_values(self) -> None:
         try:
-            fert = tuple(int(g) for g in self.fertility_guids.text().replace(";", ",").split(",") if g.strip())
+            fert = guid_list(self.fertility_guids.text())
         except ValueError:
-            self.kind.setText(tr("the fertilities must be GUIDs (numbers)"))
+            self.kind.setText(tr("maps.fertilities_must_guids_numbers"))
             return
         self._apply_element(
             {

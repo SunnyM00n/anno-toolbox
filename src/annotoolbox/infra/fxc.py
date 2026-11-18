@@ -17,16 +17,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .com import POINTER, Guid, blob_bytes, c_void_p, file_version, release
-from .dxc import Compiled, Reflection, read_reflection
+from .dxc import Compiled, CompilerMissing, Reflection, read_reflection
+from .i18n import N_
 from .tools import candidates
 
 FXC_ENV = "ANNO_FXC_DIR"
 DLL = "d3dcompiler_47.dll"
 GAME_DIRS = (Path("Bin") / "Win64", Path("bin"), Path("."))
-WHERE_TO_GET = (
-    "d3dcompiler_47.dll: the game's own Bin/Win64 when it ships one, else Windows' System32 copy (part of Windows "
-    "since 8.1), or a folder named in ANNO_FXC_DIR"
-)
+WHERE_TO_GET = N_("common.fxc_where_get")  # the id of the sentence that says where it is from
 # D3DCOMPILE_* flags (d3dcompiler.h)
 DEBUG, SKIP_OPTIMIZATION, ROW_MAJOR, COLUMN_MAJOR = 0x1, 0x4, 0x8, 0x10
 NO_PRESHADER, PREFER_FLOW_CONTROL, BACKWARDS_COMPATIBILITY = 0x100, 0x400, 0x1000
@@ -38,7 +36,7 @@ IID_REFLECTION11 = "8d536ca1-0cca-4956-a837-786963755584"  # ID3D11ShaderReflect
 IID_REFLECTION11_LEGACY = "0a233719-3960-4578-9d7c-203b8b1d9cc1"  # the same interface in d3dcompiler_43
 
 
-class FxcMissing(RuntimeError):
+class FxcMissing(CompilerMissing):
     pass
 
 
@@ -102,7 +100,7 @@ class Fxc:
 
     def __init__(self, path: Path) -> None:
         if os.name != "nt":
-            raise FxcMissing("FXC is a Windows DLL: " + WHERE_TO_GET)
+            raise FxcMissing.of(N_("common.fxc_windows_dll"), WHERE_TO_GET)
         self.path = Path(path)
         try:
             self._dll = ctypes.WinDLL(str(self.path))
@@ -133,11 +131,24 @@ class Fxc:
             try:
                 return cls(path)
             except FxcMissing as e:
-                failed.append(str(e))
-        raise FxcMissing(f"no {dll} found: " + WHERE_TO_GET + "".join(f"; {why}" for why in failed))
+                failed.append(e)
+        raise FxcMissing.of(N_("common.no_dll_found"), WHERE_TO_GET, failed, dll=dll)
+
+    @classmethod
+    def windows(cls) -> Fxc:
+        """Windows' own copy in ``System32``: the one Qt's Direct3D backends load to compile HLSL."""
+        return cls(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / DLL)
+
+    @property
+    def parallel(self) -> bool:
+        """Whether this build compiles on several threads at once (47 does; an older one, 2070's 43, is kept to one
+        compile at a time)."""
+        return self.path.name.lower() == DLL
 
     def version(self) -> str:
-        return file_version(self.path)
+        if getattr(self, "_version", None) is None:  # read once: asked for every shader's cache key
+            self._version = file_version(self.path)
+        return self._version
 
     def is_games(self) -> bool:
         """Whether this is a game's own copy (not Windows' or a folder named by the user)."""

@@ -3,8 +3,8 @@
 ``FakeGame`` answers over any ``Channel``: ``pair()`` gives a client channel joined to one by a socket (every platform),
 ``pipe_server()`` serves a real named pipe (Windows). It checks the handshake with the token, applies the closed message
 set, keeps every request in ``requests``, lets a test choose the answer per request (``answers``), delay it (``delay``),
-push events and cut the connection. What the real game side does with a request is the helper library's; this proves
-the client against the protocol.
+push events and cut the connection; a ``responder`` answers the requests an extension adds. What the real game side
+does with a request is the helper library's; this proves the client against the protocol.
 """
 
 from __future__ import annotations
@@ -17,9 +17,10 @@ from pathlib import Path
 
 from annotoolbox.suite import linkprotocol as proto
 from annotoolbox.suite import livelink
-from annotoolbox.suite.linkclient import ChannelClosed, PipeChannel
+from annotoolbox.suite.linkclient import ChannelClosed, PipeChannel, PipeLink
 
 TOKEN = "0123456789abcdef0123456789abcdef"
+PIPE = r"\\.\pipe\anno117-live-link-1"  # a name the session file's rule takes (a socket pair needs none)
 
 
 class SocketChannel:
@@ -57,8 +58,11 @@ class SocketChannel:
 class FakeGame:
     """The game's end of one connection (``serve`` on a thread of its own)."""
 
-    def __init__(self, token: str = TOKEN, kinds=livelink.KINDS, mods=None, game="anno117", build="3.0") -> None:
+    def __init__(
+        self, token: str = TOKEN, kinds=livelink.KINDS, mods=None, game="anno117", build="3.0", inert=False
+    ) -> None:
         self.token, self.kinds, self.game, self.build = token, tuple(kinds), game, build
+        self.inert = inert  # a game with no engine side (Anno 1800, 2205): the handshake, ping, subscribe, nothing else
         self.mods = mods if mods is not None else [{"id": "mymod", "folder": ""}]
         self.requests: list[tuple[str, dict]] = []
         self.answers: dict[str, tuple[str, str, dict]] = {}  # request name -> (status, message, data)
@@ -72,6 +76,7 @@ class FakeGame:
         ] = {}  # debug.list: id -> {"available": bool, "state": bool | None}, set by a test
         self.cheats: list[str] = []  # debug.list's cheats; debug.cheat accepts only these
         self.modules: list[dict] = []  # modules.list's entries; modules.set switches a switchable one
+        self.responder = None  # an object with ``respond(name, args)`` -> (status, message, data) or None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -120,6 +125,8 @@ class FakeGame:
         else:
             if name == "subscribe":
                 self.topics.update(args["topics"])
+            elif name == "unsubscribe":
+                self.topics.difference_update(args["topics"])
             time.sleep(self.delay.get(name, 0))
             status, message, data = self.answers.get(name) or self._default(name, args)
             if not self.silent:
@@ -140,8 +147,13 @@ class FakeGame:
         return True
 
     def _default(self, name: str, args: dict) -> tuple[str, str, dict]:
+        if self.inert and name not in ("ping", "subscribe", "unsubscribe"):
+            return livelink.UNAVAILABLE, "not served by this game build", {}
         if name == "files.changed":
             return livelink.OK, "", {"needs": {p: proto.needs_of(p) for p in args["paths"]}}
+        found = self.responder.respond(name, args) if self.responder else None
+        if found is not None:
+            return found
         if name.startswith("reload."):
             return livelink.DONE, "", {"ms": 1}
         if name == "ping":
@@ -177,8 +189,40 @@ def pair(game: FakeGame | None = None) -> tuple[SocketChannel, FakeGame]:
     return SocketChannel(near), game
 
 
-def session_for(game: FakeGame, pipe: str) -> proto.SessionInfo:
-    return proto.SessionInfo(pipe, game.token, proto.PROTOCOL, game.game, game.build, "fake 1", 1)
+def pipe_name(game: str, pid: int = 1) -> str:
+    """The pipe the helper of ``game`` opens (its id is in the name)."""
+    return "\\\\.\\pipe\\" + f"{game}-live-link-{pid}"
+
+
+def session_for(game: FakeGame, pipe: str = "") -> proto.SessionInfo:
+    return proto.SessionInfo(
+        pipe or pipe_name(game.game), game.token, proto.PROTOCOL, game.game, game.build, "fake 1", 1
+    )
+
+
+def connect(game: FakeGame | None = None) -> PipeLink:
+    """A client link with its handshake done, to ``game`` (a plain one by default) over a socket pair. The game is on
+    ``link.game``; ``disconnect(link)`` ends both."""
+    channel, game = pair(game)
+    link = PipeLink(channel)
+    assert link.open(session_for(game))
+    link.game = game
+    return link
+
+
+def disconnect(link: PipeLink) -> None:
+    link.close()
+    link.game.drop()
+
+
+def wait_for(condition, seconds: float = 3.0) -> bool:
+    """Whether ``condition()`` came true within ``seconds`` (what another thread does is waited for, not slept for)."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return bool(condition())
 
 
 def write_session(user_dir: Path, info: proto.SessionInfo) -> Path:

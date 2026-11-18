@@ -279,3 +279,31 @@ def test_a_river_edit_redraws_the_island_headers_lists_and_an_edit_of_another_ri
     move = {"rivers": {"0": {"points": [[0.5, 0.6, 0.0], [1.5, 0.6, 0.0]], "widths": [0.5, 0.5]}}}
     report = isc_edit.apply(isl, move)
     assert report["RiverBlockings removed"] + report["RiverBlockings added"] > 0 and before != isl.write_header()
+
+
+def _numbered(node: isd2070.Node) -> None:
+    """The list in the older files' form: ``arraysize`` and ``i0000``..."""
+    items = isd1701.list_items(node)
+    for n, item in enumerate(items):
+        item.name = f"i{n:04d}"
+    node.children.insert(0, isd2070.Node("arraysize", str(len(items))))
+
+
+def test_a_numbered_river_with_a_point_more_is_counted_and_named_anew():
+    isl = island()
+    polygon = isc_water.line_items(isl.header, "Rivers")[0].find("m_Polygon")
+    _numbered(polygon)
+    points = [[0.5, 0.625, 0.5], [0.75, 0.625, 0.75], [1.0, 0.625, 1.0], [2.0, 0.625, 1.0]]
+    report = isc_edit.apply(isl, {"rivers": {"0": {"points": points, "widths": [1, 1, 1, 1]}}})
+    assert report["rivers"] == 1 and polygon.value("arraysize") == "4"
+    assert [c.name for c in polygon.children] == ["arraysize", "i0000", "i0001", "i0002", "i0003"]
+    assert [[p[0], p[2]] for p in isc_water.network(isl)["rivers"][0]["points"]] == [[x, z] for x, _y, z in points]
+
+
+def test_a_blank_island_empties_a_numbered_list_past_its_thousandth_entry():
+    isl = island()
+    cells = isd2070.Node("RiverPathBlockings", children=[isd2070.Node("i") for _ in range(1001)])
+    _numbered(cells)
+    isl.header.children.append(cells)
+    assert isc_water.clear(isl) == 1
+    assert [c.name for c in cells.children] == ["arraysize"] and cells.value("arraysize") == "0"

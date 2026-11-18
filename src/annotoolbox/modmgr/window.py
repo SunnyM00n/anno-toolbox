@@ -8,6 +8,7 @@ above it, the details of the selected mod beside it, and the load order, the pro
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
@@ -31,10 +32,12 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import N_, tr
 from ..modloader.activations import ACTIVATIONS
-from ..suite import links, project
-from ..suite.background import Background
+from ..modloader.loadlog import LoadLog
+from ..modloader.profilefile import ProfileText
+from ..suite import gamesync, importdialog, links, project, widgets
+from ..suite.background import Background, JobTalk, Stopped
 from . import catalog, details, gameguard, install
-from .checks import PROBLEM, Issue
+from .checks import PROBLEM, Issue, Plan
 from .installspage import InstallsPage
 from .manager import GAMES, ModManager, for_settings
 from .modtree import ModTree
@@ -42,7 +45,7 @@ from .orderview import IssueView, LogView, OrderView
 from .profiles import ProfileError
 
 APP = "mods"  # the key of its remembered state in the settings
-TITLE = N_("Mod manager")
+TITLE = N_("mods.mod_manager")
 GUARD_MS = 5000  # how often the game is looked for
 WARN_STYLE = "background:#fff3cd;color:#664d03;padding:6px;border:1px solid #e0c36a"
 
@@ -54,11 +57,15 @@ class ModManagerWindow(QMainWindow):
         self.manager_args = manager_args  # the process lister and the trash of a test
         self.manager: ModManager | None = None
         self.profile = ""  # the profile open (not always the active one)
-        self.deep: dict[tuple[str, str], list[Issue]] = {}  # (game, profile) -> the last deep check's findings
+        self.deep: list[Issue] = []  # the last deep check's findings, for the profile shown as it is now
+        self.deep_stamp = 0  # counts what makes them stale: another profile, game or scan, an edit of the profile
+        self.talk: JobTalk | None = None  # the running install's or check's progress and stop
         self.background = Background(self)
         self.sync = sync  # run the background jobs here and now (a test that wants the result at once)
         self.checking = False  # a slow job (check, install) is running
-        self.plan = None
+        self.plan: Plan | None = None
+        self.text: ProfileText | None = None  # the open profile and the last start's log as the last refresh read
+        self.log: LoadLog | None = None  # them: a click on a mod shows from these, it reads no file
         self._building = False
         self._guarding = False  # a look for the game is on its way (it takes half a second)
         self._warned = ""  # what the last look said
@@ -74,7 +81,7 @@ class ModManagerWindow(QMainWindow):
     # the window
 
     def _build(self) -> None:
-        bar = QToolBar(tr("Profile"), self, movable=False)
+        bar = QToolBar(tr("mods.profile"), self, movable=False)
         self.addToolBar(bar)
         self.game_box = QComboBox()
         for key, name in GAMES.items():
@@ -82,10 +89,11 @@ class ModManagerWindow(QMainWindow):
         self.profile_box = QComboBox()
         self.profile_box.setMinimumWidth(200)
         self.new_mods = QCheckBox("EnableNewMods")  # i18n: ok (the loader's setting name)
-        self.new_mods.setToolTip(
-            tr("mods this profile does not list start on (the mods folders, not Ubisoft's examples)")
-        )
-        for before, label, widget in (("", N_("Game"), self.game_box), (" ", N_("Profile"), self.profile_box)):
+        self.new_mods.setToolTip(tr("mods.tip.mods_profile_not_list_start"))
+        for before, label, widget in (
+            ("", N_("common.game"), self.game_box),
+            (" ", N_("mods.profile"), self.profile_box),
+        ):
             bar.addWidget(QLabel(f"{before}{tr(label)} "))
             bar.addWidget(widget)
         bar.addWidget(QLabel("  "))
@@ -109,9 +117,9 @@ class ModManagerWindow(QMainWindow):
         lay.addWidget(self.log_summary)
         lay.addWidget(self.logview)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.order, tr("Load order"))
-        self.tabs.addTab(self.issues, tr("Problems"))
-        self.tabs.addTab(log_page, tr("Last start"))
+        self.tabs.addTab(self.order, tr("mods.load_order"))
+        self.tabs.addTab(self.issues, tr("mods.problems"))
+        self.tabs.addTab(log_page, tr("mods.last_start"))
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(top)
         split.addWidget(self.tabs)
@@ -124,8 +132,8 @@ class ModManagerWindow(QMainWindow):
         self.toolbar = bar
         self.installs = InstallsPage(self.settings, self.background, self.statusBar().showMessage, self.sync)
         self.pages = QTabWidget()
-        self.pages.addTab(body, tr("Mods"))
-        self.pages.addTab(self.installs, tr("Installs"))
+        self.pages.addTab(body, tr("common.mods"))
+        self.pages.addTab(self.installs, tr("common.installs"))
         self.pages.currentChanged.connect(lambda n: self.toolbar.setVisible(n == 0))  # the bar is the mods' own
         self.setCentralWidget(self.pages)
         self.game_box.currentIndexChanged.connect(lambda _n: self._game_chosen())
@@ -134,6 +142,7 @@ class ModManagerWindow(QMainWindow):
         self.tree.toggled.connect(self._mod_toggled, Qt.ConnectionType.QueuedConnection)  # the tree is rebuilt in it
         self.tree.selected.connect(self._show_card)
         self.statusBar().showMessage("")
+        self.stop_button = widgets.stop_button(self, self.stop_job)
 
     def _menus(self) -> None:
         def add(menu, text: str, slot, keys: str = "", tip: str = "") -> QAction:
@@ -145,59 +154,68 @@ class ModManagerWindow(QMainWindow):
                 act.setStatusTip(tip)
             return act
 
-        profile = self.menuBar().addMenu(tr("&Profile"))
-        add(profile, tr("New..."), self.new_profile)
-        add(profile, tr("Copy..."), self.copy_profile)
-        add(profile, tr("Rename..."), self.rename_profile)
-        add(profile, tr("Delete"), self.delete_profile)
+        profile = self.menuBar().addMenu(tr("mods.menu.profile"))
+        add(profile, tr("mods.new"), self.new_profile)
+        add(profile, tr("mods.copy"), self.copy_profile)
+        add(profile, tr("mods.rename"), self.rename_profile)
+        add(profile, tr("mods.delete"), self.delete_profile)
         profile.addSeparator()
         self.activate_action = add(
-            profile, tr("Make active"), self.make_active, tip=tr("the profile the game starts with")
+            profile, tr("mods.make_active"), self.make_active, tip=tr("mods.tip.profile_game_starts")
         )
         add(
             profile,
-            tr("No mods at the next start"),
+            tr("mods.no_mods_next_start"),
             self.deactivate,
-            tip=tr("an empty ActiveProfile: the game starts clean"),
+            tip=tr("mods.tip.empty_activeprofile_game_starts_clean"),
         )
-        mods = self.menuBar().addMenu(tr("&Mods"))
-        add(mods, tr("Install a mod folder..."), self.install_folder)
-        add(mods, tr("Install a zip..."), self.install_zip)
-        add(
-            mods,
-            tr("Install the built project"),
-            self.install_project,
-            tip=tr("the open project's build, from the Project window"),
-        )
+        mods = self.menuBar().addMenu(tr("mods.menu.mods"))
+        self.install_actions = [
+            add(mods, tr("mods.install_mod_folder"), self.install_folder),
+            add(mods, tr("mods.install_zip"), self.install_zip),
+            add(
+                mods,
+                tr("mods.install_built_project"),
+                self.install_project,
+                tip=tr("mods.tip.open_projects_build_project_window"),
+            ),
+        ]
         self.remove_action = add(
-            mods, tr("Remove the selected mod"), self.remove_selected, tip=tr("to the recycle bin")
+            mods, tr("mods.remove_selected_mod"), self.remove_selected, "Del", tip=tr("mods.tip.to_recycle_bin")
         )
+        self.import_action = add(
+            mods,
+            tr("common.import_selected_mod"),
+            self.import_selected,
+            tip=tr("common.import_selected_mod_tip"),
+        )
+        self.menu_tips = {a: a.statusTip() for a in (*self.install_actions, self.remove_action, self.import_action)}
         mods.addSeparator()
-        add(mods, tr("Rescan"), self.rescan, "F5")
-        add(mods, tr("Open the mods folder"), self.open_folder)
-        check = self.menuBar().addMenu(tr("&Check"))
+        add(mods, tr("mods.rescan"), self.rescan, "F5")
+        add(mods, tr("mods.open_mods_folder"), self.open_folder)
+        check = self.menuBar().addMenu(tr("common.menu.check"))
         self.check_action = add(
             check,
-            tr("Check the mods that are on..."),
+            tr("mods.check_mods"),
             self.deep_check,
             "F6",
-            tr("the mod lint and every operation on the game's files"),
+            tr("mods.mod_lint_every_operation_games"),
         )
         check.addSeparator()
         self.diff_mod_action = add(
-            check, tr("Compare the selected mod in Mod diff"), self.diff_mod, tip=tr("what it changes in the game")
+            check, tr("mods.compare_selected_mod_diff"), self.diff_mod, tip=tr("mods.tip.what_changes_game")
         )
         self.diff_profile_action = add(
-            check, tr("Compare the mods that are on in Mod diff"), self.diff_profile, tip=tr("where they collide")
+            check, tr("mods.compare_mods_mod_diff"), self.diff_profile, tip=tr("mods.tip.where_they_collide")
         )
         check.aboutToShow.connect(self._diff_actions)
-        game = self.menuBar().addMenu(tr("&Game"))
+        game = self.menuBar().addMenu(tr("mods.menu.game"))
         add(
             game,
-            tr("Reload in the running game"),
+            tr("mods.reload_running_game"),
             self.reload_game,
             "Shift+F3",
-            tr("asks the running game for the hot reload"),
+            tr("mods.asks_running_game_hot_reload"),
         )
 
     def _first_game(self) -> str:
@@ -208,6 +226,12 @@ class ModManagerWindow(QMainWindow):
 
     def open_game(self, key: str, profile: str = "") -> None:
         """Show the mods of ``key`` (a new manager from the settings), the profile ``profile`` if it exists."""
+        if not gamesync.may_switch(self, key):  # another app's question was cancelled: the box goes back
+            self._building = True
+            self.game_box.setCurrentIndex(self.game_box.findData(self.manager.game))
+            self._building = False
+            return
+        self._drop_deep()
         self.manager = for_settings(self.settings, key, **self.manager_args)
         self.manager.deferred = (self.background, self.statusBar().showMessage)  # the game's answer takes its time
         self._building = True
@@ -227,8 +251,11 @@ class ModManagerWindow(QMainWindow):
         self._building = True
         self.profile_box.clear()
         for name in names:
-            self.profile_box.addItem(name + ("  " + tr("(active)") if name.lower() == active.lower() else ""), name)
-        pick = next((n for n in (want, active, *names) if n in names), "")
+            self.profile_box.addItem(name + ("  " + tr("mods.active") if name.lower() == active.lower() else ""), name)
+        spelled = {n.lower(): n for n in names}  # ``profile.txt`` may spell the name in another case
+        pick = next((spelled[n.lower()] for n in (want, active, *names) if n.lower() in spelled), "")
+        if pick != self.profile:
+            self._drop_deep()
         self.profile = pick
         if pick:
             self.profile_box.setCurrentIndex(self.profile_box.findData(pick))
@@ -237,7 +264,12 @@ class ModManagerWindow(QMainWindow):
     def _profile_chosen(self) -> None:
         if not self._building:
             self.profile = self.profile_box.currentData() or ""
+            self._drop_deep()
             self.refresh()
+
+    def _drop_deep(self) -> None:
+        """The deep check's findings are of the profile as it was checked: gone with any change of it."""
+        self.deep, self.deep_stamp = [], self.deep_stamp + 1
 
     # showing
 
@@ -246,56 +278,80 @@ class ModManagerWindow(QMainWindow):
         m = self.manager
         text = m.read(self.profile)
         plan = m.plan(self.profile)
-        plan.issues = plan.issues + self.deep.get((m.game, self.profile), [])
+        plan.issues = plan.issues + self.deep
         log = m.log()
-        self.plan = plan
+        self.plan, self.text, self.log = plan, text, log
         self.tree.set_data(m.catalog, text, plan, log, editable=text is not None)
         self.order.set_plan(plan)
         self.issues.set_issues(plan.issues)
         problems = len(plan.problems)
-        self.tabs.setTabText(1, tr("Problems ({n})", n=problems) if problems else tr("Problems"))
+        self.tabs.setTabText(1, tr("mods.problems_n", n=problems) if problems else tr("mods.problems"))
         self.log_summary.setText(self.logview.set_log(log))
         self._building = True
         self.new_mods.setChecked(bool(text and text.enable_new))
         self.new_mods.setEnabled(text is not None)
         self._building = False
-        active = m.active()
-        self.activate_action.setEnabled(bool(self.profile) and self.profile.lower() != active.lower())
-        self.remove_action.setEnabled(True)
-        n_on = len([r for r in plan.rows if r.mod.parent is None])
-        where = (
-            (
-                tr("profile {name} (active)", name=self.profile)
-                if self.profile.lower() == active.lower()
-                else tr("profile {name}", name=self.profile)
-            )
-            if self.profile
-            else tr("no profile open")
-        )
-        self.statusBar().showMessage(
-            tr(
-                "{mods} mods installed, {on} on in {where}; {problems} problem(s); mods folder {folder}",
-                mods=len(m.catalog.mods),
-                on=n_on,
-                where=where,
-                problems=problems,
-                folder=m.mods_dir,
-            )
-        )
+        is_active = self.profile.lower() == m.active().lower()
+        self.activate_action.setEnabled(bool(self.profile) and not is_active)
+        self.statusBar().showMessage(self._summary(plan, is_active))
         self.update_guard()
         self._show_card(self.tree.current_card())
 
-    def _show_card(self, card) -> None:
+    def _summary(self, plan: Plan, is_active: bool) -> str:
+        """The status line of a refresh: the mods installed and on, the open profile, the problems, the folder."""
+        if not self.profile:
+            where = tr("mods.no_profile_open")
+        elif is_active:
+            where = tr("mods.profile_name_active", name=self.profile)
+        else:
+            where = tr("mods.profile_name", name=self.profile)
+        return tr(
+            "mods.mods_installed_problems_folder",
+            mods=len(self.manager.catalog.mods),
+            on=len([r for r in plan.rows if r.mod.parent is None]),
+            where=where,
+            problems=len(plan.problems),
+            folder=self.manager.mods_dir,
+        )
+
+    @property
+    def checking(self) -> bool:
+        """A slow job (check, install, remove) is running; the actions that would start another say so."""
+        return self._checking
+
+    @checking.setter
+    def checking(self, running: bool) -> None:
+        self._checking = running
+        self._actions_state()
+
+    def _actions_state(self) -> None:
+        """Install and Remove are on when no job runs (Remove: and a mod is picked) and say why they are not."""
+        if not hasattr(self, "menu_tips"):
+            return  # the menus are not made yet
+        busy = tr("mods.tip.job_running") if self._checking else ""
+        for act in self.install_actions:
+            widgets.enable_unless(act, busy, self.menu_tips[act])
+        picked = self.tree.current_card() is not None
+        widgets.enable_unless(
+            self.remove_action,
+            busy or ("" if picked else tr("mods.tip.pick_mod_first")),
+            self.menu_tips[self.remove_action],
+        )
+        widgets.enable_unless(
+            self.import_action,
+            busy or ("" if picked else tr("mods.tip.pick_mod_first")),
+            self.menu_tips[self.import_action],
+        )
+
+    def _show_card(self, card: catalog.ModCard | None) -> None:
+        """The details of ``card`` from what the last refresh read (no file is read for a click)."""
+        self._actions_state()
         if card is None:
-            self.detail.setHtml(tr("<p>Pick a mod on the left.</p>"))
+            self.detail.setHtml(tr("mods.pick_mod_left"))
             return
-        text = self.manager.read(self.profile)
-        run = None
-        log = self.manager.log()
-        if log is not None and card.mod_id:
-            run = log.run_of(card.mod_id)
-        issues = [i for i in self.plan.issues if i.mod == card.mod_id] if self.plan and card.mod_id else []
-        self.detail.setHtml(details.html(details.rows(card, catalog.state_of(card, text), issues, run)))
+        run = self.log.run_of(card.mod_id) if self.log is not None and card.mod_id else None
+        issues = self.plan.issues_of(card.mod_id) if self.plan and card.mod_id else []
+        self.detail.setHtml(details.html(details.rows(card, catalog.state_of(card, self.text), issues, run)))
 
     def update_guard(self) -> None:
         """The banner that says the game is running (and what a profile change then does). The look (the process
@@ -330,7 +386,7 @@ class ModManagerWindow(QMainWindow):
         warn = self._warned  # the last look, at most one timer tick old: asking the system here would block the window
         if not warn:
             return True
-        answer = QMessageBox.question(self, tr(TITLE), warn + "\n\n" + tr("Change the profile anyway?"))
+        answer = QMessageBox.question(self, tr(TITLE), warn + "\n\n" + tr("mods.change_profile_anyway"))
         return answer == QMessageBox.StandardButton.Yes
 
     def _failed(self, exc: Exception) -> None:
@@ -346,6 +402,7 @@ class ModManagerWindow(QMainWindow):
             self.refresh()
             return
         notice = ""
+        self._drop_deep()
         try:
             notice = change(self.profile)
         except ProfileError as exc:
@@ -366,17 +423,20 @@ class ModManagerWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, title, label, text=start)
         return name.strip() if ok else ""
 
-    def _profile_job(self, job, then: str = "") -> None:
+    def _profile_job(self, job: Callable[[], object], then: str = "") -> bool:
+        """Run a change of the profiles folder, then show the profile ``then`` (default: the open one). False when
+        it failed (said in a box and the status line)."""
         try:
             job()
         except (ProfileError, OSError) as exc:
             self._failed(exc)
-            return
+            return False
         self._fill_profiles(then or self.profile)
         self.refresh()
+        return True
 
     def new_profile(self) -> None:
-        name = self._ask_name(tr("New profile"), tr("Name of the new, empty profile:"))
+        name = self._ask_name(tr("mods.new_profile"), tr("mods.name_new_empty_profile"))
         if name:
             self._profile_job(lambda: self.manager.create_profile(name), name)
 
@@ -384,9 +444,9 @@ class ModManagerWindow(QMainWindow):
         if not self.profile:
             return
         name = self._ask_name(
-            tr("Copy profile"),
-            tr("Name of the copy of {name}:", name=self.profile),
-            tr("{name} copy", name=self.profile),
+            tr("mods.copy_profile"),
+            tr("mods.name_copy_colon", name=self.profile),
+            tr("mods.name_copy", name=self.profile),
         )
         if name:
             self._profile_job(lambda: self.manager.create_profile(name, self.profile), name)
@@ -394,32 +454,26 @@ class ModManagerWindow(QMainWindow):
     def rename_profile(self) -> None:
         if not self.profile or not self._allowed():
             return
-        name = self._ask_name(tr("Rename profile"), tr("New name of {name}:", name=self.profile), self.profile)
+        name = self._ask_name(tr("mods.rename_profile"), tr("mods.new_name", name=self.profile), self.profile)
         if name and name != self.profile:
             self._profile_job(lambda: self.manager.store.rename(self.profile, name), name)
 
     def delete_profile(self) -> None:
         if not self.profile:
             return
-        ask = QMessageBox.question(
-            self, tr(TITLE), tr("Delete the profile {name}? This cannot be undone.", name=self.profile)
-        )
+        ask = QMessageBox.question(self, tr(TITLE), tr("mods.delete_profile_cannot_undone", name=self.profile))
         if ask == QMessageBox.StandardButton.Yes:
             self._profile_job(lambda: self.manager.store.delete(self.profile), "")
 
     def make_active(self) -> None:
         if self.profile and self._allowed():
-            self._profile_job(lambda: self.manager.store.set_active(self.profile))
-            self.statusBar().showMessage(
-                tr("{name} is the active profile: the game uses it from its next start", name=self.profile)
-            )
+            if self._profile_job(lambda: self.manager.store.set_active(self.profile)):
+                self.statusBar().showMessage(tr("mods.active_profile_game_uses_next", name=self.profile))
 
     def deactivate(self) -> None:
         if not self._allowed():
             return
-        ask = QMessageBox.question(
-            self, tr(TITLE), tr("Leave ActiveProfile empty? The game then starts without any mods.")
-        )
+        ask = QMessageBox.question(self, tr(TITLE), tr("mods.leave_activeprofile_empty_game_starts"))
         if ask == QMessageBox.StandardButton.Yes:
             self._profile_job(lambda: self.manager.store.set_active(""))
 
@@ -430,11 +484,11 @@ class ModManagerWindow(QMainWindow):
 
     def _installed(self, results: list[install.Installed]) -> None:
         notes = [n for r in results for n in r.notes]
-        names = ", ".join(f"{r.mod_id}{' ' + tr('(replaced)') if r.replaced else ''}" for r in results)
+        names = ", ".join(f"{r.mod_id}{' ' + tr('mods.replaced') if r.replaced else ''}" for r in results)
         self.rescan()
         said = " ".join(dict.fromkeys(r.notice for r in results if r.notice))
         self.statusBar().showMessage(
-            tr("installed {names}", names=names)
+            tr("mods.installed_names", names=names)
             + (f"; {' '.join(notes)}" if notes else "")
             + (f". {said}" if said else "")
         )
@@ -442,30 +496,64 @@ class ModManagerWindow(QMainWindow):
             QMessageBox.information(self, tr(TITLE), "\n".join(notes))
 
     def install_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("Install a mod folder (or a folder of mods)"))
+        folder = QFileDialog.getExistingDirectory(self, tr("mods.install_mod_folder_mods"))
         if folder:
             self._install(Path(folder))
 
     def install_zip(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, tr("Install a mod from a zip"), "", tr("Zip files (*.zip)"))
+        path, _ = QFileDialog.getOpenFileName(self, tr("mods.install_mod_zip"), "", tr("mods.zip_files"))
         if path:
             self._install(Path(path))
 
     def _install(self, source: Path) -> None:
-        """Copy off the window's thread: a large mod is many files."""
+        """Copy off the window's thread: a large mod is many files. The status line says each step, Stop ends it
+        between two of them."""
         if self.checking:
             return
-        self.checking = True
-        manager = self.manager
-        self.statusBar().showMessage(tr("installing {name}...", name=source.name))
-        self.background.run(lambda: manager.install(source), self._install_done, self.sync)
+        manager, placed = self.manager, []
+        talk = self._job_started(tr("mods.installing_name", name=source.name))
+        self.background.run(
+            lambda: manager.install(source, talk.say, placed),
+            lambda found: self._install_done(found, placed),
+            self.sync,
+        )
 
-    def _install_done(self, found) -> None:
-        self.checking = False
-        if isinstance(found, Exception):
+    def _install_done(self, found, placed: list[install.Installed] | None = None) -> None:
+        self._job_ended()
+        if isinstance(found, Stopped):
+            self.rescan()
+            names = ", ".join(one.mod_id for one in placed or [])
+            said = tr("mods.install_stopped_installed", names=names) if names else tr("mods.install_stopped")
+            self.statusBar().showMessage(said)
+        elif isinstance(found, Exception):
             self._failed(found)
         else:
             self._installed(found)
+
+    def _job_started(self, text: str) -> JobTalk:
+        """A slow job begins: its progress goes to the status line, and the Stop button is there for it."""
+        self.checking = True
+        self.talk = JobTalk(self)
+        self.talk.said.connect(self.statusBar().showMessage)
+        self.stop_button.setEnabled(True)
+        self.stop_button.show()
+        self.statusBar().showMessage(text)
+        return self.talk
+
+    def _job_ended(self) -> None:
+        self.checking = False
+        self.stop_button.hide()
+        if self.talk is not None:
+            self.talk.said.disconnect()  # a report still on its way must not write over the result
+            self.talk.deleteLater()
+            self.talk = None
+
+    def stop_job(self) -> None:
+        """Stop the running install or check at its next step."""
+        if self.talk is not None:
+            self.talk.stop()
+            self.stop_button.setEnabled(False)
+            self.statusBar().showMessage(tr("mods.stopping"))
 
     def install_project(self) -> None:
         proj = project.current(self.settings)
@@ -473,7 +561,7 @@ class ModManagerWindow(QMainWindow):
             self._failed(
                 ValueError(
                     tr(
-                        "the open project is for {project_game}, this is {game}'s mods folder",
+                        "mods.open_project_s_mods_folder",
                         project_game=proj.game,
                         game=self.manager.game,
                     )
@@ -484,7 +572,7 @@ class ModManagerWindow(QMainWindow):
             return
         self.checking = True
         mods_dir = self.manager.mods_dir
-        self.statusBar().showMessage(tr("installing the project's build..."))
+        self.statusBar().showMessage(tr("mods.installing_projects_build"))
         # hashing and copying the mod, then the game's answer to the announcement, all off the window's thread
         self.background.run(
             lambda: project.install(proj, mods_dir, lambda _t: None), self._project_installed, self.sync
@@ -496,7 +584,32 @@ class ModManagerWindow(QMainWindow):
             self._failed(where)
             return
         self.rescan()
-        self.statusBar().showMessage(tr("installed the project's build into {where}", where=where))
+        self.statusBar().showMessage(tr("mods.installed_projects_build", where=where))
+
+    def import_selected(self, target: Path | None = None) -> None:
+        """Import the selected mod as a new project (a copy: the mod stays as it is), off the window's thread; Stop
+        ends it. ``target``: the project's folder, else asked for."""
+        card = self.tree.current_card()
+        if card is None or self.checking:
+            return
+        target = target or importdialog.ask_target(self, card.folder)
+        if target is None:
+            return
+        talk = self._job_started(tr("common.import_reading", name=card.folder.name))
+        importdialog.start(talk, self.background, card.folder, target, self.settings, self._imported, self.sync)
+
+    def _imported(self, result) -> None:
+        self._job_ended()
+        lines = importdialog.explain(result)
+        self.statusBar().showMessage(lines[0])
+        if isinstance(result, Exception):
+            if not isinstance(result, Stopped):
+                self._failed(result)
+            return
+        self.settings.project = str(result.folder)  # the apps work on the imported project from now on
+        if self.settings_path:
+            self.settings.save(self.settings_path)
+        QMessageBox.information(self, tr(TITLE), "\n".join(lines))
 
     def remove_selected(self) -> None:
         card = self.tree.current_card()
@@ -507,7 +620,7 @@ class ModManagerWindow(QMainWindow):
         ask = QMessageBox.question(
             self,
             tr(TITLE),
-            tr("Move {name} to the recycle bin?", name=card.folder.name) + f"\n{card.folder}",
+            tr("mods.move_recycle_bin", name=card.folder.name) + f"\n{card.folder}",
         )
         if ask != QMessageBox.StandardButton.Yes:
             return
@@ -515,21 +628,24 @@ class ModManagerWindow(QMainWindow):
             return
         self.checking = True
         manager = self.manager
-        self.statusBar().showMessage(tr("moving {name} to the recycle bin...", name=card.folder.name))
+        self.statusBar().showMessage(tr("common.moving_recycle_bin", name=card.folder.name))
         # the move can take a while for a big mod; the announcement to the game is made back here, off no thread of ours
         self.background.run(
-            lambda: manager.remove(card, announce=False), lambda where: self._removed(card, where), self.sync
+            lambda: manager.remove(card, announce=False),
+            lambda where: self._removed(manager, card, where),
+            self.sync,
         )
 
-    def _removed(self, card, where) -> None:
+    def _removed(self, manager: ModManager, card: catalog.ModCard, where: str | Exception) -> None:
+        """``manager``: the one the mod was removed from (another game may be open by now)."""
         self.checking = False
         if isinstance(where, Exception):
             self._failed(where)
             return
-        self.manager.announce_removal(card)
+        manager.announce_removal(card)
         self.rescan()
-        moved = tr("{name} moved to {where}.", name=card.folder.name, where=where)
-        self.statusBar().showMessage(f"{moved} {self.manager.notice}".rstrip())
+        moved = tr("mods.name_moved_to_where", name=card.folder.name, where=where)
+        self.statusBar().showMessage(f"{moved} {manager.notice}".rstrip())
 
     def open_folder(self) -> None:
         self.manager.mods_dir.mkdir(parents=True, exist_ok=True)
@@ -538,30 +654,34 @@ class ModManagerWindow(QMainWindow):
     # the slow check and the running game
 
     def deep_check(self) -> None:
+        """The slow checks of the profile shown, off the window's thread: the status line names the mod it is at,
+        Stop ends it before the next one."""
         if self.checking or not self.profile:
             return
-        self.checking = True
         self.check_action.setEnabled(False)
-        key = (self.manager.game, self.profile)
-        manager, profile = self.manager, self.profile
-        self.statusBar().showMessage(
-            tr("checking the mods that are on (the lint, then the operations on the game's files)...")
+        manager, profile, stamp = self.manager, self.profile, self.deep_stamp
+        talk = self._job_started(tr("mods.checking_mods_lint_operations_games"))
+        self.background.run(
+            lambda: manager.deep_check(profile, talk.say), lambda found: self._checked(stamp, found), self.sync
         )
-        self.background.run(lambda: manager.deep_check(profile), lambda found: self._checked(key, found))
 
-    def _checked(self, key: tuple[str, str], found) -> None:
-        self.checking = False
+    def _checked(self, stamp: int, found) -> None:
+        self._job_ended()
         self.check_action.setEnabled(True)
+        if isinstance(found, Stopped):
+            self.statusBar().showMessage(tr("mods.check_stopped"))
+            return
         if isinstance(found, Exception):
             self._failed(found)
             return
-        self.deep[key] = found
+        if stamp != self.deep_stamp:
+            self.statusBar().showMessage(tr("mods.check_of_changed_profile"))
+            return
+        self.deep = found
         self.refresh()
         bad = len([i for i in found if i.level == PROBLEM])
         self.tabs.setCurrentIndex(1)
-        self.statusBar().showMessage(
-            tr("check done: {bad} problem(s), {notes} note(s) from the deep check", bad=bad, notes=len(found) - bad)
-        )
+        self.statusBar().showMessage(tr("mods.check_done_problems_notes_deep", bad=bad, notes=len(found) - bad))
 
     def _diff_actions(self) -> None:
         """The Mod diff entries show only where the suite has a Mod diff to answer them."""
@@ -585,11 +705,11 @@ class ModManagerWindow(QMainWindow):
 
     def _ask_diff(self, mode: str, a: str = "", profile: str = "") -> None:
         if not links.diff_mods(mode, self.manager.game, a, "", profile):
-            self.statusBar().showMessage(tr("the Mod diff is not part of this window"))
+            self.statusBar().showMessage(tr("mods.mod_diff_not_part_window"))
 
     def reload_game(self) -> None:
         active = self.manager.active()
-        self.statusBar().showMessage(tr("asking the game to reload..."))  # it answers within seconds, up to minutes
+        self.statusBar().showMessage(tr("mods.asking_game_reload"))  # it answers within seconds, up to minutes
         self.background.run(gameguard.reload_in_game, lambda reply: self._reloaded(reply, active), self.sync)
 
     def _reloaded(self, reply, active: str) -> None:
@@ -608,10 +728,10 @@ class ModManagerWindow(QMainWindow):
 
 
 def run() -> int:
-    from ..suite.settings import SETTINGS_FILE, Settings, appdata
+    from ..suite.settings import Settings, settings_file
 
     qt = QApplication.instance() or QApplication([sys.argv[0]])
-    path = appdata() / SETTINGS_FILE
+    path = settings_file()
     window = ModManagerWindow(Settings.load(path), path)
     window.resize(1400, 900)
     window.show()

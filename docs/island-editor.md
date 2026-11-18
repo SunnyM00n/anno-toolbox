@@ -209,8 +209,9 @@ Place tool puts a building on its grid with the rules checked as the cursor move
   template named so. Groups: the build menu where the game has one (117's and 1800's `ConstructionCategory` assets: a
   category lists buildings and categories, so a building's group is the path of categories down to it), else the asset
   files' own groups (2070, 1404, 2205), else the template. The search takes a name, a GUID or a template; Buildings only
-  is on at first. A row shows its icon (`IconFilename`, read as the asset editor reads it) where the game names one; the
-  model itself is the preview under the cursor.
+  is on at first. A row shows its icon (`IconFilename`, read as the asset editor reads it) where the game names one, and in
+  the games that keep icons in `icons.xml` (2070, 1404, 1701) the tile of the game's icon atlas; a row the game has no
+  icon for says so in its tooltip; the model itself is the preview under the cursor.
 - **The ground** an asset may stand on, from its values or its template's defaults: 117 `Building/TerrainType2`
   (`NormalLand`, `Coast`, `Water`, `Marsh`), 1800 `Building/TerrainType` (`Terrain`, `Coast`, `Beach`,
   `Water_Including_Coast`, ...), 2070 and 1404 `Blocking/BlockingRules` (`CoastBuilding`) and a harbour type
@@ -381,6 +382,18 @@ the island that is already open only shows it. The view is created with the wind
 like the application starting again. Undo and Redo go up to 200 steps (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z). Save (Ctrl+S)
 writes the edit file (`editsession`, the `islandedits` format below). Build & install builds the open island from its
 saved edits.
+
+**Closing the window.** A window closed while a build, an install, a port or a restore runs, or while an island is
+read, waits for that work first: the status line says what it waits for, the window takes no input meanwhile, and the
+island that was being read is not opened. Nothing is cut off mid-write (`desktopjobs.finish_work`). When a job runs,
+the window asks first: **Stop the build**, **Wait** (the default, Enter) or **Cancel** (Esc, the window stays). Stop
+ends the job at its next log line (`editorapp.Job.stop`, state "stopped"), as a failure of that step would: what the
+step was writing is swapped in whole or not at all. The steps that must run whole report through `Job.note` and are
+never cut short: a mod copied into the mods folder with its announcement to the game, an archive install into a game,
+a restore. An island being read is waited for without a question.
+
+**Reload islands** (File) reads every game's lists off the window's thread; the panel keeps its lists until the new
+ones are read, and the status line says that they are being read.
 
 **Input.** Keys act while the view has the keyboard. The status bar's Camera box switches between Orbit and Free fly.
 In Free fly the left button looks round the camera's own eye, the wheel flies, the arrow keys slide and Page Up and

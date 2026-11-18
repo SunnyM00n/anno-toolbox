@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup
 
 from ..infra.i18n import N_, tr
 from ..render import nativelook, quality, rhiview
+from ..suite import widgets
 
 BACKENDS = {"gl": "OpenGL (moderngl)", "d3d12": "Direct3D 12", "d3d11": "Direct3D 11", "vulkan": "Vulkan",
             "opengl": "OpenGL (Qt's QRhi)"}  # fmt: skip
@@ -100,14 +101,14 @@ class RenderingMenu:
         q = self.quality()
         if q is None:
             return
-        menu = m.addMenu(tr("Rendering quality"))
-        menu.setToolTip(tr("how much the view draws for 117 and 1800: lower runs on modest graphics cards"))
+        menu = m.addMenu(tr("islands.menu.rendering_quality"))
+        menu.setToolTip(tr("islands.tip.how_much_view_draws_117"))
         group = QActionGroup(menu, exclusive=True)
-        for key, label in (*quality.PRESETS.items(), (quality.CUSTOM, N_("Custom"))):
+        for key, label in (*quality.PRESETS.items(), (quality.CUSTOM, N_("islands.custom"))):
             act = menu.addAction(tr(label), lambda k=key: self.set_quality(k))
             act.setCheckable(True)
             act.setChecked(q.preset == key)
-            act.setEnabled(key != quality.CUSTOM)
+            widgets.enable_unless(act, tr("islands.tip.quality_custom") if key == quality.CUSTOM else "")
             group.addAction(act)
 
     def _choose(self, **change) -> None:
@@ -128,7 +129,7 @@ class RenderingMenu:
         opts = self.options()
         group = QActionGroup(m, exclusive=True)
         for look in opts.looks:
-            text = look.label if look.enabled else tr("{label} - {why}", label=look.label, why=look.why)
+            text = look.label if look.enabled else tr("viewer.label_why", label=look.label, why=look.why)
             act = m.addAction(text, lambda k=look.key: self._choose(look=k))
             act.setCheckable(True)
             act.setChecked(look.key == opts.look)
@@ -136,9 +137,9 @@ class RenderingMenu:
             act.setToolTip(look.why)
             group.addAction(act)
         m.addSeparator()
-        backends = m.addMenu(tr("&Backend: {name}", name=BACKENDS.get(opts.backend, opts.backend)))
+        backends = m.addMenu(tr("viewer.menu.backend_name", name=BACKENDS.get(opts.backend, opts.backend)))
         auto = backends.addAction(
-            tr("&Automatic ({name})", name=BACKENDS.get(opts.needed, opts.needed)), lambda: self._choose(backend="")
+            tr("viewer.automatic_name", name=BACKENDS.get(opts.needed, opts.needed)), lambda: self._choose(backend="")
         )
         auto.setCheckable(True)
         chosen = nativelook.Choice.of(self.w.settings.rendering, self.game()).backend
@@ -151,33 +152,31 @@ class RenderingMenu:
         self._quality_menu(m)
         m.addSeparator()
         for f in opts.features:
-            text = tr(f.label) if f.enabled else tr("{label}: {status}", label=tr(f.label), status=f.status)
+            text = tr(f.label) if f.enabled else tr("viewer.label_status", label=tr(f.label), status=f.status_text)
             act = toggle_action(m, text, f.enabled and f.on, lambda on, k=f.key: self._choose(feature=(k, on)))
             act.setEnabled(f.enabled)
         m.addSeparator()
         for line in self.info(opts):
             m.addAction(line).setEnabled(False)
-        toggle_action(m, tr("&Hardware acceleration (from the next start)"), self.w.settings.hardware, self._hardware)
+        toggle_action(m, tr("viewer.hardware_acceleration_next_start"), self.w.settings.hardware, self._hardware)
 
     def info(self, opts: nativelook.Options) -> list[str]:
         lines = [
-            tr("Compiler: {name}", name=opts.compiler or "-"),
-            tr("Game build: {name}", name=opts.build or "-"),
+            tr("viewer.compiler_name", name=opts.compiler or "-"),
+            tr("viewer.game_build_name", name=opts.build or "-"),
         ]
         ctx = getattr(self.w.model, "ctx", None)
         if ctx is not None and hasattr(ctx, "rhi"):
             adapter = nativelook.adapter_of(ctx.rhi)
             support = nativelook.gpu_support()
-            lines.append(tr("Adapter: {adapter}; {support}", adapter=adapter.text(), support=support))
+            lines.append(tr("viewer.adapter_support", adapter=adapter.text(), support=support))
         else:
-            lines.append(tr("Adapter: {name}", name=BACKENDS.get(self.w.model.backend, self.w.model.backend)))
+            lines.append(tr("viewer.adapter_name", name=BACKENDS.get(self.w.model.backend, self.w.model.backend)))
         return lines
 
     def _hardware(self, on: bool) -> None:
         self.w.settings.hardware = on
         self.w.statusBar().showMessage(
-            tr("Hardware acceleration: on from the next start")
-            if on
-            else tr("Hardware acceleration: off (a software adapter) from the next start"),
+            tr("viewer.hardware_acceleration_on_next_start") if on else tr("viewer.hardware_acceleration_off_software"),
             8000,
         )

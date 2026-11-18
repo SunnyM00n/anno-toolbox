@@ -364,7 +364,7 @@ def material_lods(model: Node) -> list[list[int]]:
     block = model.blocks.get("MaterialLODInfos")
     if block is None:
         return []
-    return [[int(float(i.text or 0)) for i in level.iter("i") if not len(i)] for level in block.findall("i")]
+    return [[number(i.text) for i in level.iter("i") if i is not level and not len(i)] for level in block.findall("i")]
 
 
 @dataclass(frozen=True)

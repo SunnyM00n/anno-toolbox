@@ -1,9 +1,10 @@
 # The Flash UI editor for Anno 2205
 
-The Flash UI editor is a PC application and a set of commands. It opens Anno 2205's UI movies (`data/ui/*.feu`) from
+The Flash UI editor is the **Anno 2205 page** of the suite's UI app ([`../../ui-editor.md`](../../ui-editor.md)), a PC
+application of its own, and a set of commands. It opens Anno 2205's UI movies (`data/ui/*.feu`) from
 an installed game, and shows their elements and a preview. It edits texts, pictures, icons, fonts, positions and the
 code's strings, and builds the result into the game's archive layout. The format it works on is described in
-`../../formats/anno2205-ui-format.md`. **Not tried in the game yet** (see the
+[`../../formats/anno2205-ui-format.md`](../../formats/anno2205-ui-format.md). **Not tried in the game yet** (see the
 list at the end).
 
 ## Why it exists
@@ -75,6 +76,28 @@ never into the game's files. A build applies it to the game's originals each tim
 
 `<movie>` is `title_screen`, `title_screen.feu` or `data/ui/title_screen.feu`.
 
+## What the preview cannot draw
+
+The preview draws what the movie itself fixes. Some pictures get their look from the game at run time, and the
+preview shows them as a marked stand-in, never as a plain white box. The reason is in the status line and in the
+preview's tooltip whenever one is on screen. Counted on the Anno 2205 install, 89 movies, first frames (2026-11-16):
+
+| Shown as | Why | Draws | Movies |
+|---|---|---|---|
+| tinted 2205's panel blue-grey (its own shading kept; the tooltip says it is a placeholder) | a white or light-grey base (`color_base_light`, `color_gradient`, `Tile_white`: the `color_*` bases of the colour scheme) that the code colours at run time (`ColorManager`, `SetTint`) | 2,303 | 63 |
+| grey square with hatching and a cross | `rtt_*` pictures, which the game renders live from its 3D scene (portraits, the minimap) | 28 | 18 |
+| hatched grey box with a red cross | a picture the install has no file for (the status line names the first) | 2 | 2 |
+
+Before this, 2,246 draws in 63 movies came out as plain white or near-white squares: nearly all from the bases above (the
+rest from a few more white pictures), because the preview applied a colour transform's alpha only. It now applies the
+whole transform (multiplier and offset, through nested sprites), clips masked depths, composes the blend modes Qt has,
+and draws a clipped bitmap once with its edge pixels beyond it. What remains white is a real white picture: 25 draws
+in two movies (`minimap`, `economic_espionage`: the minimap's dots and a filled circle, which the code also colours).
+
+Still not drawn the way the game does: filters (a placement's filter list needs the GPU; the reason appears if one
+is used, none is in the 2205 movies), blend modes Qt lacks (named in the status line), and the colours the code sets.
+The preview cannot know those, so a swatch has no colour of its own here.
+
 ## Changing the code with a Flash tool
 
 1. `extract <movie> --to work` (or the window's export) gives `work/<movie>.swf`.
@@ -102,4 +125,4 @@ Note: the editor was written on 2026-11-07, and the list above is as of that dat
 
 The Flash UI editor's windows are in English or German. Choose the language in the settings (Games and folders,
 "Language"); it applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown
-as the game has it. See the suite's guide.
+as the game has it. See [the suite's guide](../../suite.md#language).

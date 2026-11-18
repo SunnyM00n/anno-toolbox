@@ -24,13 +24,9 @@ def unit(v: tuple) -> tuple[float, float, float]:
     return (v[0] / n, v[1] / n, v[2] / n) if n > 1e-9 else (0.0, 1.0, 0.0)
 
 
-def _first(m: Mesh, usage: int) -> int | None:
-    return next((i for i, e in enumerate(m.elements) if e.usage == usage), None)
-
-
 def normals_of(m: Mesh) -> list[tuple[float, float, float]]:
     """The mesh's unit vertex normals (up for a mesh without any)."""
-    i = _first(m, 1)
+    i = m.element_at(1)
     if i is None:
         return [(0.0, 1.0, 0.0)] * m.vertex_count
     if m.elements[i].type == 5:  # a packed direction: bytes x * 2 - 1

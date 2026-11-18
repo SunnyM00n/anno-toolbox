@@ -1,5 +1,6 @@
 """The asset editor's data layer on a synthetic game (``fakes.asset_game``): the schema, the index, the document's
-layers and edits, the two writers, the checks, the diff and usage, the table files."""
+layers and edits, the two writers, the checks, the diff and usage, the table files; the checks beyond references and
+numbers too (ids of scripts and text groups, a reference's allowed properties, variable values, a lost template)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from tests.fakes import asset_game
 from annotoolbox.assetedit import assetindex, balancing, checks, compare, modops, native
 from annotoolbox.assetedit.assetgame import open_game
 from annotoolbox.assetedit.changeset import ChangeSet
+from annotoolbox.assetedit.schema import ValueSpec
 from annotoolbox.assetedit.values import BASE, DEFAULT, OWN, TEMPLATE
 from annotoolbox.assetedit.xmltree import find_path
 
@@ -257,3 +259,63 @@ def test_the_balancing_table_and_the_texts_go_out_and_back(doc, game):
     assert texts == {"-1001": "A small hut"}
     out = balancing.export_texts(texts).replace("A small hut", "A wooden hut")
     assert balancing.import_texts(doc, "english", out, texts) == 1 and balancing.words(texts) == 3
+
+
+def test_a_damaged_index_cache_is_scanned_again_not_a_crash(game, tmp_path):
+    cached = next((tmp_path / "cache" / "asset-index").glob("*.json.gz"))
+    for damaged in (b"\x1f\x8b\x08\x00garbage that is no gzip stream", b"", b"plain text"):
+        cached.write_bytes(damaged)
+        again = open_game("anno117", tmp_path / "117", tmp_path / "cache").index
+        assert sorted(again.by_guid) == sorted(game.index.by_guid)
+
+
+def test_a_search_for_a_digit_that_is_no_number_finds_nothing(game):
+    assert game.index.search("\u00b2") == []  # a superscript two "is a digit" but no GUID
+
+
+def test_an_empty_asset_file_has_no_assets(tmp_path):
+    root = asset_game(tmp_path / "117")
+    (root / "data/base/config/export/assets.xml").write_bytes(b"")
+    assert open_game("anno117", root, tmp_path / "cache").index.entries == []
+
+
+# The checks beyond references and numbers
+
+
+def messages(found):
+    return [f.message for f in found]
+
+
+@pytest.mark.parametrize("kind", ["ScriptId", "TextGroup", "ScriptIdGroup"])
+def test_a_script_id_or_text_group_is_a_whole_number_of_64_bits(doc, kind):
+    spec = ValueSpec("AudioText", kind)
+    assert checks._value(doc, 1, ("X", "AudioText"), "-6912837866936317073", spec) == []
+    assert checks._value(doc, 1, ("X", "AudioText"), "", spec) == []
+    assert "no id" in messages(checks._value(doc, 1, ("X", "AudioText"), "pool_a", spec))[0]
+    assert checks._value(doc, 1, ("X", "AudioText"), "1" + "0" * 30, spec)
+
+
+def test_a_reference_must_have_one_of_the_allowed_properties(doc):
+    spec = ValueSpec("Ref", "Asset", allowed_properties=("Nothing", "Neither"))
+    found = checks._value(doc, 1, ("X", "Ref"), "2001", spec)
+    assert [f.severity for f in found] == [checks.WARNING] and "none of the properties" in found[0].message
+    has = doc.layers(2001).property_names()[0]
+    assert checks._value(doc, 1, ("X", "Ref"), "2001", ValueSpec("Ref", "Asset", allowed_properties=(has,))) == []
+
+
+def test_a_variable_value_names_a_variable(doc):
+    named = {("T", "Init", "Value"): "ActiveEmperor", ("T", "Init", "IsVariable"): "1"}
+    assert checks._variables(doc, 1, named) == []
+    for value in ("", "42"):
+        found = checks._variables(doc, 1, {**named, ("T", "Init", "Value"): value})
+        assert len(found) == 1 and "no variable name" in found[0].message
+    assert checks._variables(doc, 1, {("T", "Init", "Value"): "42", ("T", "Init", "IsVariable"): "0"}) == []
+
+
+def test_an_asset_of_a_template_the_game_no_longer_has_is_said(doc):
+    guid = doc.new_asset("Mission", "Lost")
+    assert not [f for f in checks.check_asset(doc, guid) if f.path == "Template"]
+    doc.changes.new[guid].template = "Removed"
+    doc._parsed.pop(guid, None)
+    found = [f for f in checks.check_asset(doc, guid) if f.path == "Template"]
+    assert found and "Removed" in found[0].message

@@ -42,7 +42,7 @@ def slope_problem(session: EditSession, polys: list[np.ndarray]) -> str:
     step = slope(session, polys)
     if step <= FLAT_STEP:
         return ""
-    return tr("stands on sloping ground: the ground differs by {step} under it", step=f"{step:.2f}")
+    return tr("islands.stands_sloping_ground_differs_under", step=f"{step:.2f}")
 
 
 def blocked_problem(session: EditSession, polys: list[np.ndarray]) -> str:
@@ -56,7 +56,7 @@ def blocked_problem(session: EditSession, polys: list[np.ndarray]) -> str:
     hit = blocked[cells[ok, 1], cells[ok, 0]] if ok.any() else np.zeros(0, bool)
     if not hit.any():
         return ""
-    return tr("stands on blocked ground (a mountain or cliff: {n} path cells)", n=int(hit.sum()))
+    return tr("islands.stands_blocked_ground_mountain_cliff", n=int(hit.sum()))
 
 
 def rock_problem(session: EditSession, polys: list[np.ndarray]) -> str:
@@ -69,9 +69,7 @@ def rock_problem(session: EditSession, polys: list[np.ndarray]) -> str:
             continue
         at = np.array([[e.position[0], e.position[2]]])
         if any(footprints.inside(at - (h.mean(axis=0) - at) * 0.01, h)[0] for h in hulls):  # on an edge is not in it
-            return tr(
-                "{name} stands in it: a rock or cliff with no footprint of its own", name=label_of(e.base) or e.cfg
-            )
+            return tr("islands.stands_rock_cliff_no_footprint", name=label_of(e.base) or e.cfg)
     return ""
 
 

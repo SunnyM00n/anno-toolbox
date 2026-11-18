@@ -24,6 +24,12 @@ def register(sub: argparse._SubParsersAction) -> None:
     sp.add_argument("--force", action="store_true", help="overwrite files that exist")
     sp.add_argument("--all-mips", action="store_true", help="a texture's every mip level, not the largest")
     sp.add_argument("--hdr-form", choices=("exr", "hdr"), default="exr", help="the form of a float texture")
+    sp.add_argument(
+        "--rdm-target",
+        choices=("anno2070", "anno2205", "anno1800", "anno117"),
+        default="anno117",
+        help="the game a Granny .gr2's rdm form is written for",
+    )
     sp.set_defaults(func=cmd_export)
 
 
@@ -43,7 +49,7 @@ def _sources(inputs: list[Path]) -> list[tuple[run.FolderSource, list[str]]]:
 
 def cmd_export(args: argparse.Namespace) -> int:
     formats = {f.strip() for f in args.format.split(",") if f.strip()}
-    options = run.Options(all_mips=args.all_mips, hdr_form=args.hdr_form, force=args.force)
+    options = run.Options(all_mips=args.all_mips, hdr_form=args.hdr_form, rdm_target=args.rdm_target, force=args.force)
     if message := run.missing_tools(formats):
         print(message)
     entries: list[run.Entry] = []

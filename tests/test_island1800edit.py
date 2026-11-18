@@ -137,15 +137,26 @@ def test_the_build_writes_a_mod_that_replaces_the_island_and_refuses_other_folde
     (edits_dir / "1800_other.json").write_text("{}", encoding="utf-8")  # no source: skipped, said so
     log: list[str] = []
     out = tmp_path / "out" / "anno1800-islands"
-    written = a7m_edit1800.build(
-        a7m_reader.GameFiles(_tree()), edits_dir, out, "anno1800-islands", "Islands", log.append
-    )
+    binned: list = []
+
+    def build(files, where=out):
+        return a7m_edit1800.build(
+            files, edits_dir, where, "anno1800-islands", "Islands", log.append, trash=binned.append
+        )
+
+    written = build(a7m_reader.GameFiles(_tree()))
     assert written == [PATH] and (out / PATH).is_file() and any("no source island" in line for line in log)
     info = json.loads((out / "modinfo.json").read_text(encoding="utf-8"))
     assert info["ModID"] == "anno1800-islands" and info["ModName"]["English"] == "Islands"
     for bad in (tmp_path / "other", out.parent):
         with pytest.raises(ValueError, match="refusing"):
-            a7m_edit1800.build(FakeFiles(), edits_dir, bad, "anno1800-islands", "x")
+            build(FakeFiles(), bad)
+    # a build that fails (the island is gone from the game) leaves the last build as it was: it was removed first
+    with pytest.raises((KeyError, FileNotFoundError)):
+        build(FakeFiles())
+    assert (out / PATH).is_file() and (out / "modinfo.json").is_file() and not binned
+    assert sorted(p.name for p in out.parent.iterdir()) == [out.name]  # no staging folder left beside it
+    assert build(a7m_reader.GameFiles(_tree())) == [PATH] and len(binned) == 1  # the old copy goes to the bin
     assert a7m_edit1800.edit_name(PATH) == "1800_isle.json"
 
 
@@ -278,3 +289,23 @@ def test_an_1800_islands_info_edits_are_written_in_its_own_layout(tmp_path):
     assert (tmp_path / PATH.replace(".a7m", ".a7minfo")).read_bytes() == done.info
     untouched = a7m_edit1800.apply(a7m_reader.GameFiles(_tree()), PATH, {**islandedits.empty(), "source": PATH})
     assert untouched.info is None
+
+
+def test_the_games_assets_are_read_again_for_another_tree_at_the_freed_ones_address():
+    """The assets were kept by the tree's ``id()``: a new tree (another install folder, the other game's) that took
+    the freed tree's address was read with the old one's assets."""
+
+    def viewer(guid: int) -> a7mviewer.A7mViewer:
+        v = a7mviewer.A7mViewer.__new__(a7mviewer.A7mViewer)
+        v.tree = FakeTree({"data/config/export/main/asset/assets.xml": ASSETS.replace("100849", str(guid))})
+        return v
+
+    first = viewer(7)
+    assert first.game_assets().asset(7) is not None and first.game_assets() is first.game_assets()  # read once
+    address = id(first.tree)
+    del first
+    for _ in range(100):  # the next tree usually takes the freed one's address at once
+        other = viewer(9)
+        if id(other.tree) == address:
+            break
+    assert other.game_assets().asset(9) is not None and other.game_assets().asset(7) is None

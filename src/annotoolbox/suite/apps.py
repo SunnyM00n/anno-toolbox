@@ -1,18 +1,23 @@
-"""The suite's apps: the island editor, the asset editor, the 2205 UI editor, the viewer, the UI editor for 117 and
-1800, the mod manager, the object builder, the mod diff, the text editor, the map editor, the savegame editor, the
-particle editor, and what an extension adds at ``features.APPS``. Each app's modules are imported when its page is first made, so the window opens without them.
+"""The suite's apps: the island editor, the asset editor, the viewer, the UI editor (the interface files of every game,
+Flash movies of 2205 included), the mod manager, the object builder, the mod diff, the text editor, the map editor, the
+savegame editor, the particle editor, and what an extension adds at ``features.APPS``. Each app's modules are imported
+when its page is first made, so the window opens without them.
 ``parts`` lists each app's share of a project's mod (``suite.project``); each app's ``links`` are what it answers
 for the others (``suite.links``).
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from ..infra.i18n import N_, tr
 from ..render import glformat, rhiview
+from ..sources import gametree
+from . import carriedpart as carried
 from . import features, links, project
 from .extspecs import AppSpec
+from .gamesync import AppGame
 from .shell import SuiteWindow
 
 
@@ -20,7 +25,9 @@ def _islands(shell: SuiteWindow):
     from ..editor import editorapp
     from ..editor.desktop.workbench import MainWindow
 
-    return MainWindow(app=editorapp.App(shell.settings_path, settings=shell.settings))
+    window = MainWindow(app=editorapp.App(shell.settings_path, settings=shell.settings))
+    window.show_game(shell.settings.game)  # the Islands panel on the suite's game
+    return window
 
 
 def _islands_place(page, game: str, cfg: str) -> str:
@@ -29,17 +36,17 @@ def _islands_place(page, game: str, cfg: str) -> str:
 
     doc = getattr(page, "doc", None)
     if doc is None:
-        return tr("open an island first")
+        return tr("common.open_island_first")
     open_game = game_of({}, kind=doc.info.get("kind") or "")
     if open_game != game:
-        return tr("the open island is {open}'s, the model {model}'s", open=open_game, model=game)
+        return tr("common.open_island_s_model", open=open_game, model=game)
     buildings = getattr(doc, "buildings", None)  # the island's asset list (desktopplace)
     guid = buildings.guid_of(cfg) if buildings is not None else None
     if guid is not None:  # a model of an asset: placed as that asset, on its grid
         return buildings.choose(guid)
     name = cfg.rsplit("/", 1)[-1].removesuffix(".cfg")
     doc.view.set_pick({"name": name, "cfg": cfg, "group": "from the viewer", "title": cfg})
-    doc.say(tr("place {name}: click on the island", name=name))
+    doc.say(tr("common.place_click_island", name=name))
     return ""
 
 
@@ -49,10 +56,10 @@ def _islands_place_asset(page, game: str, guid: int) -> str:
 
     doc = getattr(page, "doc", None)
     if doc is None:
-        return tr("open an island first")
+        return tr("common.open_island_first")
     open_game = game_of({}, kind=doc.info.get("kind") or "")
     if open_game != game:
-        return tr("the open island is {open}'s, the asset {asset}'s", open=open_game, asset=game)
+        return tr("common.open_island_s_asset", open=open_game, asset=game)
     return doc.buildings.choose(int(guid))
 
 
@@ -77,7 +84,7 @@ def _islands_selection(page, selection: dict) -> bool:
         return False
     doc.view.select(found[0])
     doc.view.focus_on(found)
-    doc.say(tr("the game selected {name}", name=found[0].base.get("label") or found[0].cfg))
+    doc.say(tr("common.game_selected_name", name=found[0].base.get("label") or found[0].cfg))
     return True
 
 
@@ -104,15 +111,6 @@ def _asset_files(_page, game: str) -> tuple[str, ...]:
     return LAYOUTS[game].assets if game in LAYOUTS else ()
 
 
-def _ui2205(shell: SuiteWindow):
-    """The Flash UI editor on the 2205 folder of the settings, its edit file in the open project."""
-    from ..flashui.uiwindow import EditorWindow
-
-    edits = project.folder_of(shell.settings) / project.UI_EDITS / "anno2205.json"
-    game = shell.settings.anno2205 if shell.settings.anno2205 and Path(shell.settings.anno2205).is_dir() else ""
-    return EditorWindow(game, str(edits), last_game=False)
-
-
 def _viewer(shell: SuiteWindow):
     """The asset viewer on the game (and the file) last open in it."""
     from ..viewer.viewerwindow import APP, ViewerWindow
@@ -135,14 +133,23 @@ def _viewer_export(page, game: str, paths: list[str]) -> bool:
 
 
 def _ui(shell: SuiteWindow):
-    """The UI editor for 117's and 1800's Phoenix files, on the game last open in it."""
-    from ..uiedit.uiwindow import APP, UiWindow
+    """The UI editor: one page for Anno 117's, 1800's, 1404's and 1701's files, one for 2205's Flash movies, each made
+    when first shown; the Flash editor's edit file is the open project's."""
+    from ..flashui.uiwindow import EditorWindow
+    from ..uiedit import uihost
+    from ..uiedit.uiwindow import UiWindow
 
-    window = UiWindow(shell.settings, shell.settings_path)
-    game = shell.settings.apps.get(APP, {}).get("game")
-    if game:
-        window.open_game(game)
-    return window
+    def flash():
+        edits = project.folder_of(shell.settings) / project.UI_EDITS / "anno2205.json"
+        game = shell.settings.anno2205 if shell.settings.anno2205 and Path(shell.settings.anno2205).is_dir() else ""
+        return EditorWindow(game, str(edits), last_game=False)
+
+    host = uihost.UiHost(
+        shell.settings,
+        {uihost.PHOENIX: lambda: UiWindow(shell.settings, shell.settings_path), uihost.FLASH: flash},
+    )
+    host.show_last()
+    return host
 
 
 def _objects(shell: SuiteWindow):
@@ -247,62 +254,154 @@ def _particles(shell: SuiteWindow):
     return window
 
 
+def _converter(shell: SuiteWindow):
+    """The Converter app: single files, assets and islands into other formats (docs/converter-app.md)."""
+    from ..converterapp.window import make
+
+    return make(shell)
+
+
 def _particles_open(page, game: str, path: str, model: str = "") -> bool:
     page.open_effect(game, path, model)
     return True
 
 
+def _app_games(app: str):
+    """The games an app can show, from the app's own list (its modules load with its page)."""
+    if app == "assets":
+        from ..assetedit.gamefiles import LAYOUTS as games
+    elif app == "ui":
+        from ..uiedit import uiframe, uihost
+
+        games = (*uiframe.GAMES, uihost.FLASH_GAME)
+    elif app == "mods":
+        from ..modmgr.manager import GAMES as games
+    elif app == "sound":
+        from ..soundedit.soundwindow import GAMES as games
+    elif app == "texts":
+        from ..textedit.textwindow import GAMES as games
+    elif app == "moddiff":
+        from ..moddiff.jobs import ARCHIVE_GAMES as games
+    elif app == "maps":
+        from ..mapedit.mapwindow import GAMES as games
+    elif app == "saves":
+        from ..saveedit.locations import LOCATIONS as games
+    else:  # the island editor, the viewer, the object builder, the particle editor: every game
+        games = gametree.GAMES
+    return games
+
+
+def _box_open(page, key: str) -> None:
+    """Choose ``key`` in an app's box of games; a box that lacks it now (the Mod diff's question) says so."""
+    at = page.game_box.findData(key)
+    if at >= 0:
+        page.game_box.setCurrentIndex(at)
+    else:
+        page.statusBar().showMessage(tr("common.game_sync_not_shown", game=gametree.GAMES.get(key, key)))
+
+
+def _ui_open(host, key: str) -> None:
+    """The UI app's page for ``key`` to the front; the Phoenix page opens the game unless it is on it already."""
+    from ..uiedit import uihost
+
+    kind = uihost.kind_of(key)
+    page = host.show_kind(kind)
+    if kind == uihost.PHOENIX and (page.game is None or page.game.key != key):
+        page.open_game(key)
+
+
+def _ui_may_leave(host, key: str) -> bool:
+    """Only the Phoenix page leaves a game for another: 2205's page holds its one game whatever is selected."""
+    from ..uiedit import uihost
+
+    page = host.pages.get(uihost.PHOENIX)
+    if page is None or page.game is None or uihost.kind_of(key) != uihost.PHOENIX or page.game.key == key:
+        return True
+    return page.may_leave()
+
+
+def _ui_remember(state: dict, game: str) -> None:
+    from ..uiedit import uihost
+
+    state["kind"] = uihost.kind_of(game)
+    if state["kind"] == uihost.PHOENIX:
+        state["game"] = game
+
+
+def _app_game(app: str, current, open_game=lambda page, key: page.open_game(key), **more) -> AppGame:
+    """An app's side of the suite's game selection (``gamesync``; suite.md "One game for every app")."""
+    return AppGame(app, lambda: _app_games(app), current, open_game, **more)
+
+
+def _tree_game(page) -> str:
+    return page.tree.game if page.tree is not None else ""
+
+
+APP_GAMES = {
+    # the Islands panel lists every game: its tab is turned, the open island stays
+    "islands": _app_game("islands", lambda p: p.shown_game(), lambda p, key: p.show_game(key),
+                     remember=lambda _state, _game: None),
+    "assets": _app_game("assets", lambda p: p.game.layout.key if p.game is not None else "", lambda p, key: p.open(key),
+                    may_leave=lambda p, _key: p.confirm_close()),
+    "viewer": _app_game("viewer", _tree_game),
+    "ui": _app_game("ui", lambda host: host.game(), _ui_open, may_leave=_ui_may_leave, remember=_ui_remember,
+                say=lambda host, text: host.pages[host.current].statusBar().showMessage(text)),
+    "mods": _app_game("mods", lambda p: p.manager.game, needs_folder=False),
+    "objects": _app_game("objects", _tree_game, may_leave=lambda p, _key: p.confirm_discard()),
+    "sound": _app_game("sound", lambda p: p.key, may_leave=lambda p, _key: p.may_leave()),
+    "texts": _app_game("texts", lambda p: p.key, may_leave=lambda p, _key: p.may_leave()),
+    "moddiff": _app_game("moddiff", lambda p: p.game_box.currentData() or "", _box_open, needs_folder=False),
+    "maps": _app_game("maps", lambda p: p.key, may_leave=lambda p, _key: p._may_leave()),
+    "saves": _app_game("saves", lambda p: p.game_box.currentData() or "", _box_open, needs_folder=False),
+    "particles": _app_game("particles", _tree_game, may_leave=lambda p, _key: p.confirm_discard()),
+}  # fmt: skip
+
+
 BUILTIN = (
-    AppSpec("islands", N_("Islands"), "app_islands", N_("the island editor: islands of every Anno, edit, build"), _islands,
+    AppSpec("islands", N_("common.islands"), "app_islands", N_("common.island_editor_islands_every_anno"), _islands,
             glformat.prepare, {links.PLACE_MODEL: _islands_place, links.PLACE_ASSET: _islands_place_asset,
                                links.OPEN_ISLAND: _islands_open, links.GAME_SELECTION: _islands_selection},
             frozenset({links.GAME_SELECTION})),  # following the game's selection never takes the window from the player
-    AppSpec("assets", N_("Assets"), "app_assets", N_("the asset editor: a game's assets in forms from its schema, as a mod"),
+    AppSpec("assets", N_("common.assets"), "app_assets", N_("common.asset_editor_games_assets_forms"),
             _assets, links={links.SHOW_ASSET: _assets_show, links.ASSET_FILES: _asset_files},
             quiet_links=frozenset({links.ASSET_FILES})),
-    AppSpec("ui2205", N_("UI 2205"), "app_ui", N_("the Flash UI editor: Anno 2205's interface movies, edited and built"),
-            _ui2205),
-    AppSpec("viewer", N_("Viewer"), "app_viewer", N_("the asset viewer: any game's models, textures, effects and sounds"),
+    AppSpec("viewer", N_("common.viewer"), "app_viewer", N_("common.asset_viewer_any_games_models"),
             _viewer, glformat.prepare, {links.VIEW_FILE: _viewer_open, links.EXPORT_FILES: _viewer_export}),
-    AppSpec("ui", N_("UI"), "app_phoenix", N_("the UI editor: Anno 117's and 1800's interface files, previewed, bound, edited"),
+    AppSpec("ui", N_("common.ui"), "app_phoenix", N_("common.ui_editor_interface_files_anno"),
             _ui),
-    AppSpec("mods", N_("Mods"), "app_mods", N_("the mod manager: Anno 117's and 1800's mods, profiles, load order, problems"),
+    AppSpec("mods", N_("common.mods"), "app_mods", N_("common.mod_manager_anno_117s_1800s"),
             _mods, links={links.SHOW_MODS: _mods_show}),
-    AppSpec("objects", N_("Objects"), "app_objects", N_("the object builder: a model config's parts, materials, sequences and boxes edited live, "
-                                                      "saved as a mod"),
+    AppSpec("objects", N_("common.objects"), "app_objects", N_("common.object_builder_model_configs_parts"),
             _objects, glformat.prepare, {links.EDIT_OBJECT: _objects_open}),
-    AppSpec("sound", N_("Sound"), "app_sound", N_("the sound editor: Wwise banks of Anno 117, 1800 and 2205, edited and saved "
-                                                  "as a mod"),
+    AppSpec("sound", N_("sound.sound"), "app_sound", N_("common.sound_editor_wwise_banks_anno"),
             _sound),
-    AppSpec("texts", N_("Texts"), "app_texts", N_("the text editor: a game's texts in two languages side by side, a translation "
-                                                  "checked, saved as a mod"),
+    AppSpec("texts", N_("ui.texts"), "app_texts", N_("common.text_editor_games_texts_two"),
             _texts),
-    AppSpec("moddiff", N_("Mod diff"), "app_moddiff", N_("the mod diff: what a mod changes, two versions, conflicts between mods, "
-                                                        "archive mods against the game"),
+    AppSpec("moddiff", N_("common.mod_diff"), "app_moddiff", N_("common.mod_diff_what_changes_two"),
             _moddiff, links={links.DIFF_MODS: _moddiff_open}),
-    AppSpec("maps", N_("Maps"), "app_maps", N_("the map editor: a game's sessions as maps, islands and slots placed, grown on "
-                                                "any side, saved as a mod"),
+    AppSpec("maps", N_("maps.maps"), "app_maps", N_("maps.map_editor_games_sessions_maps"),
             _maps),
-    AppSpec("saves", N_("Saves"), "app_saves", N_("the savegame editor: every game's saves read, the known values changed, "
-                                                  "written as a new file beside the original"),
+    AppSpec("saves", N_("saves.saves"), "app_saves", N_("saves.savegame_editor_every_games_saves"),
             _saves),
-    AppSpec("particles", N_("Particles"), "app_particles", N_("the particle editor: any game's effects, their emitters, "
-                                                              "curves and colours edited, played live, saved as a mod"),
+    AppSpec("particles", N_("islands.particles"), "app_particles", N_("particles.particle_editor_any_games_effects"),
             _particles, glformat.prepare, {links.EDIT_EFFECT: _particles_open}),
+    AppSpec("converter", N_("convert.converter"), "app_converter", N_("convert.app_summary"), _converter),
 )  # fmt: skip
 
 
 def available() -> list[AppSpec]:
-    """The built-in apps, then the ones an extension registers (``features.APPS``)."""
-    return [*BUILTIN, *features.extensions(features.APPS).values()]
+    """The built-in apps, each with its side of the game selection, then the ones an extension registers
+    (``features.APPS``)."""
+    builtin = [replace(app, game=APP_GAMES.get(app.key)) for app in BUILTIN]
+    return [*builtin, *features.extensions(features.APPS).values()]
 
 
 def parts() -> list[project.Part]:
-    """Each app's share of a project's mod, in the order the build merges them (islands, assets, the 2205 UI, the
-    117 and 1800 UI, sound, the imported models, the object builder's configs, the effects, the texts, the maps)."""
+    """Each app's share of a project's mod, in the order the build merges them (the imported mod's carried files,
+    islands, assets, the UI, sound, the imported models, the object builder's configs, the effects, the texts, the
+    maps)."""
     from ..assetedit import projectpart as assets
     from ..editor import projectpart as islands
-    from ..flashui import projectpart as ui2205
     from ..mapedit import projectpart as maps
     from ..objbuild import projectpart as objects
     from ..particleedit import projectpart as particles
@@ -312,10 +411,10 @@ def parts() -> list[project.Part]:
     from ..viewer import projectpart as models
 
     return [
+        carried.PART,
         islands.PART,
         assets.PART,
-        ui2205.PART,
-        ui.PART,
+        ui.UI_PART,
         sound.PART,
         models.PART,
         objects.PART,

@@ -206,7 +206,8 @@ The speaker of a 117 line is the `Portrait` asset whose `OasisCharacterId` is th
 named so, the other seven (380 lines) show as `character <last digits>`: a search of every text and every UI file of the install for those ids (as text and as 64-bit numbers) finds them in `audio_generated.xml` only, and the lines' editor names give a place (`Credits..`, `Movie1_..`, `Murmur..`, `Dialog..`: the film narrator, the credits' actors, the crowd), **no name**: the data has none, so they stay numbers. The three variation kinds that no `Portrait` asset names (40, 42 and 79 twins, all in `texts_metadata.xml` only) are the same: the app says `variation <digits>`. A voiced row says who speaks it and the mood, has the filter
 "only spoken", is found by the speaker's name in the search box, and has two buttons that play the line **in the source
 and in the target language** (a language the game has no voice for has its button off); the clip is read and decoded off
-the window's thread and played by Qt's media player, as the Sound app plays a sound.
+the window's thread and played by Qt's media player, as the Sound app plays a sound. The decoded clip is one file of the
+cache folder's `sounds`, named by its content and written once (`Voices.clip_file`), never a file of the temp folder.
 
 ## One writer for both apps
 
@@ -238,6 +239,11 @@ style where no label does), "every style" and each localized font of the target 
 "Drawn in ..." where a label names the text. The glyph check of the box uses the pick. In code `TextDoc.glyph_problems(text,
 style, key)`, `style_choices`, `linked_names`.
 
+Both boxes show the text in the game's font of the picked style (`textfont.py`, `TextDoc.face`): the first face of that
+style's chain for 117 and 1800, the game's default font for the others (2205 Roboto Regular, 2070 DejaVu Sans Condensed,
+1404 and 1701 Georgia). A font that cannot be read leaves the plain font and the boxes' tooltip says why. The fonts are
+read from the install and registered with Qt, never copied ([`ui-editor.md`](ui-editor.md), "Fonts").
+
 ## Lip files
 
 1404 and 1701 keep a `.sp` file beside each speech file (6,576 and 11,863 files). Read from the installs: **a 32-bit count `n`,
@@ -264,8 +270,8 @@ changed, a broken byte kept), `texttable.py` (a language's entries by id, the me
 two languages, the edits and their undo, the status, the filters, the twins), `checks.py` (the placeholder, markup,
 length and glossary checks), `fontcover.py` (the glyph check), `voices.py` (clips) and `voicedata.py` (which texts are spoken and by whom, for every game), `fontchain.py` (117's text styles, their faces and fallback lists), `glossary.py`,
 `exchange.py` (CSV, XLIFF and PO), `render.py` (what a project's texts become as files), `projectpart.py` (the part of the
-project), `rowsmodel.py`, `detailpanel.py` and `textwindow.py` (the window). The tests: `tests/test_textedit.py` and
-`tests/test_textedit_audit.py` (synthetic), `tests/test_textedit_installed.py` (the installs, gated on `ANNO*_DIR`: every
+project), `rowsmodel.py`, `detailpanel.py` and `textwindow.py` (the window). The tests: `tests/test_textedit.py`,
+`tests/test_textedit_fonts.py` and `tests/test_textedit_voices.py` (synthetic, by module), `tests/test_textedit_installed.py` (the installs, gated on `ANNO*_DIR`: every
 file of every game read and written back byte for byte, the fonts, the twins, the voices), `tests/test_textedit_window.py`
 (the window offscreen).
 

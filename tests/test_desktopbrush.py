@@ -62,6 +62,22 @@ def test_the_other_height_modes_stroke_through_the_view(mode):
     assert len(s.undo.commands) == 1
 
 
+def test_a_stroke_ends_as_the_tool_it_began_with_when_a_key_changes_the_tool_meanwhile():
+    """S during a height stroke: the next mouse move looked for the Select tool's stroke and raised, and the stroke
+    was never ended."""
+    s = EditSession(edit_island())
+    view = FakeView(s, mode="raise")
+    tools = BrushTools(view)
+    assert tools.start((8.0, 0.0, 8.0))
+    view.tool = "select"
+    tools.to((7.0, 0.0, 8.0))
+    tools.end()
+    assert len(s.undo.commands) == 1 and s.edits["heights"] and tools.tool is None
+    tools.to((6.0, 0.0, 8.0))  # no stroke under way: nothing
+    tools.end()
+    assert len(s.undo.commands) == 1
+
+
 def test_the_spray_stroke_places_the_picked_model_and_asks_for_a_pick_first():
     s = EditSession(edit_island())
     view = FakeView(s, tool="spray")

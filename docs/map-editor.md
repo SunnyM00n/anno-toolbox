@@ -494,7 +494,8 @@ difficulties), `mapedit/mapdoc.py` (the open map and its undo stack), `mapedit/r
 `mapedit/mapmod.py` (the mod's files), `mapedit/projectpart.py`; the window: `mapedit/mapview.py`,
 `mapedit/mappanel.py`, `mapedit/mapdialogs.py`, `mapedit/mapwindow.py`. The fixed 2070 maps and the random sector
 write their `.a7tinfo` through `template` and their `.a7te` with `levelfile` (one writer each). Tests:
-`tests/test_mapedit.py`, `tests/test_mapedit_extras.py` (synthetic), `tests/test_mapedit_installed.py` (the installed
+`tests/test_mapedit.py`, `tests/test_mapedit_extras.py` (synthetic), `tests/test_mapedit_window.py` (the window and
+its dialogs, offscreen), `tests/test_mapedit_installed.py` (the installed
 games, with `ANNO117_DIR`, `ANNO1800_DIR`, `ANNO2070_DIR`, `ANNO1404_DIR`, `ANNO1701_DIR`).
 
 Three things are left open:

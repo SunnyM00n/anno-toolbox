@@ -1,46 +1,21 @@
-"""The debug-command palette: the catalogue, its checks and the window, against the stand-in game (tests/fakegame.py).
-
-The link's three debug requests are not in the protocol yet (docs/debug-palette.md section 5), so the tests add them to
-the protocol table and give a link subclass the methods the link side will have.
-"""
+"""The debug-command palette: the catalogue, its checks and the window, against the stand-in game (tests/fakegame.py)
+over the link's own debug requests (docs/debug-palette.md section 5)."""
 
 from __future__ import annotations
-
-import time
 
 import pytest
 from tests import fakegame
 
 from annotoolbox.suite import debugcommands as dc
-from annotoolbox.suite import linkclient, livelink
-from annotoolbox.suite import linkprotocol as proto
-
-
-class DebugLink(linkclient.PipeLink):
-    """What the link side will add to the client: one typed method per debug request."""
-
-    def debug_list(self):
-        return self._request("debug.list", {})
-
-    def debug_run(self, command, values=None):
-        return self._request("debug.run", {"command": command, "values": values or {}})
-
-    def debug_cheat(self, name):
-        return self._request("debug.cheat", {"name": name})
+from annotoolbox.suite import livelink
 
 
 @pytest.fixture
-def game_link(monkeypatch):
-    monkeypatch.setitem(proto.REQUESTS, "debug.list", ())
-    monkeypatch.setitem(proto.REQUESTS, "debug.run", (proto.Arg("command", "name", True), proto.Arg("values", "str")))
-    monkeypatch.setitem(proto.REQUESTS, "debug.cheat", (proto.Arg("name", "name", True),))
-    channel, game = fakegame.pair()
-    link = DebugLink(channel)
-    assert link.open(fakegame.session_for(game, r"\\.\pipe\anno117-live-link-1"))
-    link.game = game
+def game_link():
+    """A link to a game that takes the debug commands (its welcome names ``debug``)."""
+    link = fakegame.connect(fakegame.FakeGame(kinds=livelink.CAPABILITIES))
     yield link
-    link.close()
-    game.drop()
+    fakegame.disconnect(link)
 
 
 def test_values_are_typed_and_nothing_else_passes():
@@ -112,13 +87,8 @@ def test_without_a_game_the_link_says_so():
 
 
 def wait_for(qt, condition, seconds=3.0):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        qt.processEvents()
-        if condition():
-            return True
-        time.sleep(0.01)
-    return condition()
+    """``fakegame.wait_for`` with the window's events run meanwhile (the answers come back through a signal)."""
+    return fakegame.wait_for(lambda: qt.processEvents() or condition(), seconds)
 
 
 def test_the_window_offline_shows_the_catalogue_and_sends_nothing():
@@ -129,12 +99,15 @@ def test_the_window_offline_shows_the_catalogue_and_sends_nothing():
 
     qt = QApplication.instance() or QApplication([])
     livelink.reset()
+    following = len(livelink._listeners["status"])
     window = linkpalette.PaletteWindow(None, {})
     assert window.list.count() == len(dc.commands()) and "not connected" in window.connection.text()
-    assert not window.run.isEnabled()
+    assert not window.run.isEnabled() and len(livelink._listeners["status"]) == following + 1
     window.search.setText("heal")
     assert window.list.count() == 1 and window.current.id == "heal_selected"
+    window.show()
     window.close()
+    assert len(livelink._listeners["status"]) == following  # closed: it no longer asks the game at every change
     qt.processEvents()
 
 
@@ -158,7 +131,8 @@ def test_the_window_sends_lists_states_and_keeps_history(game_link):
         game_link.game.answers["debug.run"] = (livelink.DONE, "on now", {"state": True})
         window.run_current()
         assert wait_for(qt, lambda: state.get("history"))
-        assert game_link.game.requests[-1] == ("debug.run", {"command": "ignore_building_costs", "values": {}})
+        sent = [args for name, args in game_link.game.requests if name == "debug.run"]
+        assert sent == [{"command": "ignore_building_costs"}]  # a command without arguments carries no values
         assert state["history"][0]["status"] == livelink.DONE and saved
         assert wait_for(qt, lambda: "[on]" in window.list.item(0).text())
         window.star_current()

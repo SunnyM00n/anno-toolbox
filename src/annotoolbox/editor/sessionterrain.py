@@ -124,7 +124,7 @@ class TerrainEdits:
             self._redraw(0, 0, self.size, self.size)
             self._notify(Change(heights=(0, 0, self.size, self.size)))
 
-        self._push(tr("height"), lambda: put(before, before_h), lambda: put(after, after_h))
+        self._push(tr("common.height"), lambda: put(before, before_h), lambda: put(after, after_h))
 
     # the ground: paint
     def attach_ground(self, ids: list[int], weights: np.ndarray, materials: list[dict]) -> None:
@@ -201,7 +201,7 @@ class TerrainEdits:
             self._notify(Change(materials=True))
 
         self.reorder_materials()
-        self._push(tr("material"), lambda: put(before), lambda: put(after))
+        self._push(tr("islands.material"), lambda: put(before), lambda: put(after))
         self._notify(Change(materials=True))
         return free
 
@@ -309,7 +309,7 @@ class TerrainEdits:
             self.edits["paint"].append(st)
             weights(after)
 
-        self._push(tr("paint"), undo, redo)
+        self._push(tr("islands.paint_lower"), undo, redo)
 
     # forest
     def forest_tiles(self) -> set[str]:
@@ -441,4 +441,4 @@ class TerrainEdits:
                     self._restore(e, st)
             sync()
 
-        self._push(tr("forest"), undo, redo)
+        self._push(tr("islands.forest_lower"), undo, redo)

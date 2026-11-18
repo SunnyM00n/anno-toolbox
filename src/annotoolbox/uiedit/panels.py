@@ -7,6 +7,7 @@ edits. ``parse`` reads a typed value from the text a user wrote. docs/ui-editor.
 
 from __future__ import annotations
 
+import math
 import re
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -37,17 +38,17 @@ TYPE_CODES = {0: fields.BOOL, 1: fields.I32, 2: fields.U32, 3: fields.FLOAT, 4: 
               6: fields.VEC3, 13: fields.STRING, 17: fields.U32, 18: fields.U32}  # fmt: skip
 ROLE = Qt.ItemDataRole.UserRole
 NEW_WIDGETS = (
-    ("image", N_("a picture")),
-    ("label", N_("a text")),
-    ("container", N_("a widget file placed here")),
-    ("video", N_("a video")),
+    ("image", N_("ui.a_picture")),
+    ("label", N_("ui.a_text")),
+    ("container", N_("ui.widget_file_placed_here")),
+    ("video", N_("ui.a_video")),
 )
 LIBRARY_GROUPS = {  # a library kind -> its tree heading
-    "Component": N_("Components ({n})"),
-    "Widget type": N_("Widget types ({n})"),
-    "Effect": N_("Effects ({n})"),
-    "Enum": N_("Enums ({n})"),
-    "Game object": N_("Game objects ({n})"),
+    "Component": N_("ui.components_n"),
+    "Widget type": N_("ui.widget_types_n"),
+    "Effect": N_("ui.effects_n"),
+    "Enum": N_("ui.enums_n"),
+    "Game object": N_("ui.game_objects_n"),
 }
 
 
@@ -64,6 +65,14 @@ def show(value) -> str:
     return str(value)
 
 
+def whole(text: str) -> int:
+    """A whole number from text ("12", "12.0", "1e3"); ``ValueError`` for anything else, "inf" included."""
+    number = float(text)
+    if not math.isfinite(number):
+        raise ValueError(f"not a number: {text}")
+    return int(number)
+
+
 def parse(text: str, code: int, names: dict[int, str] | None = None):
     """A typed value from text: numbers, ``x, y, z``, true/false, a GUID (empty: none), an enum value's name."""
     text = text.strip()
@@ -75,7 +84,7 @@ def parse(text: str, code: int, names: dict[int, str] | None = None):
             if found is not None:
                 return found
         text = text.split()[0] if text else "0"
-        return int(text, 16) if text.lower().startswith("0x") else int(float(text))
+        return int(text, 16) if text.lower().startswith("0x") else whole(text)
     if code == fields.FLOAT:
         return float(text or 0)
     if code in (fields.VEC2, fields.VEC3, fields.VEC4):
@@ -114,7 +123,7 @@ class PropertyPanel(QTreeWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setColumnCount(3)
-        self.setHeaderLabels([tr("Property"), tr("Value"), tr("Type")])
+        self.setHeaderLabels([tr("ui.property"), tr("common.value"), tr("ui.type")])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.itemChanged.connect(self._changed)
         self._filling = False
@@ -135,17 +144,17 @@ class PropertyPanel(QTreeWidget):
         self._filling = False
 
     def _fields(self, node: dict) -> None:
-        top = _item(self, [tr("Fields"), "", node.get("schema_type", "")])
+        top = _item(self, [tr("ui.fields"), "", node.get("schema_type", "")])
         top.setExpanded(True)
         for f in fields.fields_of(node):
             name = fields.label(f)
             if f.code == fields.EMBEDDED and f.objs and f.objs[0]["schema_type"] == "33d396c1":
                 pal, entry, rgb = fields.color_of(node, f.schema["name"] or f.schema["hash"])
-                text = show(rgb) + (tr("  (palette entry {entry:08x})", entry=entry) if pal else "")
-                _item(top, [name, text, tr("colour")], ("color", node, name), editable=True)
+                text = show(rgb) + (tr("ui.palette_entry", entry=entry) if pal else "")
+                _item(top, [name, text, tr("common.colour_lower")], ("color", node, name), editable=True)
                 continue
             if f.objs or f.code in (fields.OBJECTS, fields.OBJECT, fields.EMBEDDED):
-                _item(top, [name, tr("{n} objects", n=len(f.objs)), f.kind], dim=not f.present)
+                _item(top, [name, tr("ui.n_objects", n=len(f.objs)), f.kind], dim=not f.present)
                 continue
             names = fields.enum_names(name)
             text = show(f.value) + (f"  {names[f.value]}" if isinstance(f.value, int) and f.value in names else "")
@@ -158,12 +167,12 @@ class PropertyPanel(QTreeWidget):
             return
         given = {tuple(fields.get(pv, "PropertyIdPath", []) or []): fields.get(pv, "Value")
                  for pv in phoenixedit.objects(node, "PropertyValues")}  # fmt: skip
-        top = _item(self, [tr("Its widget file's properties"), "", tpl or ""])
+        top = _item(self, [tr("ui.widget_files_properties"), "", tpl or ""])
         top.setExpanded(True)
         for uid, (name, ptype) in sorted(props.items(), key=lambda kv: kv[1][0].lower()):
             code = TYPE_CODES.get(ptype)
             value = given.get((uid,))
-            text = show(value[1]) if isinstance(value, tuple) else tr("(its default)")
+            text = show(value[1]) if isinstance(value, tuple) else tr("ui.its_default")
             kind = fields.ENUMS["PropertyType"].get(ptype, str(ptype))
             _item(top, [name, text, kind], ("value", node, [uid], code), code is not None, dim=value is None)
 
@@ -173,26 +182,26 @@ class PropertyPanel(QTreeWidget):
             return
         given = {tuple(fields.get(pv, "PropertyIdPath", []) or []): fields.get(pv, "Value")
                  for pv in phoenixedit.objects(node, "PropertyValues")}  # fmt: skip
-        top = _item(self, [tr("Components"), "", str(len(comps))])
+        top = _item(self, [tr("ui.components"), "", str(len(comps))])
         top.setExpanded(True)
         for comp in comps:
             tpl = fields.get(comp, "ComponentTemplate") or ""
             uid = int(fields.get(comp, "UniqueId", 0) or 0)
             item = namer.library.items.get(tpl)
-            head = _item(top, [phoenixedit.object_name(comp) or tr("(component)"), item.name if item else tpl[:8], f"{uid:08x}"],
+            head = _item(top, [phoenixedit.object_name(comp) or tr("ui.component_in_brackets"), item.name if item else tpl[:8], f"{uid:08x}"],
                          ("component", node, comp))  # fmt: skip
             if item is not None:
                 head.setToolTip(0, item.description)
             for prop_uid, (name, ptype) in namer.template(tpl).items():
                 code = TYPE_CODES.get(ptype)
                 value = given.get((uid, prop_uid))
-                text = show(value[1]) if isinstance(value, tuple) else tr("(its default)")
+                text = show(value[1]) if isinstance(value, tuple) else tr("ui.its_default")
                 _item(head, [name, text, fields.ENUMS["PropertyType"].get(ptype, str(ptype))],
                       ("value", node, [uid, prop_uid], code), code is not None, dim=value is None)  # fmt: skip
 
     def _own_properties(self, root: dict) -> None:
         props = bindings.custom_properties(root)
-        top = _item(self, [tr("Custom properties"), "", str(len(props))])
+        top = _item(self, [tr("ui.custom_properties"), "", str(len(props))])
         for p in props:
             info = bindings.property_info(p)
             access = fields.ENUMS["PropertyAccessibility"].get(info["access"], str(info["access"]))
@@ -204,13 +213,25 @@ class PropertyPanel(QTreeWidget):
     def _effects(self, node: dict) -> None:
         effects = phoenixedit.objects(node, "Effects")
         if effects:
-            top = _item(self, [tr("Effects"), "", str(len(effects))])
+            top = _item(self, [tr("common.effects"), "", str(len(effects))])
             for e in effects:
-                _item(top, [phoenixedit.object_name(e) or tr("(effect)"), fields.get(e, "EffectTemplate") or ""],
+                _item(top, [phoenixedit.object_name(e) or tr("ui.effect_in_brackets"), fields.get(e, "EffectTemplate") or ""],
                       ("effect", node, e))  # fmt: skip
 
+    def show_origins(self, rows: list[tuple[str, str, str]]) -> None:
+        """Where the values the selected element is given came from (``gamedataview.origin_rows``), on top."""
+        if not rows:
+            return
+        self._filling = True
+        top = QTreeWidgetItem([tr("ui.where_values_come_from"), "", str(len(rows))])
+        self.insertTopLevelItem(0, top)
+        for what, value, origin in rows:
+            QTreeWidgetItem(top, [what, value, origin])
+        top.setExpanded(True)
+        self._filling = False
+
     def _builtins(self, kind: str) -> None:
-        top = _item(self, [tr("Built-in properties (binding ends)"), "", ""])
+        top = _item(self, [tr("ui.built_properties_binding_ends"), "", ""])
         for b in fields.builtins_of(kind):
             _item(top, [b.name, f"{b.uid:08x}", f"{b.owner} {b.kind} {b.vtype}"], dim=True)
 
@@ -229,7 +250,7 @@ class PropertyPanel(QTreeWidget):
                 )
             elif meta[0] == "color":
                 _, node, name = meta
-                self.edit_color.emit(node, name, tuple(int(float(v)) for v in re.split(r"[,\s]+", text) if v)[:3])
+                self.edit_color.emit(node, name, tuple(whole(v) for v in re.split(r"[,\s]+", text) if v)[:3])
             elif meta[0] == "value":
                 _, node, path, code = meta
                 self.edit_value.emit(node, path, code, parse(text, code))
@@ -245,7 +266,7 @@ class PropertyPanel(QTreeWidget):
             if kinds:
                 menu = QMenu(self)
                 menu.addAction(
-                    tr("Choose the {name}...", name=name), lambda: self.pick_reference.emit(meta[1], name, kinds)
+                    tr("ui.choose_the_name", name=name), lambda: self.pick_reference.emit(meta[1], name, kinds)
                 )
                 menu.exec(event.globalPos())
             return
@@ -253,7 +274,7 @@ class PropertyPanel(QTreeWidget):
             return
         menu = QMenu(self)
         field = "Components" if meta[0] == "component" else "Effects"
-        label = tr("Remove this component") if meta[0] == "component" else tr("Remove this effect")
+        label = tr("ui.remove_component") if meta[0] == "component" else tr("ui.remove_effect")
         menu.addAction(label, lambda: self.remove_object.emit(meta[1], field, meta[2]))
         menu.exec(event.globalPos())
 
@@ -279,7 +300,7 @@ class PalettePanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.filter = QLineEdit(placeholderText=tr("filter the library"))
+        self.filter = QLineEdit(placeholderText=tr("ui.filter_library"))
         self.tree = _PaletteTree()
         self.tree.setHeaderHidden(True)
         lay = QVBoxLayout(self)
@@ -293,7 +314,7 @@ class PalettePanel(QWidget):
     def show_library(self, lib: library.Library | None) -> None:
         self.library = lib
         self.tree.clear()
-        widgets = QTreeWidgetItem(self.tree, [tr("New widgets")])
+        widgets = QTreeWidgetItem(self.tree, [tr("ui.new_widgets")])
         for kind, tip in NEW_WIDGETS:
             it = QTreeWidgetItem(widgets, [kind.title()])
             it.setData(0, ROLE, ("instance", kind))
@@ -304,7 +325,7 @@ class PalettePanel(QWidget):
             top = QTreeWidgetItem(self.tree, [tr(LIBRARY_GROUPS[kind], n=len(items))])
             folders: dict[str, QTreeWidgetItem] = {}
             for item in items:
-                folder = folders.get(item.folder) or QTreeWidgetItem(top, [item.folder or tr("(no folder)")])
+                folder = folders.get(item.folder) or QTreeWidgetItem(top, [item.folder or tr("ui.no_folder")])
                 folders[item.folder] = folder
                 it = QTreeWidgetItem(folder, [item.name])
                 it.setData(0, ROLE, (kind, item.guid))
@@ -345,12 +366,12 @@ class ViewModelPanel(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.filter = QLineEdit(placeholderText=tr("find a class or field"))
+        self.filter = QLineEdit(placeholderText=tr("ui.find_class_field"))
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
-        self.tree.setHeaderLabels([tr("Name"), tr("Type")])
+        self.tree.setHeaderLabels([tr("common.name"), tr("ui.type")])
         self.tree.itemExpanded.connect(self._expand)
-        load = QPushButton(tr("Load a script list..."))
+        load = QPushButton(tr("ui.load_script_list"))
         load.clicked.connect(self.load_scripts.emit)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -379,9 +400,9 @@ class ViewModelPanel(QWidget):
     def _fill(self) -> None:
         self.tree.clear()
         if self.guess is not None:
-            top = self._class_item(self.tree, self.guess, tr("This scene's data: {name}", name=self.guess.short))
+            top = self._class_item(self.tree, self.guess, tr("ui.scenes_data_name", name=self.guess.short))
             top.setFont(0, _bold())
-        reads = QTreeWidgetItem(self.tree, [tr("Field ids this file reads ({n})", n=len(self.reads)), ""])
+        reads = QTreeWidgetItem(self.tree, [tr("ui.field_ids_file_reads", n=len(self.reads)), ""])
         for words, path in self.reads:
             it = QTreeWidgetItem(reads, [words, " ".join(f"{i:08x}" for i in path)])
             it.setData(0, ROLE, ("read", path))
@@ -391,16 +412,14 @@ class ViewModelPanel(QWidget):
             found = self.models.search(text) if text else []
             total = len(self.models.classes)
             head = (
-                tr("UI data classes ({n}): {found} found", n=total, found=len(found))
-                if text
-                else tr("UI data classes ({n})", n=total)
+                tr("ui.ui_data_classes_found", n=total, found=len(found)) if text else tr("ui.ui_data_classes", n=total)
             )
             top = QTreeWidgetItem(self.tree, [head, ""])
             for c in found[:300]:
                 self._class_item(top, c)
             top.setExpanded(bool(text))
         if self.scripts is not None:
-            top = QTreeWidgetItem(self.tree, [tr("Script readouts ({n})", n=len(self.scripts.readouts())), ""])
+            top = QTreeWidgetItem(self.tree, [tr("ui.script_readouts_n", n=len(self.scripts.readouts())), ""])
             for r in self.scripts.readouts():
                 it = QTreeWidgetItem(top, [r.call, ", ".join(r.returns)])
                 it.setToolTip(0, r.doc)
@@ -421,9 +440,9 @@ class ViewModelPanel(QWidget):
             )
             it.setText(
                 1,
-                tr("{type} ({kind}, settable)", type=f.type, kind=f.kind)
+                tr("ui.type_kind_settable", type=f.type, kind=f.kind)
                 if f.settable
-                else tr("{type} ({kind})", type=f.type, kind=f.kind),
+                else tr("ui.type_kind", type=f.type, kind=f.kind),
             )
             it.setData(1, ROLE, ("field", f"{c.short}.{f.name}"))
 
@@ -434,15 +453,15 @@ class ViewModelPanel(QWidget):
         meta, field = item.data(0, ROLE), item.data(1, ROLE)
         menu = QMenu(self)
         if meta and meta[0] == "read":
-            menu.addAction(tr("Bind it to the selected element's property..."), lambda: self.bind.emit(meta[1]))
+            menu.addAction(tr("ui.bind_selected_elements_property"), lambda: self.bind.emit(meta[1]))
         if field and field[0] == "field":
             unnamed = [(p[-1], w) for w, p in self.reads if p and p[-1] not in self.names]
-            sub = menu.addMenu(tr("Name an id {field}", field=field[1]))
+            sub = menu.addMenu(tr("ui.menu.name_id_field", field=field[1]))
             for uid, words in unnamed[:40]:
                 sub.addAction(f"{uid:08x} ({words})", lambda u=uid, n=field[1]: self.name_id.emit(u, n))
             sub.setEnabled(bool(unnamed))
         if meta and meta[0] == "readout":
-            menu.addAction(tr("Add as a custom property of this file"), lambda: self.add_readout.emit(meta[1]))
+            menu.addAction(tr("ui.add_custom_property_file"), lambda: self.add_readout.emit(meta[1]))
         if not menu.isEmpty():
             menu.exec(event.globalPos())
 
@@ -461,7 +480,7 @@ class SamplePanel(QTableWidget):
 
     def __init__(self) -> None:
         super().__init__(0, 2)
-        self.setHorizontalHeaderLabels([tr("Read from"), tr("Sample value")])
+        self.setHorizontalHeaderLabels([tr("ui.read_from"), tr("ui.sample_value")])
         self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.itemChanged.connect(self._changed)
         self._filling = False
@@ -482,7 +501,7 @@ class SamplePanel(QTableWidget):
                 font = value.font()
                 font.setItalic(True)
                 value.setFont(font)
-                value.setToolTip(tr("a placeholder the preview made up; write a value to keep your own"))
+                value.setToolTip(tr("ui.tip.placeholder_preview_made_up_write"))
             self.setItem(row, 1, value)
         self._filling = False
 
@@ -492,7 +511,7 @@ class SamplePanel(QTableWidget):
             return
         key = self.item(item.row(), 0).data(ROLE)
         menu = QMenu(self)
-        menu.addAction(tr("Reset to a placeholder"), lambda: self.reset.emit(key))
+        menu.addAction(tr("ui.reset_to_placeholder"), lambda: self.reset.emit(key))
         menu.exec(event.globalPos())
 
     def _changed(self, item: QTableWidgetItem) -> None:
@@ -524,12 +543,12 @@ class StatesPanel(QWidget):
         self.combo = QComboBox()
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, 1000)
-        self.play = QPushButton(tr("Play"))
+        self.play = QPushButton(tr("common.play"))
         self.time = QLabel("0.00 s")  # i18n: ok (a number and a unit)
-        self.design_box = QCheckBox(tr("Design view: show what an animation fades in"))
+        self.design_box = QCheckBox(tr("ui.design_view_show_what_animation"))
         self.design_box.setChecked(True)
         self.events = QTreeWidget()
-        self.events.setHeaderLabels([tr("Event or action"), tr("What it drives")])
+        self.events.setHeaderLabels([tr("ui.event_action"), tr("ui.what_drives")])
         row = QHBoxLayout()
         for w in (self.combo, self.play, self.time):
             row.addWidget(w)
@@ -546,16 +565,15 @@ class StatesPanel(QWidget):
         self.combo.currentIndexChanged.connect(lambda _i: self._emit())
         self.design_box.toggled.connect(self.design.emit)
         self.anims: list = []
+        self.stage: QWidget | None = None  # the picture the animation plays in: it stands still while that is hidden
 
     def show_states(self, anims, graph: bindings.Graph | None, describe) -> None:
         self.anims = anims
         self.combo.blockSignals(True)
         self.combo.clear()
-        self.combo.addItem(tr("(no animation)"))
+        self.combo.addItem(tr("ui.no_animation"))
         for a in anims:
-            self.combo.addItem(
-                tr("{name} ({seconds:.2f} s, {n} tracks)", name=a.name, seconds=a.seconds, n=len(a.tracks))
-            )
+            self.combo.addItem(tr("ui.name_seconds_s_n_tracks", name=a.name, seconds=a.seconds, n=len(a.tracks)))
         self.combo.blockSignals(False)
         self.events.clear()
         if graph is None:
@@ -564,11 +582,11 @@ class StatesPanel(QWidget):
             info = bindings.property_info(p)
             if info["type"] in (9, 10):
                 label = (
-                    tr("{name} (event)", name=info["name"])
+                    tr("ui.name_event", name=info["name"])
                     if info["type"] == 9
-                    else tr("{name} (action)", name=info["name"])
+                    else tr("ui.name_action", name=info["name"])
                 )
-                QTreeWidgetItem(self.events, [label, tr("declared by this file")])
+                QTreeWidgetItem(self.events, [label, tr("ui.declared_file")])
         for b in graph.bindings:
             if any(e.kind == "path" and e.ids and fields.BUILTIN_BY_ID.get(e.ids[-1], None) and fields.BUILTIN_BY_ID[e.ids[-1]].kind == "event"
                    for e in b.sources) or b.operator in ("c32c7054", "130e634e", "599c5545", "a3de9f56"):  # fmt: skip
@@ -588,15 +606,17 @@ class StatesPanel(QWidget):
     def _toggle(self) -> None:
         if self.timer.isActive():
             self.timer.stop()
-            self.play.setText(tr("Play"))
+            self.play.setText(tr("common.play"))
         elif self.current() is not None:
             self.timer.start()
-            self.play.setText(tr("Pause"))
+            self.play.setText(tr("ui.pause"))
 
     def _tick(self) -> None:
         anim = self.current()
         if anim is None or anim.seconds <= 0:
             self._toggle()
             return
+        if self.stage is not None and not self.stage.isVisible():
+            return  # another app or page is shown: a step would lay out a picture nobody sees
         step = int(1000 * 0.033 / anim.seconds)
         self.slider.setValue((self.slider.value() + max(1, step)) % 1001)

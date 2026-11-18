@@ -73,8 +73,8 @@ class EditLayers:
 
     def create(self, name: str) -> None:
         if not name or name in self.table:
-            raise ValueError(tr("a layer needs a new name: {name}", name=repr(name)))
-        self._change(tr("new layer {name}", name=name), lambda: self.table.update({name: _row()}))
+            raise ValueError(tr("islands.layer_needs_new_name", name=repr(name)))
+        self._change(tr("islands.new_layer_name", name=name), lambda: self.table.update({name: _row()}))
 
     def remove(self, name: str) -> None:
         """Take the layer away; its objects stay on the island without a layer."""
@@ -85,7 +85,7 @@ class EditLayers:
                 if e.added is not None and e.added.get("layer") == name:
                     e.added.pop("layer")
 
-        self._change(tr("remove layer {name}", name=name), do)
+        self._change(tr("islands.remove_layer_name", name=name), do)
 
     def assign(self, entries: Iterable[Entry], name: str | None) -> None:
         """Put ``entries`` on the layer ``name`` (made when new), or on none."""
@@ -106,16 +106,20 @@ class EditLayers:
                 elif name is not None:
                     self.table[name]["members"].append(e.key)
 
-        self._change(tr("to layer {name}", name=name) if name else tr("off its layer"), do)
+        self._change(tr("islands.to_layer_name", name=name) if name else tr("islands.off_layer"), do)
 
     def set_flag(self, name: str, flag: str, on: bool) -> None:
         """Hide (``hidden``) or lock (``locked``) a layer."""
         if flag not in ("hidden", "locked"):
             raise ValueError(flag)
         if on:
-            label = tr("hide {name}", name=name) if flag == "hidden" else tr("lock {name}", name=name)
+            label = tr("islands.hide_name", name=name) if flag == "hidden" else tr("islands.lock_name", name=name)
         else:
-            label = tr("hidden off: {name}", name=name) if flag == "hidden" else tr("locked off: {name}", name=name)
+            label = (
+                tr("islands.hidden_off_name", name=name)
+                if flag == "hidden"
+                else tr("islands.locked_off_name", name=name)
+            )
         self._change(label, lambda: self.table[name].update({flag: on}))
 
 

@@ -29,7 +29,7 @@ from ..models.cfgpatch import NEW, PATCH, REPLACE
 from ..sources.overlay import normalize
 from .objdoc import ObjectDoc
 
-TITLES = {NEW: N_("A new file"), REPLACE: N_("Replace the game's file"), PATCH: N_("A patch (ModOps)")}
+TITLES = {NEW: N_("objects.new_file"), REPLACE: N_("objects.replace_games_file"), PATCH: N_("objects.patch_modops")}
 
 
 @dataclass
@@ -68,7 +68,7 @@ def plan(obj: ObjectDoc, way: str, new_path: str = "", saved: Iterable[str] = ()
     object (``held``): a file in the other way is removed by the save, so the mod never carries both."""
     out = Plan(way)
     if any(not o.doc.exact for o in obj.opened.values()):
-        out.problems.append(tr("a file does not read back byte for byte, so it is shown but not saved"))
+        out.problems.append(tr("objects.file_not_read_back_byte"))
     elif way == NEW:
         _plan_new(obj, new_path, out)
     else:
@@ -80,13 +80,13 @@ def plan(obj: ObjectDoc, way: str, new_path: str = "", saved: Iterable[str] = ()
 def _plan_new(obj: ObjectDoc, new_path: str, out: Plan) -> None:
     stem = normalize(new_path, studio=True).rsplit(".", 1)[0]
     if not stem or stem == obj.main.asked.rsplit(".", 1)[0]:
-        out.problems.append(tr("name a path of your own for the new file"))
+        out.problems.append(tr("objects.name_path_your_own_new"))
     elif any(x in ("", ".", "..") or ":" in x for x in stem.split("/")):
-        out.problems.append(tr("the new path must stay inside the game's folders (no .., no drive)"))
+        out.problems.append(tr("objects.new_path_must_stay_inside"))
     else:
         for o in obj.opened.values():
             out.files[f"{stem}.{o.read.rsplit('.', 1)[-1]}"] = o.doc.to_bytes()
-        out.notes.append(tr("the game reads {stem}.* only when an asset or another config names it", stem=stem))
+        out.notes.append(tr("objects.game_reads_only_when_asset", stem=stem))
 
 
 def _plan_changed(obj: ObjectDoc, way: str, out: Plan) -> bool:
@@ -101,17 +101,17 @@ def _plan_changed(obj: ObjectDoc, way: str, out: Plan) -> bool:
         if way == REPLACE or not o.read.endswith(cfgpatch.PATCHED):
             out.files[o.read] = o.doc.to_bytes()
             if way == PATCH:
-                out.notes.append(tr("{path}: written whole (it cannot be patched)", path=o.read))
+                out.notes.append(tr("objects.written_whole_cannot_patched", path=o.read))
             continue
         found = cfgpatch.render_patch(obj.base_bytes(role), o.doc)
         out.problems += found.problems
         if found.text:
             out.files[o.read + ".xml"] = found.text.encode("utf-8")
-            out.notes.append(tr("{path}: {count} operations", path=o.read + ".xml", count=found.count))
+            out.notes.append(tr("objects.path_count_operations", path=o.read + ".xml", count=found.count))
     if not out.problems:
         _follow_bfg(obj, out)
     if not out.files and not out.problems:
-        out.problems.append(tr("nothing changed"))
+        out.problems.append(tr("common.nothing_changed"))
     return True
 
 
@@ -119,10 +119,10 @@ def _note_project_files(obj: ObjectDoc, way: str, saved: Iterable[str], out: Pla
     """What the save does to the files the project already holds of the object: replaces them or removes them."""
     for path in held(obj, saved):
         if path in out.files:
-            out.notes.append(tr("{path}: replaces what the project holds", path=path))
+            out.notes.append(tr("objects.replaces_what_project_holds", path=path))
         elif _stale(obj, path, way):
             out.stale.append(path)
-            out.notes.append(tr("{path}: removed (an earlier save in the other way)", path=path))
+            out.notes.append(tr("objects.removed_earlier_save_other_way", path=path))
 
 
 def _follow_bfg(obj: ObjectDoc, out: Plan) -> None:
@@ -138,16 +138,14 @@ def _follow_bfg(obj: ObjectDoc, out: Plan) -> None:
     if follow.problems:
         out.notes.append(
             tr(
-                "{path}: the game's file stays, it cannot follow the change: {problem}",
+                "objects.games_file_stays_cannot_follow",
                 path=path,
                 problem=follow.problems[0],
             )
         )
     elif follow.changed:
         out.files[path] = follow.data
-        out.notes.append(
-            tr("{path}: the baked data follows the changed parts (none for new ones, no far-view model)", path=path)
-        )
+        out.notes.append(tr("objects.baked_data_follows_changed_parts", path=path))
 
 
 def _role_of(obj: ObjectDoc, path: str) -> str:
@@ -168,27 +166,27 @@ class SaveDialog(QDialog):
 
     def __init__(self, obj: ObjectDoc, parent=None, saved: Iterable[str] = ()) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Save into the project"))
+        self.setWindowTitle(tr("objects.title.save_project"))
         self.obj, self.result_plan, self.saved = obj, None, list(saved)
         self.group = QButtonGroup(self)
         self.path = QLineEdit(obj.main.asked.rsplit(".", 1)[0] + "_mod." + obj.main.asked.rsplit(".", 1)[-1])
         self.preview = QPlainTextEdit(readOnly=True)
         lay = QVBoxLayout(self)
-        changed = ", ".join(obj.dirty()) or tr("nothing")
-        lay.addWidget(QLabel(tr("<b>{title}</b>: changed {what}", title=obj.title, what=changed)))
+        changed = ", ".join(obj.dirty()) or tr("objects.nothing")
+        lay.addWidget(QLabel(tr("objects.title_changed_what", title=obj.title, what=changed)))
         for k, w in enumerate(ways(obj)):
             button = QRadioButton(tr(TITLES[w.way]), enabled=w.allowed)
             self.group.addButton(button, k)
             lay.addWidget(button)
-            why = QLabel(w.why if w.allowed else tr("Not open: {why}", why=w.why), wordWrap=True)
+            why = QLabel(w.why if w.allowed else tr("objects.not_open_why", why=w.why), wordWrap=True)
             why.setIndent(24)
             lay.addWidget(why)
             if w.way == NEW:
                 lay.addWidget(self.path)
         lay.addWidget(self.preview)
         buttons = QDialogButtonBox()
-        self.save_button = buttons.addButton(tr("Save"), QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.addButton(tr("Cancel"), QDialogButtonBox.ButtonRole.RejectRole)
+        self.save_button = buttons.addButton(tr("common.save"), QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(tr("common.cancel"), QDialogButtonBox.ButtonRole.RejectRole)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
@@ -203,8 +201,8 @@ class SaveDialog(QDialog):
 
     def _show(self) -> None:
         found = plan(self.obj, self.chosen(), self.path.text(), self.saved)
-        lines = [tr("writes {path}", path=p) for p in found.files] + found.notes
-        lines += [tr("cannot: {problem}", problem=p) for p in found.problems]
+        lines = [tr("objects.writes_path", path=p) for p in found.files] + found.notes
+        lines += [tr("objects.cannot_problem", problem=p) for p in found.problems]
         patch = next((d for p, d in found.files.items() if p.endswith(".xml")), b"")
         self.preview.setPlainText("\n".join(lines) + ("\n\n" + patch.decode("utf-8") if patch else ""))
         self.save_button.setEnabled(not found.problems)

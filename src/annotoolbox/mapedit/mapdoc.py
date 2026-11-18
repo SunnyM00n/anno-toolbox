@@ -86,7 +86,7 @@ class MapDoc:
     def size_names(self) -> list[str]:
         """What a slot's size index means here, as shown: the size classes, or a random-map template's edges."""
         if not self.is_template and self.record.random:
-            return [tr("{edge} tiles", edge=edge) for edge in self.record.edges]
+            return [tr("maps.edge_tiles", edge=edge) for edge in self.record.edges]
         return [tr(s) for s in template.SIZES]
 
     def size_index(self, e: Element) -> int:
@@ -260,19 +260,26 @@ class MapDoc:
             }
             keep |= {"fertilities_per_area_index"}
         changed = {k: v for k, v in values.items() if k in keep and getattr(e, k) != v}
+        if _same_file(changed.get("map_file_path"), e.map_file_path):  # the same island, spelled another way
+            del changed["map_file_path"]
         if "map_file_path" in changed:
             changed = {**CLEARED_WITH_FILE, **changed}
         if changed:
             self.edit(lambda _r: [setattr(e, k, v) for k, v in changed.items()])
 
     def set_area(self, size: tuple[int, int] | None = None, playable=None, initial=None) -> None:
+        """The map's size and, for a template, its playable areas (None: kept) as one step; none when all are kept."""
+        new_size = self.size if size is None else tuple(size)
+        areas = self.is_template  # a world's playable area is the world
+        new_playable = tuple(playable) if areas and playable is not None else self.playable
+        new_initial = tuple(initial) if areas and initial is not None else self.initial
+        if (new_size, new_playable, new_initial) == (tuple(self.size), tuple(self.playable), self.initial):
+            return
+
         def change(r):
-            if size is not None:
-                r.size = size
-            if playable is not None and self.is_template:
-                r.playable = playable
-            if initial is not None and self.is_template:
-                r.initial = initial
+            r.size = new_size
+            if areas:
+                r.playable, r.initial = new_playable, new_initial
 
         self.edit(change)
 
@@ -283,10 +290,15 @@ class MapDoc:
             return self._grow_world(sides)
         parts = self._grow_parts(widen, scripts or {})
         before, previous = self._state(), self.grown
-        result = grow.grow_map(parts, sides)
+        try:
+            result = grow.grow_map(parts, sides)
+        except Exception:  # the template is grown first: a part that fails leaves the map as it was
+            self._restore(before)
+            raise
         if previous is not None and not result.asset_ops:  # an east or north growth: the earlier move still holds
             result.asset_ops = list(previous.asset_ops)
         self.undos.append(before)
+        del self.undos[:-UNDO_DEPTH]
         self.redos.clear()
         self.grown = result
         return result
@@ -370,6 +382,11 @@ class MapDoc:
 
     def changed(self) -> bool:
         return self.grown is not None or self.render() != self.original
+
+
+def _same_file(a: str | None, b: str) -> bool:
+    """Whether two game paths name one file (the games read them without case, with either slash)."""
+    return a is not None and a.replace("\\", "/").lower() == b.replace("\\", "/").lower()
 
 
 def open_map(tree, game: str, path: str, maps: pool.GameMaps) -> MapDoc:

@@ -24,16 +24,27 @@ class Change:
     materials: bool = False
 
 
-REPORT_LABELS = (
-    N_("objects changed"), N_("objects deleted"), N_("objects added"), N_("heights"), N_("paint"),
-    N_("trees planted"), N_("properties"), N_("rivers"), N_("lakes"), N_("coast lines"), N_("path cells"),
-)  # fmt: skip
+REPORT_LABELS = {  # a report's keys -> the words shown for them
+    "objects changed": N_("islands.objects_changed"),
+    "objects deleted": N_("islands.objects_deleted"),
+    "objects added": N_("islands.objects_added"),
+    "heights": N_("islands.heights"),
+    "paint": N_("islands.paint_lower"),
+    "trees planted": N_("islands.trees_planted"),
+    "properties": N_("islands.properties"),
+    "rivers": N_("islands.rivers_lower"),
+    "lakes": N_("islands.lakes"),
+    "coast lines": N_("islands.coast_lines"),
+    "path cells": N_("islands.path_cells"),
+}
 
 
 def count_line(report: dict) -> str:
     """The counts of a build's report as one line ("heights 3, paint 1"): what is zero, and the unmatched names (listed
     apart), left out."""
-    return ", ".join(f"{tr(k) if k in REPORT_LABELS else k} {v}" for k, v in report.items() if v and k != "unmatched")
+    return ", ".join(
+        f"{tr(REPORT_LABELS[k]) if k in REPORT_LABELS else k} {v}" for k, v in report.items() if v and k != "unmatched"
+    )
 
 
 def num(v):

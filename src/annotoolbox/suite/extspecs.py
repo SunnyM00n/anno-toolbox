@@ -91,7 +91,8 @@ class ModelImport:
 class AppSpec:
     """An app of the suite's window (``features.APPS`` for one an extension adds): ``make(shell)`` returns its page,
     made when it is first shown; ``prepare`` runs before the program's first window (the OpenGL format); ``links``:
-    per ``suite.links`` name what the app answers, ``handler(page, *args)`` on its page (made when asked)."""
+    per ``suite.links`` name what the app answers, ``handler(page, *args)`` on its page (made when asked); ``game``:
+    how it follows the suite's game selection (a ``suite.gamesync.AppGame``), None for an app that has no game."""
 
     key: str
     title: str
@@ -101,6 +102,23 @@ class AppSpec:
     prepare: Callable[[], None] | None = None
     links: dict[str, Callable[..., Any]] = field(default_factory=dict)
     quiet_links: frozenset[str] = frozenset()  # queries: answered without the page, which they get only if it is made
+    game: Any = None
+
+
+@dataclass(frozen=True)
+class UiCompare:
+    """A panel of the UI editor that holds a second set of values against the preview (``features.UI_COMPARE``):
+    ``title`` is its dock's, ``make_panel()`` its widget (the window keeps it as ``compare_panel``),
+    ``add_file_actions(window, menu)`` and ``add_view_action(window, menu, app)`` fill the File and View menus (the
+    second returns the checkable action ``window.live_action``), ``texts(window)`` the label texts it holds by key
+    for the preview, ``show(window)`` draws its overlay and rows after the preview was laid out."""
+
+    title: str
+    make_panel: Callable[[], Any]
+    add_file_actions: Callable[[Any, Any], None]
+    add_view_action: Callable[[Any, Any, str], Any]
+    texts: Callable[[Any], dict[str, str]]
+    show: Callable[[Any], None]
 
 
 @dataclass(frozen=True)
@@ -136,3 +154,44 @@ class SaveEdit:
     games: frozenset[str]
     fields: Callable[[Any], list]
     apply: Callable[[Any, Any, dict, Any], Any]
+
+
+@dataclass(frozen=True)
+class Conversion:
+    """An entry of the Converter app (``features.CONVERSIONS`` for one an extension adds): a command of the command
+    line (``command``) run on single files, assets or islands, its form made from the command's own options.
+    ``register(sub)`` adds the command's group to argparse sub-parsers, ``words`` walks from there to the command;
+    ``inputs`` and ``output`` name its source and target arguments. The fields one by one: docs/converter-app.md,
+    "An entry"."""
+
+    key: str
+    category: str  # a key of ``converterapp.catalogue.CATEGORIES``
+    title: str
+    summary: str
+    command: tuple[str, ...]
+    register: Callable[[Any], None]
+    words: tuple[str, ...]
+    inputs: str = "inputs"
+    source: str = "files"
+    output: str = "out"
+    output_file: str = ""
+    output_subfolder: bool = False
+    suffixes: tuple[str, ...] = ()
+    games: tuple[str, ...] = ()  # the games whose files it takes; empty: any
+    fixed: tuple[str, ...] = ()
+    choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    folders: dict[str, str] = field(default_factory=dict)
+    hidden: frozenset[str] = frozenset()
+    per_input: bool = True
+    candidates: Callable[[Any], list[tuple[str, str]]] | None = None
+    complete: Callable[[Any, dict, str], dict] | None = None
+    prepare: Callable[[Any], None] | None = None
+
+
+@dataclass(frozen=True)
+class ConverterPage:
+    """A page of the Converter app beside its entries (``features.CONVERTER_PAGES``): ``make(shell)`` returns its
+    widget, made when the app's page is; ``title`` is its tab's."""
+
+    title: str
+    make: Callable[[Any], Any]

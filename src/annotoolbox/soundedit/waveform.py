@@ -39,6 +39,6 @@ def peaks(clip: Clip, bins: int) -> tuple[tuple[int, int], ...]:
 def shape(wem: bytes, bins: int) -> Shape:
     """The shape of a ``.wem``; a ``ClipError`` says why it cannot be drawn."""
     if len(wem) > MAX_BYTES:
-        raise ClipError(tr("{size} MB: too large to draw", size=len(wem) // 1_000_000))
+        raise ClipError(tr("common.mb_too_large_draw", size=len(wem) // 1_000_000))
     clip = read_wem(wem)
     return Shape(peaks(clip, bins), clip.seconds, clip.rate, clip.channels)

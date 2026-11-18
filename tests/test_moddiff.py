@@ -546,3 +546,28 @@ def test_two_mods_that_only_set_the_value_that_was_there_are_an_overlap_not_a_cr
         "Values/Product/Price",
         ("12", "12"),
     )
+
+
+def test_a_text_both_versions_add_with_other_words_differs(game, tmp_path):
+    def text(words: str) -> str:
+        return ops(
+            f'<ModOp Type="add" Path="/TextExport/Texts"><Text><LineId>777</LineId><Text>{words}</Text></Text></ModOp>'
+        )
+
+    v1 = mod_of(tmp_path / "v1", "ver", {TEXTS: text("one")})
+    v2 = mod_of(tmp_path / "v2", "ver", {TEXTS: text("two")}, Version="2")
+    report = compare.two_versions(game, v1, v2, search=[])
+    found = target(report, "777", TEXTS)
+    assert found.kind == model.DIFFERS and [(c.before, c.after) for c in found.changes] == [("one", "two")]
+    assert compare.two_versions(game, v1, v1, search=[]).targets == []
+
+
+def test_files_past_the_byte_for_byte_limit_are_read_again_to_tell_two_versions_apart(game, tmp_path):
+    from annotoolbox.moddiff import filechanges
+
+    v1 = mod_of(tmp_path / "v1", "ver", {"data/f.dds": b"one", "data/g.dds": b"same"})
+    v2 = mod_of(tmp_path / "v2", "ver", {"data/f.dds": b"two", "data/g.dds": b"same"}, Version="2")
+    base = GameBase(game)
+    one, two = (filechanges.mod_files(base, m, compare_bytes=0) for m in (v1, v2))
+    assert not any(f.digest for f in one) and filechanges.read_source(one[0].source) == b"one"
+    assert [(f.path, f.kind) for f in compare.diff_files(one, two)] == [("data/f.dds", model.DIFFERS)]

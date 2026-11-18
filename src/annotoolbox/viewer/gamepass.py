@@ -15,6 +15,7 @@ import time
 import numpy as np
 
 from ..infra import dxc
+from ..infra.i18n import N_
 from ..models import shaderview
 from ..render import (
     eyeadapt,
@@ -135,8 +136,8 @@ class GamePass(OwnPass):
                 "shading",
                 self.SOURCE.shading,
                 lambda got: gamelight.DeferredShading(self.r.ctx.rhi, *got),
-                "the game's deferred shading",
-                "our light instead",
+                N_("viewer.games_deferred_shading"),
+                N_("viewer.our_light_instead"),
             )
         return self.shading
 
@@ -147,8 +148,8 @@ class GamePass(OwnPass):
                 "shadowfit",
                 self.SOURCE.shadow_fit,
                 lambda got: shadowfit.ShadowFit(self.r.ctx.rhi, got),
-                "the game's shadow analysis",
-                "fitted on the CPU",
+                N_("viewer.games_shadow_analysis"),
+                N_("viewer.fitted_on_cpu"),
             )
         return self.fit
 
@@ -163,8 +164,8 @@ class GamePass(OwnPass):
                 "post",
                 self.SOURCE.post_stages,
                 lambda got: gamepost.GamePost(self.r.ctx.rhi, got),
-                "the game's post chain",
-                "our finish",
+                N_("viewer.games_post_chain"),
+                N_("viewer.our_finish"),
             )
         if self.post is None or self.post.error:
             return None
@@ -189,8 +190,8 @@ class GamePass(OwnPass):
                 "eye",
                 lambda source: source.stage_set(eyeadapt.STAGES),
                 lambda got: eyeadapt.EyeAdaptation(self.r.ctx.rhi, got),
-                "the game's eye adaptation",
-                "the tone map without it",
+                N_("viewer.games_eye_adaptation"),
+                N_("viewer.tone_map_without_it"),
             )
         if self.eye is None or self.eye.error:
             return None
@@ -209,8 +210,8 @@ class GamePass(OwnPass):
                 "sky",
                 self.SOURCE.sky_passes,
                 lambda got: gamesky.SkyPasses(self.r.ctx.rhi, *got),
-                "the game's sky passes",
-                "the look's sky light",
+                N_("viewer.games_sky_passes"),
+                N_("viewer.looks_sky_light"),
             )
         return self.sky
 
@@ -249,7 +250,7 @@ class GamePass(OwnPass):
         self.frame.set_quality(quality)
         size = drawn_size(size, quality)  # the frame's composite stretches it over the view
         both = (shading, sky) if shading is not None and not shading.error else None
-        box = self.r.box if self.r.box is not None else None
+        box = self.r.box
         lights = self._lights() if self.switches.get("lights", True) else []
         fit = self._fit() if casters else None
         sky_passes = self._sky() if both is not None and self.switches.get("sky", True) else None
@@ -282,8 +283,8 @@ class GamePass(OwnPass):
                     "ground",
                     gameground.compile_ground,
                     lambda got: gamedraw.GameModel(self.r.ctx.rhi, self._program(*got[:2]), gameground.mesh(), got[2]),
-                    "the ground by the game's model shader",
-                    "none in the game's frame",
+                    N_("viewer.ground_by_games_model_shader"),
+                    N_("viewer.none_in_games_frame"),
                     lambda: self.__setattr__("ground", False),
                 )
                 or self.ground
@@ -312,8 +313,8 @@ class GamePass(OwnPass):
                 "atmosphere",
                 lambda source: (source.stage_set(gameatmosphere.STAGES), source.sky_passes()[1]),
                 lambda got: gameatmosphere.Atmosphere(self.r.ctx.rhi, *got),
-                "the game's visible sky and haze",
-                "our sky",
+                N_("viewer.games_visible_sky_haze"),
+                N_("viewer.our_sky"),
             )
         return self.atmosphere
 
@@ -330,8 +331,8 @@ class GamePass(OwnPass):
                     gameclouds.read_maps(source.files, source.ambient_text()),
                 ),
                 lambda got: gameclouds.Clouds(self.r.ctx.rhi, *got),
-                "the game's clouds",
-                "no clouds",
+                N_("viewer.games_clouds"),
+                N_("viewer.no_clouds"),
             )
         return self.clouds if self.clouds is not None and not self.clouds.error else None
 
@@ -347,8 +348,8 @@ class GamePass(OwnPass):
                     "ocean",
                     lambda source: (source.stage_set(gameocean.STAGES), gameocean.read_water(source.ambient_text())),
                     lambda got: gameocean.OceanSimulation(self.r.ctx.rhi, *got),
-                    "the game's ocean simulation",
-                    "flat water",
+                    N_("viewer.games_ocean_simulation"),
+                    N_("viewer.flat_water"),
                 )
             ocean = self.ocean if self.ocean is not None and not self.ocean.error else None
         if ocean is None:
@@ -366,8 +367,8 @@ class GamePass(OwnPass):
                 "water",
                 lambda source: (source.stage_set(gamewater.STAGES), source.float_maps(gamewater.MAPS)),
                 lambda got: gamewater.SceneCopies(self.r.ctx.rhi, *got),
-                "the scene's copies for the water",
-                "the water without them",
+                N_("viewer.scenes_copies_for_water"),
+                N_("viewer.water_without_them"),
             )
         return self.water
 

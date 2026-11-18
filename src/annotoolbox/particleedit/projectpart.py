@@ -12,4 +12,4 @@ from ..infra.i18n import N_
 from ..suite.project import ALL_GAMES, EditsFolder
 
 EDITS = EditsFolder("particle-edits", ALL_GAMES)
-PART = EDITS.part("particles", N_("Particles"), "particle editor")
+PART = EDITS.part("particles", N_("islands.particles"), "particle editor")

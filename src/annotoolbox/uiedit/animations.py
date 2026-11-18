@@ -159,6 +159,6 @@ def read(root: dict) -> list[Animation]:
                 Track(int(fields.get(node, "AnimatedPropertyIndex", 0) or 0), f"{node['type']:08x}", keys, node)
             )
         guid = str(uuid.UUID(bytes_le=a["guid"])) if a.get("guid") else None
-        out.append(Animation(a, phoenixedit.object_name(a) or tr("(animation)"), guid,
+        out.append(Animation(a, phoenixedit.object_name(a) or tr("ui.animation"), guid,
                              int(fields.get(a, "Duration", 0) or 0), int(fields.get(a, "FrameRate", 60) or 60), tracks))  # fmt: skip
     return out

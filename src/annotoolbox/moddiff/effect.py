@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..assetedit.assetgame import Game
+from ..infra.i18n import tr
 from ..modloader.engine import INFO, Event, Session
 from ..modloader.mods import Mod, Variables, patch_target
 from ..modloader.patchdoc import PatchDoc
@@ -144,7 +145,7 @@ class Run:
     def step(self, mod: Mod, variables: Variables, compare_bytes: int, later: set[str] = frozenset()) -> ModEffect:
         """One mod, a patch file at a time: each file's document is opened, patched and compared, and let go once no
         later mod patches it (``later``: the files they patch), so only one large file is held at once."""
-        self.say(f"applying {mod.mod_id}")
+        self.say(tr("common.applying_mod", mod=mod.mod_id))
         step = ModEffect(mod.mod_id, f"{mod.mod_id} {mod.version}".strip(), mod)
         self.steps.append(step)
         files = [(rel, patch_target(rel)) for rel, _path in mod.patch_files()]

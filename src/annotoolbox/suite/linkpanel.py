@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from ..sources import gametree
-from . import linkannounce, linkcompanion, linkhandover, linkprotocol, livelink
+from . import linkannounce, linkclient, linkcompanion, linkhandover, linkprotocol, livelink
 from .background import Background
 
 LOG_LINES = 200
@@ -36,13 +36,25 @@ def rows(link: livelink.LiveLink | None = None) -> list[tuple[str, str]]:
     """The panel's facts as (label, text); every text is a sentence a person can read without the protocol."""
     link = link or livelink.current()
     status = link.status()
-    session = linkprotocol.session_folder() / linkprotocol.SESSION_FILE
+    session = (
+        linkprotocol.session_folder(game=livelink.target_game() or linkprotocol.DEFAULT_GAME)
+        / linkprotocol.SESSION_FILE
+    )
     mods = [str(m.get("id", "")) for m in getattr(link, "mods", []) if isinstance(m, dict)]
     return [
-        (tr("Connection"), status.text),
-        (tr("The game takes"), ", ".join(sorted(status.kinds)) if status.connected and status.kinds else tr("none")),
-        (tr("Mods the game has enabled"), ", ".join(mods) if mods else tr("none known")),
-        (tr("The game's session file"), f"{session} ({tr('there') if session.is_file() else tr('not there')})"),
+        (
+            tr("common.connection"),
+            status.text if status.connected or linkclient.supported() else tr("common.live_link_windows_only_why"),
+        ),
+        (
+            tr("common.game_takes"),
+            ", ".join(sorted(status.kinds)) if status.connected and status.kinds else tr("common.none"),
+        ),
+        (tr("common.mods_game_enabled"), ", ".join(mods) if mods else tr("common.none_known")),
+        (
+            tr("common.games_session_file"),
+            f"{session} ({tr('common.there') if session.is_file() else tr('common.not_there')})",
+        ),
     ]
 
 
@@ -65,35 +77,31 @@ class LinkDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle(tr("Game link"))
+        self.setWindowTitle(tr("common.title.game_link"))
         self.background = Background(self)
         self.form = QFormLayout()
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setMaximumBlockCount(LOG_LINES)
         self.note = QLabel(wordWrap=True)
-        connect = QPushButton(tr("Connect now"))
-        connect.setToolTip(tr("look for a running game (the suite also looks every few seconds)"))
+        connect = QPushButton(tr("common.connect_now"))
+        connect.setToolTip(tr("common.tip.look_running_game_suite_also"))
         connect.clicked.connect(lambda _c=False: self.connect_now())
-        reload_ = QPushButton(tr("Reload assets and texts"))
-        reload_.setToolTip(tr("the mod pass of the game, as Shift+F3 in it") + ". " + tr(livelink.PAUSE_NOTE))
+        reload_ = QPushButton(tr("common.reload_assets_texts"))
+        reload_.setToolTip(tr("common.mod_pass_game_shift_plus") + ". " + tr(livelink.PAUSE_NOTE))
         reload_.clicked.connect(lambda _c=False: self.reload_now())
-        handover = QPushButton(tr("Anno 1800: open in the editor ..."))
-        handover.setToolTip(
-            tr("put the start file for the game's own open-in-editor command into its Tools/ToolOne folder")
-        )
+        handover = QPushButton(tr("common.anno_1800_open_editor"))
+        handover.setToolTip(tr("common.tip.put_start_file_games_own"))
         handover.clicked.connect(lambda _c=False: self.set_up_1800())
-        companion = QPushButton(tr("Companion mod ..."))
-        companion.setToolTip(tr("write the small mod with the key that sends the selected object to the suite"))
+        companion = QPushButton(tr("common.companion_mod"))
+        companion.setToolTip(tr("common.tip.write_small_mod_key_sends"))
         companion.clicked.connect(lambda _c=False: self.install_companion())
-        modules = QPushButton(tr("List modules"))
-        modules.setToolTip(
-            tr("the game side's modules; a ticked one runs, a switchable one is ticked here to switch it")
-        )
+        modules = QPushButton(tr("common.list_modules"))
+        modules.setToolTip(tr("common.tip.game_sides_modules_ticked_one"))
         modules.clicked.connect(lambda _c=False: self.list_modules())
         self.modules = QListWidget()
         self.modules.setMaximumHeight(140)
         self.modules.itemChanged.connect(self._module_ticked)
-        close = QPushButton(tr("Close"))
+        close = QPushButton(tr("common.close"))
         close.clicked.connect(self.accept)
         buttons = QHBoxLayout()
         for button in (connect, reload_, modules, handover, companion):
@@ -104,7 +112,7 @@ class LinkDialog(QDialog):
         layout.addLayout(self.form)
         layout.addWidget(self.note)
         layout.addWidget(self.modules)
-        layout.addWidget(QLabel(tr("The game's log")))
+        layout.addWidget(QLabel(tr("common.games_log")))
         layout.addWidget(self.log, 1)
         layout.addLayout(buttons)
         self.resize(720, 480)
@@ -153,41 +161,36 @@ class LinkDialog(QDialog):
             self.line.emit(str(payload["message"]))
 
     def connect_now(self) -> None:
-        self.note.setText(tr("looking for a game ..."))
+        self.note.setText(tr("common.looking_game"))
         self.background.run(livelink.connect, lambda link: self.note.setText(self._found(link)))
 
     @staticmethod
     def _found(result) -> str:
         if isinstance(result, Exception):
-            return tr("the search failed: {reason}", reason=result)
+            return tr("common.search_failed_reason", reason=result)
         if livelink.current().connected:
-            return tr("connected")
+            return tr("common.connected")
         # the link helper has the link on by default, the full helper library only with live_link=1
-        return tr(
-            "no game answered: is the link helper in the game's folder "
-            "(the full helper library needs live_link=1 in its ini)?"
-        )
+        return tr("common.no_game_answered_link_helper")
 
     def set_up_1800(self) -> None:
         """Ask for Anno 1800's folder and write (or, when it is there already, remove) the hand-over's start file."""
-        folder = QFileDialog.getExistingDirectory(self, tr("The folder of Anno 1800"))
+        folder = QFileDialog.getExistingDirectory(self, tr("common.folder_anno_1800"))
         if not folder:
             return
         try:
             if linkhandover.uninstall(Path(folder)):
-                self.note.setText(tr("the suite's start file was removed from {folder}", folder=folder))
+                self.note.setText(tr("common.suites_start_file_removed", folder=folder))
             else:
                 path = linkhandover.install(Path(folder))
-                self.note.setText(
-                    tr("written: {path}; the game's open-in-editor command now opens the asset here", path=path)
-                )
+                self.note.setText(tr("common.written_games_open_editor_command", path=path))
         except (OSError, ValueError) as exc:  # ValueError: a name the file cannot hold
             self.note.setText(str(exc))
 
     def install_companion(self) -> None:
         """Ask for the mods folder (the game's own to start with) and write the companion mod into it."""
         start = gametree.user_dir("anno117") / "mods"
-        folder = QFileDialog.getExistingDirectory(self, tr("The mods folder of the game"), str(start))
+        folder = QFileDialog.getExistingDirectory(self, tr("common.mods_folder_game"), str(start))
         if not folder:
             return
         try:
@@ -195,9 +198,7 @@ class LinkDialog(QDialog):
         except OSError as exc:
             self.note.setText(str(exc))
             return
-        self.note.setText(
-            tr("written: {path}; enable it in the game's mod list (delete the folder to remove it)", path=path)
-        )
+        self.note.setText(tr("common.written_enable_games_mod_list", path=path))
 
     def list_modules(self) -> None:
         """The game side's modules into the list (behind the game's debug commands switch)."""
@@ -224,7 +225,7 @@ class LinkDialog(QDialog):
         self.background.run(lambda: livelink.current().modules_set(name, on), lambda r: self._module_switched(r))
 
     def _module_switched(self, reply) -> None:
-        self.note.setText(str(reply) if isinstance(reply, Exception) else reply.message or tr("switched"))
+        self.note.setText(str(reply) if isinstance(reply, Exception) else reply.message or tr("common.switched"))
         self.list_modules()
 
     def reload_now(self) -> None:

@@ -13,11 +13,30 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from ..formats import fxeffect, fxlink
-from ..infra import buildcache
+from ..infra import buildcache, dxc
 from ..render import gameshader as gs
+
+REFLECTION = "reflection 1"  # what a reflection kept beside a bytecode is keyed by (bump when its form changes)
+KEPT = 8192  # compiled shaders kept at hand for the session, every game's source (each tens of KB) [ours]
+_kept: dict[tuple, tuple] = {}  # (namespace, key) -> (bytecode, reflection): another view or quality finds them
+_kept_lock = threading.Lock()
+
+
+def _kept_get(key: tuple) -> tuple | None:
+    with _kept_lock:
+        return _kept.get(key)
+
+
+def _kept_put(key: tuple, value: tuple) -> tuple:
+    with _kept_lock:
+        while len(_kept) >= KEPT:
+            del _kept[next(iter(_kept))]
+        return _kept.setdefault(key, value)
 
 
 @dataclass(frozen=True)
@@ -221,8 +240,11 @@ class FxcSource:
 
     def __init__(self, files, compiler, game: FxcGame) -> None:
         self.files, self.compiler, self.record = files, compiler, game
-        self._lock = threading.Lock()
-        self._effects: dict[tuple, Built] = {}
+        self._lock = threading.Lock()  # the tables
+        self._effects: dict[tuple, Future] = {}  # (file, defines) -> the Future of its ``Built``
+        # a compiler build that compiles on several threads at once runs beside the others (``Fxc.parallel``)
+        self._serial = nullcontext() if getattr(compiler, "parallel", False) is True else threading.Lock()
+        self._version = ""
 
     def _preprocess(self, fx: str, defines: tuple) -> Built:
         raise NotImplementedError
@@ -240,11 +262,21 @@ class FxcSource:
         return None
 
     def effect(self, fx: str, defines: tuple) -> Built:
-        """The preprocessed effect, made once per file and defines."""
+        """The preprocessed effect, made once per file and defines (a thread asking while another makes it waits for
+        that one; other effects are made beside it)."""
         with self._lock:
-            if (fx, defines) not in self._effects:
-                self._effects[fx, defines] = self._preprocess(fx, defines)
-            return self._effects[fx, defines]
+            got = self._effects.get((fx, defines))
+            mine = got is None
+            if mine:
+                got = self._effects[fx, defines] = Future()
+        if mine:
+            try:
+                got.set_result(self._preprocess(fx, defines))
+            except BaseException as exc:  # not kept: asked again, it is made again
+                with self._lock:
+                    self._effects.pop((fx, defines), None)
+                got.set_exception(exc)
+        return got.result()
 
     def prepare(
         self,
@@ -272,18 +304,39 @@ class FxcSource:
     def compiled(self, entry: Entry, fx: str) -> Stage:
         """``entry`` compiled, its bytecode kept in the build cache under exactly what the compiler is handed: a
         change to any rewrite of the text compiles it again by itself, with no version to bump."""
-        key = buildcache.digest(self.compiler.version(), entry.profile, entry.flags, entry.entry, entry.hlsl)
-        blob = buildcache.get(self.record.namespace, key)
+        if not self._version:
+            self._version = self.compiler.version()
+        key = buildcache.digest(self._version, entry.profile, entry.flags, entry.entry, entry.hlsl)
+        at = (str(buildcache.root()), self.record.namespace, key)  # what this cache holds (none when it is off)
+        kept = _kept_get(at) if buildcache.enabled() else None
+        if kept is None:
+            kept = self._compile(key, entry, fx)
+            if buildcache.enabled():
+                kept = _kept_put(at, kept)
+        blob, reflection = kept
+        return Stage(blob, entry.entry, reflection, list(entry.inputs), dict(entry.types), dict(entry.samplers))
+
+    def _compile(self, key: str, entry: Entry, fx: str) -> tuple[bytes, object]:
+        """The bytecode under ``key`` from the build cache, else compiled and kept; and its reflection, kept beside it
+        (read back in a fraction of the compiler's time; an older entry without one gets it now)."""
+        namespace = self.record.namespace
+        blob = buildcache.get(namespace, key)
         if blob is None:
-            with self._lock:
+            with self._serial:
                 done = self.compiler.compile(entry.hlsl, entry.entry, entry.profile, flags=entry.flags, name=fx)
             if not done.ok:
                 raise RuntimeError(f"{entry.entry} of {fx}: {done.messages[:2000]}")
             blob = done.object
-            buildcache.put(self.record.namespace, key, blob)
-        with self._lock:
+            buildcache.put(namespace, key, blob)
+        reflection_key = buildcache.digest(REFLECTION, key)
+        kept = buildcache.get(namespace, reflection_key)
+        if kept is not None:
+            return blob, dxc.reflection_of_json(kept)
+        with self._serial:
             reflection = self.compiler.reflect(blob)
-        return Stage(blob, entry.entry, reflection, list(entry.inputs), dict(entry.types), dict(entry.samplers))
+        if isinstance(reflection, dxc.Reflection):
+            buildcache.put(namespace, reflection_key, dxc.reflection_json(reflection))
+        return blob, reflection
 
     def effect_pass(self, fx: str, defines: tuple, technique: str) -> tuple[list[Stage], State | None]:
         """The vertex and pixel ``Stage`` (and the geometry stage where ``_geometry`` gives one) and the states (None

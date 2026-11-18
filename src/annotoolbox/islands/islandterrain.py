@@ -220,17 +220,49 @@ def page_error(sample, nx: int, nz: int, node: float) -> float:
     return float(np.abs(map_coordinates(cv, [zz, xx], order=1) - want).max())
 
 
-def smooth_sample(grid, xs, zs):
+CUBIC_PAD = 12  # texels scipy adds round a grid before it prefilters it for mode "nearest" (_prepad_for_spline_filter)
+
+
+def cubic_filter(grid):
+    """``grid`` padded and prefiltered as ``map_coordinates(order=3, mode="nearest")`` does on every call, for a grid
+    sampled many times (``page_ground_sampler``: about 1,500 calls an island); None where this scipy lacks the call
+    that takes it, and every sample filters again."""
+    import numpy as np
+    from scipy import ndimage
+
+    if not hasattr(ndimage, "_nd_image") or not hasattr(ndimage._nd_image, "geometric_transform"):
+        return None
+    padded = np.pad(np.asarray(grid), CUBIC_PAD, mode="edge")
+    return ndimage.spline_filter(padded, 3, output=np.float64, mode="nearest")
+
+
+def _cubic(grid, zz, xx, filtered):
+    """``map_coordinates(grid, [zz, xx], order=3, mode="nearest")``, from ``cubic_filter(grid)`` when given: the same
+    call scipy makes after filtering, so the same bytes."""
+    import numpy as np
+    from scipy import ndimage
+
+    if filtered is None:
+        return ndimage.map_coordinates(grid, [zz, xx], order=3, mode="nearest")
+    coordinates = np.asarray([zz, xx])
+    output = np.zeros(coordinates.shape[1:], dtype=np.asarray(grid).dtype.name)
+    mode = ndimage._ni_support._extend_mode_to_code("nearest")
+    ndimage._nd_image.geometric_transform(
+        filtered, None, coordinates, None, None, output, 3, mode, 0.0, CUBIC_PAD, None, None
+    )
+    return output
+
+
+def smooth_sample(grid, xs, zs, filtered=None):
     """Heights of ``grid`` (numpy, rows = z) at column positions ``xs`` and row positions ``zs``
     (outer product), cubic B-spline interpolation clamped to the four surrounding samples. Linear
     interpolation of 2070's one height per tile left slopes made of flat facets whose creases
     showed in-game as straight lines along the tile grid; the clamp keeps cliffs and coasts from
-    overshooting."""
+    overshooting. ``filtered``: ``cubic_filter(grid)``, made once for many calls."""
     import numpy as np
-    from scipy import ndimage
 
     zz, xx = np.meshgrid(zs, xs, indexing="ij")
-    cubic = ndimage.map_coordinates(grid, [zz, xx], order=3, mode="nearest")
+    cubic = _cubic(grid, zz, xx, filtered)
     h, w = grid.shape
     z0 = np.clip(np.floor(zz).astype(int), 0, h - 2)
     x0 = np.clip(np.floor(xx).astype(int), 0, w - 2)
@@ -281,10 +313,11 @@ def page_ground_sampler(coarse, weight=None):
     from scipy.ndimage import map_coordinates
 
     w = coarse.shape[0]
+    filtered = cubic_filter(coarse)  # the grid stays as it is: filtered once, not once a sample
 
     def sample(x, z):
         xs, zs = np.clip(np.asarray(x, float) * 2, 0, w - 1), np.clip(np.asarray(z, float) * 2, 0, w - 1)
-        smooth = smooth_sample(coarse, xs, zs)
+        smooth = smooth_sample(coarse, xs, zs, filtered)
         if weight is None:
             return smooth
         zz, xx = np.meshgrid(zs, xs, indexing="ij")
@@ -343,6 +376,58 @@ def set_bytes(attr: filedb.Attrib, arr) -> None:
     if len(raw) != len(attr.data):
         raise ValueError(f"{attr.name}: {len(attr.data)} bytes in the donor, {len(raw)} generated")
     attr.data = raw
+
+
+def lod_grids(rd, size: int) -> tuple:
+    """What a stored node mesh is made from: the coarse heightmap (heightmap units) with its gradients (world units a
+    tile, as the stored normals are), the active map and its cell in tiles."""
+    import numpy as np
+
+    w, steps = a7mread.coarse_steps(rd)
+    hm = np.frombuffer(steps, np.int16).reshape(w, w).astype(np.float64) / a7mread.HEIGHT_STEPS
+    gz, gx = np.gradient(hm / HEIGHT_UNITS, 0.5)
+    am = rd.path("Terrain/ActiveMap")
+    return (hm, gx, gz), np.asarray(read_bits(am), dtype=bool), size // am.find("x").u32()
+
+
+def node_mesh(grids: tuple, at: tuple[int, int], node: int, level: int):
+    """One node's stored mesh from ``lod_grids``: a regular grid of half-tile cells up to ``LOD_MESH_CELLS`` across,
+    the active cells only, with vanilla's skirts; (vertex bytes, index bytes), None outside the active map."""
+    heights, active, acell = grids
+    cell = _node_cell(heights[0], active, acell, at, node, max(0.5, node / LOD_MESH_CELLS))
+    return _node_mesh(heights, active, acell, at, node, cell, level)
+
+
+def fill_empty_meshes(rd, size: int, files: dict[str, bytes]) -> dict[str, int]:
+    """The stored meshes of the nodes whose ``HasMeshArray`` bit is set but whose ``.tmc`` entry holds none, written
+    in ``files`` as ``node_mesh`` makes them; returns the nodes filled per level. Anno 1800 keeps no mesh above level 8
+    (a 384- or 768-tile island flags the top level all the same); 117 draws those nodes from afar (island-regions
+    "The empty top level")."""
+    grids, filled = None, {}
+    for level, lv in enumerate(rd.path("Terrain/Levels").findall("#1")):
+        if level < 2 or lv.path("HasMeshArray") is None:
+            continue
+        has = read_bits(lv.path("HasMeshArray"))
+        node = node_tiles(size, len(has))
+        for key in sorted(k for k in files if k.startswith(f"meshes/{level}/") and k.endswith(".tmc")):
+            tx, tz = (int(v) for v in key.rsplit("/", 1)[1][:-4].split("x"))
+            doc, made = filedb.read(files[key]), 0
+            for k, e in enumerate(c for c in doc.path("Meshes/map").children if isinstance(c, filedb.Tag)):
+                ni, nj = tx * 32 + k % 32, tz * 32 + k // 32
+                verts, indices = e.find("Vertices"), e.find("Indices")
+                if verts is None or indices is None or verts.data or nj >= len(has) or ni >= len(has[nj]):
+                    continue
+                if not has[nj][ni]:
+                    continue
+                grids = grids or lod_grids(rd, size)
+                mesh = node_mesh(grids, (ni, nj), node, level)
+                if mesh is not None:
+                    verts.data, indices.data = mesh
+                    made += 1
+            if made:
+                files[key] = filedb.write(doc, *filedb.name_ids(files[key]), version=filedb.version(files[key]))
+                filled[level] = filled.get(level, 0) + made
+    return filled
 
 
 class TerrainMixin:
@@ -440,15 +525,8 @@ class TerrainMixin:
         Vanilla meshes cover only the active area; a mesh over the full node draws the sea as a flat terrain sheet.
         Here: a regular grid per node (half-tile cells up to ``LOD_MESH_CELLS`` across), only the cells inside the
         active map, with vanilla's skirts. Returns the new .tmc files."""
-        import numpy as np
-
         t = self.rd.path("Terrain")
-        w, steps = a7mread.coarse_steps(self.rd)
-        hm = np.frombuffer(steps, np.int16).reshape(w, w).astype(np.float64) / a7mread.HEIGHT_STEPS
-        gz, gx = np.gradient(hm / HEIGHT_UNITS, 0.5)  # world units per tile, as the stored normals are
-        am = t.find("ActiveMap")
-        active = np.asarray(read_bits(am), dtype=bool)
-        acell = self.size // am.find("x").u32()  # tiles per active map cell
+        grids = lod_grids(self.rd, self.size)
         out: dict[str, bytes] = {}
         counts: dict[int, int] = {}
         for level, lv in enumerate(t.path("Levels").findall("#1")):
@@ -457,7 +535,6 @@ class TerrainMixin:
             has = read_bits(lv.path("HasMeshArray"))
             n = len(has)
             node = node_tiles(self.size, n)  # tiles per node
-            cell = max(0.5, node / LOD_MESH_CELLS)  # tiles per mesh cell: at least the heightmap's own samples
             docs = {
                 k: (filedb.read(d), filedb.name_ids(d))
                 for k, d in gamedata_files.items()
@@ -471,8 +548,7 @@ class TerrainMixin:
                     ni, nj = tx * 32 + k % 32, tz * 32 + k // 32
                     verts = indices = b""
                     if ni < n and nj < n and has[nj][ni]:
-                        size = _node_cell(hm, active, acell, (ni, nj), node, cell)
-                        mesh = _node_mesh((hm, gx, gz), active, acell, (ni, nj), node, size, level)
+                        mesh = node_mesh(grids, (ni, nj), node, level)
                         if mesh is not None:
                             verts, indices = mesh
                             made += 1
@@ -566,11 +642,10 @@ class TerrainMixin:
         new terrain). The donor's pages are removed from ``gamedata_files``."""
         import numpy as np
 
-        grey = struct.pack("<HHI", 0x8410, 0x8410, 0)  # one DXT1 block, both colours 128 grey
+        from .tintpages import neutral
+
         template_key = next(k for k in sorted(gamedata_files) if k.startswith("tintmaps/") and k.endswith(".dds"))
-        tmpl = gamedata_files[template_key]
-        header = 148 if tmpl[84:88] == b"DX10" else 128
-        page = tmpl[:header] + grey * ((len(tmpl) - header) // 8)
+        page = neutral(gamedata_files[template_key])
         for k in [k for k in gamedata_files if k.startswith("tintmaps/")]:
             del gamedata_files[k]
         out: dict[str, bytes] = {}
@@ -583,6 +658,6 @@ class TerrainMixin:
         base = self.rd.path("Terrain/TintMapLevels/BaseTextureData")
         if base is not None:
             m = base.find("map")
-            m.data = grey * (len(m.data) // 8)
+            m.data = neutral(m.data)
         self.report["tint_pages"] = counts
         return out

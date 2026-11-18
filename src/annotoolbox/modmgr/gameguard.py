@@ -52,13 +52,13 @@ def change_warning(now: GameState, editing: str, active: str) -> str:
     """The sentence to show before a profile change while the game runs ("" when it does not)."""
     if not now.busy:
         return ""
-    text = tr("{game} is running: a profile change takes effect at its next start.", game=now.name)
+    text = tr("mods.running_profile_change_takes_effect", game=now.name)
     text += " " + tr(
-        "A hot reload (Shift+F3) loads the active profile ({active}) and rewrites its file.",
-        active=active or tr("none"),
+        "mods.hot_reload_shift_plus_f3",
+        active=active or tr("common.none"),
     )
     if editing and editing != active:
-        text += " " + tr("You are editing {name}, which is not the active one: a reload will not use it.", name=editing)
+        text += " " + tr("mods.you_editing_not_active_one", name=editing)
     return text
 
 
@@ -70,7 +70,7 @@ def reload_in_game(mod: str = "") -> livelink.Reply:
 
 def reload_text(reply: livelink.Reply, active: str) -> str:
     """What to tell the person about a reload's reply, the active-profile trap included."""
-    trap = " " + tr("It reloads the active profile ({active}), not the one open here.", active=active or tr("none"))
+    trap = " " + tr("mods.reloads_active_profile_not_one", active=active or tr("common.none"))
     if reply.ok:
-        return tr("Reload asked: {message}.", message=reply.message or reply.status) + trap
+        return tr("mods.reload_asked_message", message=reply.message or reply.status) + trap
     return f"{reply.message or reply.status}.{trap}"

@@ -20,7 +20,14 @@ from ..infra.i18n import tr
 from ..islands import islandedits, islandinfo, mappictures, tintpages
 from ..islands.gameterrain import PAGE_TILES
 from ..islands.islandgrid import HEIGHT_UNITS, ground_at, read_bits, turned_normals, write_bits
-from ..islands.islandground import GroundMixin, paint_strokes, painted_layers, slot_weights, stroke_cover
+from ..islands.islandground import (
+    GroundMixin,
+    paint_strokes,
+    painted_layers,
+    slot_weights,
+    stroke_cover,
+    stroke_material,
+)
 from ..islands.islandterrain import TMC_VERTEX, replace_dds_pixels, set_bytes
 from ..islands.islandwater import Spline, depth_code, fill_spline
 from ..islands.terrainbuild import page_field, write_page
@@ -129,7 +136,8 @@ def used_mask(strokes: list[dict]) -> int:
     """The material bits (one per material id) of the strokes, as the used-material masks hold them."""
     mask = 0
     for st in strokes:
-        mask |= 1 << int(st["material"])
+        if 0 <= (material := stroke_material(st)) < 32:  # a stroke that names none has no bit
+            mask |= 1 << material
     return mask
 
 
@@ -316,15 +324,22 @@ def dds_u32(data: bytes):
 
 
 def painted_strokes(strokes: list[dict], order: dict[int, int]) -> list[dict]:
-    """The strokes of the island's own materials (``order``: its set's IDs), the ones the paint step lays."""
-    return [st for st in strokes if int(st.get("material", -1)) in order and int(st["material"]) < 32]
+    """The strokes of the island's own materials (``order``: its set's IDs), the ones the paint step lays; a stroke
+    without a point or without a number as its material (a hand-edited file) lays nothing and is left out, as
+    the island build leaves it."""
+    return [st for st in strokes if st.get("points") and stroke_material(st) in order and stroke_material(st) < 32]
+
+
+def other_materials(strokes: list[dict], laid: list[dict]) -> int:
+    """How many strokes with points are not among the ``laid`` ones: those of a material outside the island's set."""
+    return sum(1 for st in strokes if st.get("points")) - len(laid)
 
 
 def apply_paint(isl, gd: Gamedata, strokes: list[dict], order: dict[int, int], out: dict[str, bytes]) -> dict:
     """Paint the strokes of the island's own materials into every material map it has (117: the four levels of
     ``materialmaps/`` and the copy in rd3d; 1800: rd3d) and mark the materials used where they were painted."""
     ok = painted_strokes(strokes, order)
-    report = {"strokes": len(ok), "other materials": len(strokes) - len(ok), "blocks": 0}
+    report = {"strokes": len(ok), "other materials": other_materials(strokes, ok), "blocks": 0}
     if not ok:
         return report
     t = isl.rd.path("Terrain")
@@ -496,7 +511,7 @@ def apply_water(isl, edits: dict, objects=None, place=None) -> dict:
     report = {"rivers": 0, "lakes": 0, "unmatched": []}
     for k, river in sorted(edits.get("rivers", {}).items()):
         if not str(k).isdigit() or int(k) >= len(rivers) or not river_edit_ok(river):
-            report["unmatched"].append(tr("river {k}", k=k))
+            report["unmatched"].append(tr("islands.river_k", k=k))
             continue
         _set_river(
             rivers[int(k)], [tuple(map(float, p)) for p in river["points"]], [float(w) for w in river["widths"]], place
@@ -504,20 +519,20 @@ def apply_water(isl, edits: dict, objects=None, place=None) -> dict:
         report["rivers"] += 1
     for k, level in sorted(edits.get("lakes", {}).items()):
         if not str(k).isdigit() or int(k) >= len(lakes):
-            report["unmatched"].append(tr("lake {k}", k=k))
+            report["unmatched"].append(tr("islands.lake_k", k=k))
             continue
         _set_lake(lakes[int(k)], float(level), place)
         report["lakes"] += 1
     for k, outline in sorted(edits.get("lake_outlines", {}).items()):
         if not str(k).isdigit() or int(k) >= len(lakes) or len(outline["points"]) < 3:
-            report["unmatched"].append(tr("lake outline {k}", k=k))
+            report["unmatched"].append(tr("islands.lake_outline_k", k=k))
             continue
         level = float(edits.get("lakes", {}).get(k, _lake_level(lakes[int(k)])))
         fill_lake(lakes[int(k)], [(float(x), level, float(z)) for x, z in outline["points"]], place)
         report["lake outlines"] = report.get("lake outlines", 0) + 1
     for k, line in sorted(edits.get("coast", {}).items()):
         if not str(k).isdigit() or int(k) >= len(coasts) or len(line["points"]) < 2:
-            report["unmatched"].append(tr("coast line {k}", k=k))
+            report["unmatched"].append(tr("islands.coast_line_k", k=k))
             continue
         _set_coast(coasts[int(k)], [tuple(map(float, p)) for p in line["points"]], place)
         report["coasts"] = report.get("coasts", 0) + 1

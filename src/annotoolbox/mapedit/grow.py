@@ -26,9 +26,9 @@ LUA_NUMBERS = re.compile(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)(?:\s*,\s*(-
 def check_sides(sides: tuple[int, int, int, int]) -> None:
     """``ValueError`` unless every side is a whole number of chunks and something grows."""
     if any(s < 0 or s % STEP for s in sides):
-        raise ValueError(tr("each side grows by a multiple of {step} tiles", step=STEP))
+        raise ValueError(tr("maps.side_grows_multiple_tiles", step=STEP))
     if not any(sides):
-        raise ValueError(tr("no side grows"))
+        raise ValueError(tr("maps.no_side_grows"))
 
 
 @dataclass
@@ -76,7 +76,7 @@ def grow_template(t: MapTemplate, sides: tuple[int, int, int, int], report: Repo
         report.add(file, "MapTemplate/TemplateElement/Element/Position", MOVED, "x and z", len(t.elements))
     for name in ("EnlargementOffset", "IslandShift"):
         if t.value(name) is not None:
-            report.add(file, f"MapTemplate/{name}", KEPT, tr("kept: its meaning past 0, 0 is not known"))
+            report.add(file, f"MapTemplate/{name}", KEPT, tr("maps.kept_meaning_past_0_not"))
 
 
 HORIZONS, ENLARGED_HORIZONS = "HorizonIslands", "EnlargedHorizonIslands"
@@ -116,7 +116,7 @@ def grow_horizons(
     moved, count = re.subn(r"<Position>(.*?)</Position>", lambda m: _moved_position(m, west, south), block, flags=re.S)
     report.add("assets", f"MapTemplate {guid} {name}/Item/Position", MOVED, "X and Z", count)
     if horizon_list(asset, other):
-        report.add("assets", f"MapTemplate {guid} {other}", KEPT, tr("the other map of the same asset uses it"))
+        report.add("assets", f"MapTemplate {guid} {other}", KEPT, tr("maps.other_map_same_asset_uses"))
     path = f"//Asset[Values/Standard/GUID='{guid}']/Values/MapTemplate/{name}"
     return [modxml.modop(path, moved, "replace")], asset.replace(block, moved, 1)
 
@@ -241,7 +241,7 @@ def grow_assets(
         try:
             root = ET.fromstring(moved.get(asset.guid, asset.text))
         except ET.ParseError:
-            report.add("assets", f"{asset.template} {asset.guid}", KEPT, tr("the asset cannot be read"))
+            report.add("assets", f"{asset.template} {asset.guid}", KEPT, tr("maps.asset_cannot_read"))
             continue
         blocks = _position_elements(root)
         maps = _map_of(asset, found, templates)
@@ -250,11 +250,11 @@ def grow_assets(
             continue
         if maps != {guid}:
             if not maps:
-                reason = tr("names no map: not moved")
+                reason = tr("maps.names_no_map_not_moved")
             elif guid in maps:
-                reason = tr("names other maps too: whose position it is is not known")
+                reason = tr("maps.names_other_maps_too_whose")
             else:
-                reason = tr("belongs to another map")
+                reason = tr("maps.belongs_to_another_map")
             report.add("assets", where, KEPT, reason, len(blocks))
             continue
         for path, e in blocks:
@@ -267,7 +267,7 @@ def _move_block(guid: int, where: str, path: str, e: ET.Element, west: int, sout
     """One position block moved in place; its ModOp (none, and a ``kept`` line, when a value is not a number)."""
     old = (_axis(e, "X"), _axis(e, "Z"))
     if None in old:
-        report.add("assets", f"{where} {path}", KEPT, tr("X or Z is not a number"))
+        report.add("assets", f"{where} {path}", KEPT, tr("maps.x_z_not_number"))
         return []
     new = (_num(old[0] + west), _num(old[1] + south))
     _set_axis(e, "X", old[0] + west)
@@ -291,9 +291,7 @@ def scan_scripts(scripts: dict[str, str], size: tuple[int, int], report: Report)
                     break
         if hits:
             lines = ", ".join(str(h) for h in hits[:8]) + (" ..." if len(hits) > 8 else "")
-            report.add(
-                path, tr("lines {lines}", lines=lines), KEPT, tr("numbers in the map's range: check by hand"), len(hits)
-            )
+            report.add(path, tr("maps.lines", lines=lines), KEPT, tr("maps.numbers_maps_range_check_hand"), len(hits))
 
 
 def grow_map(parts: GrowParts, sides: tuple[int, int, int, int]) -> Grown:
@@ -310,7 +308,7 @@ def grow_map(parts: GrowParts, sides: tuple[int, int, int, int]) -> Grown:
         sessionfile.grow(session, sides, report, f"{stem}.a7t", parts.widen)
         files[".a7t"] = session.render()
     else:
-        report.add(f"{stem}.a7t", "", KEPT, tr("the template has no session file"))
+        report.add(f"{stem}.a7t", "", KEPT, tr("maps.template_no_session_file"))
     level = parts.level if parts.level is not None else levelfile.editor_level(*old)
     files[".a7te"] = levelfile.regrown(level, *t.size)
     report.add(f"{stem}.a7te", "Dimensions, Chunks", MOVED, f"{old} -> {t.size}")
@@ -322,8 +320,8 @@ def grow_map(parts: GrowParts, sides: tuple[int, int, int, int]) -> Grown:
         )
         ops = [*ops, *more]
     scan_scripts(parts.scripts, old, report)
-    report.add("", tr("the island files"), KEPT, tr("their coordinates are their own"))
-    report.add("", tr("the camera's start and the generator's spacing"), KEPT, tr("held by the program, not by a file"))
+    report.add("", tr("maps.island_files"), KEPT, tr("maps.coordinates_own"))
+    report.add("", tr("maps.cameras_start_generators_spacing"), KEPT, tr("maps.held_program_not_file"))
     files[".a7tinfo"] = t.render()
     report.size = t.size
     return Grown(files, ops, report, asset, moved_assets)

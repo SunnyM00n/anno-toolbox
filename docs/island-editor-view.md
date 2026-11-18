@@ -206,6 +206,20 @@ and the 2070 look exclude one another.
   water parts read the scene behind them (phases 6 to 8, island-117-view.md). The sea, coast waves, rivers and lakes
   and the session fog are drawn by the game's shaders too (phase 6, steps 2 to 4; phase 7). Where those do not draw,
   the view's own water is plain see-through surfaces.
+
+  **The terrain by the game's shipped shaders** (2026-11-17): where the Toolbox's Direct3D 12 module is installed, the
+  terrain's nodes and their shadow are drawn by the game's own compiled terrain shader as it ships, not by a copy the
+  Toolbox rewrites and compiles; the rest of this look is drawn as before. It looks the same, with sharper rock faces
+  at a grazing angle (the game's anisotropic filtering). Not checked against the game's own picture
+  (`rendering/native-backend.md` section 9).
+
+  **The start-up stage** (2026-11-17): the first start after a game update prepares this look's shaders. While the
+  start-up screen shows it compiles what an island needs first (the shaders the game does not ship, the look's fixed
+  passes); once the window is up, every model shader the game ships compiles in the background, with "Preparing game
+  shaders: n of m" in the status bar. An island opened meanwhile goes first. A later start skips both. When an update
+  draws a part of the look with the game's own shaders, or after a game update, a pop-up offers to remove the compiled
+  shaders no longer needed (Help > Remove unused game shaders at any time). Not seen in the installed program yet
+  (`tool-suite.md` section 21, "The start-up stage").
 - **Go to** (the Home tab): `x z [distance] [turn]` points the camera at a place in tiles, from a turn in degrees.
   This shows the same spot in a 2070 and a 117 island one after the other (how the falls were compared).
 
@@ -214,8 +228,8 @@ the settings keep for that game: Low, Medium (the default), High or Ultra (Custo
 older games' islands are drawn at their best, and the menu is greyed. A preset sets the level of detail's bias and the
 smallest object drawn from the game's own quality level. It also sets our render scale, shadow map size, draw
 distance, largest map side, tessellation and particle budget. It applies in both looks and the game's shaders. A
-change of the shadow map, the maps' size or the tessellation makes the game's shaders' frame anew (seconds; a minute
-or two on a continental island). The values, sources and measurements are in
+change of the shadow map, the maps' size or the tessellation makes the game's shaders' frame anew (Medium to High on
+`roman_island_medium_03`: 11 s, 24 s before 2026-11-17; rendering/island-117-view.md "Speed", part 14). The values, sources and measurements are in
 [`rendering/quality.md`](rendering/quality.md).
 
 Note: the game's own shaders were added from 2026-11-12 to 2026-11-14, and the rendering quality on 2026-11-13.
@@ -352,6 +366,8 @@ session minimap, from the editor's current heights. It is repainted 150 ms after
 
 The three colours are neutral stand-ins (`minimap.LAND_COLORS`). The game's colours are in its minimap scene asset,
 which the editor does not read yet (`paint(..., colors=...)` takes them).
+
+A paint that fails is said in the status line; the dock keeps its last picture.
 
 Limits: the picture is drawn from the editor's own formula and was not compared with a game screenshot. x runs right
 and z down, as the heights are stored. Fog, owners and the camera frame of the game's minimap are not drawn.

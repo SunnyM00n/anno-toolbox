@@ -1,7 +1,7 @@
 """What goes into the Toolbox installer: the editions, the version, the files beside the program, the notices.
 
-The pure parts of ``build_app.py`` (the PyInstaller folder) and ``installer_wix.py`` (the .msi); every rule is in
-``docs/installer.md``. Nothing here starts a tool, so the tests run it on small synthetic trees.
+The pure parts of ``build_app.py`` (the PyInstaller folder and the installer's packing) and ``installer_wix.py`` (the
+migration package); every rule is in ``docs/installer.md``. Nothing here starts a tool, so the tests run it on small synthetic trees.
 """
 
 from __future__ import annotations
@@ -22,36 +22,29 @@ RUNTIME_FILES = (  # read beside the program at run time (paths.REPO_ROOT / ...)
     "docs/formats/enums-117.json",
 )
 LICENSE_FILES = ("LICENSE", "LICENSE-UBISOFT.md")
-NOTICE = (
-    "Anno Toolbox is an unofficial fan project. It is not made, endorsed or supported by Ubisoft. Anno and its game "
-    "titles are trademarks of Ubisoft Entertainment.\n\n"
-    "The program carries no game files. It reads the Anno games you have installed on this computer, and everything "
-    "it writes (mods, exports, edit files) is yours to use under the rules of those games.\n\n"
-    "The installer is not signed, so Windows may show its reputation warning (SmartScreen) when you start it. "
-    "Install only a copy you got from the project's own page.\n\n"
-    "Your settings stay in %LOCALAPPDATA% when you uninstall; delete that folder to remove them too.\n"
-)
-MIT = (
-    "MIT License\n\nCopyright (c) 2026 Sunny_Moon and the Anno Toolbox contributors\n\n"
-    "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated "
-    'documentation files (the "Software"), to deal in the Software without restriction, including without '
-    "limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the "
-    "Software, and to permit persons to whom the Software is furnished to do so, subject to the following "
-    "conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or "
-    'substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, '
-    "EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR "
-    "PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, "
-    "DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN "
-    "CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n"
-)
 # What the bundle's libraries are, by distribution name; the version and licence line are read from the build's
 # environment (``third_party``). Python, Qt, the boot loader and texconv are not distributions.
-THIRD_PARTY = ("PySide6", "shiboken6", "moderngl", "glcontext", "numpy", "scipy", "Pillow", "etcpak", "miniaudio")
+THIRD_PARTY = (
+    "PySide6",
+    "shiboken6",
+    "moderngl",
+    "glcontext",
+    "numpy",
+    "scipy",
+    "Pillow",
+    "etcpak",
+    "miniaudio",
+    "velopack",
+)
 THIRD_PARTY_FIXED = (
     ("Python", "PSF-2.0", "the interpreter and its standard library"),
     ("Qt", "LGPL-3.0", "the Qt libraries are separate files in _internal/PySide6 and can be replaced"),
     ("PyInstaller", "GPL-2.0-with-exception", "the boot loader; the exception allows bundled programs of any licence"),
     ("texconv", "MIT", "Microsoft DirectXTex, in tools/"),
+    # the game look's compiled module (native/d3d12/THIRD-PARTY.md: the commits and the licence texts)
+    ("NVRHI", "MIT", "NVIDIA's rendering layer, built into the render module _nativegpu.pyd"),
+    ("DirectX-Headers", "MIT", "Microsoft's Direct3D 12 headers, built into _nativegpu.pyd"),
+    ("nanobind", "BSD-3-Clause", "the module's Python binding, built into _nativegpu.pyd"),
 )
 
 
@@ -63,11 +56,16 @@ class Edition:
     install_folder: str
     upgrade_code: str  # stable for ever: a newer version of this edition replaces the older one through it
     registry_key: str
-    suffix: str  # in the .msi's file name
+    suffix: str  # in the migration package's file name
 
     @property
     def command(self) -> str:
         return "anno-toolbox"
+
+    @property
+    def pack_id(self) -> str:
+        """The installer's id of the program: its folder under ``%LOCALAPPDATA%`` and its update feed's name."""
+        return PROGRAM + ("Full" if self.key == "full" else "")
 
 
 EDITIONS = {
@@ -100,6 +98,15 @@ def package_version(package_dir: Path) -> str:
     if not found:
         raise SystemExit(f"{package_dir}: no __version__")
     return found.group(1)
+
+
+def semver(version: str) -> str:
+    """A version the installer's packer takes (SemVer 2): ``0.2.0rc1`` becomes ``0.2.0-rc1``, ``1.0`` becomes ``1.0.0``."""
+    found = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+))?[-.]?([0-9A-Za-z.]*)", version.strip())
+    if not found:
+        raise SystemExit(f"cannot make a SemVer version of {version!r}")
+    major, minor, patch, tail = found.groups()
+    return f"{major}.{minor}.{patch or 0}" + (f"-{tail}" if tail else "")
 
 
 def msi_version(version: str) -> str:
@@ -141,12 +148,6 @@ def find_texconv(tree: Path, environ: dict[str, str]) -> Path | None:
     if on_path := shutil.which("texconv"):
         options.append(Path(on_path))
     return next((p for p in options if p.is_file()), None)
-
-
-def licence_text(tree: Path) -> str:
-    """The licence the installer shows: the tree's own files, else the MIT text the package metadata names."""
-    texts = [(tree / name).read_text("utf-8") for name in LICENSE_FILES if (tree / name).is_file()]
-    return "\n\n".join(texts) if texts else MIT
 
 
 def third_party(names=THIRD_PARTY) -> list[tuple[str, str, str]]:

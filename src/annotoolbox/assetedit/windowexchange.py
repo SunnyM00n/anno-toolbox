@@ -14,7 +14,7 @@ from ..modloader import mods as modlist
 from ..suite import project
 from . import archiveimport, balancing, checks, modimport, printing, report
 
-TITLE = N_("Asset Editor")
+TITLE = N_("assets.asset_editor")
 
 
 class ExchangeActions:
@@ -25,9 +25,7 @@ class ExchangeActions:
         """A mod folder's ModOps applied to the game and opened as a change set (``docs/tool-suite.md`` 17)."""
         if folder is None:
             start = self.settings.mods if self.doc.changes.game == "anno117" else self.settings.mods1800
-            name = QFileDialog.getExistingDirectory(
-                self, tr("{title}: the mod folder to import", title=tr(TITLE)), start or ""
-            )
+            name = QFileDialog.getExistingDirectory(self, tr("assets.mod_folder_import", title=tr(TITLE)), start or "")
             if not name:
                 return
             folder = Path(name)
@@ -37,7 +35,7 @@ class ExchangeActions:
         """An archive mod of an older game compared with the game's files and opened as a change set."""
         if archive is None:
             name, _ = QFileDialog.getOpenFileName(
-                self, tr("{title}: the archive mod to import", title=tr(TITLE)), "", "Archives (*.rda)"
+                self, tr("assets.archive_mod_import", title=tr(TITLE)), "", "Archives (*.rda)"
             )  # i18n: ok (a file filter)
             if not name:
                 return
@@ -52,7 +50,7 @@ class ExchangeActions:
             active = modlist.active_profile(mods) if mods else None
             start = str(active or (mods / "profiles" if mods else ""))
             name, _ = QFileDialog.getOpenFileName(
-                self, tr("{title}: a mod profile", title=tr(TITLE)), start, tr("Profiles (*.txt)")
+                self, tr("assets.title_mod_profile", title=tr(TITLE)), start, tr("assets.profiles_txt")
             )
             if not name:
                 return
@@ -64,7 +62,7 @@ class ExchangeActions:
     def _import(self, work, wait: bool) -> None:
         if not self.confirm_close():
             return
-        self.say(tr("importing… (the first import of a large mod takes a while)"))
+        self.say(tr("assets.importing_first_import_large_mod"))
         if wait:
             return self._imported(work())
         self.background.run(work, self._imported)
@@ -72,7 +70,7 @@ class ExchangeActions:
     def _imported(self, result) -> None:
         if isinstance(result, Exception):
             QMessageBox.warning(
-                self, tr(TITLE), tr("the import failed: {error}", error=f"{type(result).__name__}: {result}")
+                self, tr(TITLE), tr("assets.import_failed_error", error=f"{type(result).__name__}: {result}")
             )
             return
         key = self.game.layout.key
@@ -88,12 +86,7 @@ class ExchangeActions:
         self.docks["Checks"].raise_()
         box = QMessageBox(QMessageBox.Icon.Information, tr(TITLE), "\n".join(lines[:4]), parent=self)
         box.setDetailedText("\n".join(lines))
-        box.setInformativeText(
-            tr(
-                "Saved as a change set with File > Save; written back with File > Build mod (ModOps)"
-                " or Write the game's own files."
-            )
-        )
+        box.setInformativeText(tr("assets.saved_change_set_file_gt"))
         box.show()
         self.say(lines[1])
 
@@ -101,44 +94,62 @@ class ExchangeActions:
     def _file(self, save: bool, what: str) -> Path | None:
         dialog = QFileDialog.getSaveFileName if save else QFileDialog.getOpenFileName
         name, _ = dialog(
-            self, tr("{title}: {what}", title=tr(TITLE), what=what), "", "CSV (*.csv)"
+            self, tr("assets.title_what", title=tr(TITLE), what=what), "", "CSV (*.csv)"
         )  # i18n: ok (a file filter)
         return Path(name) if name else None
 
-    def export_csv(self) -> None:
-        path = self._file(True, tr("balancing table"))
+    def _read_table(self, path: Path) -> str | None:
+        """A table file's text (a spreadsheet's byte order mark dropped); None, and said, when it does not read."""
+        try:
+            return path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as exc:
+            self._failed(exc)
+            return None
+
+    def _write_table(self, path: Path, text: str) -> bool:
+        try:
+            path.write_text(text, encoding="utf-8", newline="\n")
+        except OSError as exc:  # open in a spreadsheet, a folder that takes no file
+            self._failed(exc)
+            return False
+        return True
+
+    def export_csv(self, path: Path | None = None) -> None:
+        path = path or self._file(True, tr("assets.balancing_table"))
         if path:
             text = balancing.export_csv(self.doc, self.tree.selected_group(), self.balancing.paths())
-            path.write_text(text, encoding="utf-8", newline="\n")
+            self._write_table(path, text)
 
-    def import_csv(self) -> None:
-        path = self._file(False, tr("balancing table"))
-        if path:
-            problems = balancing.import_csv(self.doc, path.read_text(encoding="utf-8"))
+    def import_csv(self, path: Path | None = None) -> None:
+        path = path or self._file(False, tr("assets.balancing_table"))
+        text = self._read_table(path) if path else None
+        if text is not None:
+            problems = balancing.import_csv(self.doc, text)
             self.findings.present([checks.Finding(None, "csv", checks.WARNING, p) for p in problems])
 
-    def export_texts(self) -> None:
-        path = self._file(True, tr("texts"))
+    def export_texts(self, path: Path | None = None) -> None:
+        path = path or self._file(True, tr("assets.texts"))
         if path:
             lang = self.texts.language.currentText()
             texts = self.game.texts(lang)
             out = balancing.export_texts(texts, self.doc.changes.texts.get(lang))
-            path.write_text(out, encoding="utf-8", newline="\n")
-            self.say(tr("{n} texts, {words} words", n=len(texts), words=balancing.words(texts)))
+            if self._write_table(path, out):
+                self.say(tr("assets.n_texts_words", n=len(texts), words=balancing.words(texts)))
 
-    def import_texts(self) -> None:
-        path = self._file(False, tr("texts"))
-        if path:
+    def import_texts(self, path: Path | None = None) -> None:
+        path = path or self._file(False, tr("assets.texts"))
+        text = self._read_table(path) if path else None
+        if text is not None:
             lang = self.texts.language.currentText()
-            n = balancing.import_texts(self.doc, lang, path.read_text(encoding="utf-8"), self.game.texts(lang))
-            self.say(tr("{n} texts changed", n=n))
+            n = balancing.import_texts(self.doc, lang, text, self.game.texts(lang))
+            self.say(tr("assets.n_texts_changed", n=n))
 
     # printing
     def print_asset(self, to_pdf: bool = False, pdf: Path | None = None) -> bool:
         """The asset shown as a page (values with their origins, the game's value where changed, texts and their
         words) to a printer, or to a PDF file (``pdf``, else asked for)."""
         if self.doc is None or self.guid is None or not self.doc.exists(self.guid):
-            self.say(tr("pick an asset to print first"))
+            self.say(tr("assets.pick_asset_print_first"))
             return False
         language = self.texts.language.currentText()
         html = report.asset_html(self.doc, self.guid, self.game.texts(language), language)
@@ -148,7 +159,7 @@ class ExchangeActions:
         """The balancing table as it stands (its group's assets against the columns) to a printer or a PDF file."""
         columns = self.balancing.paths()
         if self.doc is None or not columns:
-            self.say(tr("choose the BalancingView's columns first"))
+            self.say(tr("assets.choose_balancingviews_columns_first"))
             return False
         guids = (self.tree.selected_group() or [])[:500]
         title = f"{self.game.layout.name}: " + ", ".join(columns)
@@ -159,7 +170,7 @@ class ExchangeActions:
         if to_pdf and pdf is None:
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
-                tr("{title}: a PDF file", title=tr(TITLE)),
+                tr("assets.title_pdf_file", title=tr(TITLE)),
                 name,
                 "PDF (*.pdf)",  # i18n: ok (a file filter)
             )
@@ -168,5 +179,5 @@ class ExchangeActions:
             pdf = Path(chosen)
         done = printing.print_html(self, html, pdf)
         if done:
-            self.say(tr("wrote {path}", path=pdf) if pdf is not None else tr("sent to the printer"))
+            self.say(tr("common.wrote_path", path=pdf) if pdf is not None else tr("assets.sent_to_printer"))
         return done

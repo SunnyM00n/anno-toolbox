@@ -14,11 +14,12 @@ import json
 import time
 from collections import ChainMap, OrderedDict
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 from ...infra.i18n import tr
-from ...render import gameinland, gameshadow, terrainbake, terraindraw, terrainnodes, terrainpages
+from ...render import gameinland, gameshadow, terrainbake, terraindraw, terrainnative, terrainnodes, terrainpages
 from ...render.cull import boxes_in_view
 from ...render.gamecompute import carry
 from ...render.gameframe import GameFrame, Light, Passes
@@ -120,6 +121,18 @@ def shadow_stages(source) -> dict:
     return out
 
 
+def native_shaders(game, compiler):
+    """The terrain's shipped shaders for the native backend (``render.terrainnative``), read and reflected; None
+    where it does not draw (switched off, no module)."""
+    if not terrainnative.enabled():
+        return None
+    from ...models import shadernative
+
+    natives = shadernative.NativeShaders(game, compiler)
+    terrainnative.shaders(natives)
+    return natives
+
+
 def frame_planes(camera) -> tuple[float, float]:
     """The near and far plane of ``render.camera.OrbitCamera.proj``: the composite writes the view's depth by them."""
     return max(0.1, camera.distance / 500), max(4000.0, camera.distance * 8)
@@ -180,6 +193,7 @@ class GameIsland(IslandBake):
         self.sea_waiting = False  # the game's sea compiles or its maps load (``_sea``)
         self._coast_edited, self._coast_at = False, 0.0  # heights edited since the sea's coast was made, and when
         self.inland_waiting = False  # the game's rivers and lakes compile or the file's flow and look load
+        self.native = None  # render.terrainnative.NativeTerrain: the terrain by the shipped shaders (None: the rewrite)
         self._inland_key: tuple | None = None  # the lines and heights their bodies were made from
         from .desktopgamedecals import GameDecals
         from .desktopgameground import GroundMaps
@@ -204,12 +218,12 @@ class GameIsland(IslandBake):
         if self.error:
             return self.error
         if not hasattr(ctx, "native_pass") or ctx.rhi.backendName() != BACKEND:
-            return tr("the game's own shaders draw on Direct3D 12 (View > Renderer)")
+            return tr("common.games_own_shaders_draw_direct3d")
         if r.editor is None or not hasattr(r.editor, "files"):
-            return tr("the game's own shaders need the game's files")
+            return tr("common.games_own_shaders_need_files")
         got = r.loader.get(JOB, self._compile)
         if isinstance(got, Exception):
-            return tr("the game's shaders do not compile: {reason}", reason=f"{type(got).__name__}: {got}"[:300])
+            return tr("common.games_shaders_not_compile", reason=f"{type(got).__name__}: {got}"[:300])
         return ""
 
     def _compile(self):
@@ -222,22 +236,30 @@ class GameIsland(IslandBake):
 
         game = getattr(self.r.editor.files, "game", self.r.editor.files)  # the install's, not a mod folder's
         compiler = dxc.Dxc.find(anno117=install_folder(game))
-        source = self.source = shaderview.ShaderSource(game, compiler, frame_instances=True)  # (gameinstances)
+        source = self.source = shaderview.shared(game, compiler, frame_instances=True)  # (gameinstances)
         try:
             self.cold = not source.cached(terraindraw.STAGES)  # a first start: the view's look draws meanwhile
         except Exception:  # the sources do not read: the compile below says why
             self.cold = True
-        optional = []
         flip = (terrainbake.FLIP_HLSL, terrainbake.FLIP_ENTRY)
-        for make in (source.sky_passes, lambda: source.stage_set(terraindraw.DETAILED),
-                     lambda: source.stage_set(terrainpages.STAGES),
-                     lambda: {**source.stage_set(terrainbake.STAGES), "flip": source.own_stage(*flip)},
-                     lambda: shadow_stages(source)):  # fmt: skip
-            try:
-                optional.append(make())
-            except Exception as exc:  # the terrain draws all the same: by the look's sky light, untessellated
-                optional.append(exc)
-        return source.stage_set(terraindraw.STAGES), source.shading(), *optional
+        makes = (source.sky_passes, lambda: source.stage_set(terraindraw.DETAILED),
+                 lambda: source.stage_set(terrainpages.STAGES),
+                 lambda: {**source.stage_set(terrainbake.STAGES), "flip": source.own_stage(*flip)},
+                 lambda: shadow_stages(source), lambda: native_shaders(game, compiler))  # fmt: skip
+        with ThreadPoolExecutor(len(makes) + 2, thread_name_prefix="view-data-base") as pool:  # side by side
+            needed = [pool.submit(lambda: source.stage_set(terraindraw.STAGES)), pool.submit(source.shading)]
+            optional = [pool.submit(make) for make in makes]
+            terrain, shading = (f.result() for f in needed)
+        # what may fail alone: the terrain draws all the same, by the look's sky light, untessellated
+        return source, terrain, shading, *(f.exception() or f.result() for f in optional)
+
+    def _adopt(self, got: tuple, quality) -> None:
+        """The frame's parts made from the compiled shaders ``got`` (``_compile``'s) for ``quality``. Their source
+        comes with them: a look made again for another quality did not compile them itself, and without the source
+        its objects, decals, water and post chain were never made."""
+        self.quality = quality  # what the frame is made for (a change makes it anew)
+        self.source = got[0]
+        self._make(*got[1:])
 
     def compiled(self) -> bool:
         """The shaders are in (``why_not`` said nothing against them): ``draw`` draws."""
@@ -266,8 +288,7 @@ class GameIsland(IslandBake):
             return False
         ctx = self.r.ctx
         if self.terrain is None:
-            self.quality = getattr(opts, "quality", None)  # what the frame is made for (a change makes it anew)
-            self._make(*got)
+            self._adopt(got, getattr(opts, "quality", None))
         self._take_failures()  # the last frame's, before this frame's nodes are picked
         if self.error:
             return False
@@ -309,14 +330,16 @@ class GameIsland(IslandBake):
             self._fog(passes.atmosphere)
         near, far = frame_planes(camera)  # with clouds the rays reach their own far plane (frame-117-viewer.md 12)
         cam = self.frame.camera(size, e, camera.target, camera.fov, near, far, self.extras.far())
-        if shading is not None and shadows:
-            passes.casters, passes.box = terrain.casters(models) + objects.casters, self._box()
-            passes.fit = self.fit if self.fit is not None and not self.fit.error else None
+        native = self._terrain_passes(passes, models, objects.casters, shading is not None and shadows)
         # the ground stage's order: the terrain, the cut-outs clearing its depth, the decals, the models
-        drawn = models + objects.cutouts + decals + objects.gbuffer
+        drawn = (models if native is None else []) + objects.cutouts + decals + objects.gbuffer
         self.frame.render(target, size, drawn, cam, light, finish=False, shading=shading, passes=passes)
+        if native is not None:
+            native.end_frame()
+        self.r.stats["terrain_native"] = int(native is not None)
         self.r.stats["terrain_nodes"] = len(models)
-        self.r.stats["terrain_casters"] = len(passes.casters)
+        native_casters = len(passes.native.caster_list) if passes.native is not None else 0  # the terrain's
+        self.r.stats["terrain_casters"] = len(passes.casters) + native_casters
         self.r.stats["game_objects"], self.r.stats["game_object_draws"] = objects.instances, len(objects.gbuffer)
         self.r.stats["game_object_levels"] = objects.levels
         self.r.stats["game_decals"] = sum(d.count for d in decals)
@@ -328,6 +351,19 @@ class GameIsland(IslandBake):
         settling = self._unbaked or (self.pages is not None and self.pages.busy()) or fitted
         self.animated = bool(moving or settling)
         return True
+
+    def _terrain_passes(self, passes, models: list, object_casters: list, shadows: bool):
+        """The frame's shadow casters and fit, and the terrain's way: drawn first in the G-buffer's and the shadow's
+        passes by the shipped shaders (``terrainnative``: returned), or among the current path's models (None)."""
+        native = self.native if self.native is not None and not self.native.error else None
+        casters = []
+        if shadows:
+            casters = self.terrain.casters(models)
+            passes.casters, passes.box = (casters if native is None else []) + object_casters, self._box()
+            passes.fit = self.fit if self.fit is not None and not self.fit.error else None
+        if native is not None:
+            passes.native = terrainnative.FrameDraws(native, models, casters, passes.ground, self.terrain.detailed)
+        return native
 
     def finish(self, image, size: tuple[int, int], lut):
         """The game's grade and tone map of the view's resolved colour (phase 8; ``lut`` the ambient's grade cube or
@@ -362,7 +398,7 @@ class GameIsland(IslandBake):
             sea.set_coast(s.heights)  # the shore's foam and fade follow an edited coast, at most once a second
             self._coast_edited, self._coast_at = False, time.monotonic()
         if sea.waves_error:  # the sea draws on without its coast waves: said once
-            self.r._message(tr("the game's coast waves: {reason}", reason=sea.waves_error[:300]))
+            self.r._message(tr("islands.games_coast_waves", reason=sea.waves_error[:300]))
             sea.waves_error = ""
         sea.seconds = seconds
         self.r.game_sea = not sea.error
@@ -430,7 +466,7 @@ class GameIsland(IslandBake):
         terrain, s = self.terrain, self.r.session
         got = self.r.loader.get(FILES_JOB, lambda: island_source(self.r.editor))
         if isinstance(got, Exception):
-            self.r._message(tr("the island's height pages: {reason}", reason=f"{type(got).__name__}: {got}"[:300]))
+            self.r._message(tr("islands.islands_height_pages", reason=f"{type(got).__name__}: {got}"[:300]))
         source = got if isinstance(got, terraindraw.IslandSource) else None
         if source is not None and terrain.source is None and terrain.heights is not None:
             terrain.set_heights(terrain.heights, None)  # the nodes made before it came read its tint pages now
@@ -481,6 +517,10 @@ class GameIsland(IslandBake):
         compute shaders, turn only themselves off (the nodes then draw untessellated, from the view's heights)."""
         ctx = self.r.ctx
         self.objects.take_failures()  # an object's draw: its part to the view's look
+        if self.native is not None and self.native.error:  # the terrain by the current path from now on, said once
+            self.r._message(tr("islands.games_native_terrain", reason=self.native.error[:300]))
+            self.native.release()
+            self.native = None
         self.decals.take_failures(ctx.failed_models)  # a decal's draw: the view's own decals from now on
         made = self.extras.made if self.extras is not None else {}
         from ...render.gameextras import N_INLAND, N_SEA
@@ -495,10 +535,10 @@ class GameIsland(IslandBake):
         patches = [x for x in mine if x[0].program is terrain.detailed]
         if patches:  # the tessellated nodes alone: they draw untessellated from now on, said once
             terrain.detailed = None
-            self.r._message(tr("the game's tessellated terrain: {reason}", reason=patches[0][1][:300]))
+            self.r._message(tr("islands.games_tessellated_terrain", reason=patches[0][1][:300]))
             terrain.set_heights(terrain.heights, None)
         if self.pages is not None and self.pages.error:
-            self.r._message(tr("the game's height pages: {reason}", reason=self.pages.error[:300]))
+            self.r._message(tr("islands.games_height_pages", reason=self.pages.error[:300]))
             self.pages.release()
             self.pages = terrain.pages = None
             terrain.set_heights(terrain.heights, None)
@@ -506,19 +546,19 @@ class GameIsland(IslandBake):
         shadows = [x for x in mine if terrain.shadow is not None and x[0].program in terrain.shadow]
         if shadows:  # the casters alone: no terrain shadow from now on, said once
             terrain.shadow = None
-            self.r._message(tr("the game's terrain shadow: {reason}", reason=shadows[0][1][:300]))
+            self.r._message(tr("islands.games_terrain_shadow", reason=shadows[0][1][:300]))
         mine = [x for x in mine if all(x is not y for y in shadows)]
         baking = [x for x in mine if self.bake is not None and x[0].program is self.bake.program]
         if baking or (self.bake is not None and self.bake.error):
             self._drop_bake(baking[0][1] if baking else self.bake.error)
         mine = [x for x in mine if all(x is not y for y in baking)]
         if mine:
-            self.error = tr("the game's terrain shader: {reason}", reason=mine[0][1][:300])
+            self.error = tr("common.games_terrain_shader", reason=mine[0][1][:300])
         if ctx.pass_errors:
-            self.error = tr("the game's frame failed: {reason}", reason=ctx.pass_errors[-1][:300])
+            self.error = tr("common.games_frame_failed", reason=ctx.pass_errors[-1][:300])
             ctx.pass_errors.clear()
 
-    def _make(self, stages: dict, shading, sky, detailed, pages, bake, shadow) -> None:
+    def _make(self, stages: dict, shading, sky, detailed, pages, bake, shadow, native=None) -> None:
         from PySide6.QtGui import QRhi
 
         from ...render.gamedraw import Program
@@ -530,11 +570,11 @@ class GameIsland(IslandBake):
         self.frame.set_quality(self.quality)
         self.shading = DeferredShading(ctx.rhi, *shading)
         self.extras = FrameExtras(ctx.rhi, lambda: self.source, self.r.loader.get, self.r._message)
-        said = {"sky": lambda why: tr("the game's sky passes: {reason}", reason=why),
-                "detailed": lambda why: tr("the game's tessellated terrain: {reason}", reason=why),
-                "pages": lambda why: tr("the game's height pages: {reason}", reason=why),
-                "bake": lambda why: tr("the game's ground bake: {reason}", reason=why),
-                "shadow": lambda why: tr("the game's terrain shadow: {reason}", reason=why)}  # fmt: skip
+        said = {"sky": lambda why: tr("islands.games_sky_passes", reason=why),
+                "detailed": lambda why: tr("islands.games_tessellated_terrain", reason=why),
+                "pages": lambda why: tr("islands.games_height_pages", reason=why),
+                "bake": lambda why: tr("islands.games_ground_bake", reason=why),
+                "shadow": lambda why: tr("islands.games_terrain_shadow", reason=why)}  # fmt: skip
         for key, got in (("sky", sky), ("detailed", detailed), ("pages", pages), ("bake", bake), ("shadow", shadow)):
             if isinstance(got, Exception):
                 self.r._message(said[key](f"{type(got).__name__}: {got}"[:300]))
@@ -551,6 +591,22 @@ class GameIsland(IslandBake):
         self._bake_stages = bake if isinstance(bake, dict) else None
         if isinstance(shadow, dict):
             self._make_shadow(shadow, tessellated is not None)
+        self._make_native(native)
+
+    def _make_native(self, natives) -> None:
+        """The terrain by the game's shipped shaders on the native backend (``terrainnative``) where its shaders
+        read; else, or when its pipelines are refused, the current path draws it (said once)."""
+        if natives is None:
+            return
+        try:
+            if isinstance(natives, Exception):
+                raise natives
+            from ...render import nativegpu
+
+            self.native = terrainnative.NativeTerrain(nativegpu.attach(self.r.ctx.rhi), natives, stencil=True)
+        except Exception as exc:
+            self.native = None
+            self.r._message(tr("islands.games_native_terrain", reason=f"{type(exc).__name__}: {exc}"[:300]))
 
     def _make_shadow(self, shadow: dict, tessellated: bool) -> None:
         """The terrain's shadow programs (the tessellated one for tessellated nodes) and the cascades' analysis."""
@@ -587,11 +643,13 @@ class GameIsland(IslandBake):
         self._drop_own_bake()
         self.objects.release()
         self.decals.release()
-        for part in (self.bake, self.terrain, self.pages, self.sky, self.fit, self.shading, self.frame, self.extras):
+        for part in (self.bake, self.terrain, self.pages, self.sky, self.fit, self.shading, self.frame, self.extras,
+                     getattr(self, "native", None)):  # fmt: skip
             if part is not None:
                 part.release()
         self.ground.release()
         self.bake = self.terrain = self.pages = self.sky = self.fit = self.shading = self.frame = self.extras = None
+        self.native = None
         self._baked_with.clear()
         self._own_rects.clear()
         self._painted = None

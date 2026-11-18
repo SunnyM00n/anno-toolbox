@@ -17,12 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LOADER_LOG "mods/mod-loader.log"
+#define LOADER_LOG G_LOADER_LOG
 #define PASS_WAIT_MS 10000
 #define FILES_WAIT_MS 30000
 #define RESULTS_MAX 512
-#define GAME_LOG_DIR "log"
-#define GAME_LOG_PREFIX "Anno117_LOGFILE_"
+#define GAME_LOG_DIR G_GAME_LOG_DIR
+#define GAME_LOG_PREFIX G_GAME_LOG_PREFIX
 #ifndef RELOAD_START_WAIT_MS /* the host test of the pipe shortens the waits */
 #define RELOAD_START_WAIT_MS 10000 /* the engine's start line may be missing this long: it drops a reload without a line */
 #endif
@@ -76,7 +76,7 @@ size_t llr_log_from(uint64_t from, char *buf, size_t cap, uint64_t *size) {
 
 static uint64_t ft64(FILETIME t) { return ((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime; }
 
-/* The game's own log (the newest Anno117_LOGFILE_*.log of the user's log folder): the engine writes "--- AssetData
+/* The game's own log (the newest log of the game's prefix in the user's log folder): the engine writes "--- AssetData
    Reload Start ---" and "--- AssetData Reload End ---" there around its rebuild of the asset database. Only a file made
    by this start counts (by its creation time: a directory's write times lag); the link may come up before the game
    made it, and the previous start's log would answer every reload "skipped". */

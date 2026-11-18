@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import struct
 import zlib
 from dataclasses import dataclass, field
@@ -19,12 +20,13 @@ import numpy as np
 
 from ..formats import a7mread, filedb
 from ..infra.i18n import tr
-from ..islands import regions, regiontables, slotlist
+from ..islands import regions, regiontables, slotlist, tintpages
 from ..islands.donor117 import area_keys
+from ..islands.gameterrain import coarse
 from ..islands.islandgrid import read_sparse, write_bits, write_sparse
-from ..islands.islandterrain import replace_dds_pixels, set_bytes
+from ..islands.islandterrain import fill_empty_meshes, replace_dds_pixels, set_bytes
 from ..islands.materialorder import set_ranks
-from . import groundedit, largerdonor, objectclones, portpictures, regionconvert, templatedonors
+from . import groundedit, islandplaces, largerdonor, objectclones, portpictures, regionconvert, templatedonors
 from .assetmodels import AssetModels
 from .formats.a7m import edit117 as a7m_edit117
 from .regionconvert import ASSET_GAMES, material_set_of
@@ -39,7 +41,7 @@ GRAFT_GAMEDATA = (
     "RegrowManager/TreeMap",
     "SessionSettings/PlayableArea",
 )
-GRAFT_TERRAIN = (  # not the far pictures' BaseTextureData: they are another size in each game (portpictures.far_tint)
+GRAFT_TERRAIN = (  # not the far pictures' BaseTextureData: another size in each game, (portpictures.far_tint)
     "Levels", "ActiveMap", "AllNormalMapLevels/Levels", "TintMapLevels/Levels", "CoarseHeightMap", "GritMap2",
 )  # fmt: skip
 GRAFT_RD3D = ("WaterInfos", "WaterFlow")
@@ -98,12 +100,28 @@ def active_area(info: filedb.Tag) -> int:
     return (x1 - x0) * (z1 - z0)
 
 
-def donor_for(dst, region, source) -> tuple[str, largerdonor.Place]:
+def registered(side) -> set[str]:
+    """The islands a ``RandomIsland`` asset of the game puts in its pool (game paths, lower case)."""
+    return {m.lower() for block in side.pool() for m in re.findall(r"<FilePath>([^<|]+)", block)}
+
+
+def donor_for(dst, region, source, on_maps: bool = False) -> tuple[str, largerdonor.Place]:
     """The target region's pool island that carries ``source`` and where the source lies in it: one of the source's
-    grid whose active rectangle is nearest, else the smallest larger one that draws its land (``largerdonor``)."""
+    grid whose active rectangle is nearest, else the smallest larger one that draws its land (``largerdonor``). Only
+    an island the pool lists counts where the region has a pool: Latium's 768-tile continental island stands on fixed
+    maps only, and an island carried onto it took a small island's place (island-regions "The report of 2026-11-17").
+    ``on_maps``: the island is placed on maps, not drawn from the pool: an island a map places fixedly comes first
+    (island-regions "A place on a map")."""
     size, area = grid_size(source.info), active_area(source.info)
+    paths = dst.island_paths(region)
+    if on_maps:
+        fixed = {p.island for p in islandplaces.fixed_islands(dst)}
+        paths = [p for p in paths if p.lower() in fixed] or paths
+    else:
+        listed = registered(dst)
+        paths = [p for p in paths if p.lower() in listed] or paths  # the Nile has no pool: its map's islands
     pool = []
-    for path in dst.island_paths(region):
+    for path in paths:
         try:
             info = filedb.read(dst.read(path[:-4] + ".a7minfo"))
         except (KeyError, OSError, ValueError):
@@ -112,6 +130,8 @@ def donor_for(dst, region, source) -> tuple[str, largerdonor.Place]:
     same = [(diff, path) for grid, diff, path in pool if grid == size]
     if same:
         return min(same)[1], largerdonor.Place(size, size)
+    if pool and not on_maps and not any(grid > size for grid, _diff, _path in pool):  # 1800's 768 in Latium
+        raise ValueError(tr("islands.no_pool_size_slot", region=tr(region.label), size=size))
     return largerdonor.choose(
         pool, size, largerdonor.source_land(source), lambda p: largerdonor.active_cells(dst.open(p))
     )
@@ -325,15 +345,28 @@ def carry_objects(src, dst, source, donor, table: dict[int, int | None], where: 
     return report
 
 
-def fit_target(source, donor) -> list[str]:
-    """What only one of the two games keeps: the donor's 117-only maps follow the source's shape (the displacement
-    heights take the heights, the ford and forest-chunk maps are emptied), 1800's street map is emptied."""
+def neutral_displacement(island) -> list[str]:
+    """117's two displacement layers set to no displacement, as the island build writes them: the game's
+    ``DisplacementHeightMap`` (a displacement on top of the heights, not heights) zero, rd3d's
+    ``CoarseDisplacementMap`` byte 128. Returns the layers the island has (island-regions "Displacement")."""
     done = []
-    tm = donor.gm.find("TerrainManager")
-    disp, hm = tm.find("DisplacementHeightMap"), tm.find("HeightMap")
-    if disp is not None and source.gm.path("TerrainManager/DisplacementHeightMap") is None:
-        graft(hm, disp)
+    disp = island.gm.path("TerrainManager/DisplacementHeightMap/HeightMap")
+    if disp is not None:
+        disp.data = bytes(len(disp.data))
         done.append("DisplacementHeightMap")
+    coarse = island.rd.path("Terrain/CoarseDisplacementMap/map")
+    if coarse is not None:
+        coarse.data = bytes([128]) * len(coarse.data)
+        done.append("CoarseDisplacementMap")
+    return done
+
+
+def fit_target(source, donor) -> list[str]:
+    """What only one of the two games keeps: the donor's 117-only maps follow the source's shape (no displacement,
+    the ford and forest-chunk maps emptied), 1800's street map is emptied."""
+    done = []
+    if source.gm.path("TerrainManager/DisplacementHeightMap") is None:  # 1800 has none: none, not the donor's
+        done += neutral_displacement(donor)
     if source.gm.path("WorldManager/FordGrid") is None and (ford := donor.gm.path("WorldManager/FordGrid")) is not None:
         write_bits(ford, [[0] * donor.size for _ in range(donor.size)])
         done.append("FordGrid")
@@ -411,10 +444,11 @@ def carry_shape(source, donor, dgd: groundedit.Gamedata, place: largerdonor.Plac
     return report
 
 
-def carry_shape_files(sgd, dgd, out: dict[str, bytes], tables, place: largerdonor.Place) -> dict[str, bytes]:
-    """The ``_gamedata`` files of the ported island: the source's stored meshes, height pages, tint pages and map
-    pictures where the grids are one size; in a larger donor the donor's, with the edit's changes in ``out`` and the
-    source's tints in its window."""
+def carry_shape_files(sgd, dgd, out: dict[str, bytes], materials: dict[int, int], place) -> dict[str, bytes]:
+    """The ``_gamedata`` files of the ported island: the source's stored meshes (their used-material masks on the IDs
+    of ``materials``), height pages, tint pages and map pictures where the grids are one size (the two games' files
+    are one layout: island-regions "Meshes and pages in both games"); in a larger donor the donor's, with the edit's
+    changes in ``out`` and the source's tints in its window."""
     if place.padded:
         tints = largerdonor.embed_tints(sgd, dgd, place)
         return {n: out[n] if n in out else tints[n] if n in tints else dgd.read(n) for n in dgd.names}
@@ -423,9 +457,36 @@ def carry_shape_files(sgd, dgd, out: dict[str, bytes], tables, place: largerdono
         if name.startswith(SHAPE_FILES) or ("/" not in name and name in dgd.names):  # the shape; the map pictures
             data = sgd.read(name)
             if name.endswith(".tmc"):
-                data = regionconvert.remap_mesh_bits(data, tables.materials) or data
+                data = regionconvert.remap_mesh_bits(data, materials) or data
             out[name] = refile(name, data, version)
     return {n: out.get(n) or dgd.read(n) for n in dgd.names if not n.startswith(SHAPE_FILES)} | out
+
+
+def tint_range(island) -> tuple[float, float] | None:
+    """The tint over an island's land, as it opens: the mean and spread of its far tint picture's luminance byte."""
+    img = tintpages.far_picture(island.rd)
+    if img is None:
+        return None
+    at = (np.arange(img.shape[0]) + 0.5) * island.size / img.shape[0]
+    zz, xx = np.meshgrid(at, at, indexing="ij")
+    return tintpages.land_spread(img, coarse(groundedit.coarse_heights(island), xx, zz) > groundedit.LAND_ABOVE)
+
+
+def fit_tints(gamedata: dict[str, bytes], rd, ranges: tuple) -> int:
+    """Every tint page and the far tint picture carried from the source, their tint fitted into the donor's range
+    (``ranges``: the source's and the donor's ``tint_range``). A tint multiplies the ground's colours and each game
+    sets it for its own materials: 1800's Old World lifts its dark rock up to 2.7 times, which turns Latium's light
+    limestone white (island-regions "The tint between games"). Returns the pages fitted."""
+    src, dst = ranges
+    if src is None or dst is None:
+        return 0
+    pages = [n for n in gamedata if tintpages.PAGE.search(n)]
+    for name in pages:
+        gamedata[name] = tintpages.fit_blocks(gamedata[name], src, dst)
+    base = rd.path("Terrain/TintMapLevels/BaseTextureData/map")
+    if base is not None:
+        base.data = tintpages.fit_blocks(base.data, src, dst)
+    return len(pages)
 
 
 def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> Carried:
@@ -433,10 +494,11 @@ def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> 
     own = regions.region_of(src.key, request.source)
     source = src.open(request.source)
     sgd = groundedit.gamedata(src.files, request.source)
-    donor_path, place = donor_for(dst, target, source)
-    log(tr("carrying the island onto {donor}", donor=donor_path.rsplit("/", 1)[-1]))
+    donor_path, place = donor_for(dst, target, source, request.fit == "map")  # islandconvert.FIT_MAP
+    log(tr("islands.carrying_island_onto", donor=donor_path.rsplit("/", 1)[-1]))
     donor = dst.open(donor_path)
     dgd = groundedit.gamedata(dst.files, donor_path)
+    ranges = (tint_range(source), tint_range(donor))  # the donor's own land, before the source's shape is written
     regionconvert.set_material_set(donor.rd, target.material_set)  # the region's own set, not a donor's variant
     src_set, dst_set = src.text(material_set_of(source, src.key)), dst.text(material_set_of(donor, dst.key))
     tables = regiontables.build(
@@ -444,35 +506,39 @@ def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> 
         regiontables.Sources(target, dst_set, dst.inventory(target), dst.asset_names),
         colour,
     )
+    materials = regiontables.with_unlisted(tables.materials, dst_set)
     report: dict = {"donor": donor_path}
     out: dict[str, bytes] = {}
-    log(tr("writing the shape: heights, land, rivers, sea"))
+    log(tr("islands.writing_shape_heights_land_rivers"))
     report |= carry_shape(source, donor, dgd, place, out)
-    log(tr("carrying the ground"))
+    log(tr("islands.carrying_ground"))
     sids, salphas = regionconvert.material_maps(source, sgd)
     ground = Ground(
         sids,
         salphas,
         source.size,
-        tables.materials,
+        materials,
         set_ranks(src_set),
         set_ranks(dst_set),
         place,
         sea_bed_material(sids),
     )
     report["ground"] = carry_ground(ground, donor, dgd, out)
-    log(tr("carrying the objects and props"))
+    log(tr("islands.carrying_objects_props"))
     report |= carry_objects(
         src, dst, source, donor, tables.objects, (donor_path, place)
     )  # clears the donor's props too
     report |= carry_props(source.rd, donor.rd, tables.props, place)
     report["slot list"] = refresh_slots(donor)
-    gamedata = carry_shape_files(sgd, dgd, out, tables, place)
+    gamedata = carry_shape_files(sgd, dgd, out, materials, place)
+    if dst.key == "anno117":  # 1800 flags its top mesh level and stores nothing there; 117 draws it from afar
+        report["meshes filled"] = fill_empty_meshes(donor.rd, donor.size, gamedata)
     if place.padded:
         report["meshes"] = largerdonor.mark_meshes(gamedata, report["ground"]["used"])
     report["far"] = portpictures.far_tint(source.rd, donor.rd, place)
+    report["tint pages fitted"] = fit_tints(gamedata, donor.rd, ranges)
     if colour is not None:
-        log(tr("drawing the map pictures"))
+        log(tr("islands.drawing_map_pictures"))
         final = groundedit.Gamedata(sorted(gamedata), gamedata.__getitem__)
         gamedata |= portpictures.redraw(donor, final, dst_set, lambda file: colour("dst", file))
     return Carried(donor.write(), donor.write_info(), gamedata, donor_path, tables, report)

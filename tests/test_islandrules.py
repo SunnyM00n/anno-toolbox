@@ -2,6 +2,7 @@
 
 from annotoolbox.editor import editsession, islandrules
 from annotoolbox.editor.editsession import EditSession
+from annotoolbox.infra.i18n import tr
 from fakes import edit_island
 
 
@@ -47,14 +48,16 @@ def test_rivers_paint_and_heights_out_of_range():
     errors = messages(rows, "error")
     assert any("river 0 has 1 point" in m for m in errors)
     assert any("material 40" in m for m in errors)
+    s.edits["paint"].append({"material": "sand", "radius": 2, "strength": 1, "points": [[5, 5]]})  # a hand-edited file
+    assert any("material -1" in m for m in messages(islandrules.check(s, "117"), "error"))
     assert any("past the 128 units" in m for m in errors)
     assert rows[0].level == "error"
 
 
 def test_an_edit_that_crosses_a_size_class_is_named():
     s = EditSession(edit_island())
-    assert islandrules.size_class(9_000) == "Small" and islandrules.size_class(9_001) == "Medium"
-    assert islandrules.size_class(10**7) == "Continental"
+    assert tr(islandrules.size_class(9_000)) == "Small" and tr(islandrules.size_class(9_001)) == "Medium"
+    assert tr(islandrules.size_class(10**7)) == "Continental"
     info = islandrules.readout(s)
     assert info["land tiles"] == info["land tiles as opened"] > 0
     assert info["active cells"] >= 1

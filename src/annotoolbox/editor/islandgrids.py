@@ -15,10 +15,10 @@ from ..infra.i18n import N_, tr
 from ..islands.islandgrid import cell_key, read_bits, write_bits
 
 ZONES = (  # (number, name): the zones of the game's EnvironmentType the grid holds, the ones painted most first
-    (8, N_("Meadow")), (4, N_("Forest")), (9, N_("Mountain")), (10, N_("Mountain top")), (1, N_("Coast (rock)")),
-    (2, N_("Coast (sand)")), (7, N_("Marsh")), (5, N_("Lake")), (6, N_("Lake shore")), (3, N_("Field")),
-    (31, N_("Desert")), (29, N_("River crossing")), (30, N_("Embankment")), (20, N_("Sea")),
-    (21, N_("Sea (near the coast)")), (32, N_("Sea (calm)")), (0, N_("None")),
+    (8, N_("islands.meadow")), (4, N_("islands.forest")), (9, N_("islands.mountain")), (10, N_("islands.mountain_top")), (1, N_("islands.coast_rock")),
+    (2, N_("islands.coast_sand")), (7, N_("islands.marsh")), (5, N_("islands.lake")), (6, N_("islands.lake_shore")), (3, N_("islands.field")),
+    (31, N_("islands.desert")), (29, N_("islands.river_crossing")), (30, N_("islands.embankment")), (20, N_("islands.sea")),
+    (21, N_("islands.sea_near_coast")), (32, N_("islands.sea_calm")), (0, N_("islands.none")),
 )  # fmt: skip
 
 
@@ -46,15 +46,15 @@ def apply_ford(isl, cells: dict) -> dict:
     ford, river = (wm.find("FordGrid"), wm.find("RiverGrid")) if wm is not None else (None, None)
     report = {"cells": 0, "unmatched": []}
     if ford is None or river is None:
-        report["unmatched"].append(tr("no ford grid on this island"))
+        report["unmatched"].append(tr("islands.no_ford_grid_island"))
         return report
     grid = np.asarray(read_bits(ford), np.int64)
     on_river = np.asarray(read_bits(river), bool)
     ok, off = parse_cells(cells, grid.shape[0])
-    report["unmatched"] += [tr("ford {key}", key=k) for k in off]
+    report["unmatched"] += [tr("islands.ford_key", key=k) for k in off]
     for x, z, value in ok:
         if value and not on_river[z, x]:
-            report["unmatched"].append(tr("ford {key}", key=f"{x},{z}"))
+            report["unmatched"].append(tr("islands.ford_key", key=f"{x},{z}"))
         elif grid[z, x] != value:
             grid[z, x] = value
             report["cells"] += 1
@@ -69,12 +69,12 @@ def apply_environment(isl, cells: dict) -> dict:
     grid = isl.gm.path("WorldManager/EnvironmentGrid/EnvironmentGRid")
     report = {"cells": 0, "unmatched": []}
     if grid is None:
-        report["unmatched"].append(tr("no environment grid on this island"))
+        report["unmatched"].append(tr("islands.no_environment_grid_island"))
         return report
     n = grid.find("x").u32()
     zones = bytearray(grid.find("val").data)
     ok, off = parse_cells(cells, n, bit=False)
-    report["unmatched"] += [tr("environment {key}", key=k) for k in off]
+    report["unmatched"] += [tr("islands.environment_key", key=k) for k in off]
     for x, z, value in ok:
         if zones[z * n + x] != value:
             zones[z * n + x] = value

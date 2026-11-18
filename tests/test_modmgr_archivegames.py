@@ -228,7 +228,9 @@ def test_installed_games_are_only_read(key, tmp_path):
         assert ag.prefer_local(ini) in (True, False, None)
 
 
-def test_the_installs_page_lists_the_games_and_gates_the_loose_actions(tmp_path):
+@pytest.fixture
+def installs_page(tmp_path):
+    """``installs_page(**settings)`` makes the Installs page offscreen for those settings (a workspace is given)."""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
@@ -237,9 +239,12 @@ def test_the_installs_page_lists_the_games_and_gates_the_loose_actions(tmp_path)
     from annotoolbox.suite.background import Background
 
     qt = QApplication.instance() or QApplication([])
-    game = make_game(tmp_path)
-    s = Settings(anno2205=str(game), workspace=str(tmp_path / "ws"))
-    page = InstallsPage(s, Background(), sync=True)
+    yield lambda **kw: InstallsPage(Settings(workspace=str(tmp_path / "ws"), **kw), Background(), sync=True)
+    qt.processEvents()
+
+
+def test_the_installs_page_lists_the_games_and_gates_the_loose_actions(tmp_path, installs_page):
+    page = installs_page(anno2205=str(make_game(tmp_path)))
     assert page.installs.topLevelItemCount() == 4 and page.mods.topLevelItemCount() == 0
     assert not page.switch_button.isEnabled() and not page.add_button.isEnabled()
     assert "Not confirmed" in page.loose_state.text() or "nicht bestätigt" in page.loose_state.text()
@@ -249,4 +254,28 @@ def test_the_installs_page_lists_the_games_and_gates_the_loose_actions(tmp_path)
         assert page.add_button.isEnabled()
     finally:
         del ag.LOOSE_CONFIRMED["anno2205"]
-    qt.processEvents()
+
+
+@pytest.mark.parametrize("text", ["[1]", '"x"', '{"name": "m", "installed": "", "files": 5, "replaced": {}}', "{"])
+def test_a_manifest_that_is_not_one_is_left_out_of_the_list(tmp_path, text):
+    g = loose(tmp_path, force=True)
+    g.install_mod(make_mod(tmp_path))
+    (g.root / "mods" / "broken.json").write_text(text, encoding="utf-8")
+    assert [m.name for m in g.mods()] == ["pack"]
+
+
+def test_a_path_in_other_letter_case_is_the_same_file_of_the_game(tmp_path):
+    g = loose(tmp_path, force=True)
+    g.install_mod(make_mod(tmp_path))
+    other = tmp_path / "other"
+    (other / "Data" / "New" / "deep").mkdir(parents=True)
+    (other / "Data" / "New" / "deep" / "X.TXT").write_text("theirs", encoding="utf-8")
+    with pytest.raises(ag.LooseError, match="belongs to the loose mod pack"):
+        g.install_mod(other)
+    assert (tmp_path / "game" / "data" / "new" / "deep" / "x.txt").read_text(encoding="utf-8") == "new"
+
+
+def test_a_game_without_a_folder_set_offers_no_loose_actions(installs_page, monkeypatch):
+    monkeypatch.setitem(ag.LOOSE_CONFIRMED, "anno2205", "test")
+    page = installs_page()
+    assert not page.add_button.isEnabled() and not page.remove_button.isEnabled()  # no folder is not "this folder"

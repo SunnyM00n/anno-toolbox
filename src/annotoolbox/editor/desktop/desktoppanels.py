@@ -40,7 +40,7 @@ LIBRARY_SHOWN = 400  # rows the library lists at once: the search narrows the re
 SOURCES = (  # the library's sources: the key in ``IslandEditor.library()`` and the label
     ("2070", "2070"),
     ("117", "117"),
-    ("editor", N_("117 editor-only")),
+    ("editor", N_("islands.117_editor_only")),
     ("anno1800", "Anno 1800"),
     ("anno2205", "Anno 2205"),
 )
@@ -76,7 +76,7 @@ class MaterialGallery(QWidget):
         super().__init__()
         self.doc = doc
         layout = QVBoxLayout(self)
-        note = QLabel(tr("By the game they come from, each bottom layer first (draw order; docs/island-editor.md)."))
+        note = QLabel(tr("islands.game_they_come_bottom_layer"))
         note.setWordWrap(True)
         layout.addWidget(note)
         scroll = QScrollArea(widgetResizable=True, objectName="galleryScroll")
@@ -118,9 +118,9 @@ class MaterialGallery(QWidget):
             for kind, m in items:
                 item = QListWidgetItem()
                 where = (
-                    tr("island set, layer {layer}", layer=order.get(m["id"], m).get("order", m["id"]))
+                    tr("islands.island_set_layer", layer=order.get(m["id"], m).get("order", m["id"]))
                     if kind == "own"
-                    else tr("{set}, place {rank}", set=m["set"], rank=m.get("rank", 0))
+                    else tr("islands.set_place_rank", set=m["set"], rank=m.get("rank", 0))
                 )
                 item.setToolTip(f"{m['name']} ({where})")
                 item.setData(Qt.ItemDataRole.UserRole, (kind, m))
@@ -148,7 +148,7 @@ class MaterialGallery(QWidget):
         else:
             mid = s.register_vanilla_material(m, [x["id"] for x in doc.own_materials])
             if mid is None:
-                doc.say(tr("the island's material set is full (32 materials)"))
+                doc.say(tr("islands.islands_material_set_full_32"))
                 return
         doc.view.paint_material = mid
         doc.view.set_tool("paint")
@@ -165,7 +165,7 @@ class LibraryPanel(QWidget):
         row = QHBoxLayout()
         self.source = QComboBox()
         self._sources()
-        self.search = QLineEdit(placeholderText=tr("search models"))
+        self.search = QLineEdit(placeholderText=tr("islands.search_models"))
         row.addWidget(self.source)
         row.addWidget(self.search, 1)
         layout.addLayout(row)
@@ -206,8 +206,8 @@ class LibraryPanel(QWidget):
                 child.setData(0, Qt.ItemDataRole.UserRole, e)
                 top.addChild(child)
                 shown += 1
-            top.setExpanded(query or group == tr("forest of this island"))
-        self.count.setText(tr("{total} in {groups} groups", total=total, groups=len(groups)))
+            top.setExpanded(query or group == tr("islands.forest_island"))
+        self.count.setText(tr("islands.total_in_groups", total=total, groups=len(groups)))
 
     def _pick(self, item) -> None:
         e = item.data(0, Qt.ItemDataRole.UserRole)
@@ -217,14 +217,14 @@ class LibraryPanel(QWidget):
             self.doc.view.set_pick(e)
             return
         doc = self.doc
-        doc.say(tr("converting {name}…", name=e["name"]))
+        doc.say(tr("islands.converting_name", name=e["name"]))
         editor = doc.editor
 
         def done(result):
             if not doc.alive:
                 return
             if isinstance(result, Exception):
-                doc.say(tr("could not prepare {name}: {error}", name=e["name"], error=result))
+                doc.say(tr("islands.could_not_prepare", name=e["name"], error=result))
                 return
             e["cfg"] = result
             doc.say("")
@@ -244,7 +244,7 @@ class ObjectsPanel(QWidget):
         self.doc = doc
         layout = QVBoxLayout(self)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels([tr("Object"), tr("Count")])
+        self.tree.setHeaderLabels([tr("common.object"), tr("islands.count")])
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.itemClicked.connect(self._click)
@@ -283,14 +283,17 @@ class ObjectsPanel(QWidget):
             models = groups[t]
             count = sum(1 for es in models.values() for e in es if e.visible)
             off = t in hid.types
-            top = QTreeWidgetItem([t, (tr("hidden") + " · " if off else "") + str(count)])
+            top = QTreeWidgetItem([t, (tr("common.hidden") + " · " if off else "") + str(count)])
             top.setData(0, Qt.ItemDataRole.UserRole, t)
             self.tree.addTopLevelItem(top)
             for g in sorted(models, key=lambda g: label_of(models[g][0].base)):
                 es = models[g]
                 hidden = g in hid.groups or off or (hid.foliage and is_foliage(es[0].base))
                 child = QTreeWidgetItem(
-                    [label_of(es[0].base), (tr("hidden") + " · " if hidden else "") + str(sum(e.visible for e in es))]
+                    [
+                        label_of(es[0].base),
+                        (tr("common.hidden") + " · " if hidden else "") + str(sum(e.visible for e in es)),
+                    ]
                 )
                 child.setToolTip(0, g)
                 child.setData(0, Qt.ItemDataRole.UserRole, g)
@@ -341,24 +344,27 @@ class ObjectsPanel(QWidget):
             label = item.text(0)
             if key in hid.groups:
                 menu.addAction(
-                    tr("Show all {name}", name=label),
+                    tr("islands.show_all_name", name=label),
                     lambda: (hid.groups.discard(key), view.apply_hidden(), self.fill()),
                 )
             else:
                 menu.addAction(
-                    tr("Hide all {name}", name=label), lambda: (hid.groups.add(key), view.apply_hidden(), self.fill())
+                    tr("islands.hide_all_name", name=label),
+                    lambda: (hid.groups.add(key), view.apply_hidden(), self.fill()),
                 )
             key = item.parent().data(0, Qt.ItemDataRole.UserRole)
         if key in hid.types:
             menu.addAction(
-                tr("Show category {name}", name=key), lambda: (hid.types.discard(key), view.apply_hidden(), self.fill())
+                tr("islands.show_category_name", name=key),
+                lambda: (hid.types.discard(key), view.apply_hidden(), self.fill()),
             )
         else:
             menu.addAction(
-                tr("Hide category {name}", name=key), lambda: (hid.types.add(key), view.apply_hidden(), self.fill())
+                tr("islands.hide_category_name", name=key),
+                lambda: (hid.types.add(key), view.apply_hidden(), self.fill()),
             )
         if hid.count():
-            menu.addAction(tr("Show everything hidden ({n})", n=hid.count()), self.show_hidden)
+            menu.addAction(tr("islands.show_everything_hidden", n=hid.count()), self.show_hidden)
         menu.exec(self.tree.viewport().mapToGlobal(at))
 
     def show_hidden(self) -> None:
@@ -389,16 +395,16 @@ class PropertiesPanel(QWidget):
         super().__init__()
         self.doc = doc
         layout = QVBoxLayout(self)
-        self.title = QLabel(tr("nothing selected"))
+        self.title = QLabel(tr("islands.nothing_selected"))
         self.title.setWordWrap(True)
         layout.addWidget(self.title)
         row = QHBoxLayout()
-        self.asset_button = QPushButton(tr("Show the asset"), toolTip=tr("the object's asset in the asset editor"))
-        self.model_button = QPushButton(tr("View the model"), toolTip=tr("the object's model config in the viewer"))
+        self.asset_button = QPushButton(tr("islands.show_asset"), toolTip=tr("islands.tip.objects_asset_editor"))
+        self.model_button = QPushButton(tr("islands.view_model"), toolTip=tr("islands.tip.objects_model_config_viewer"))
         self.asset_button.clicked.connect(lambda _c=False: self._follow(links.SHOW_ASSET, "guid"))
         self.model_button.clicked.connect(lambda _c=False: self._follow(links.VIEW_FILE, "cfg"))
         self.export_button = QPushButton(
-            tr("Export the model"), toolTip=tr("the object's model config and meshes, exported by the viewer")
+            tr("islands.export_model"), toolTip=tr("islands.tip.objects_model_config_meshes_exported")
         )
         self.export_button.clicked.connect(lambda _c=False: self._follow(links.EXPORT_FILES, "cfg"))
         for button in (self.asset_button, self.model_button, self.export_button):
@@ -407,10 +413,11 @@ class PropertiesPanel(QWidget):
         self.form = QFormLayout()
         self.fields = {}
         for key, label, lo, hi, step in (
-            ("x", tr("x (tiles)"), -2000, 4000, 0.1), ("y", tr("height"), -200, 400, 0.05), ("z", tr("z (tiles)"), -2000, 4000, 0.1),
-            ("yaw", tr("turn (°)"), -360, 360, 5), ("tx", tr("tilt x (°)"), -90, 90, 1), ("tz", tr("tilt z (°)"), -180, 180, 1),
-            ("s", tr("scale"), 0.01, 100, 0.05), ("sx", tr("scale x"), 0.01, 100, 0.05), ("sy", tr("scale y"), 0.01, 100, 0.05),
-            ("sz", tr("scale z"), 0.01, 100, 0.05), ("width", tr("river width"), 0.5, 100, 0.5), ("level", tr("lake level"), -50, 100, 0.05),
+            ("x", tr("islands.x_tiles"), -2000, 4000, 0.1), ("y", tr("common.height"), -200, 400, 0.05), ("z", tr("islands.z_tiles"), -2000, 4000, 0.1),
+            ("yaw", tr("islands.turn_deg"), -360, 360, 5), ("tx", tr("islands.tilt_x_deg"), -90, 90, 1), ("tz", tr("islands.tilt_z_deg"), -180, 180, 1),
+            ("s", tr("common.scale"), 0.01, 100, 0.05), ("sx", tr("islands.scale_x"), 0.01, 100, 0.05), ("sy", tr("islands.scale_y"), 0.01, 100, 0.05),
+            ("sz", tr("islands.scale_z"), 0.01, 100, 0.05), ("width", tr("islands.river_width"), 0.5, 100, 0.5),
+            ("level", tr("islands.lake_level"), -50, 100, 0.05),
         ):  # fmt: skip
             sb = QDoubleSpinBox(minimum=lo, maximum=hi, singleStep=step, decimals=3, keyboardTracking=False)
             sb.editingFinished.connect(lambda k=key: self._edited(k))
@@ -418,7 +425,7 @@ class PropertiesPanel(QWidget):
             self.form.addRow(label, sb)
         self.tint = ColorButton()
         self.tint.picked.connect(lambda rgba: self.entry is not None and self.doc.session.set_color(self.entry, rgba))
-        self.form.addRow(tr("tint"), self.tint)
+        self.form.addRow(tr("islands.tint_lower"), self.tint)
         layout.addLayout(self.form)
         layout.addStretch(1)
         self.show_entry(None)
@@ -440,33 +447,27 @@ class PropertiesPanel(QWidget):
             link, game_of({}, kind=self.doc.info.get("kind") or ""), int(value) if key == "guid" else value
         ):
             if key == "guid":
-                self.doc.say(tr("the asset {value} is not in that game's files", value=value))
+                self.doc.say(tr("islands.asset_not_games_files", value=value))
             else:
-                self.doc.say(tr("the model {value} is not in that game's files", value=value))
+                self.doc.say(tr("islands.model_not_games_files", value=value))
 
     def show_entry(self, e) -> None:
         self.entry = e
         if self.doc.view.water_sel is not None:
             return self.show_water(self.doc.view.water_sel)
         if e is None or not e.alive:
-            self.title.setText(tr("nothing selected"))
+            self.title.setText(tr("islands.nothing_selected"))
             return self._visible(())
-        added = " " + tr("(added)") if e.added is not None else ""
+        added = " " + tr("islands.added") if e.added is not None else ""
         info = f"<b>{label_of(e.base)}</b><br>{e.marker or e.kind}{added}"
         if e.kind == "tree":
-            self.title.setText(tr("{info}<br>forest tree · tile {tile}<br>Del clears the tile", info=info, tile=e.tile))
+            self.title.setText(tr("islands.forest_tree_tile_del_clears", info=info, tile=e.tile))
             return self._visible(())
         if not e.visible:
-            info += " · " + tr("deleted")
+            info += " · " + tr("islands.deleted")
         self.title.setText(info)
-        keys = ["x", "y", "z", "yaw", "tx", "tz"] + (["sx", "sy", "sz"] if isinstance(e.scale, list) else ["s"])
-        self._visible(keys)
-        yaw, tx, tz = euler_of(e.rotation)
-        values = dict(zip("xyz", e.position, strict=True)) | {"yaw": yaw, "tx": tx, "tz": tz}
-        if isinstance(e.scale, list):
-            values |= dict(zip(("sx", "sy", "sz"), e.scale, strict=True))
-        else:
-            values["s"] = e.scale
+        values = self._values(e)
+        self._visible(list(values))
         for k, v in values.items():
             sb = self.fields[k]
             if not sb.hasFocus():
@@ -478,24 +479,39 @@ class PropertiesPanel(QWidget):
         self.tint.set_color(e.color)
         self.tint.setEnabled(not self.doc.session.readonly)
 
+    @staticmethod
+    def _values(e) -> dict[str, float]:
+        """An object's place, turn and size as the fields show them (a scale per axis: three fields)."""
+        yaw, tx, tz = euler_of(e.rotation)
+        values = dict(zip("xyz", e.position, strict=True)) | {"yaw": yaw, "tx": tx, "tz": tz}
+        if isinstance(e.scale, list):
+            return values | dict(zip(("sx", "sy", "sz"), e.scale, strict=True))
+        return values | {"s": e.scale}
+
+    def _unchanged(self, key: str, now: float) -> bool:
+        """Whether the field ``key`` still shows ``now``, the value it was filled with: a field only left (Tab, a
+        click elsewhere) reports an edit too, and its rounded value must not be written back as one."""
+        sb = self.fields[key]
+        return abs(sb.value() - float(now)) <= 0.5 * 10 ** -sb.decimals()
+
     def show_water(self, w) -> None:
         s = self.doc.session
         if w is None:
             self.title.setText(
-                tr("click a river or coast point or a lake")
+                tr("islands.click_river_coast_point_lake")
                 if s.water_net
-                else tr("this island has no river network (no .water.json)")
+                else tr("islands.island_no_river_network_water")
             )
             return self._visible(())
         if "lake" in w:
-            self.title.setText(tr("<b>lake {name}</b>", name=w["lake"]))
+            self.title.setText(tr("islands.lake_name", name=w["lake"]))
             self._visible(["level"])
             self.fields["level"].setValue(s.lake_level(w["lake"]))
             return
         if "outline" in w:
             self.title.setText(
                 tr(
-                    "<b>lake {name} · outline point {point}/{n}</b><br>drag it over the ground",
+                    "islands.lake_outline_point_drag_over",
                     name=w["outline"],
                     point=w["point"] + 1,
                     n=len(s.lake_outline(w["outline"])),
@@ -506,7 +522,7 @@ class PropertiesPanel(QWidget):
             n = len(s.path.coast(w["coast"])["points"])
             self.title.setText(
                 tr(
-                    "<b>coast line {name} · point {point}/{n}</b><br>drag it over the ground",
+                    "islands.coast_line_point_drag_over",
                     name=w["coast"],
                     point=w["point"] + 1,
                     n=n,
@@ -516,15 +532,15 @@ class PropertiesPanel(QWidget):
         if "shape" in w:
             shape = {"name": w["k"], "point": w["point"] + 1, "n": len(s.path.shapes(w["shape"])[w["k"]]["points"])}
             self.title.setText(
-                tr("<b>camera blocker {name} · point {point}/{n}</b><br>drag it over the ground", **shape)
+                tr("islands.camera_blocker_point_drag_over", **shape)
                 if w["shape"] == "camera"
-                else tr("<b>build blocker {name} · point {point}/{n}</b><br>drag it over the ground", **shape)
+                else tr("islands.build_blocker_point_drag_over", **shape)
             )
             return self._visible(())
         r = s.river(w["river"])
         self.title.setText(
             tr(
-                "<b>river {name} · point {point}/{n}</b><br>water {level}<br>Del: remove point · Ctrl+D: insert after",
+                "islands.river_point_water_del_remove",
                 name=w["river"],
                 point=w["point"] + 1,
                 n=len(r["points"]),
@@ -535,25 +551,33 @@ class PropertiesPanel(QWidget):
         self.fields["width"].setValue(r["widths"][w["point"]])
 
     def _edited(self, key: str) -> None:
+        """A field was edited (or only left): the selected river point, lake or object takes its value as one change;
+        the object's other values stay its own, not the fields' rounded ones."""
         s, v = self.doc.session, self.fields[key].value()
         w = self.doc.view.water_sel
-        if key in ("width", "level") and w is not None:
-            before = s.water_snapshot()
-            if key == "level":
+        if key in ("width", "level"):
+            if w is not None and key == "level" and "lake" in w and not self._unchanged(key, s.lake_level(w["lake"])):
+                before = s.water_snapshot()
                 s.set_lake_level(w["lake"], v)
-            else:
-                s.set_river_width(w["river"], w["point"], v)
-            s.end_water(before, tr("lake level") if key == "level" else tr("river width"))
+                s.end_water(before, tr("islands.lake_level"))
+            elif w is not None and key == "width" and "river" in w:
+                if not self._unchanged(key, s.river(w["river"])["widths"][w["point"]]):
+                    before = s.water_snapshot()
+                    s.set_river_width(w["river"], w["point"], v)
+                    s.end_water(before, tr("islands.river_width"))
             return
         e = self.entry
         if e is None or not e.alive or e.kind == "tree":
             return
-        f = {k: sb.value() for k, sb in self.fields.items()}
+        f = self._values(e)
+        if key not in f or self._unchanged(key, f[key]):
+            return
+        f[key] = v
         if key in ("x", "y", "z"):
-            s.transform(e, tr("move"), position=[f["x"], f["y"], f["z"]])
+            s.transform(e, tr("islands.move_lower"), position=[f["x"], f["y"], f["z"]])
         elif key in ("yaw", "tx", "tz"):
-            s.transform(e, tr("rotation"), rotation=quat_of(f["yaw"], f["tx"], f["tz"]))
+            s.transform(e, tr("islands.rotation"), rotation=quat_of(f["yaw"], f["tx"], f["tz"]))
         elif key == "s":
-            s.transform(e, tr("scale"), scale=f["s"])
+            s.transform(e, tr("common.scale"), scale=f["s"])
         else:
-            s.transform(e, tr("scale"), scale=[f["sx"], f["sy"], f["sz"]])
+            s.transform(e, tr("common.scale"), scale=[f["sx"], f["sy"], f["sz"]])

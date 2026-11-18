@@ -72,7 +72,7 @@ class BankDoc:
     def obj(self, obj_id: int) -> HircObject:
         at = self._at(obj_id)
         if at is None:
-            raise EditError(tr("the bank has no object {obj_id}", obj_id=obj_id))
+            raise EditError(tr("sound.bank_no_object", obj_id=obj_id))
         return self.bank.hirc[at]
 
     def kind_of(self, obj_id: int) -> int:
@@ -135,7 +135,7 @@ class BankDoc:
     def add(self, obj: HircObject) -> None:
         """Add an object the way the shipped banks order them: children and containers before actions and events."""
         if any(o.id == obj.id for o in self.bank.hirc):
-            raise EditError(tr("the bank has an object {id} already", id=obj.id))
+            raise EditError(tr("sound.bank_object_already", id=obj.id))
         late = obj.type in (bnkgraph.ACTION, bnkgraph.EVENT)
         first_late = next(
             (i for i, o in enumerate(self.bank.hirc) if o.type in (bnkgraph.ACTION, bnkgraph.EVENT)), None
@@ -191,7 +191,7 @@ class BankDoc:
         it raises an ``EditError``."""
         fn = EDITS.get(name)
         if fn is None:
-            raise EditError(tr("no edit {name}", name=repr(name)))
+            raise EditError(tr("sound.no_edit_name", name=repr(name)))
         before = self._state()
         try:
             result = fn(self, **args)

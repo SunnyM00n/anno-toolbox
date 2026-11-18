@@ -38,12 +38,10 @@ class Layout:
 def child_span(obj: HircObject, node: bnkgraph.Node, version: int) -> tuple[int, int]:
     """Where a container's child list starts and where it ends in the payload (``LayoutError``: not found exactly)."""
     if not node.exact:
-        raise LayoutError(
-            tr("{type_name} {id}: the child list was not found exactly", type_name=obj.type_name, id=obj.id)
-        )
+        raise LayoutError(tr("sound.child_list_not_found_exactly", type_name=obj.type_name, id=obj.id))
     at = bnkgraph.child_block(obj, bnkgraph.family(version), set(node.children))
     if at is None:
-        raise LayoutError(tr("{type_name} {id}: the child list was not found", type_name=obj.type_name, id=obj.id))
+        raise LayoutError(tr("sound.child_list_not_found", type_name=obj.type_name, id=obj.id))
     return at, at + 4 + 4 * len(node.children)
 
 
@@ -52,7 +50,7 @@ def read_layout(obj: HircObject, node: bnkgraph.Node, version: int) -> Layout:
     if obj.type not in (bnkgraph.RANSEQ, bnkgraph.MIXER, bnkgraph.SWITCH):
         raise LayoutError(
             tr(
-                "{type_name} {id}: only Random/Sequence, Actor-Mixer and Switch containers are edited",
+                "sound.only_random_sequence_actor_mixer",
                 type_name=obj.type_name,
                 id=obj.id,
             )
@@ -67,7 +65,7 @@ def read_layout(obj: HircObject, node: bnkgraph.Node, version: int) -> Layout:
             if len(pay) != after:
                 raise LayoutError(
                     tr(
-                        "{type_name} {id}: {value} bytes follow the children",
+                        "sound.bytes_follow_children",
                         type_name=obj.type_name,
                         id=obj.id,
                         value=len(pay) - after,
@@ -76,19 +74,17 @@ def read_layout(obj: HircObject, node: bnkgraph.Node, version: int) -> Layout:
         else:
             out.table, out.rest = _read_table(pay, after)
     except struct.error as exc:
-        raise LayoutError(
-            tr("{type_name} {id}: the tail does not read ({exc})", type_name=obj.type_name, id=obj.id, exc=exc)
-        ) from exc
+        raise LayoutError(tr("sound.tail_not_read", type_name=obj.type_name, id=obj.id, exc=exc)) from exc
     return out
 
 
 def _read_playlist(pay: bytes, after: int, children: list[int]) -> list[tuple[int, int]]:
     count = struct.unpack_from("<H", pay, after)[0]
     if len(pay) != after + 2 + 8 * count:
-        raise LayoutError(tr("the playlist does not end the container"))
+        raise LayoutError(tr("sound.playlist_not_end_container"))
     pairs = [struct.unpack_from("<II", pay, after + 2 + 8 * i) for i in range(count)]
     if not {i for i, _w in pairs} <= set(children):
-        raise LayoutError(tr("the playlist names objects that are not children"))
+        raise LayoutError(tr("sound.playlist_names_objects_not_children"))
     return pairs
 
 

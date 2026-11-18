@@ -283,6 +283,10 @@ caster). A failure is therefore handled as follows (`render/nativepass`, `render
   errors, and the game's own shaders are switched off for the scene: our look draws it, with the reason in the menu's
   place and on the message line. The next scene tries them again.
 
+What a game's pass draws in the view's place (its ground plane or sea, 2205's effects and decals) counts only for a
+frame the pass drew: while it compiles, after it failed, or when a frame holds nothing for it, the view draws its own
+ground, effects and decals (`ModelRenderer._by_game`).
+
 ### Rendering quality
 
 **View > Rendering > Rendering quality** (117 and 1800 only; `viewer/renderingmenu`): the presets of

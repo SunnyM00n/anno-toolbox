@@ -15,6 +15,7 @@ import json
 import mmap
 import re
 import xml.etree.ElementTree as ET
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -86,7 +87,7 @@ class AssetIndex:
         q = query.strip().lower()
         if not q:
             return []
-        exact = [self.by_guid[int(q)]] if q.isdigit() and int(q) in self.by_guid else []
+        exact = [self.by_guid[int(q)]] if q.isdecimal() and int(q) in self.by_guid else []
         rest = [e for e in self.entries if q in e.name.lower() or q in e.template.lower() or q in str(e.guid)]
         return (exact + [e for e in rest if e not in exact])[:limit]
 
@@ -261,12 +262,13 @@ def _cache_path(cache: Path, files: GameFiles, paths: list[str]) -> Path:
 def _load(path: Path, files: list[str], local: list[Path]) -> AssetIndex | None:
     try:
         data = json.loads(gzip.decompress(path.read_bytes()))
-    except (OSError, ValueError):
-        return None
-    entries = [Entry(*row) for row in data["entries"]]
-    refs = {int(k): v for k, v in data["refs"].items()}
-    ranges = {tuple(g): (lo, hi) for g, lo, hi in data.get("group_ranges", [])}
-    return AssetIndex(files, local, [tuple(g) for g in data["groups"]], entries, refs, data.get("problems", []), ranges)
+        entries = [Entry(*row) for row in data["entries"]]
+        refs = {int(k): v for k, v in data["refs"].items()}
+        ranges = {tuple(g): (lo, hi) for g, lo, hi in data.get("group_ranges", [])}
+        groups = [tuple(g) for g in data["groups"]]
+        return AssetIndex(files, local, groups, entries, refs, data.get("problems", []), ranges)
+    except (OSError, ValueError, EOFError, zlib.error, KeyError, TypeError, AttributeError):
+        return None  # a damaged cache file: the game is scanned again
 
 
 def _save(path: Path, index: AssetIndex) -> None:
@@ -300,6 +302,8 @@ def build_index(
     mounted = mounts(paths, local) if follow_links else {}
     for k, path in enumerate(local):
         say(f"indexing {paths[k]} ({path.stat().st_size // 1_000_000} MB)")
+        if not path.stat().st_size:
+            continue  # an empty file has no assets (and cannot be mapped)
         with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
             found, refs = scan_file(data, k, groups, group_ids, ranges, mounted.get(normalize(paths[k]), ()))
         offset = len(entries)

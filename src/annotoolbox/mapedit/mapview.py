@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QWidget
 from ..infra.i18n import tr
 from . import pool
 from .placing import complex_of
-from .template import KIND_FIXED, KIND_SLOT, KIND_START, SIZES, SNAP
+from .template import KIND_FIXED, KIND_SLOT, KIND_START, SNAP
 
 SEA, EDGE, MARGIN, LAND = QColor(36, 70, 102), QColor(220, 220, 220), QColor(0, 0, 0, 90), QColor(190, 170, 120)
 TYPE_COLOURS = {
@@ -31,7 +31,7 @@ TYPE_COLOURS = {
 }
 SELECTED, FLAGGED, START = QColor(255, 255, 255), QColor(255, 80, 80), QColor(255, 230, 120)
 START_RADIUS = 7  # pixels
-LETTERS = {i: s[0] if s != "XL" else "XL" for i, s in enumerate(SIZES)}
+LETTERS = dict(enumerate(("S", "M", "L", "XL", "C")))  # a slot's size class as drawn on it
 
 
 class MapView(QWidget):
@@ -92,7 +92,7 @@ class MapView(QWidget):
         p.fillRect(self.rect(), QColor(24, 26, 30))
         if self.doc is None:
             p.setPen(EDGE)
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, tr("Open a game, then a map on the left."))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, tr("maps.open_game_map_left"))
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.doc.size

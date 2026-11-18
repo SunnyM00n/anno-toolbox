@@ -1,18 +1,22 @@
-"""The Texts app's voices for 1800, 2205, 1404 and 1701 (docs/text-editor.md, "Speakers and voices"): synthetic files,
+"""The Texts app's voices for every game (docs/text-editor.md, "Speakers and voices", "Lip files", "1701's speech
+files", "2205's streamed voices"): who speaks a text, the clip, the lip file beside it. Synthetic files,
 and the installs where the ``ANNO*_DIR`` variables name them."""
 
 from __future__ import annotations
 
 import os
+import struct
 from pathlib import Path
 
 import pytest
 from tests.fakes import INSTALL_VARS
 
 from annotoolbox.assetedit.gamefiles import LAYOUTS, open_files
+from annotoolbox.exporting import banks
+from annotoolbox.textedit import lipsync, voicedata
 from annotoolbox.textedit.editfile import EditFile
 from annotoolbox.textedit.textdoc import Filter, TextDoc
-from test_textedit import _doc, _utf16, _write
+from test_textedit import META_TWINS, _doc, _entries, _utf16, _write
 
 TEXTS = "<TextExport><Texts>{}</Texts></TextExport>"
 ENTRY = "<Text><{tag}>{key}</{tag}><Text>{text}</Text></Text>"
@@ -111,6 +115,150 @@ def test_the_speech_files_of_1404_and_1701_are_found_by_text_id_with_the_folder_
     assert doc.rows(Filter(voiced=True)) == ["5", "6"]
 
 
+def test_a_played_clip_is_one_file_of_the_cache_folder_however_often_it_plays(tmp_path):
+    files = {"data/loca/eng/txt/a.txt": _utf16("5=Hello\r\n"), "data/loca/eng/speech/willem/5.mp3": b"ID3x"}
+    doc = TextDoc(_write(tmp_path, files), LAYOUTS["anno1404"], EditFile("anno1404"), "english", "english")
+    first = doc.clip_file("5", "source")
+    assert first.parent == tmp_path / "cache" / "sounds" and first.read_bytes() == b"ID3x" and first.suffix == ".mp3"
+    first.write_bytes(b"kept")  # the second play opens the file that is there, it writes no other
+    assert doc.clip_file("5", "target") == first and first.read_bytes() == b"kept"
+    assert [p.name for p in first.parent.iterdir()] == [first.name]
+
+
+# 117 and 2070
+AUDIO = (
+    "<Group><Assets><Asset><Template>Audio</Template><Values><Standard><GUID>1</GUID><Name>Line_A</Name></Standard>"
+    "<Audio><VoiceMood>Neutral</VoiceMood><CharacterId>-555</CharacterId></Audio>"
+    "<WwiseStandard><WwiseID>77</WwiseID><OasisScriptId>-20</OasisScriptId></WwiseStandard></Values></Asset>"
+    "<Asset><Template>Audio</Template><Values><Standard><GUID>2</GUID><Name>Line_B</Name></Standard>"
+    "<Audio><CharacterId>-999</CharacterId></Audio>"
+    "<WwiseStandard><WwiseID>78</WwiseID><OasisScriptId>-23</OasisScriptId></WwiseStandard></Values></Asset></Assets></Group>"
+)
+
+
+PORTRAIT = (
+    "<Assets><Asset><Template>Portrait</Template><Values><Portrait><PortraitName>-1</PortraitName>"
+    "<OasisCharacterId>-555</OasisCharacterId></Portrait><Standard><GUID>9</GUID>"
+    "<Name>Advisor Character (Ben Baalion) Portrait</Name></Standard></Values></Asset>"
+    "<Asset><Template>Portrait</Template><Values><Portrait><OasisCharacterId>-900</OasisCharacterId></Portrait>"
+    "<Standard><GUID>10</GUID><Name>Campaign Char01 (Marcus Africanus)</Name></Standard></Values></Asset></Assets>"
+)
+
+
+@pytest.fixture
+def voice_game(tmp_path):
+    export = "data/base/config/export/"
+    gui = "data/base/config/gui/"
+    english = _entries(("-20", "Hello Marcus"), ("-21", "Hello Marcus"), ("-23", "Other"))
+    return _write(
+        tmp_path,
+        {export + "audio_generated.xml": AUDIO, export + "assets.xml": PORTRAIT, gui + "texts_english.xml": english,
+         gui + "texts_german.xml": english, gui + "texts_metadata.xml": META_TWINS},
+    )  # fmt: skip
+
+
+def test_the_speaker_of_a_117_line_is_the_portrait_of_the_character_its_audio_asset_names(voice_game):
+    doc = _doc(voice_game)
+    doc.prepare("english", "german")
+    voice = doc.voice("-20")
+    assert (voice.speaker, voice.mood, voice.event) == ("Ben Baalion", "Neutral", 77)
+    assert doc.voice("-23").speaker.startswith("character") and doc.voice("-21") is None
+    assert doc.kind_label("-21") == "Marcus Africanus" and doc.playable("-20") == ("source", "target")
+    assert doc.rows(Filter(voiced=True)) == ["-20", "-23"] and doc.rows(Filter(query="baalion")) == ["-20"]
+
+
+def test_a_text_without_a_voice_line_says_so_when_asked_for_its_clip(voice_game):
+    doc = _doc(voice_game)
+    with pytest.raises(LookupError, match="no voice line"):
+        doc.clip("-21", "target")
+
+
+def test_2070_speech_is_found_by_the_text_id_and_its_speaker_is_the_folder(tmp_path):
+    files = _write(
+        tmp_path,
+        {
+            "data/loca/eng/txt/a.txt": _utf16("5=Hello\r\n6=Silent\r\n"),
+            "data/loca/eng/speech/addon/eve/5.mp3": b"ID3fake",
+            "data/loca/eng/speech/thor strindberg/5.mp3": b"ID3other",
+        },
+    )
+    doc = TextDoc(files, LAYOUTS["anno2070"], EditFile("anno2070"), "english", "english")
+    voice = doc.voice("5")
+    assert voice.speaker in ("eve", "thor strindberg") and doc.voice("6") is None
+    assert doc.clip("5", "source")[1] == ".mp3" and doc.rows(Filter(voiced=True)) == ["5"]
+
+
+# lip files
+def _sp(levels: bytes) -> bytes:
+    return struct.pack("<I", len(levels) - 4) + levels + bytes(4)
+
+
+def test_a_lip_file_is_its_count_and_the_levels_and_a_clip_gives_the_rate():
+    lips = lipsync.Lips.read(_sp(bytes([0, 128, 255, 255, 64, 0])))
+    assert lips is not None and lips.levels == (0, 128, 255, 255, 64, 0) and lips.peak == 255
+    assert lips.bars(3) == "▄█▂"  # the loudest of each third, in eight heights
+    assert lipsync.Lips.read(b"short") is None and lipsync.Lips.read(struct.pack("<I", 9) + bytes(4)) is None
+    frame = struct.pack(">I", 0xFFFB9000) + bytes(413)  # MPEG-1 layer III, 128 kbit/s, 44.1 kHz: 417 bytes, 26.1 ms
+    assert lipsync.mp3_seconds(b"ID3" + bytes([4, 0, 0, 0, 0, 0, 0]) + frame * 10) == pytest.approx(0.2612, abs=1e-3)
+    assert lipsync.mp3_seconds(b"not an mp3") == 0
+
+
+def test_the_lip_file_beside_a_speech_file_is_shown_with_the_voice(tmp_path):
+    frame = struct.pack(">I", 0xFFFB9000) + bytes(413)
+    files = {
+        "data/loca/eng/txt/a.txt": _utf16("5=Hello\r\n"),
+        "data/loca/eng/speech/willem/5.mp3": frame * 40,
+        "data/loca/eng/speech/willem/5.sp": _sp(bytes(range(0, 100, 2))),
+    }
+    doc = TextDoc(_write(tmp_path, files), LAYOUTS["anno1404"], EditFile("anno1404"), "english", "english")
+    line = doc.lips("5")
+    assert "50 frames in 1.0 s" in line and len(doc.voices.load("english")) == 1
+    assert TextDoc(_write(tmp_path / "b", {**files, "data/loca/eng/speech/willem/5.sp": b"x"}), LAYOUTS["anno1404"],
+                   EditFile("anno1404"), "english", "english").lips("5") == ""  # fmt: skip
+
+
+# 1701's speech files
+MESSAGES = (
+    "<MessageSounds><Message><ID>7</ID><SoundGuid>1</SoundGuid><SpeachGuid>900</SpeachGuid>"
+    "<SpeachGuid>901</SpeachGuid></Message></MessageSounds>"
+)
+
+
+AI = (
+    "<AI><MESSAGELIST><MESSAGE><Text>8</Text><SOUNDS><SOUND><GUID>910</GUID></SOUND><SOUND><GUID>911</GUID></SOUND>"
+    "</SOUNDS></MESSAGE></MESSAGELIST></AI>"
+)
+
+
+def test_a_speech_file_no_text_names_belongs_to_the_text_its_message_or_ai_profile_gives_it(tmp_path):
+    speech = "data/loca/eng/speech/"
+    files = {
+        "data/loca/eng/txt/a.txt": _utf16("5=Own\r\n7=Message\r\n8=Ai profile\r\n9=Base\r\n10=Silent\r\n"),
+        "data/config/game/messages.xml": MESSAGES, "data/ai/aiprofile.xml": AI,
+        speech + "sprecher_1/5.mp3": b"x", speech + "sprecher_1/900.mp3": b"x", speech + "sprecher_2/901.mp3": b"x",
+        speech + "sprecher_2/910.mp3": b"x", speech + "sprecher_2/911.mp3": b"x", speech + "sprecher_3/9_1.mp3": b"x",
+        speech + "sprecher_3/9_2.mp3": b"x",
+    }  # fmt: skip
+    doc = TextDoc(_write(tmp_path, files), LAYOUTS["anno1701"], EditFile("anno1701"), "english", "english")
+    doc.prepare("english", "english")
+    assert [(k, doc.voice(k).speaker) for k in ("5", "7", "8", "9")] == [
+        ("5", "sprecher 1"), ("7", "sprecher 1"), ("8", "sprecher 2"), ("9", "sprecher 3")
+    ]  # fmt: skip
+    assert (doc.voice("7").variants, doc.voice("9").variants, doc.voice("5").variants) == (2, 2, 1)
+    assert doc.voice("10") is None and doc.playable("7") == ("source", "target")
+    assert voicedata.read_speech_owners(doc.files, "anno2070") == {}
+
+
+# 2205's streamed voice files
+def test_a_bank_info_names_its_streamed_files_like_its_media():
+    text = (
+        '{"SoundBanksInfo": {"SoundBanks": [{"ShortName": "Voices", "ReferencedStreamedFiles": ['
+        '{"Id": "479781", "ShortName": "109243@1161.wav", "Path": "Voices\\\\English(US)\\\\109243@1161_CC1486BC.wem"}]}]}}'
+    )
+    info = banks.bank_info(text)
+    assert info.media[479781] == ("109243@1161.wav", "voices/english(us)/109243@1161_cc1486bc.wem")
+
+
 # the installs
 def _installed(game: str, tmp_path) -> TextDoc:
     folder = os.environ.get(INSTALL_VARS[game])
@@ -143,3 +291,35 @@ def test_1800_and_2205_voice_lines_are_found_with_their_speaker_and_the_event(ga
         doc.clip(key, "source")
     except LookupError as exc:  # the install holds no voice files (1800: no bank, 2205: no ``Voices`` folder)
         assert "voice" in str(exc)
+
+
+@pytest.mark.parametrize(("game", "least"), [("anno1404", 6500), ("anno1701", 11000)])
+def test_the_lip_files_of_1404_and_1701_read_and_run_at_50_frames_a_second(game, least, tmp_path):
+    files = _installed(game, tmp_path).files
+    paths = files.glob("data/loca/eng/speech/*/*.sp") + files.glob("data/loca/eng/speech/*/*/*.sp")
+    assert len(paths) >= least
+    rates = []
+    for path in paths[:200]:
+        lips = lipsync.Lips.read(files.read(path))
+        seconds = lipsync.mp3_seconds(files.read(path[:-3] + ".mp3"))
+        assert lips is not None and seconds > 0
+        rates.append(len(lips.levels) / seconds)
+    assert all(48 < r < 54 for r in rates)
+
+
+def test_1701s_speech_files_reach_the_texts_that_messages_and_ai_profiles_name(tmp_path):
+    doc = _installed("anno1701", tmp_path)
+    files = doc.files
+    lines = doc.voices.load("english")
+    voiced = [k for k in lines if k in doc.table("english")]
+    assert len(voiced) > 2000 and any(lines[k].variants > 3 for k in voiced)
+    assert voicedata.read_speech_owners(files, "anno1701")["5010321"] == "118056"
+    assert "Lips:" in doc.voices.lip_line(next(k for k in voiced if lines[k].variants == 1), "english")
+
+
+def test_2205s_missing_voice_file_is_named_by_the_banks_streamed_entry(tmp_path):
+    doc = _installed("anno2205", tmp_path)
+    lines = doc.voices.load("english")
+    key = next(k for k, v in lines.items() if v.event and doc.voices.can_play(k, "english"))
+    with pytest.raises(LookupError, match=r"voices/english\(us\)/.+\.wem"):
+        doc.clip(key, "source")

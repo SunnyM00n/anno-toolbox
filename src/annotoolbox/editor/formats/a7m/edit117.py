@@ -357,7 +357,7 @@ class _Build:
         """The ``RandomIsland`` asset that puts the new island ``target`` in the pool, next to the original's."""
         vanilla = random_island(self.assets_xml, source)
         if vanilla is None:
-            self.log(tr("{source}: no RandomIsland asset found, written but not in the pool", source=source))
+            self.log(tr("islands.no_randomisland_asset_found_written", source=source))
             return
         guid = self.islands.get(target if edits.get("name") else source)
         asset = re.sub(r"<GUID>\d+</GUID>", f"<GUID>{guid}</GUID>", vanilla, count=1)
@@ -395,7 +395,7 @@ def staged_mod(out: Path, mod_id: str, trash: modswap.Trash = modswap.recycle, l
     if not out.is_absolute() or out.name != mod_id or mod_id in (".", ".."):
         raise ValueError(
             tr(
-                "refusing to rebuild {out}: not an absolute path ending in the mod id {mod_id}",
+                "islands.refusing_rebuild_not_absolute_path_lower",
                 out=out,
                 mod_id=repr(mod_id),
             )
@@ -426,14 +426,14 @@ def build(
             edits = islandedits.load(path)
             source = edits.get("source")
             if not source:
-                log(tr("{name}: no source island, skipped", name=path.name))
+                log(tr("islands.no_source_island_skipped", name=path.name))
                 continue
             run.sources_for(edits)
             target = run.new_island(edits, source) if edits.get("target", "replace") == "new" else source
             done = apply(files, source, edits, run.template, run.samples, target, others)
             run.write_island(target, done)
-            log(tr("{source} -> {target}: {report}", source=source, target=target, report=done.report))
+            log(tr("islands.source_target_report", source=source, target=target, report=done.report))
         run.write_pool(mod_id, mod_name)
     for problem in modcheck.check(out, modcheck.readable(files)):
-        log(tr("mod check: {problem}", problem=problem))
+        log(tr("islands.mod_check_problem", problem=problem))
     return run.written

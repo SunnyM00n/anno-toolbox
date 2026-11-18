@@ -14,6 +14,7 @@ from dataclasses import replace
 
 import numpy as np
 
+from ..infra.i18n import N_
 from ..models import shader2070
 from ..models.modelread import SHADER_DYE
 from ..models.shader2070 import NoPass
@@ -136,7 +137,7 @@ class FxcPass1404(OwnPass):
         """The sky's compiled stages (``compile_(source)`` once, in the background), None while they compile or
         where they failed (said once: the view's sky)."""
         if self.sky_stages is None and not self.sky_broken:
-            self.sky_stages = self._part(key, compile_, lambda got: got, "the game's sky", "the view's sky",
+            self.sky_stages = self._part(key, compile_, lambda got: got, N_("viewer.games_sky"), N_("viewer.views_sky"),
                                          lambda: setattr(self, "sky_broken", True))  # fmt: skip
         return self.sky_stages
 
@@ -152,6 +153,7 @@ class FxcPass1404(OwnPass):
         """Every group the game's shaders draw into ``target`` with its depth; the rest of ``drawn`` is returned for
         the renderer, or None while a shader compiles."""
         self._view = (camera, size, ground)
+        self.ground = False  # until the sea is drawn: a frame that draws none leaves the ground to the view
         ready, rest, waiting = self._split(drawn)
         if waiting:
             return None
@@ -219,7 +221,7 @@ class FxcPass1404(OwnPass):
         if ground is None or not self._on("waves") or self.sea_broken:
             return None
         if self.sea is None:
-            self.sea = self._part(key, compile_, make, "the game's sea", "no sea",
+            self.sea = self._part(key, compile_, make, N_("viewer.games_sea"), N_("viewer.no_sea"),
                                   lambda: setattr(self, "sea_broken", True))  # fmt: skip
         return camera, size
 
@@ -259,8 +261,8 @@ class FxcPass1404(OwnPass):
                 "post1404",
                 lambda ready: post2070.compile_steps(ready.shaders, post2070.STEPS_1404),
                 lambda stages: post2070.PostChain2070(self.r.ctx, stages, self._dummies(), post2070.STEPS_1404, 1.0),
-                "the game's post sequence",
-                "the view's finish",
+                N_("viewer.games_post_sequence"),
+                N_("viewer.views_finish"),
             )
         if self.post is None:
             return source

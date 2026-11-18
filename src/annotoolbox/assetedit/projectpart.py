@@ -48,4 +48,4 @@ def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, 
     return out
 
 
-PART = Part("assets", N_("Assets"), has_work, render)
+PART = Part("assets", N_("common.assets"), has_work, render)

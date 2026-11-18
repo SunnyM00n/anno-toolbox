@@ -41,26 +41,51 @@ from ..infra.i18n import N_, tr
 from ..othergames import ui2205
 from ..othergames.installs import GAMES
 from ..suite import widgets
-from . import uiexportdialog, uirender, uiseam
+from ..suite.background import Background
+from . import fonts2205, uiexportdialog, uirender, uiseam
 from .uidoc import MovieDoc, Node
 from .uiproject import Project, changes
 
 ZOOMS = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
-PROPERTY_NAMES = (  # the movie's property keys the form shows by their words; the keys stay the code's
-    N_("id"), N_("path"), N_("width"), N_("height"), N_("game path"), N_("flags"), N_("file"), N_("name"),
-    N_("languages"), N_("variable"), N_("font"), N_("color"), N_("box"), N_("html"), N_("character"), N_("depth"),
-    N_("x"), N_("y"), N_("scale"), N_("class"), N_("block"),
-)  # fmt: skip
+PROPERTY_NAMES = {  # the movie's property keys -> the words the form shows for them
+    "id": N_("ui.id"),
+    "path": N_("common.path"),
+    "width": N_("ui.width"),
+    "height": N_("common.height"),
+    "game path": N_("ui.game_path"),
+    "flags": N_("ui.flags"),
+    "file": N_("common.file_lower"),
+    "name": N_("common.name_lower"),
+    "languages": N_("ui.languages"),
+    "variable": N_("ui.variable"),
+    "font": N_("common.font"),
+    "color": N_("ui.color"),
+    "box": N_("ui.box"),
+    "html": N_("ui.html"),
+    "character": N_("ui.character"),
+    "depth": N_("ui.depth"),
+    "x": N_("ui.x"),
+    "y": N_("ui.y"),
+    "scale": N_("common.scale"),
+    "class": N_("ui.class"),
+    "block": N_("ui.block"),
+}
 
 
 class EditorWindow(QMainWindow):
+    sync = False  # a test's: the game folder is indexed on the caller's thread
+
     def __init__(self, game: str = "", edits: str | None = None, last_game: bool = True) -> None:
         """``last_game`` False: only ``game`` opens, not the one this window remembers (the suite owns the folders)."""
         super().__init__()
-        self.setWindowTitle(tr("Flash UI editor - Anno 2205"))
+        self.background = Background(self)
+        self._asked = 0  # the folder asked for last: an older index is dropped
+        self.movie_paths: list[str] = []
+        self.setWindowTitle(tr("ui.title.flash_ui_editor_anno_2205"))
         self.resize(1500, 900)
         self.settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "flashui", "flashui")
         self.ui: ui2205.UiFiles | None = None
+        self.fonts: fonts2205.Fonts2205 | None = None  # the install's fonts, read once per opened folder
         self.game: Path | None = None
         self.project = Project(Path(edits)) if edits and not Path(edits).is_file() else Project()
         if edits and Path(edits).is_file():
@@ -81,7 +106,8 @@ class EditorWindow(QMainWindow):
         movies = QWidget()
         lay = QVBoxLayout(movies)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.filter = QLineEdit(placeholderText=tr("filter movies"))
+        self.filter = QLineEdit(placeholderText=tr("ui.filter_movies"))
+        widgets.find_key(self, self.filter)
         self.filter.textChanged.connect(self._fill_movies)
         self.movies = QListWidget()
         self.movies.currentTextChanged.connect(self.open_movie)
@@ -95,7 +121,7 @@ class EditorWindow(QMainWindow):
         left.addWidget(movies)
         left.addWidget(self.tree)
         left.setSizes([250, 650])
-        dock = QDockWidget(tr("Movies and elements"))
+        dock = QDockWidget(tr("ui.movies_elements"))
         dock.setWidget(left)
         self.addDockWidget(Qt.LeftDockWidgetArea, dock)
 
@@ -110,7 +136,7 @@ class EditorWindow(QMainWindow):
 
         self.props = QWidget()
         self.form = QFormLayout(self.props)
-        dock = QDockWidget(tr("Properties"))
+        dock = QDockWidget(tr("common.properties"))
         dock.setWidget(self.props)
         dock.setMinimumWidth(360)
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
@@ -121,19 +147,19 @@ class EditorWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.zoom)
 
     def _build_menu(self) -> None:
-        file = self.menuBar().addMenu(tr("&File"))
+        file = self.menuBar().addMenu(tr("common.menu.file"))
         for label, slot, keys in (
-            (N_("Open game folder..."), self._ask_game, None),
-            (N_("Open edit file..."), self._ask_edits, QKeySequence.Open),
-            (N_("Save edit file"), self.save, QKeySequence.Save),
-            (N_("Save edit file as..."), self.save_as, None),
-            (N_("Export movie for a Flash tool..."), self._export_swf, None),
-            (N_("Replace movie from a Flash tool..."), self._import_swf, None),
-            (N_("Export images..."), lambda: uiexportdialog.export_images(self), None),
-            (N_("Build mod..."), self.build, None),
-            (N_("Choose the build folder..."), self.choose_out, None),
-            (N_("Install into the game"), self.install, None),
-            (N_("Uninstall from the game"), self.uninstall, None),
+            (N_("ui.open_game_folder"), self._ask_game, None),
+            (N_("ui.open_edit_file"), self._ask_edits, QKeySequence.Open),
+            (N_("ui.save_edit_file"), self.save, QKeySequence.Save),
+            (N_("ui.save_edit_file_dots"), self.save_as, None),
+            (N_("ui.export_movie_flash_tool"), self._export_swf, None),
+            (N_("ui.replace_movie_flash_tool"), self._import_swf, None),
+            (N_("ui.export_images_dots"), lambda: uiexportdialog.export_images(self), None),
+            (N_("ui.build_mod"), self.build, None),
+            (N_("ui.choose_build_folder"), self.choose_out, None),
+            (N_("ui.install_game"), self.install, None),
+            (N_("ui.uninstall_game"), self.uninstall, None),
         ):
             act = QAction(tr(label), self)
             if keys is not None:
@@ -144,7 +170,7 @@ class EditorWindow(QMainWindow):
         self._enable_history()
         extra = uiseam.extensions("actions")
         if extra:
-            menu = self.menuBar().addMenu(tr("&Tools"))
+            menu = self.menuBar().addMenu(tr("common.menu.tools"))
             for label, func in extra.values():
                 act = QAction(label, self)
                 act.triggered.connect(lambda _c=False, f=func: f(self))
@@ -153,28 +179,62 @@ class EditorWindow(QMainWindow):
     # Game, movies, tree
 
     def open_game(self, folder: str) -> bool:
+        """Open an Anno 2205 folder: its archives are indexed off the window's thread, the movies listed when that
+        is done; the folder asked for last is the one opened. False when it is no such folder."""
         path = Path(folder)
         if not GAMES["anno2205"].is_install(path):
-            self.statusBar().showMessage(tr("{folder} is not an Anno 2205 folder", folder=folder))
+            self.statusBar().showMessage(tr("ui.not_anno_2205_folder", folder=folder))
             return False
-        self.game, self.ui = path, ui2205.UiFiles(GAMES["anno2205"].tree(path))
-        self.settings.setValue("game", str(path))
-        self._fill_movies()
-        self.statusBar().showMessage(tr("{n} UI movies in {path}", n=len(self.ui.movies()), path=path))
+        self._asked += 1
+        mine = self._asked
+
+        def work() -> tuple[ui2205.UiFiles, list[str]]:
+            ui = ui2205.UiFiles(GAMES["anno2205"].tree(path))
+            return ui, ui.movies()
+
+        self.statusBar().showMessage(tr("ui.reading_folder", path=path))
+        self.background.run(
+            work, lambda found: self._game_read(path, found) if mine == self._asked else None, self.sync
+        )
         return True
+
+    def _game_read(self, path: Path, found) -> None:
+        if isinstance(found, Exception):
+            self.statusBar().showMessage(tr("common.path_not_read_error", path=path, error=found))
+            return
+        self.game, (self.ui, self.movie_paths) = path, found
+        self.settings.setValue("game", str(path))
+        self._close_movie()
+        self._atlas_pictures.clear()  # cut from the atlases of the folder before
+        self.fonts = fonts2205.Fonts2205(self.ui)
+        self._fill_movies()
+        self.statusBar().showMessage(tr("ui.n_ui_movies_path", n=len(self.movie_paths), path=path))
 
     def _fill_movies(self) -> None:
         self.movies.clear()
         if self.ui is not None:
             text = self.filter.text().lower()
-            self.movies.addItems([m for m in self.ui.movies() if text in m])
+            self.movies.addItems([m for m in self.movie_paths if text in m])
 
     def open_movie(self, path: str) -> None:
         if not path or self.ui is None:
             return
         self.statusBar().clearMessage()  # a "pictures not found" of the movie before must not stay
-        self.doc = MovieDoc.from_game(self.ui, path, self.project)
+        try:
+            self.doc = MovieDoc.from_game(self.ui, path, self.project)
+        except (feuread.FeuError, feuedit.EditError, ValueError, OSError) as e:
+            self._close_movie()
+            self.statusBar().showMessage(tr("common.path_not_read_error", path=path, error=e))
+            return
         self._fill_tree()
+        self._enable_history()
+
+    def _close_movie(self) -> None:
+        """No movie is open: its tree, properties and picture go."""
+        self.doc = self.node = None
+        self._fill_tree()
+        self._clear_props()
+        self.preview.clear()
         self._enable_history()
 
     def _fill_tree(self) -> None:
@@ -208,7 +268,7 @@ class EditorWindow(QMainWindow):
         """Right click on an element or the preview: export the selected picture (when it is one)."""
         img = self.doc.picture_ref(self.node) if self.doc is not None else None
         menu = QMenu(self)
-        act = menu.addAction(tr("Export this picture..."))
+        act = menu.addAction(tr("ui.export_picture_dots"))
         act.setEnabled(img is not None)
         if menu.exec(global_pos) is act and img is not None:
             uiexportdialog.export_one(self, img)
@@ -232,12 +292,17 @@ class EditorWindow(QMainWindow):
         if self.doc is None:
             return
         scale = ZOOMS[self.zoom.currentIndex()]
-        image, r = uirender.render(self.doc.movie, self._owner(), scale, self.picture, QColor(30, 30, 30))
+        choose = self.fonts.choose if self.fonts else None
+        image, r = uirender.render(self.doc.movie, self._owner(), scale, self.picture, QColor(30, 30, 30), choose)
         self.preview.setPixmap(QPixmap.fromImage(image))
+        notes = []
         if r.missing:
-            self.statusBar().showMessage(
-                tr("{n} pictures not found, e.g. {name}", n=len(r.missing), name=sorted(r.missing)[0])
-            )
+            notes.append(tr("ui.pictures_not_found_e_g", n=len(r.missing), name=sorted(r.missing)[0]))
+        if r.unsupported:
+            notes.append(tr("ui.preview_cannot_draw", what=", ".join(sorted(r.unsupported))))
+        self.preview.setToolTip("\n".join(notes + (self.fonts.notes() if self.fonts else [])))
+        if notes:
+            self.statusBar().showMessage("; ".join(notes))
 
     def picture(self, img: feuread.ExternalImage) -> QImage | None:
         """The picture of an image tag: the edit file's replacement, the game's file, or cut from its atlas."""
@@ -273,16 +338,16 @@ class EditorWindow(QMainWindow):
         props = self.doc.properties(self.node)
         for key, value in props.items():
             if key not in ("text", "strings"):
-                name = tr(key) if key in PROPERTY_NAMES else key
+                name = tr(PROPERTY_NAMES[key]) if key in PROPERTY_NAMES else key
                 self.form.addRow(name, QLabel(str(value), textInteractionFlags=Qt.TextSelectableByMouse))
         kind = self.node.kind
         if kind == "text":
             self._text_editor(props)
         elif kind == "image":
-            self._button(tr("Replace picture..."), lambda: self._replace_picture(props["game path"]))
+            self._button(tr("ui.replace_picture"), lambda: self._replace_picture(props["game path"]))
         elif kind == "icon":
             self._button(
-                tr("Replace icon..."), lambda: self._replace_icon(props["path"], props["width"], props["height"])
+                tr("ui.replace_icon"), lambda: self._replace_icon(props["path"], props["width"], props["height"])
             )
         elif kind == "font":
             self._font_editor(props)
@@ -299,16 +364,18 @@ class EditorWindow(QMainWindow):
 
     def _text_editor(self, props: dict) -> None:
         box = QPlainTextEdit(props["text"])
-        self.form.addRow(tr("text"), box)
-        self._button(tr("Apply"), lambda: self._edit("text", props["id"], {"text": box.toPlainText()}))
+        self.form.addRow(tr("ui.text"), box)
+        self._button(tr("common.apply"), lambda: self._edit("text", props["id"], {"text": box.toPlainText()}))
 
     def _font_editor(self, props: dict) -> None:
         combo = QComboBox()
         files = sorted(p[len(ui2205.UI) :] for p in self.ui.paths(".ffd"))
         combo.addItems(files)
         combo.setCurrentText(props["file"].lower())
-        self.form.addRow(tr("font file"), combo)
-        self._button(tr("Apply"), lambda: self._edit("font", props["id"], {"file": _font_name(combo.currentText())}))
+        self.form.addRow(tr("ui.font_file"), combo)
+        self._button(
+            tr("common.apply"), lambda: self._edit("font", props["id"], {"file": _font_name(combo.currentText())})
+        )
 
     def _place_editor(self, props: dict) -> None:
         x, y = QDoubleSpinBox(), QDoubleSpinBox()
@@ -316,10 +383,10 @@ class EditorWindow(QMainWindow):
             spin.setRange(-100000, 100000)
             spin.setDecimals(2)
             spin.setValue(value)
-        self.form.addRow(tr("new x (pixels)"), x)
-        self.form.addRow(tr("new y (pixels)"), y)
+        self.form.addRow(tr("ui.new_x_pixels"), x)
+        self.form.addRow(tr("ui.new_y_pixels"), y)
         owner, index = self.node.key
-        self._button(tr("Apply"), lambda: self._edit("move", index, {"sprite": owner, "x": round(x.value() * 20),
+        self._button(tr("common.apply"), lambda: self._edit("move", index, {"sprite": owner, "x": round(x.value() * 20),
                                                                  "y": round(y.value() * 20)}))  # fmt: skip
 
     def _strings_editor(self, props: dict) -> None:
@@ -328,17 +395,17 @@ class EditorWindow(QMainWindow):
         line = QLineEdit()
         listing.currentRowChanged.connect(lambda row: line.setText(props["strings"][row] if row >= 0 else ""))
         self.form.addRow(listing)
-        self.form.addRow(tr("new text"), line)
+        self.form.addRow(tr("ui.new_text"), line)
         block = props["block"]
-        self._button(tr("Apply"), lambda: self._edit("string", listing.currentRow() + 1, {"text": line.text(), "block": block}))  # fmt: skip
+        self._button(tr("common.apply"), lambda: self._edit("string", listing.currentRow() + 1, {"text": line.text(), "block": block}))  # fmt: skip
 
     def _edit(self, op: str, target: int, values: dict) -> None:
         try:
             self.doc.edit(feuedit.Edit(op, target, values))
         except (feuedit.EditError, feuread.FeuError, ValueError) as e:
-            QMessageBox.warning(self, tr("Edit"), str(e))
+            QMessageBox.warning(self, tr("common.edit"), str(e))
             return
-        self.statusBar().showMessage(tr("{op} edited; save the edit file to keep it", op=op))
+        self.statusBar().showMessage(tr("ui.edited_save_edit_file_keep", op=op))
         self._refresh()
 
     def _refresh(self) -> None:
@@ -359,17 +426,15 @@ class EditorWindow(QMainWindow):
             self.tree.setCurrentItem(item)
 
     def _replace_picture(self, game_path: str) -> None:
-        name, _ = QFileDialog.getOpenFileName(self, tr("Picture"), "", tr("PNG pictures (*.png)"))
+        name, _ = QFileDialog.getOpenFileName(self, tr("ui.picture"), "", tr("ui.png_pictures"))
         if name:
             self.project.files[game_path] = name
             self._draw()
-            self.statusBar().showMessage(
-                tr("{path} replaced; the movies naming it get its size in the build", path=game_path)
-            )
+            self.statusBar().showMessage(tr("ui.replaced_movies_naming_get_size", path=game_path))
 
     def _replace_icon(self, name: str, width: int, height: int) -> None:
         file, _ = QFileDialog.getOpenFileName(
-            self, tr("Icon of {width}x{height}", width=width, height=height), "", tr("PNG pictures (*.png)")
+            self, tr("ui.icon_width_x_height", width=width, height=height), "", tr("ui.png_pictures")
         )
         if not file:
             return
@@ -377,9 +442,9 @@ class EditorWindow(QMainWindow):
         if (size.width(), size.height()) != (width, height):
             QMessageBox.warning(
                 self,
-                tr("Icon"),
+                tr("ui.icon"),
                 tr(
-                    "the icon is {width}x{height}, the picture {pw}x{ph}",
+                    "ui.icon_x_picture",
                     width=width,
                     height=height,
                     pw=size.width(),
@@ -393,20 +458,20 @@ class EditorWindow(QMainWindow):
     # Files and the build
 
     def _ask_game(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, tr("Anno 2205 folder"))
+        folder = QFileDialog.getExistingDirectory(self, tr("ui.anno_2205_folder"))
         if folder:
             self.open_game(folder)
 
     def _ask_edits(self) -> None:
         if not self.may_leave():
             return
-        name, _ = QFileDialog.getOpenFileName(self, tr("Edit file"), "", tr("Edit files (*.json)"))
+        name, _ = QFileDialog.getOpenFileName(self, tr("ui.edit_file"), "", tr("ui.edit_files_json"))
         if not name:
             return
         try:
             self.project = Project.load(Path(name))
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, tr("Edit file"), str(e))
+            QMessageBox.warning(self, tr("ui.edit_file"), str(e))
             return
         if self.doc is not None:
             self.open_movie(self.doc.path)
@@ -418,14 +483,14 @@ class EditorWindow(QMainWindow):
         return self._write(None)
 
     def save_as(self) -> bool:
-        name, _ = QFileDialog.getSaveFileName(self, tr("Edit file"), "", tr("Edit files (*.json)"))
+        name, _ = QFileDialog.getSaveFileName(self, tr("ui.edit_file"), "", tr("ui.edit_files_json"))
         return bool(name) and self._write(Path(name))
 
     def _write(self, path: Path | None) -> bool:
         try:
-            self.statusBar().showMessage(tr("saved {path}", path=self.project.save(path)))
+            self.statusBar().showMessage(tr("common.saved_path", path=self.project.save(path)))
         except (OSError, ValueError) as e:
-            QMessageBox.warning(self, tr("Edit file"), tr("could not save: {error}", error=e))
+            QMessageBox.warning(self, tr("ui.edit_file"), tr("islands.could_not_save", error=e))
             return False
         return True
 
@@ -434,12 +499,7 @@ class EditorWindow(QMainWindow):
         cancelled or the save failed."""
         if not self.project.unsaved:
             return True
-        buttons = QMessageBox.StandardButton
-        answer = QMessageBox.question(self, tr("Edit file"), tr("Save the edit file first?"),
-                                      buttons.Save | buttons.Discard | buttons.Cancel)  # fmt: skip
-        if answer == buttons.Save:
-            return self.save()
-        return answer != buttons.Cancel
+        return widgets.ask_keep(self, tr("ui.edit_file"), tr("assets.save_edit_file_first"), self.save)
 
     def closeEvent(self, event) -> None:
         if not self.may_leave():
@@ -450,16 +510,17 @@ class EditorWindow(QMainWindow):
     def _export_swf(self) -> None:
         if self.doc is None:
             return
-        name, _ = QFileDialog.getSaveFileName(self, tr("Movie for a Flash tool"), "", tr("Flash movies (*.swf)"))
+        name, _ = QFileDialog.getSaveFileName(self, tr("ui.movie_flash_tool"), "", tr("ui.flash_movies_swf"))
         if name:
-            Path(name).write_bytes(feuwrite.resign(self.doc.data(), b"FWS"))
+            try:
+                Path(name).write_bytes(feuwrite.resign(self.doc.data(), b"FWS"))
+            except (OSError, ValueError) as e:
+                QMessageBox.warning(self, tr("common.export"), tr("texts.path_not_written_error", path=name, error=e))
 
     def _import_swf(self) -> None:
         if self.doc is None:
             return
-        name, _ = QFileDialog.getOpenFileName(
-            self, tr("Movie saved by a Flash tool"), "", tr("Flash movies (*.swf *.feu)")
-        )
+        name, _ = QFileDialog.getOpenFileName(self, tr("ui.movie_saved_flash_tool"), "", tr("ui.flash_movies_swf_feu"))
         if name:
             self.project.files[self.doc.path] = name
             self.project.edits.pop(self.doc.path, None)  # the edits were made on the movie it replaces
@@ -467,7 +528,7 @@ class EditorWindow(QMainWindow):
 
     def choose_out(self) -> Path | None:
         """Ask for the build folder and keep it (an absolute path); None when the person cancelled."""
-        name = QFileDialog.getExistingDirectory(self, tr("Folder for the build"))
+        name = QFileDialog.getExistingDirectory(self, tr("ui.folder_build"))
         if not name:
             return None
         base = Path(name).resolve()
@@ -491,40 +552,46 @@ class EditorWindow(QMainWindow):
         try:
             files = changes(self.project, self.ui)
             if not files:
-                self.statusBar().showMessage(tr("the edit file changes nothing"))
+                self.statusBar().showMessage(tr("ui.edit_file_changes_nothing"))
                 return None
             ui2205.build(files, ui2205.base_index(self.game, backup), built, self.statusBar().showMessage)
         except (ValueError, RuntimeError, OSError) as e:
-            QMessageBox.warning(self, tr("Build"), str(e))
+            QMessageBox.warning(self, tr("common.build"), str(e))
             return None
         return built
 
+    def _has_game(self) -> bool:
+        """Whether a game folder is open; the status line says so when none is."""
+        if self.game is None:
+            self.statusBar().showMessage(tr("ui.open_game_folder_first"))
+        return self.game is not None
+
     def install(self) -> None:
-        if (out := self._out()) is None:
+        if not self._has_game() or (out := self._out()) is None:
             return
         built, backup = out
         try:
             ui2205.install(built, self.game, backup, self.statusBar().showMessage)
         except (RuntimeError, OSError, TypeError) as e:
-            QMessageBox.warning(self, tr("Install"), str(e))
+            QMessageBox.warning(self, tr("ui.install"), str(e))
 
     def uninstall(self) -> None:
-        if (out := self._out()) is None:
+        if not self._has_game() or (out := self._out()) is None:
             return
         _, backup = out
         try:
             ui2205.uninstall(self.game, backup, self.statusBar().showMessage)
         except (RuntimeError, OSError, TypeError) as e:
-            QMessageBox.warning(self, tr("Uninstall"), str(e))
+            QMessageBox.warning(self, tr("ui.uninstall"), str(e))
 
     def undo(self) -> None:
         if self.doc is not None and (label := self.doc.undo()) is not None:
-            self.statusBar().showMessage(tr("undone: {label}", label=label), 5000)
+            self.statusBar().showMessage(tr("common.undone_label", label=label), 5000)
             self._refresh()
 
     def redo(self) -> None:
         if self.doc is not None and (label := self.doc.redo()) is not None:
-            self.statusBar().showMessage(tr("redone: {label}", label=label), 5000)
+            self.statusBar().showMessage(tr("common.redone_label", label=label), 5000)
             self._refresh()
 
     def _enable_history(self) -> None:

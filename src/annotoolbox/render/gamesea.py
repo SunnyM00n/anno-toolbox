@@ -10,6 +10,7 @@ steps 2 and 3.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 import numpy as np
@@ -93,7 +94,9 @@ def flow_map(raw: bytes) -> np.ndarray:
 def _cells(raw: bytes, ring: tuple) -> np.ndarray:
     """A square map of RGBA bytes (rows along z), x turned over into the view's mirrored axes, its outer ring
     ``ring``: the maps are read clamped, and past the island's square the sea is open [ours]."""
-    n = round((len(raw) // 4) ** 0.5)
+    n = math.isqrt(len(raw) // 4)  # a map cut short: its whole rows
+    if n < 2:  # no room for the ring: open sea
+        return np.full((2, 2, 4), ring, np.uint8)
     cells = np.frombuffer(raw[: n * n * 4], np.uint8).reshape(n, n, 4)[:, ::-1].copy()
     cells[[0, -1], :], cells[:, [0, -1]] = ring, ring
     return cells

@@ -27,7 +27,7 @@ class FieldForm(QTreeWidget):
         super().__init__(parent)
         self.read_only = False
         self.setColumnCount(2)
-        self.setHeaderLabels([tr("field"), tr("value")])
+        self.setHeaderLabels([tr("common.field"), tr("common.value_lower")])
         self.setRootIsDecorated(False)
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.header().setStretchLastSection(True)
@@ -66,9 +66,9 @@ class FieldForm(QTreeWidget):
         if kind == FILE:
             item.setForeground(1, QColor(LINK))
         item.setFlags(flags)
-        tip = tr(row.info.meaning) if row.info.meaning else tr("not described")
+        tip = tr(row.info.meaning) if row.info.meaning else tr("particles.not_described")
         item.setToolTip(0, tip)
-        item.setToolTip(1, tip if kind != FILE else tr("{meaning}; double-click the name: open it in the viewer",
+        item.setToolTip(1, tip if kind != FILE else tr("particles.double_click_name_open_viewer",
                                                        meaning=tip))  # fmt: skip
         return item
 
@@ -78,7 +78,7 @@ class FieldForm(QTreeWidget):
             combo.addItem(f"{value}  {tr(label)}", value)
         at = combo.findData(row.value.strip())
         if at < 0:
-            combo.addItem(tr("{value} (not in the list)", value=row.value), row.value)
+            combo.addItem(tr("objects.value_not_list", value=row.value), row.value)
             at = combo.count() - 1
         combo.setCurrentIndex(at)
         combo.setEnabled(not self.read_only)

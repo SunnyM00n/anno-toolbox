@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 import struct
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,9 +32,6 @@ GLYPH_FONTS = {
     "b4a9f3b2-4918-4c05-8a81-64e68e761066",
 }
 OWN_DESCRIPTOR = "[LocalizedFontAsset] FontDescriptor = ref"  # the font's own entry, not a language exception's
-LABEL_STYLE_FLAG = (
-    "0xc6"  # the decoder reads a label's TextStyle from the hash's last byte (phoenixedit.set_text_style)
-)
 
 
 def references(log: list[str]) -> list[tuple[str, str, str]]:
@@ -43,14 +39,8 @@ def references(log: list[str]) -> list[tuple[str, str, str]]:
     out = []
     for line in log:
         if m := SINGLE.search(line):
-            field, flags, hash_, guid = m.groups()
-            if field == "TextStyle" and flags != LABEL_STYLE_FLAG:  # the shifted form of ``phoenixedit.set_ref``
-                out.append((field, "badform", guid))
-            elif flags == LABEL_STYLE_FLAG:  # hash = the GUID's first four bytes, the GUID is cut four bytes short
-                raw = struct.pack("<I", int(hash_, 16)) + uuid.UUID(guid).bytes_le[:12]
-                out.append((field, "c697c96c", str(uuid.UUID(bytes_le=raw))))
-            else:
-                out.append((field, hash_, guid))
+            field, _flags, hash_, guid = m.groups()
+            out.append((field, hash_, guid))
         elif (m := LISTED.search(line)) and ITEM.search(m.group(2)):
             out += [(m.group(1), h, g) for h, g in ITEM.findall(m.group(2))]
     return out
@@ -95,14 +85,6 @@ def missing_refs(mod: Path, has_base: Callable[[str], bool], schema: dict | None
         seen = set()
         for field, type_hash, guid in refs:
             target = phoenix.GENERATED + guid
-            if type_hash == "badform":
-                found.append(
-                    (
-                        f"{phoenix.GENERATED}{path.name}",
-                        "TextStyle is stored in the wrong form (hash shifted into the GUID)",
-                    )
-                )
-                break
             if type_hash in IN_FILE or guid in seen or (mod / target).is_file() or has_base(target):
                 continue
             seen.add(guid)

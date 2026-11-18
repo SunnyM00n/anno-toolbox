@@ -8,6 +8,7 @@ import struct
 
 import pytest
 from tests.test_bnkgraph import container, sound
+from tests.test_soundedit import sound_window  # noqa: F401
 
 from annotoolbox.formats import bnk, bnkcurves, bnkgraph, bnkmusic
 from annotoolbox.soundedit import curveedits
@@ -231,22 +232,15 @@ def test_the_window_lists_the_curves_of_an_object():
     assert curveedits.curve_refs(doc, 30)[0].points[0].y == 5.0
 
 
-def test_the_panel_parses_points_and_the_window_edits_a_curve_through_it(monkeypatch):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-
+def test_the_panel_parses_points_and_the_window_edits_a_curve_through_it(sound_window):  # noqa: F811
     from annotoolbox.soundedit import curvepanel
-    from annotoolbox.soundedit.soundwindow import SoundWindow
-    from annotoolbox.suite.settings import Settings
 
     assert curvepanel.parse_points("0:1, 2:3:9") == [(0.0, 1.0, 4), (2.0, 3.0, 9)]
     assert curvepanel.points_text([bnkcurves.Point(0.0, 1.5, 4), bnkcurves.Point(2.0, 3.0, 9)]) == "0:1.5:4, 2:3:9"
     for bad in ("1", "1:2:3:4", "a:b"):
         with pytest.raises(ValueError):
             curvepanel.parse_points(bad)
-    QApplication.instance() or QApplication([])
-    window = SoundWindow(Settings())
+    window = sound_window
     window.doc = make(NEW)
     window._fill_outline()
     window._select(30)

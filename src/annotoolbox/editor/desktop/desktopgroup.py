@@ -14,32 +14,38 @@ from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QGridLayout, QInputDialog, QLabel
 
 from ...infra.i18n import N_, tr
+from ...suite.widgets import access_keys
 from .. import brushes, footprints, snapping
 from ..editlayers import EditLayers
 from ..editsession import EditSession, Entry
 from ..selection import Selection, copy, paste
 
 SNAP_LABELS = {
-    "off": N_("Off"),
-    "tile": N_("Tile centres"),
-    "corner": N_("Tile corners"),
-    "half": N_("Half tiles"),
-    "quarter": N_("Quarter tiles"),
-    "diagonal": N_("Diagonal lattice (turned buildings)"),
-    "building": N_("Building grid (its footprint)"),
-    "cell": N_("8-tile cells"),
+    "off": N_("islands.off"),
+    "tile": N_("islands.tile_centres"),
+    "corner": N_("islands.tile_corners"),
+    "half": N_("islands.half_tiles"),
+    "quarter": N_("islands.quarter_tiles"),
+    "diagonal": N_("islands.diagonal_lattice_turned_buildings"),
+    "building": N_("islands.building_grid_footprint"),
+    "cell": N_("islands.8_tile_cells"),
 }
-TURN_LABELS = {"off": N_("Free"), "eighth": N_("Eighths (45°)"), "15": N_("15°"), "quarter": N_("Quarters (90°)")}
+TURN_LABELS = {
+    "off": N_("islands.free"),
+    "eighth": N_("islands.eighths_45_deg"),
+    "15": N_("islands.15_deg"),
+    "quarter": N_("islands.quarters_90_deg"),
+}
 
 
 def curve_labels() -> dict[str, str]:
     """``brushes.CURVES`` as the menu says them (the status line says them in lower case)."""
     return {
-        "smooth": tr("Smooth", context="falloff"),
-        "linear": tr("Linear"),
-        "sharp": tr("Sharp"),
-        "sphere": tr("Spherical"),
-        "constant": tr("Constant"),
+        "smooth": tr("islands.falloff.smooth"),
+        "linear": tr("islands.linear"),
+        "sharp": tr("islands.sharp"),
+        "sphere": tr("islands.spherical"),
+        "constant": tr("islands.constant"),
     }
 
 
@@ -64,7 +70,7 @@ class GroupTools:
         if self.selection is None:
             return
         if e is not None and self.layers.locked(e):
-            self.view.status.emit(tr("on the locked layer {name}", name=self.layers.layer_of(e)))
+            self.view.status.emit(tr("islands.locked_layer_name", name=self.layers.layer_of(e)))
             return
         if shift and e is not None:
             self.selection.toggle(e)
@@ -192,36 +198,38 @@ def edit_menu(main, menu) -> None:
 
     menu.addSeparator()
     for label, keys, job, saying in (
-        (tr("Copy"), QKeySequence.StandardKey.Copy, GroupTools.copy, lambda n: tr("{n} copied", n=n)),
-        (tr("Paste"), QKeySequence.StandardKey.Paste, GroupTools.paste, lambda n: tr("{n} pasted", n=n)),
+        (tr("islands.copy"), QKeySequence.StandardKey.Copy, GroupTools.copy, lambda n: tr("islands.n_copied", n=n)),
+        (tr("islands.paste"), QKeySequence.StandardKey.Paste, GroupTools.paste, lambda n: tr("islands.n_pasted", n=n)),
         (
-            tr("Select the same model"),
+            tr("islands.select_same_model"),
             QKeySequence("Ctrl+Shift+A"),
             GroupTools.same_model,
-            lambda n: tr("{n} selected", n=n),
+            lambda n: tr("islands.n_selected", n=n),
         ),
     ):
         act = menu.addAction(label, lambda job=job, saying=saying: run(job, saying))
         act.setShortcut(keys)
     _choice_menu(
-        menu.addMenu(tr("Snap places")),
+        menu.addMenu(tr("islands.menu.snap_places")),
         {k: tr(v) for k, v in SNAP_LABELS.items()},
         lambda k: _set_snap(group(), "mode", k),
         "off",
     )
     _choice_menu(
-        menu.addMenu(tr("Snap turns")),
+        menu.addMenu(tr("islands.menu.snap_turns")),
         {k: tr(v) for k, v in TURN_LABELS.items()},
         lambda k: _set_snap(group(), "turn", k),
         "off",
     )
-    ground = menu.addAction(tr("Snap onto the ground"))
+    ground = menu.addAction(tr("islands.snap_onto_ground"))
     ground.setCheckable(True)
     ground.toggled.connect(lambda on: _set_snap(group(), "ground", on))
-    _choice_menu(menu.addMenu(tr("Brush falloff")), curve_labels(), lambda c: _set_falloff(main, c), brushes.DEFAULT)
+    _choice_menu(
+        menu.addMenu(tr("islands.menu.brush_falloff")), curve_labels(), lambda c: _set_falloff(main, c), brushes.DEFAULT
+    )
     menu.addSeparator()
-    menu.addAction(tr("Selection to a layer…"), lambda: _to_layer(main, group()))
-    menu.addAction(tr("Layers…"), lambda: _layers_dialog(main, group()))
+    menu.addAction(tr("islands.selection_to_layer"), lambda: _to_layer(main, group()))
+    menu.addAction(tr("islands.layers_dots"), lambda: _layers_dialog(main, group()))
 
 
 def _choice_menu(menu, labels: dict, pick, current: str) -> None:
@@ -241,20 +249,22 @@ def _set_snap(g: GroupTools | None, field: str, value) -> None:
 def _set_falloff(main, curve: str) -> None:
     if main.doc is not None:
         main.doc.session.falloff = curve
-        main.say(tr("brush falloff: {curve}", curve=curve_labels().get(curve, curve).lower()))
+        main.say(tr("islands.brush_falloff_curve", curve=curve_labels().get(curve, curve).lower()))
 
 
 def _to_layer(main, g: GroupTools | None) -> None:
     if g is None or not g.selection.entries:
-        main.say(tr("select something first"))
+        main.say(tr("islands.select_something_first"))
         return
     names = g.layers.names()
-    first = [tr("layer 1")]  # the name a new layer gets, kept in the edit file as typed
-    name, ok = QInputDialog.getItem(main, tr("Layer"), tr("Layer (a new name makes one):"), names or first, 0, True)
+    first = [tr("islands.layer_1")]  # the name a new layer gets, kept in the edit file as typed
+    name, ok = QInputDialog.getItem(
+        main, tr("islands.layer"), tr("islands.layer_new_name_makes_one"), names or first, 0, True
+    )
     if ok and name:
         g.layers.assign(g.selection.entries, name)
         g.apply_layers()
-        main.say(tr("{n} on the layer {name}", n=len(g.selection.entries), name=name))
+        main.say(tr("islands.n_layer_name", n=len(g.selection.entries), name=name))
 
 
 def _layers_dialog(main, g: GroupTools | None) -> None:
@@ -262,11 +272,11 @@ def _layers_dialog(main, g: GroupTools | None) -> None:
     if g is None:
         return
     dlg = QDialog(main)
-    dlg.setWindowTitle(tr("Layers"))
+    dlg.setWindowTitle(tr("islands.layers"))
     grid = QGridLayout(dlg)
-    grid.addWidget(QLabel(tr("<b>Layer</b>")), 0, 0)
-    grid.addWidget(QLabel(tr("<b>Hidden</b>")), 0, 1)
-    grid.addWidget(QLabel(tr("<b>Locked</b>")), 0, 2)
+    grid.addWidget(QLabel(tr("islands.layer_heading")), 0, 0)
+    grid.addWidget(QLabel(tr("islands.hidden")), 0, 1)
+    grid.addWidget(QLabel(tr("islands.locked")), 0, 2)
     for row, name in enumerate(g.layers.names(), 1):
         grid.addWidget(QLabel(f"{name} ({len(g.layers.members(name))})"), row, 0)
         for col, flag in ((1, "hidden"), (2, "locked")):
@@ -275,9 +285,9 @@ def _layers_dialog(main, g: GroupTools | None) -> None:
             box.toggled.connect(lambda on, name=name, flag=flag: (g.layers.set_flag(name, flag, on), g.apply_layers()))
             grid.addWidget(box, row, col)
     if not g.layers.names():
-        grid.addWidget(QLabel(tr("no layers yet: Edit > Selection to a layer…")), 1, 0, 1, 3)
+        grid.addWidget(QLabel(tr("islands.no_layers_yet_edit_gt")), 1, 0, 1, 3)
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-    buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("Close"))
+    buttons.button(QDialogButtonBox.StandardButton.Close).setText(access_keys([tr("common.close")])[0])
     buttons.rejected.connect(dlg.reject)
     grid.addWidget(buttons, grid.rowCount(), 0, 1, 3)
     dlg.exec()

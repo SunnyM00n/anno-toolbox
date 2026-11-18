@@ -25,7 +25,7 @@ from ..modloader import modswap
 from ..othergames import installs, isd1701
 from ..render.nativelook import apply_hardware
 from ..suite import extspecs, features, linkannounce, project
-from ..suite.settings import SETTINGS_FILE, Settings, appdata, is_2070
+from ..suite.settings import Settings, is_2070, settings_file
 from . import archivedelivery, blankisland, islandeditor, oldenginebuild
 from .formats.a7m import edit117 as a7m_edit117
 from .formats.a7m import edit1800 as a7m_edit1800
@@ -72,31 +72,59 @@ def edit_file2070(source: str) -> str:
     return f"{isd_edit.EDIT_PREFIX}{slug}.json"
 
 
+class JobStopped(Exception):
+    """The person stopped the job: ``Job.log`` raises it on the job's thread."""
+
+
 class Job:
-    """One background task (a build, an install) with its log."""
+    """One background task (a build, an install) with its log. ``stop()`` ends it at its next ``log`` line, as a
+    failure of that step would (what a step wrote is swapped in whole or not at all); a step that must run whole
+    (an install, a restore) reports through ``note``."""
 
     def __init__(self, name: str, work) -> None:
         self.name = name
         self.lines: list[str] = []
         self.state = "running"
         self.result = None
+        self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, args=(work,), daemon=True)
         self._thread.start()
 
     def log(self, line: str) -> None:
+        """A line of the log, and the place where a stopped job ends."""
+        if self._stop.is_set():
+            raise JobStopped
         self.lines.append(str(line))
+
+    def note(self, line: str) -> None:
+        """A line of the log from a step a stop must not cut short."""
+        self.lines.append(str(line))
+
+    def stop(self) -> None:
+        """Ask the job to end at its next log line (state ``stopped``); nothing happens to one that has ended."""
+        self._stop.set()
 
     def _run(self, work) -> None:
         try:
             self.result = work(self)
             self.state = "done"
+        except JobStopped:
+            self.note(tr("islands.job_stopped", name=self.name))
+            self.state = "stopped"
         except (Exception, SystemExit) as exc:  # the window shows what went wrong; the app stays up
             self.lines += traceback.format_exc().splitlines()
-            self.log(tr("failed: {error}", error=exc))
+            self.note(tr("islands.failed_error", error=exc))
             self.state = "failed"
 
     def status(self, since: int = 0) -> dict:
-        return {"name": self.name, "state": self.state, "lines": self.lines[since:], "next": len(self.lines)}
+        """The job's state and its log from line ``since``; ``next`` is the line to ask from the next time."""
+        state, lines = self.state, self.lines[since:]  # the state first: a job that ended has logged its last line
+        return {"name": self.name, "state": state, "lines": lines, "next": since + len(lines)}
+
+    def wait(self, timeout: float | None = None) -> bool:
+        """Wait up to ``timeout`` seconds (None: until it ends) for the job's thread; whether it has ended."""
+        self._thread.join(timeout)
+        return not self._thread.is_alive()
 
 
 class App(IslandCatalogue):
@@ -115,7 +143,7 @@ class App(IslandCatalogue):
         if unknown:
             raise ValueError(f"unknown games {unknown}: {', '.join(installs.GAMES)}")
         self.games = tuple(games) if games else None
-        self.settings_path = settings_path or appdata() / SETTINGS_FILE
+        self.settings_path = settings_path or settings_file()
         self.settings = settings or Settings.load(self.settings_path)
         apply_hardware(self.settings.hardware)  # "Hardware acceleration": read when a window makes its 3D device
         self.editor: islandeditor.IslandEditor | None = None
@@ -217,7 +245,7 @@ class App(IslandCatalogue):
         another game's (its key). A 2070 island to build, or a new one, is built first (``build``).
         Returns what is open (``island``)."""
         if not self.wants(kind) and kind in (*installs.GAMES, "anno117", "anno2070", "built"):
-            raise ValueError(tr("this application only opens {games} islands", games=", ".join(self.games or ())))
+            raise ValueError(tr("islands.application_only_opens_islands", games=", ".join(self.games or ())))
         if kind == "anno2070":
             return self._open2070(name)
         if kind in installs.GAMES and kind not in NATIVE:
@@ -233,7 +261,7 @@ class App(IslandCatalogue):
         if kind == "anno117":  # Anno 117 editing: edited in place, saved by build117
             edits = self.edits_dir / a7m_edit117.edit_name(name)
             return self._open117(self.files(), name, edits, kind, name, buildable=True, meta={"source": name})
-        raise ValueError(tr("cannot open a {kind} island; build it first", kind=repr(kind)))
+        raise ValueError(tr("islands.cannot_open_island_build_first", kind=repr(kind)))
 
     def open_path(self, island: str, mod: Path | None = None, edits: Path | None = None) -> dict:
         """An island file by its game path, in a mod folder (one ``scripts/island_test.py`` built, say) or the
@@ -273,7 +301,7 @@ class App(IslandCatalogue):
         tree = isd_blank.with_new_islands(self.tree2070(), self.edits_dir, isd_edit.EDIT_PREFIX)
         source = name if name.endswith(".isd") else self.islands2070()[0].get(name, f"{ISLANDS_2070}{name}.isd")
         if not tree.exists(source):
-            raise FileNotFoundError(tr("no 2070 island {source}", source=source))
+            raise FileNotFoundError(tr("islands.no_2070_island", source=source))
         edits = self.edits_dir / edit_file2070(source)
         self.editor = isd_edit.Island2070Editor(tree, source, self.cache_dir, edits)
         self.island = {
@@ -298,10 +326,10 @@ class App(IslandCatalogue):
         native file stays untouched; ``BUILDABLE`` says whose edits a build reads)."""
         game = installs.GAMES[key]
         if game.editor is None:
-            raise ValueError(tr("{game}: no editor reads its islands yet", game=game.name))
+            raise ValueError(tr("islands.no_editor_reads_islands_yet", game=game.name))
         tree = self.game_tree(key)
         if not tree.exists(path):
-            raise FileNotFoundError(tr("no {game} island {path}", game=game.name, path=path))
+            raise FileNotFoundError(tr("islands.no_game_island_path", game=game.name, path=path))
         edits = self.edits_dir / f"{installs.GAMES[key].edit_prefix}{Path(path).stem}.json"
         self.editor = viewer_class(game.editor)(game, tree, path, self.cache_dir / key, edits)
         if key == "anno1800":
@@ -329,7 +357,7 @@ class App(IslandCatalogue):
         also reshaped into a plateau island (``blankisland``) when the edit file holds no heights yet - after that the
         ground is the mapper's own. 2205 has no such island: its sessions are whole maps (island-editor "New islands")."""
         if key not in BLANKABLE:
-            raise ValueError(tr("{game}: no blank islands", game=installs.GAMES[key].name))
+            raise ValueError(tr("islands.no_blank_islands", game=installs.GAMES[key].name))
         edits = self.edits_dir / f"{installs.GAMES[key].edit_prefix}{Path(path).stem}.json"
         islandedits.save(edits, {**islandedits.load(edits), "source": path, "game": key, "clear": True})
         info = self._open_other(key, path)
@@ -367,7 +395,7 @@ class App(IslandCatalogue):
     # jobs
     def _start(self, name: str, work) -> Job:
         if self.job and self.job.state == "running":
-            raise RuntimeError(tr("{name} is still running", name=self.job.name))
+            raise RuntimeError(tr("islands.name_still_running", name=self.job.name))
         self.job = Job(name, work)
         return self.job
 
@@ -377,18 +405,18 @@ class App(IslandCatalogue):
             note = (
                 ""
                 if features.extensions(features.BUILDERS)
-                else tr(" (building islands is {state})", state=tr(features.NOT_IN_EDITION))
+                else tr("islands.building_islands_state", state=tr(features.NOT_IN_EDITION))
             )
             raise ValueError(
                 tr(
-                    "no island build from {source} to {target} yet{note}",
+                    "islands.no_island_build_yet",
                     source=source_game,
                     target=target_game,
                     note=note,
                 )
             )
         if source_game == "anno2070" and (reason := self.unconvertible(island)):
-            raise ValueError(tr("{island} cannot be built: {reason}", island=island, reason=reason))
+            raise ValueError(tr("islands.island_cannot_built_reason", island=island, reason=reason))
         return self.build(Path(island).stem.lower() if island.endswith(".isd") else island, install=False)
 
     def unconvertible(self, island: str) -> str | None:
@@ -411,7 +439,7 @@ class App(IslandCatalogue):
 
         builder = builder_for("anno2070", "anno117")
         if builder is None:
-            raise RuntimeError(tr("building 2070 islands is {state}", state=tr(features.NOT_IN_EDITION)))
+            raise RuntimeError(tr("islands.building_2070_islands", state=tr(features.NOT_IN_EDITION)))
 
         def work(job: Job):
             builder.run(
@@ -426,12 +454,12 @@ class App(IslandCatalogue):
                     log=job.log,
                 )
             )
-            job.log(tr("built {island} into {folder}", island=island, folder=self.mod_dir))
+            job.log(tr("islands.built_island_into_folder", island=island, folder=self.mod_dir))
             if install:
                 self._install(job)
             return island
 
-        return self._start(tr("build {island}", island=island), work)
+        return self._start(tr("islands.build_island", island=island), work)
 
     def build117(self, install: bool = False) -> Job:
         """Anno 117 editing: write every edited 117 island into its mod (``formats.a7m.edit117``), then install it."""
@@ -444,12 +472,12 @@ class App(IslandCatalogue):
             written = a7m_edit117.build(
                 files, self.edits_dir, out, MOD_ID_117, MOD_NAME_117, job.log, others=others, trash=self.trash
             )
-            job.log(tr("{n} islands into {folder}", n=len(written), folder=out))
+            job.log(tr("islands.n_islands_into_folder", n=len(written), folder=out))
             if install:
                 self._copy_mod(job, out, MOD_ID_117)
             return written
 
-        return self._start(tr("build 117 islands"), work)
+        return self._start(tr("islands.build_117_islands"), work)
 
     def material_games(self, key: str) -> dict:
         """The other games of ``key``'s engine generation whose installs are set, as their files (``othermaterials``
@@ -472,47 +500,45 @@ class App(IslandCatalogue):
         if key == "anno117":
             return GameSide(key, Files(self.game117()), self.cache_dir, root)
         if not installs.GAMES[key].is_install(root):
-            raise RuntimeError(
-                tr("{game} not found: set its folder (Games and folders)", game=installs.GAMES[key].name)
-            )
+            raise RuntimeError(tr("islands.not_found_set_folder_games", game=installs.GAMES[key].name))
         return GameSide(key, self.game_tree(key), self.cache_dir, root)
 
-    def convert_region(self, key: str, path: str, target: str, install: bool = False) -> Job:
+    def convert_region(self, key: str, path: str, target: str, install: bool = False, fit: str = "") -> Job:
         """An island of ``key`` made into an island of the region ``target`` (``islandconvert``), written as a new island
-        into the workspace's port mod of the target game; with ``install``, copied into that game's mods folder."""
+        into the workspace's port mod of the target game; with ``install``, copied into that game's mods folder.
+        ``fit``: how the game places it (``islandconvert.Request.fit``)."""
         from . import islandconvert
 
         game = target.split(":", 1)[0]
         mods = Path(self.settings.mods if game == "anno117" else self.settings.mods1800 or ".")
         if install and not mods.is_absolute():
-            raise RuntimeError(
-                tr("set the target game's mods folder (Games and folders) to an absolute path to install")
-            )
+            raise RuntimeError(tr("islands.set_target_games_mods_folder"))
         out = self.workspace / PORT_MODS[game]
 
         def work(job: Job):
             # the games' indexes are opened here, in the job: reading an install is seconds of work
-            job.log(tr("opening {game}", game=key))
+            job.log(tr("islands.opening_game", game=key))
             src = self.port_side(key)
             dst = src if game == key else self.port_side(game)
-            done = islandconvert.convert(src, dst, islandconvert.Request(key, path, target), log=job.log)
+            request = islandconvert.Request(key, path, target, fit=fit)
+            done = islandconvert.convert(src, dst, request, log=job.log)
             job.log(islandconvert.summary(done))
             written = islandconvert.write_mod(out, PORT_MODS[game], PORT_MODS[game], game, [done], self.trash)
-            job.log(tr("{n} islands into {folder}", n=len(written), folder=out))
+            job.log(tr("islands.n_islands_into_folder", n=len(written), folder=out))
             if install:
                 self._copy_mod(job, out, PORT_MODS[game], mods)
             return written
 
-        return self._start(tr("port {island}", island=Path(path).stem), work)
+        return self._start(tr("islands.port_island", island=Path(path).stem), work)
 
     def build1800(self, install: bool = False) -> Job:
         """Anno 1800 editing: write every edited 1800 island into a mod that replaces it (``formats.a7m.edit1800``) in the
         workspace; with ``install``, copy the mod into 1800's mods folder (the setting ``mods1800``)."""
         mods = Path(self.settings.mods1800) if self.settings.mods1800.strip() else None
         if install and (mods is None or not mods.is_absolute()):
-            raise RuntimeError(tr("set Anno 1800's mods folder (Games and folders) to an absolute path to install"))
+            raise RuntimeError(tr("islands.set_anno_1800s_mods_folder"))
         if not installs.GAMES["anno1800"].is_install(Path(self.settings.anno1800)):
-            raise RuntimeError(tr("Anno 1800 not found: set its folder (Games and folders)"))
+            raise RuntimeError(tr("islands.anno_1800_not_found_set"))
         out = self.workspace / MOD_ID_1800
 
         def work(job: Job):
@@ -526,13 +552,14 @@ class App(IslandCatalogue):
                 MOD_NAME_1800,
                 job.log,
                 self.material_games("anno1800"),
+                trash=self.trash,
             )
-            job.log(tr("{n} islands into {folder}", n=len(written), folder=out))
+            job.log(tr("islands.n_islands_into_folder", n=len(written), folder=out))
             if install:
                 self._copy_mod(job, out, MOD_ID_1800, mods)
             return written
 
-        return self._start(tr("build 1800 islands"), work)
+        return self._start(tr("islands.build_1800_islands"), work)
 
     def build_archives(self, key: str, install: bool = False) -> Job:
         """Every edited island (2205: session) of a game that loads archives into the archives it loads
@@ -551,17 +578,18 @@ class App(IslandCatalogue):
             if out.exists():
                 shutil.rmtree(out)  # the build's own folder: its name is the record's
             if not (written and archives):
-                job.log(tr("no edit changes a {what}: nothing written", what=d.what_one))
+                job.log(tr("islands.no_edit_changes_nothing_written", what=d.what_one))
                 return []
             for rel, data in archives.items():
                 (out / rel).parent.mkdir(parents=True, exist_ok=True)
                 (out / rel).write_bytes(data)
-            job.log(tr("{n} {what} into {folder}", n=len(written), what=tr(d.what), folder=out))
+            job.log(tr("islands.n_what_into_folder", n=len(written), what=tr(d.what), folder=out))
             if install:
-                job.log(d.install(out, self.settings, job.log))
+                job.log("")  # the last place to stop: the install into the game runs whole
+                job.note(d.install(out, self.settings, job.note))
             return written
 
-        return self._start(tr("build {game} {what}", game=key.removeprefix("anno"), what=tr(d.what)), work)
+        return self._start(tr("islands.build_game_what", game=key.removeprefix("anno"), what=tr(d.what)), work)
 
     def installed(self, key: str) -> bool:
         """Whether an archive of the editor's lies in the game (a restore is then offered)."""
@@ -572,12 +600,12 @@ class App(IslandCatalogue):
         """Give a game its own files back and remove the editor's archives (``IslandDelivery.restore``)."""
         d = archivedelivery.ISLAND_DELIVERIES[key]
         return self._start(
-            tr("restore {game}", game=key.removeprefix("anno")), lambda job: d.restore(self.settings, job.log)
+            tr("islands.restore_game", game=key.removeprefix("anno")), lambda job: d.restore(self.settings, job.note)
         )
 
     def install(self) -> Job:
         self.need(mods=True)
-        return self._start(tr("install"), self._install)
+        return self._start(tr("islands.install"), self._install)
 
     def _install(self, job: Job) -> str:
         return self._copy_mod(job, self.mod_dir, MOD_ID)
@@ -587,17 +615,15 @@ class App(IslandCatalogue):
         (``modswap.place_folder``): a copy that fails leaves the installed mod as it was, the old copy goes to
         ``trash``, and a folder that holds anything but this mod is never replaced."""
         if not (source / "modinfo.json").is_file():
-            raise RuntimeError(tr("nothing built yet"))
+            raise RuntimeError(tr("islands.nothing_built_yet"))
         target = (mods or Path(self.settings.mods)) / modswap.check_folder_name(mod_id)
         if not target.is_absolute() or target.name != mod_id:
-            raise RuntimeError(
-                tr("refusing to replace {target}: set the mods folder to an absolute path", target=target)
-            )
+            raise RuntimeError(tr("islands.refusing_replace_set_mods_folder", target=target))
         modswap.check_holds(target, mod_id)
         before = linkannounce.snapshot(target)
         ignore = shutil.ignore_patterns("*_base", "*.water.json", "tmp.a7m")
         for note in modswap.place_folder(source, target, self.trash, ignore=ignore):
-            job.log(note)
-        job.log(tr("installed into {target} - start a new game to see changed assets", target=target))
-        job.log(linkannounce.announce_install(mod_id, target, before).text)
+            job.note(note)  # the mod is in: the game is told of it whatever the person asks now
+        job.note(tr("islands.installed_start_new_game_see", target=target))
+        job.note(linkannounce.announce_install(mod_id, target, before).text)
         return str(target)

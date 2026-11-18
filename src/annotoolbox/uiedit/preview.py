@@ -13,6 +13,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from ..infra.i18n import tr
 from ..suite import theme
 from . import canvas, effects, pickers, worldscene
 from .layout import Box, Frame, apply, invert
@@ -40,10 +41,11 @@ class Preview(QWidget):
         self.zoom, self.offset, self.fit = 0.5, QPointF(20, 20), True
         self.current: int | None = None
         self.outlines = True
-        self.overlay: list[tuple[tuple[float, float, float, float], tuple[int, int, int]]] = []  # a game dump's boxes
+        self.overlay: list[tuple[tuple[float, float, float, float], tuple[int, int, int]]] = []  # boxes of a comparison
         self._drag: tuple[str, QPointF] | None = None
         self._pan: QPointF | None = None
         self._delta = QPointF()
+        self.play = None  # Play mode (``playmode.PlayController``): it takes the pointer and the keys while it is on
         self.play_effects = True  # View > Play the effects over time; off shows time zero
         self.effect_seconds = 0.0  # what the moving effects (a scroll, a blink) are drawn at
         self._moving = False
@@ -113,7 +115,7 @@ class Preview(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(theme.canvas()["bg"]))
         if self.frame is None:
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Open a scene or a widget file on the left.")
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, tr("ui.open_scene_widget_file_left"))
             return
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -144,6 +146,11 @@ class Preview(QWidget):
         p.setPen(QPen(QColor(90, 90, 100), 0))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(QRectF(0, 0, w, h))
+        if self.play is not None:
+            self.play.paint(p)  # the keyboard's widget and the info tip
+
+    def _playing(self) -> bool:
+        return self.play is not None and self.play.active
 
     def _shown_size(self, box: Box) -> tuple[float, float]:
         w, h = box.size
@@ -159,7 +166,7 @@ class Preview(QWidget):
         if self.frame is None:
             return None
         for node_id, box in reversed(list(self.frame.boxes.items())):
-            if not box.visible or box.size[0] <= 0 or box.size[1] <= 0:
+            if not box.visible or box.mask or box.size[0] <= 0 or box.size[1] <= 0:  # masks take no input
                 continue
             x, y = apply(invert(box.matrix), p.x(), p.y())
             if 0 <= x <= box.size[0] and 0 <= y <= box.size[1]:
@@ -188,6 +195,9 @@ class Preview(QWidget):
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        if self._playing():  # Play mode: a press of the widget, no selection and no edit
+            self.play.mouse("press", self.to_ref(pos), pos)
+            return
         if self._on_handle(pos):
             self._drag, self._delta = ("size", self.to_ref(pos)), QPointF()
             return
@@ -206,13 +216,20 @@ class Preview(QWidget):
             self._pan, self.fit = pos, False
             self.update()
             return
+        if self._playing():
+            self.play.mouse("move", self.to_ref(pos), pos)
+            return
         if self._drag is not None:
             self._delta = self.to_ref(pos) - self._drag[1]
             self.update()
 
-    def mouseReleaseEvent(self, _event) -> None:
+    def mouseReleaseEvent(self, event) -> None:
         if self._pan is not None:
             self._pan = None
+            return
+        if self._playing():
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.play.mouse("release", self.to_ref(event.position()), event.position())
             return
         drag, self._drag = self._drag, None
         if drag is None or self.current is None or self.frame is None:
@@ -233,7 +250,7 @@ class Preview(QWidget):
         self._delta = QPointF()
 
     def dragEnterEvent(self, event) -> None:
-        if pickers.read_mime(event.mimeData()) is not None:
+        if pickers.read_mime(event.mimeData()) is not None and not self._playing():  # Play mode edits nothing
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:
@@ -248,6 +265,9 @@ class Preview(QWidget):
             event.acceptProposedAction()
 
     def wheelEvent(self, event) -> None:
+        if self._playing() and not event.modifiers() & Qt.KeyboardModifier.ControlModifier:  # Ctrl zooms in Play mode
+            self.play.wheel(self.to_ref(event.position()), -1 if event.angleDelta().y() > 0 else 1)
+            return
         before = self.to_ref(event.position())
         self.zoom = max(0.05, min(8.0, self.zoom * (1.15 if event.angleDelta().y() > 0 else 1 / 1.15)))
         after = self.to_ref(event.position())
@@ -259,3 +279,19 @@ class Preview(QWidget):
         if self.fit:
             self.fit_view()
         super().resizeEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._playing():
+            self.play.leave()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if self._playing() and self.play.key(event):  # Enter or Space presses the focused widget
+            return
+        super().keyPressEvent(event)
+
+    def focusNextPrevChild(self, forward: bool) -> bool:
+        if self._playing():  # Tab walks the scene's widgets
+            self.play.move_focus(1 if forward else -1)
+            return True
+        return super().focusNextPrevChild(forward)

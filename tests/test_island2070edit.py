@@ -200,6 +200,7 @@ def test_heights_change_the_chunks_and_the_logic_grid():
 def test_paint_raises_its_layer_and_lowers_those_above():
     isl = isd_edit.Island2070(isd_bytes())
     stroke = {"material": 78, "radius": 3, "strength": 1, "points": [[24, 24]]}  # beach where only chunk 0 has it
+    assert isl.apply_paint([{**stroke, "material": "beach"}]) == 0  # a hand-edited file: left out, not a failed build
     assert isl.apply_paint([stroke]) == 1
     out = isd2070.Island(isl.write())
     chunks = list(out.texture_chunks())

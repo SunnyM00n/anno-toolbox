@@ -30,6 +30,12 @@ def register(sub: argparse._SubParsersAction) -> None:
     c.add_argument("--mod-id", default="island-port", help="the mod's id and folder name")
     c.add_argument("--name", default="", help="the new island's name (one island only)")
     c.add_argument("--pool-region", default="", help="the pool region it is registered in (default the target's)")
+    c.add_argument(
+        "--fit",
+        choices=["map"],
+        default="",
+        help="map: no pool asset, the island takes its donor's fixed places on the game's maps (a size the pool lacks)",
+    )
     c.add_argument("--src", type=Path, help="the source game's install (default ANNO117_DIR, ANNO1800_DIR, ...)")
     c.add_argument("--dst", type=Path, help="the target game's install, for a port to the other game")
     c.add_argument("--cache", type=Path, help="where the install index and the regions' inventories are kept")
@@ -47,7 +53,7 @@ def open_game(key: str, folder: Path | None, cache: Path | None):
     var = env_var(key)
     root = folder or (Path(os.environ[var]) if os.environ.get(var) else None)
     if root is None or not root.is_dir():
-        raise ValueError(tr("no {game} install: pass it, or set {var}", game=key, var=var))
+        raise ValueError(tr("islands.no_install_pass_set", game=key, var=var))
     tree = GAMES[key].index(root, cache / "index" if cache else None)
     if key == "anno117":
         from ..islands.islandview import Files
@@ -64,18 +70,18 @@ def cmd_convert(args) -> int:
     check_holds(args.out.resolve() / mod_id, mod_id)  # before the port's work: never another mod's or a game's folder
     games = islandconvert.source_games()
     if args.game not in games:
-        raise ValueError(
-            tr("no port from {game}; this edition ports from {games}", game=args.game, games=", ".join(games))
-        )
+        raise ValueError(tr("islands.no_port_edition_ports", game=args.game, games=", ".join(games)))
     if not any(r.id == args.to for r in regions.REGIONS):
-        raise ValueError(tr("unknown region {region}: island regions <game> lists them", region=args.to))
+        raise ValueError(tr("islands.unknown_region_island_regions_lists", region=args.to))
     if args.name and len(args.islands) > 1:
-        raise ValueError(tr("--name names one island; {count} given", count=len(args.islands)))
+        raise ValueError(tr("islands.name_names_one_island_given", count=len(args.islands)))
     target = regions.region(args.to)
     src = open_game(args.game, args.src, args.cache)
     dst = src if target.game == args.game else open_game(target.game, args.dst, args.cache)
     requests = [
-        islandconvert.Request(args.game, path.replace("\\", "/").lower(), args.to, args.name, args.pool_region)
+        islandconvert.Request(
+            args.game, path.replace("\\", "/").lower(), args.to, args.name, args.pool_region, args.fit
+        )
         for path in dict.fromkeys(args.islands)
     ]
     done = islandconvert.convert_all(src, dst, requests, log=print)
@@ -83,7 +89,7 @@ def cmd_convert(args) -> int:
         print(islandconvert.summary(item))
     out = args.out.resolve() / mod_id
     written = islandconvert.write_mod(out, mod_id, mod_id, target.game, done)
-    print(tr("{count} islands written into {out}", count=len(written), out=out))
+    print(tr("islands.count_islands_written_out", count=len(written), out=out))
     return 0
 
 

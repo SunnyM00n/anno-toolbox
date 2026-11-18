@@ -188,12 +188,25 @@ def test_paint_lays_the_islands_own_material_into_every_material_map():
     edits["paint"] = [
         {"material": 7, "radius": 2, "strength": 1.0, "points": [[4, 4], [6, 4]]},
         {"material": 99, "radius": 2, "strength": 1.0, "points": [[4, 4]]},  # not in the island's set
+        {"material": 7, "radius": 2, "strength": 1.0, "points": []},  # a hand-edited file: nothing to lay,
+        {"material": 7, "radius": 2, "strength": 1.0},  # ... and it stopped the build ("min() arg is empty")
     ]
+    assert groundedit.painted_strokes(edits["paint"], {3: 0, 7: 1}) == edits["paint"][:1]
+    word = {
+        "material": "sand",
+        "radius": 2,
+        "strength": 1.0,
+        "points": [[4, 4]],
+    }  # a material that is no number stopped it too
+    assert (
+        groundedit.painted_strokes([word], {3: 0, 7: 1}) == []
+        and groundedit.used_mask([word, edits["paint"][0]]) == 1 << 7
+    )
+    assert groundedit.other_materials([word], []) == 1  # reported with the strokes of a material outside the set
     done = a7m_edit117.apply(files, SOURCE, edits, template=None)
     back, gd = _reopen(files, done)
-    assert done.report["paint"]["strokes"] == 1 and any(
-        "outside the island's set" in u for u in done.report["unmatched"]
-    )
+    assert done.report["paint"] == {"strokes": 1, "other materials": 1, "blocks": done.report["paint"]["blocks"]}
+    assert any("outside the island's set" in u for u in done.report["unmatched"])
     order = {3: 0, 7: 1}
     dds = gd["materialmaps/0/matid.dds"], gd["materialmaps/0/matalpha.dds"]
     ids, alphas = (np.frombuffer(d[128:], "<u4").reshape(-1, int.from_bytes(d[16:20], "little")) for d in dds)

@@ -39,37 +39,37 @@ class Region:
 _SETS_117 = "data/base/graphics/library/environment/material_sets/"
 REGIONS: tuple[Region, ...] = (
     Region(
-        "anno117", "roman", N_("Latium"), "Roman", "data/base/provinces/roman/islands/pool",
+        "anno117", "roman", N_("islands.latium"), "Roman", "data/base/provinces/roman/islands/pool",
         _SETS_117 + "roman_materialset_02.xml", "amb_roman_01", "ls_heartlands_01", r"/provinces/roman/",
     ),
     Region(
-        "anno117", "celtic", N_("Albion"), "Celtic", "data/base/provinces/celtic/islands/pool",
+        "anno117", "celtic", N_("islands.albion"), "Celtic", "data/base/provinces/celtic/islands/pool",
         _SETS_117 + "celtic_materialset_02.xml", "amb_celtic_01", "ls_wetlands_01", r"/provinces/celtic/",
     ),
     Region(
-        "anno117", "egypt", N_("The Nile"), "Roman", "data/dlc03/provinces/egypt/islands/pool",
+        "anno117", "egypt", N_("islands.the_nile"), "Roman", "data/dlc03/provinces/egypt/islands/pool",
         "data/dlc03/graphics/library/environment/material_sets/egypt_materialset_01.xml", "amb_egypt_01",
         "ls_egypt_01", r"/provinces/egypt/",
     ),
     Region(
-        "anno1800", "cape", N_("Cape Trelawney"), "Moderate", "data/dlc01/sessions/islands/pool", "", "Moderate_01",
+        "anno1800", "cape", N_("islands.cape_trelawney"), "Moderate", "data/dlc01/sessions/islands/pool", "", "Moderate_01",
         "Moderate", r"/moderate_dst_", "SecondaryRegion", "moderate_",
     ),
     Region(
-        "anno1800", "moderate", N_("Old World"), "Moderate", "data/sessions/islands/pool/moderate", "", "Moderate_01",
+        "anno1800", "moderate", N_("islands.old_world"), "Moderate", "data/sessions/islands/pool/moderate", "", "Moderate_01",
         "Moderate", r"/moderate", "PrimaryRegion", "moderate_",
     ),
     Region(
-        "anno1800", "colony01", N_("New World"), "Colony01", "data/sessions/islands/pool/colony01",
+        "anno1800", "colony01", N_("islands.new_world"), "Colony01", "data/sessions/islands/pool/colony01",
         "data/config/engine/material_sets/south_america_01.xml", "south_america_caribic_01", "Colony", r"/colony01",
         prefix="colony01_",
     ),
     Region(
-        "anno1800", "colony02", N_("Enbesa"), "Africa", "data/dlc06/sessions/islands/pool",
+        "anno1800", "colony02", N_("islands.enbesa"), "Africa", "data/dlc06/sessions/islands/pool",
         "data/config/engine/material_sets/colony02_01.xml", "Colony_02", "Colony02", r"/colony02", prefix="colony02_",
     ),
     Region(
-        "anno1800", "colony03", N_("The Arctic"), "Arctic", "data/dlc03/sessions/islands/pool",
+        "anno1800", "colony03", N_("islands.the_arctic"), "Arctic", "data/dlc03/sessions/islands/pool",
         "data/dlc03/config/engine/material_sets/arctic_01.xml", "DLC03_01", "Arctic", r"/colony03", prefix="colony03_",
     ),
 )  # fmt: skip

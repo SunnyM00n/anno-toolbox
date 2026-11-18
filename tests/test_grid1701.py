@@ -177,3 +177,35 @@ def test_a_1701_footprint_comes_from_the_models_info_file_and_the_island_scan_is
     assert viewer.footprint_of("data/a/house.mcf") == box
     out = viewer.footprints([{"cfg": "data/a/house.mcf", "guid": 7}, {"cfg": "data/a/rock.mcf", "guid": 8}])
     assert out["data/a/house.mcf"] == box and out["data/a/rock.mcf"] == [grid1701.polygon(Shape(2, 2))]
+
+
+def test_the_object_configs_of_another_1701_install_are_read_again():
+    """The table was kept by the tree's ``id()``, which the next tree is given again once the first is gone (the
+    game's folder changed in the settings): its objects then drew the other install's models."""
+    from annotoolbox.editor import gameviewers
+
+    class Tree:
+        def __init__(self, files):
+            self.files = files
+
+        def read_text(self, path):
+            return self.files[path]
+
+        def iter_paths(self, prefix, suffix=None):
+            return [p for p in self.files if p.endswith(suffix or "")]
+
+    def viewer(guid: int, name: str):
+        v = gameviewers.Isd1701Viewer.__new__(gameviewers.Isd1701Viewer)
+        ocf = f"<ObjectConfig><GUID>{guid}</GUID><MeshConfig>data/{name}.mcf</MeshConfig></ObjectConfig>"
+        v.tree2070 = Tree({f"data/{name}.ocf": ocf})
+        return v
+
+    first = viewer(7, "a")
+    assert first._ocf_models() == {7: ["data/a.mcf"]} and first._ocf_models() is first._ocf_models()  # read once
+    address = id(first.tree2070)
+    del first
+    for _ in range(100):  # the next tree usually takes the freed one's address at once
+        other = viewer(9, "b")
+        if id(other.tree2070) == address:
+            break
+    assert other._ocf_models() == {9: ["data/b.mcf"]}

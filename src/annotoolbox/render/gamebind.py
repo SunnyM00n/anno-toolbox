@@ -50,6 +50,7 @@ class Resources:
         self.keep: list = []  # everything made here, and what the owner adds (its pipeline): destroyed on release
         self.srb = None
         self._bound: tuple | None = ()
+        self._held: tuple = ()  # the inputs bound: kept, so that their ids are theirs alone while ``_bound`` names them
         self._retired: list = []
 
     def uniform(self, name: str):
@@ -109,7 +110,7 @@ class Resources:
         self.srb = self.rhi.newShaderResourceBindings()
         self.srb.setBindings(self._bindings(batch, inputs))
         self.srb.create()
-        self._bound = bound
+        self._bound, self._held = bound, tuple(inputs.values())
         return True
 
     def write(self, batch, fill: Callable[[gs.Constants], None] | None = None) -> None:
@@ -123,4 +124,4 @@ class Resources:
         for r in [*self.keep, *self._retired, *([self.srb] if self.srb is not None else [])]:
             r.destroy()
         self.keep, self._retired, self.buffers, self.made = [], [], {}, {}
-        self.srb, self._bound = None, ()
+        self.srb, self._bound, self._held = None, (), ()

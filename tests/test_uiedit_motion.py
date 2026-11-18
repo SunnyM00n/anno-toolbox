@@ -121,8 +121,41 @@ def test_tweens_play_in_the_preview(ui_tree, tmp_path):  # noqa: F811
     assert image.alpha == pytest.approx(0.25)
 
 
+def test_a_playing_animation_stands_still_while_its_picture_is_hidden():
+    """Another app shown in the suite's window hides the preview: a step would lay it out for nobody."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from annotoolbox.uiedit.panels import StatesPanel
+
+    QApplication.instance() or QApplication([])
+    panel, stage, steps = StatesPanel(), QWidget(), []
+    panel.stage = stage
+    panel.show_states([SimpleNamespace(name="fade", seconds=1.0, tracks=[], guid="g")], None, str)
+    panel.combo.setCurrentIndex(1)
+    panel.animation.connect(lambda guid, t: steps.append(t))
+    panel._toggle()
+    assert panel.timer.isActive()
+    panel._tick()
+    assert steps == [] and panel.slider.value() == 0  # hidden: nothing is laid out, the play head waits
+    stage.show()
+    panel._tick()
+    panel._tick()
+    assert len(steps) == 2 and steps[1] > steps[0] > 0
+    stage.hide()
+    panel._tick()
+    assert len(steps) == 2 and panel.timer.isActive()  # still playing: it goes on when the picture is back
+    panel._toggle()
+    stage.deleteLater()
+    panel.deleteLater()
+
+
 def test_the_window_shows_the_sequence_and_edits_a_key(ui_tree, tmp_path):  # noqa: F811
     pytest.importorskip("PySide6")
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
     from PySide6.QtWidgets import QApplication
 
     from annotoolbox.suite.settings import Settings
@@ -136,9 +169,16 @@ def test_the_window_shows_the_sequence_and_edits_a_key(ui_tree, tmp_path):  # no
     window.open_file(ANIMATED)
     window.states.combo.setCurrentIndex(1)
     assert window.sequence.animation is not None and window.sequence.canvas.tracks
+    assert window.states.stage is window.preview  # a playing animation stands still while the preview is hidden
     window.sequence.canvas.added.emit(0, 0.25)
     assert [k.time for k in animations.read(window.doc.root)[0].tracks[0].keys] == [0.0, 0.25, 1.0]
     assert window.doc.dirty
+    canvas = window.sequence.canvas  # Del on a picked key is the canvas's, not the window's "Remove the element"
+    for current, taken in (((0, 1), True), ((0, -1), False)):
+        canvas.current = current
+        override = QKeyEvent(QEvent.Type.ShortcutOverride, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(canvas, override)
+        assert override.isAccepted() is taken
     window.doc.undo.mark_clean()  # closing asks about unsaved edits otherwise
     window.close()
     qt.processEvents()

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QImageWriter, QKeySequence
 from PySide6.QtWidgets import QDockWidget, QFileDialog, QInputDialog, QMainWindow, QMessageBox
 
 from ..infra.i18n import N_, number, tr
@@ -19,7 +19,7 @@ from ..models import cfgdoc, cfgparts, fileresolve
 from ..models.cfgdoc import Doc
 from ..render import rhiview
 from ..sources import gametree
-from ..suite import gameopen, links, project, widgets
+from ..suite import gameopen, gamesync, links, project, widgets
 from ..suite.background import Background
 from ..viewer.browser import FileBrowser
 from ..viewer.modelfiles import ModelFiles
@@ -37,7 +37,7 @@ from .overlay import Overlay
 from .timeline import SequenceEditor
 
 APP = "objects"  # the key of its remembered state in the settings
-TITLE = N_("Object builder")
+TITLE = N_("objects.object_builder")
 OBJECT_FILES = (".cfg", ".mcf", ".prp", ".ifo", ".fc")
 REDRAW_MS = 150  # after the last edit, the 3D view is redrawn
 
@@ -62,17 +62,17 @@ class ObjectWindow(QMainWindow):
         ))  # fmt: skip
         self.setCentralWidget(self.view)
         self.docks = {}
-        for name, widget, area in (
-            (N_("Files"), self.browser, Qt.DockWidgetArea.LeftDockWidgetArea),
-            (N_("Object"), self.objects, Qt.DockWidgetArea.LeftDockWidgetArea),
-            (N_("Properties"), self.props, Qt.DockWidgetArea.RightDockWidgetArea),
-            (N_("Sequences"), self.sequences, Qt.DockWidgetArea.BottomDockWidgetArea),
-            (N_("Feedback loops"), self.feedback, Qt.DockWidgetArea.BottomDockWidgetArea),
+        for key, name, widget, area in (
+            ("Files", N_("common.files"), self.browser, Qt.DockWidgetArea.LeftDockWidgetArea),
+            ("Object", N_("common.object"), self.objects, Qt.DockWidgetArea.LeftDockWidgetArea),
+            ("Properties", N_("common.properties"), self.props, Qt.DockWidgetArea.RightDockWidgetArea),
+            ("Sequences", N_("common.sequences"), self.sequences, Qt.DockWidgetArea.BottomDockWidgetArea),
+            ("Feedback loops", N_("objects.feedback_loops"), self.feedback, Qt.DockWidgetArea.BottomDockWidgetArea),
         ):
-            dock = QDockWidget(tr(name), self, objectName=f"objects{name}")
+            dock = QDockWidget(tr(name), self, objectName=f"objects{key}")
             dock.setWidget(widget)
             self.addDockWidget(area, dock)
-            self.docks[name] = dock
+            self.docks[key] = dock
         self.resizeDocks([self.docks["Files"], self.docks["Properties"]], [340, 380], Qt.Orientation.Horizontal)
         self.tabifyDockWidget(self.docks["Sequences"], self.docks["Feedback loops"])
         self.docks["Sequences"].raise_()
@@ -80,58 +80,57 @@ class ObjectWindow(QMainWindow):
         self._menus()
         self._wire()
         self.setWindowTitle(tr(TITLE))
-        self.statusBar().showMessage(tr("No game open"))
+        self.statusBar().showMessage(tr("common.no_game_open"))
 
     # building the window
     def _menus(self) -> None:
-        file = self.menuBar().addMenu(tr("&File"))
-        games = file.addMenu(tr("Open &game"))
+        file = self.menuBar().addMenu(tr("common.menu.file"))
+        games = file.addMenu(tr("common.menu.open_game"))
         for key, name in gametree.GAMES.items():
             games.addAction(name, lambda k=key: self.open_game(k))
-        file.addAction(tr("&Open a file by its path..."), self._ask_path, QKeySequence("Ctrl+O"))
-        file.addAction(tr("&Save into the project..."), self.save, QKeySequence.StandardKey.Save)
-        file.addAction(tr("Show in the &viewer"), self._to_viewer)
-        file.addAction(tr("Save the &picture..."), self._save_picture, QKeySequence("Ctrl+Shift+S"))
+        file.addAction(tr("objects.open_file_path"), self._ask_path, QKeySequence("Ctrl+O"))
+        file.addAction(tr("objects.save_project"), self.save, QKeySequence.StandardKey.Save)
+        file.addAction(tr("objects.show_viewer"), self._to_viewer)
+        file.addAction(tr("common.save_picture_dots"), self._save_picture, QKeySequence("Ctrl+Shift+S"))
         edit, self.undo_action, self.redo_action = widgets.edit_menu(self, self.undo, self.redo)
         edit.addSeparator()
-        edit.addAction(tr("&Add a part"), self.add_part, QKeySequence("Ins"))
-        edit.addAction(tr("Add a part from &another file..."), self.add_from_file)
-        edit.addAction(tr("&Duplicate"), self.duplicate_part, QKeySequence("Ctrl+D"))
-        edit.addAction(tr("&Remove"), self.remove_part, QKeySequence.StandardKey.Delete)
-        edit.addAction(tr("Move &up"), lambda: self.move_part(-1), QKeySequence("Alt+Up"))
-        edit.addAction(tr("Move do&wn"), lambda: self.move_part(1), QKeySequence("Alt+Down"))
+        edit.addAction(tr("objects.add_part"), self.add_part, QKeySequence("Ins"))
+        edit.addAction(tr("objects.add_part_another_file"), self.add_from_file)
+        edit.addAction(tr("objects.duplicate"), self.duplicate_part, QKeySequence("Ctrl+D"))
+        edit.addAction(tr("objects.remove"), self.remove_part, QKeySequence.StandardKey.Delete)
+        edit.addAction(tr("objects.move_up"), lambda: self.move_part(-1), QKeySequence("Alt+Up"))
+        edit.addAction(tr("objects.move_down"), lambda: self.move_part(1), QKeySequence("Alt+Down"))
         edit.addSeparator()
-        self._handle_menu(edit.addMenu(tr("&Handles")))
-        self.footprint_action = edit.addAction(tr("Draw a &footprint"))
+        self._handle_menu(edit.addMenu(tr("objects.menu.handles")))
+        self.footprint_action = edit.addAction(tr("objects.draw_footprint"))
         self.footprint_action.setCheckable(True)
         self.footprint_action.triggered.connect(self.tool.draw_footprint)
         self.tool.drawing_changed.connect(self.footprint_action.setChecked)
-        view = self.menuBar().addMenu(tr("&View"))
+        view = self.menuBar().addMenu(tr("common.menu.view"))
         self.toggles: dict[str, QAction] = {}
-        for key, text, on in (("boxes", N_("The info file's &boxes"), True), ("areas", N_("The info file's &areas"), True),
-                              ("dummies", N_("The feedback's &dummies"), True), ("shadows", N_("&Shadows"), True),
-                              ("ground", N_("G&round"), True), ("particles", N_("&Effects"), True),
-                              ("cloth", N_("Simulate &cloth"), False), ("torn", N_("&Torn cloth (damaged)"), False),
-                              ("figures", N_("Walking &figures"), False)):  # fmt: skip
+        for key, text, on in (("boxes", N_("objects.info_files_boxes"), True), ("areas", N_("objects.info_files_areas"), True),
+                              ("dummies", N_("objects.feedbacks_dummies"), True), ("shadows", N_("common.shadows"), True),
+                              ("ground", N_("common.ground"), True), ("particles", N_("common.effects_accel"), True),
+                              ("cloth", N_("viewer.simulate_cloth"), False), ("torn", N_("viewer.torn_cloth_damaged"), False),
+                              ("figures", N_("viewer.walking_figures"), False)):  # fmt: skip
             self.toggles[key] = toggle_action(view, tr(text), on, lambda checked, k=key: self._toggle(k, checked))
-        self.figures = FigureMenu(self, view.addMenu(tr("Figures' &state")))
-        self.shared_action = view.addAction(tr("Read the baked &shared/ copy (as the game does)"), self._reopen)
+        self.figures = FigureMenu(self, view.addMenu(tr("viewer.menu.figures_state")))
+        self.shared_action = view.addAction(tr("common.read_baked_shared_copy_game"), self._reopen)
         self.shared_action.setCheckable(True)
         self.shared_action.setChecked(True)
-        lods = view.addMenu(tr("&Level of detail"))
+        lods = view.addMenu(tr("common.menu.level_detail"))
         self.lod = 0
         for n in range(5):
-            lods.addAction(tr("LOD {n}", n=n), lambda n=n: self._set_lod(n))
-        view.addAction(tr("&Frame the model"), lambda: self.view.frame_model(), QKeySequence("F"))
-        windows = self.menuBar().addMenu(tr("&Window"))
-        for dock in self.docks.values():
-            windows.addAction(dock.toggleViewAction())
+            lods.addAction(tr("common.lod_n", n=n), lambda n=n: self._set_lod(n))
+        view.addAction(tr("common.frame_model"), lambda: self.view.frame_model(), QKeySequence("F"))
+        windows = self.menuBar().addMenu(tr("common.menu.window"))
+        widgets.add_docks(windows, self.docks.values())
 
     def _handle_menu(self, menu) -> None:
         """Off, Move (W), Rotate (E), Scale (R): the handles over the selected part; the keys work in the view."""
         group, self.handle_actions = QActionGroup(self), {}
-        for mode, text, key in (("off", N_("&Off"), ""), ("move", N_("&Move"), "W"), ("rotate", N_("&Rotate"), "E"),
-                                ("scale", N_("&Scale"), "R")):  # fmt: skip
+        for mode, text, key in (("off", N_("objects.off"), ""), ("move", N_("objects.move"), "W"), ("rotate", N_("objects.rotate"), "E"),
+                                ("scale", N_("objects.scale"), "R")):  # fmt: skip
             action = menu.addAction(tr(text))
             action.setCheckable(True)
             action.setChecked(mode == "off")
@@ -144,6 +143,7 @@ class ObjectWindow(QMainWindow):
             self.handle_actions[mode] = action
 
     def _wire(self) -> None:
+        widgets.find_key(self, self.browser.search)
         self.browser.opened.connect(self.open_path)
         self.objects.picked.connect(self._picked)
         self.props.edited.connect(lambda node, value: self._fields_edited([(node, value)]))
@@ -165,19 +165,34 @@ class ObjectWindow(QMainWindow):
     # games and files
     def open_game(self, key: str, then: str = "", wait: bool = False) -> None:
         """Open an installed game in the background; ``then``: an object to open in it."""
+        if not gamesync.may_switch(self, key, self.confirm_discard):  # asks; the suite's other apps follow
+            return
 
         def opened(tree) -> None:
             if isinstance(tree, Exception):
                 self.statusBar().showMessage(
-                    tr("{game} did not open: {error}", game=gametree.GAMES.get(key, key), error=tree)
+                    tr("common.game_not_open_error", game=gametree.GAMES.get(key, key), error=tree)
                 )
                 return
+            self.close_object()
             self.set_tree(tree)
             self.settings.apps.setdefault(APP, {})["game"] = key
             if then:
                 self.open_path(then)
 
         gameopen.open_installed(self, self.settings, key, self.background, then=opened, wait=wait)
+
+    def close_object(self) -> None:
+        """Let the open object go (its game was left; asked about before): the panels and the view are emptied."""
+        self.obj, self.files, self.scene = None, None, None
+        self.objects.clear()
+        self.objects.items = {}
+        self._picked(None)
+        self.sequences.show_doc(None, None)
+        self.feedback.show_doc(None)
+        self.overlay.set_shapes([], None)
+        self.view.clear()
+        self.setWindowTitle(tr(TITLE))
 
     def set_tree(self, tree) -> None:
         """Browse ``tree`` (a ``sources.gametree.GameTree``) and edit its objects."""
@@ -186,7 +201,7 @@ class ObjectWindow(QMainWindow):
         self.props.game, self.props.files = tree.game, lambda: tree.paths
         self.props.source_names = tree.game in fileresolve.NEW_ENGINE
         self.statusBar().showMessage(
-            tr("{name}: {count} files; double-click a model config", name=tree.name, count=number(len(tree.paths)))
+            tr("objects.files_double_click_model_config", name=tree.name, count=number(len(tree.paths)))
         )
 
     def open_file(self, game: str, path: str) -> None:
@@ -201,7 +216,7 @@ class ObjectWindow(QMainWindow):
         if self.tree is None:
             return False
         if not path.lower().endswith(OBJECT_FILES):
-            self.statusBar().showMessage(tr("{path} is no model config, info or feedback file", path=path), 8000)
+            self.statusBar().showMessage(tr("objects.no_model_config_info_feedback", path=path), 8000)
             return False
         if not self.confirm_discard():
             return False
@@ -212,13 +227,13 @@ class ObjectWindow(QMainWindow):
                 lambda p: saved[p].read_bytes() if p in saved else None,
             )  # fmt: skip
         except (FileNotFoundError, ValueError, OSError) as exc:
-            self.statusBar().showMessage(tr("{path} does not open: {error}", path=path, error=exc), 8000)
+            self.statusBar().showMessage(tr("objects.path_not_open_error", path=path, error=exc), 8000)
             return False
         self.set_object(obj)
         self.settings.apps.setdefault(APP, {})["file"] = path
         if obj.restored or obj.notes:
             files = ", ".join(o.read for role, o in obj.opened.items() if role in obj.restored)
-            said = [tr("opened with your saved edits from the project: {files}", files=files)] if files else []
+            said = [tr("objects.opened_your_saved_edits_project", files=files)] if files else []
             self.statusBar().showMessage("; ".join(said + obj.notes), 15000)
         return True
 
@@ -233,27 +248,30 @@ class ObjectWindow(QMainWindow):
         self._title()
         stuck = [o.read for o in obj.opened.values() if not o.doc.exact]
         if stuck:
-            self.statusBar().showMessage(
-                tr("read only: {files} does not read back byte for byte", files=", ".join(stuck)), 12000
-            )
+            self.statusBar().showMessage(tr("objects.read_only_not_back_byte", files=", ".join(stuck)), 12000)
 
     def confirm_discard(self) -> bool:
         """Whether the open object's unsaved edits may go (asked only when there are some)."""
         if self.obj is None or not self.obj.undo.dirty:
             return True
-        answer = QMessageBox.question(
-            self, tr(TITLE), tr("{title} has unsaved edits. Discard them?", title=self.obj.title)
+        return widgets.ask_keep(
+            self, tr(TITLE), tr("objects.unsaved_edits_save", title=self.obj.title), self._save_kept
         )
-        return answer == QMessageBox.StandardButton.Yes
+
+    def _save_kept(self) -> bool:
+        """The save dialog; whether the open object's edits are kept afterwards."""
+        self.save()
+        return not self.obj.undo.dirty
 
     def _reopen(self) -> None:
-        if self.obj is not None:
-            self.open_path(self.obj.main.asked)
+        """The object read again with the other choice of copy; the tick goes back when it stays as it is open."""
+        if self.obj is not None and not self.open_path(self.obj.main.asked):
+            self.shared_action.setChecked(not self.shared_action.isChecked())
 
     def _ask_path(self) -> None:
         if self.tree is None:
             return
-        path, ok = QInputDialog.getText(self, tr(TITLE), tr("A game path (data/.../name.cfg):"))
+        path, ok = QInputDialog.getText(self, tr(TITLE), tr("objects.game_path_data_name_cfg"))
         if ok and path.strip():
             self.open_path(path.strip())
 
@@ -265,11 +283,11 @@ class ObjectWindow(QMainWindow):
         if target.endswith(OBJECT_FILES):
             self.open_path(target)
         elif not links.view_file(self.tree.game, target):
-            self.statusBar().showMessage(tr("the viewer shows that file in the suite's window"), 8000)
+            self.statusBar().showMessage(tr("objects.viewer_shows_file_suites_window"), 8000)
 
     def _to_viewer(self) -> None:
         if self.obj is not None and not links.view_file(self.obj.game, self.obj.main.asked):
-            self.statusBar().showMessage(tr("the viewer is in the suite's window"), 8000)
+            self.statusBar().showMessage(tr("objects.viewer_suites_window"), 8000)
 
     # the object
     def _changed(self, roles: set[str]) -> None:
@@ -286,7 +304,7 @@ class ObjectWindow(QMainWindow):
         if self.obj is None:
             return
         mark = " *" if self.obj.undo.dirty else ""
-        self.setWindowTitle(tr("{name} - {title}", name=self.obj.title + mark, title=tr(TITLE)))
+        self.setWindowTitle(tr("common.title.name_title", name=self.obj.title + mark, title=tr(TITLE)))
         self.undo_action.setEnabled(self.obj.undo.index > 0)
         self.redo_action.setEnabled(self.obj.undo.index < len(self.obj.undo.commands))
 
@@ -300,9 +318,7 @@ class ObjectWindow(QMainWindow):
         try:
             self.scene = self.obj.scene(self.options())
         except Exception as exc:  # an edit that leaves the config unreadable: say so, keep the last picture
-            self.statusBar().showMessage(
-                tr("the config does not draw: {kind}: {error}", kind=type(exc).__name__, error=exc), 8000
-            )
+            self.statusBar().showMessage(tr("objects.config_not_draw", kind=type(exc).__name__, error=exc), 8000)
             return
         said = self.figures.graft(self.scene, self.obj)
         if said:
@@ -356,7 +372,7 @@ class ObjectWindow(QMainWindow):
     def _apply(self, role: str, *edits) -> None:
         doc = self.obj.doc(role) if self.obj is not None else None
         if doc is None or not doc.exact:
-            self.statusBar().showMessage(tr("this file is read only (it does not read back byte for byte)"), 8000)
+            self.statusBar().showMessage(tr("objects.file_read_only_not_back"), 8000)
             return
         self.obj.apply(role, *edits)
 
@@ -373,11 +389,11 @@ class ObjectWindow(QMainWindow):
 
     def undo(self) -> None:
         if self.obj is not None and (label := self.obj.undo.undo()):
-            self.statusBar().showMessage(tr("undone: {label}", label=label), 5000)
+            self.statusBar().showMessage(tr("common.undone_label", label=label), 5000)
 
     def redo(self) -> None:
         if self.obj is not None and (label := self.obj.undo.redo()):
-            self.statusBar().showMessage(tr("redone: {label}", label=label), 5000)
+            self.statusBar().showMessage(tr("common.redone_label", label=label), 5000)
 
     # adding, removing, moving parts
     def _target(self) -> tuple[Row, Doc, object, object] | None:
@@ -401,17 +417,17 @@ class ObjectWindow(QMainWindow):
         row, doc, holder, part = found
         section = row.section or (part.section if part is not None else "")
         if row.kind == "part" and part is not None and not part.section:
-            self.statusBar().showMessage(tr("pick a list (Models, Lights ...) or a part in one"), 8000)
+            self.statusBar().showMessage(tr("objects.pick_list_models_lights_part"), 8000)
             return
         kinds = cfgparts.kinds_for(section) or ((part.kind,) if part is not None else ())
         if not kind:
-            kind = self._choose(kinds, tr("Add a part of which kind?"))
+            kind = self._choose(kinds, tr("objects.add_part_kind"))
         node = cfgparts.new_part(doc, kind) if kind else None
         if node is None:
             self.statusBar().showMessage(
                 tr(
-                    "no {kind} in this file to copy: Edit > Add a part from another file",
-                    kind=kind or tr("part"),
+                    "objects.no_file_copy_edit_add",
+                    kind=kind or tr("common.part"),
                 ),
                 8000,
             )
@@ -428,7 +444,7 @@ class ObjectWindow(QMainWindow):
             if part is None
             else next(i for i, c in enumerate(holder.children) if c is part.node) + 1
         )
-        edits.append(cfgdoc.insert(holder, at, [node], tr("add {kind}", kind=cfgdoc.kind_of(node))))
+        edits.append(cfgdoc.insert(holder, at, [node], tr("objects.add_kind", kind=cfgdoc.kind_of(node))))
         self._apply(row.role, *edits)
         list_path = row.path if row.kind != "part" else row.path.rsplit("/", 1)[0]
         if row.kind == "empty":
@@ -446,14 +462,22 @@ class ObjectWindow(QMainWindow):
         path, ok = QInputDialog.getText(
             self,
             tr(TITLE),
-            tr("Copy a {kind} from which file?", kind=tr(" or ").join(kinds) or tr("part")),
+            tr("objects.copy_kind_file", kind=tr("objects.or").join(kinds) or tr("common.part")),
         )
-        if not ok or not self.tree.exists(path.strip()):
+        if not ok or not path.strip():
             return
-        other = Doc.read(self.tree.read(path.strip()), path.strip())
+        if not self.tree.exists(path.strip()):
+            error = tr("islands.not_games_files")
+            self.statusBar().showMessage(tr("objects.path_not_open_error", path=path.strip(), error=error), 8000)
+            return
+        try:
+            other = Doc.read(self.tree.read(path.strip()), path.strip())
+        except (ValueError, OSError, KeyError) as exc:  # no config, or one that does not read
+            self.statusBar().showMessage(tr("objects.path_not_open_error", path=path.strip(), error=exc), 8000)
+            return
         choices = [p for p in other.parts().walk() if p.kind in kinds and not p.is_list]
         names = [f"{p.path}  {p.name}" for p in choices]
-        pick = self._choose(tuple(names), tr("Which part?")) if names else ""
+        pick = self._choose(tuple(names), tr("objects.which_part")) if names else ""
         if pick:
             node = cfgdoc.restyled(choices[names.index(pick)].node, doc.newline)
             self._insert(row, doc, holder, part, section, node)
@@ -488,7 +512,9 @@ class ObjectWindow(QMainWindow):
         if self.obj is None:
             return
         dialog = writeback.SaveDialog(self.obj, self, self._held())
-        if dialog.exec() and dialog.result_plan is not None:
+        accepted = dialog.exec()
+        dialog.deleteLater()  # a child of the window otherwise stays until the window closes
+        if accepted and dialog.result_plan is not None:
             self.write(dialog.result_plan)
 
     def _held(self) -> list[str]:
@@ -498,16 +524,16 @@ class ObjectWindow(QMainWindow):
 
     def write(self, plan: writeback.Plan) -> None:
         current = project.current(self.settings)
-        notice = projectpart.EDITS.save_announced(current, self.obj.game, plan.files, plan.stale)
+        try:
+            notice = projectpart.EDITS.save_announced(current, self.obj.game, plan.files, plan.stale)
+        except OSError as exc:  # the project's folder takes no file: the edits stay unsaved
+            QMessageBox.warning(self, tr(TITLE), tr("islands.could_not_save", error=exc))
+            return
         self.obj.undo.mark_clean()
-        other = (
-            ""
-            if current.game == self.obj.game
-            else tr(" (the project builds {game}: they wait there)", game=current.game)
-        )
+        other = "" if current.game == self.obj.game else tr("objects.project_builds_they_wait", game=current.game)
         self.statusBar().showMessage(
             tr(
-                "saved {count} files into {folder}{other}; {text}",
+                "objects.saved_count_files_folder_other",
                 count=len(plan.files),
                 folder=current.folder.name,
                 other=other,
@@ -530,12 +556,15 @@ class ObjectWindow(QMainWindow):
 
     def _save_picture(self) -> None:
         name, _f = QFileDialog.getSaveFileName(
-            self, tr("Save the picture"), "", "PNG (*.png)"
+            self, tr("common.save_picture"), "", "PNG (*.png)"
         )  # i18n: ok (a file filter)
         if name:
             image = self.view.image()
             self.overlay.picture(image, self.view.camera)
-            image.save(name)
+            writer = QImageWriter(name)
+            if not writer.write(image):  # a folder that takes no files, a suffix Qt writes no picture for
+                error = writer.errorString()
+                self.statusBar().showMessage(tr("viewer.could_not_write_name", name=name, error=error), 12000)
 
     def closeEvent(self, event) -> None:
         if not self.confirm_discard():

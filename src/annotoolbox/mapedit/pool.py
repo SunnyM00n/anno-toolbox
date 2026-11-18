@@ -219,7 +219,8 @@ def read_island_info(tree, path: str) -> IslandInfo:
     except (ValueError, struct.error):
         return IslandInfo()
     size, rect = doc.find("MapSize"), doc.find("ActiveMapRect")
-    edge = struct.unpack("<2i", size.data[:8])[0] if isinstance(size, filedb.Attrib) else 0
+    sized = isinstance(size, filedb.Attrib) and len(size.data) >= 8
+    edge = struct.unpack("<2i", size.data[:8])[0] if sized else 0
     active = struct.unpack("<4i", rect.data[:16]) if isinstance(rect, filedb.Attrib) and len(rect.data) >= 16 else None
     return IslandInfo(edge, active if active and active[2] > active[0] else None)
 

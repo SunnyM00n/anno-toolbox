@@ -67,9 +67,7 @@ def render(doc: BankDoc, tree, only: list[str] | None = None) -> Outputs:
             copy = BankDoc(tree.read(path), path)
             out.problems += [f"{path}: {p}" for p in copy.replay(doc.log)]
         out.files[path] = copy.to_bytes()
-        out.problems += [
-            tr("{path}: media {media} could not be read and was left out", path=path, media=m) for m in copy.unreadable
-        ]
+        out.problems += [tr("sound.media_could_not_read_left", path=path, media=m) for m in copy.unreadable]
         _, lang = split(path)
         for media, loose in copy.loose.items():
             where = lang if loose.language else ""

@@ -62,7 +62,7 @@ def render(
         if layout.texts and language not in languages and texttable.style_of(layout) == textfiles.XML:
             log(
                 tr(
-                    "{language}: the install has no such text file, {count} texts left out",
+                    "texts.install_no_such_text_file",
                     language=language,
                     count=len(texts),
                 )

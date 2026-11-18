@@ -12,4 +12,4 @@ from ..infra.i18n import N_
 from ..suite.project import MODEL_EDITS, EditsFolder
 
 EDITS = EditsFolder(MODEL_EDITS)
-PART = EDITS.part("models", N_("Imported models"), "Imported models")
+PART = EDITS.part("models", N_("viewer.imported_models"), "Imported models")

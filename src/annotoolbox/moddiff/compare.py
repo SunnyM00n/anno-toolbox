@@ -63,7 +63,7 @@ def mod_against_game(game: Game, mod: Mod, search: list[Path] | None = None, pro
     """One mod (with what comes with it) against the game."""
     order = resolved([mod], search, _zips(game))
     effect = run_set(game, order, mod.home, progress)
-    return _report(effect, tr("{mod} against the game", mod=mod.mod_id), tr("game"), mod.mod_id)
+    return _report(effect, tr("moddiff.mod_against_game_title", mod=mod.mod_id), tr("ui.game"), mod.mod_id)
 
 
 def profile_conflicts(
@@ -77,7 +77,7 @@ def profile_conflicts(
     """The mods a profile switches on (``order``: ``modmgr.checks.Plan.order``), run as the loader runs them;
     ``notes``: what the caller knows about how the set was made (1800's activations, ``.zip`` mods)."""
     effect = run_set(game, order, mods_dir, progress)
-    report = _report(effect, tr("profile {name}", name=profile), tr("game"), profile)
+    report = _report(effect, tr("mods.profile_name", name=profile), tr("ui.game"), profile)
     report.notes = [*(notes or []), *report.notes]
     return report
 
@@ -86,7 +86,7 @@ def two_mods(game: Game, a: Mod, b: Mod, search: list[Path] | None = None, progr
     """``a`` and ``b`` together, in the loader's order (a ``LoadAfter`` decides), against the game and each other."""
     order = resolved([a, b], search, _zips(game))
     effect = run_set(game, order, a.home, progress)
-    return _report(effect, tr("{a} and {b}", a=a.mod_id, b=b.mod_id), tr("game"), f"{a.mod_id} + {b.mod_id}")
+    return _report(effect, tr("moddiff.a_and_b", a=a.mod_id, b=b.mod_id), tr("ui.game"), f"{a.mod_id} + {b.mod_id}")
 
 
 def archive_effect(game: Game, path: Path, progress: Progress = None) -> Effect:
@@ -97,7 +97,7 @@ def archive_effect(game: Game, path: Path, progress: Progress = None) -> Effect:
 
 def archive_against_game(game: Game, path: Path, progress: Progress = None) -> Report:
     """An archive mod or a folder of loose files against the game's files."""
-    return _report(archive_effect(game, path, progress), Path(path).name, tr("game"), Path(path).name)
+    return _report(archive_effect(game, path, progress), Path(path).name, tr("ui.game"), Path(path).name)
 
 
 def two_archives(game: Game, a: Path, b: Path, progress: Progress = None) -> Report:
@@ -118,7 +118,7 @@ def two_versions(game: Game, a: Mod, b: Mod, search: list[Path] | None = None, p
 
 def versions_report(a: Effect, b: Effect, left: str, right: str) -> Report:
     """The difference of two runs: targets in one only, targets that differ, files that differ."""
-    report = Report(tr("{a} and {b}", a=left, b=right), a.game, left, right, [left, right])
+    report = Report(tr("moddiff.a_and_b", a=left, b=right), a.game, left, right, [left, right])
     report.targets = diff_targets(a.targets, b.targets)
     report.files = diff_files(a.files, b.files)
     report.dropped = [f"{left}: {e.line()}" for e in a.events if e.level == WARNING]
@@ -163,7 +163,7 @@ def _differing(one: Target, two: Target) -> list[Change]:
         return [Change("(kind)", one.kind, two.kind)]
     if one.kind == REMOVED:
         return []
-    if one.kind == ADDED:
+    if one.kind == ADDED and (one.packed or two.packed):  # an added asset: its values; an added text: its change
         return data_changes(one.values(), two.values()) if one.packed != two.packed else []
     first, second = {c.path: c for c in one.changes}, {c.path: c for c in two.changes}
     out = []

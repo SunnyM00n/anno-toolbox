@@ -19,6 +19,10 @@ from ..infra.i18n import N_, tr
 from . import formrows, musicedits
 from .bankdoc import BankDoc
 
+RULES_MOST = (
+    65535  # the spin box's own 99 is five past what 117 ships (95 rules in one container): added ones were out of reach
+)
+
 
 def markers_text(markers: list[bnkmusic.Marker]) -> str:
     """``id:ms`` per marker, ``id:ms:name`` for a named one."""
@@ -61,32 +65,33 @@ class MusicPanel(QWidget):
         self.edit, self.say = edit, say
         self.doc: BankDoc | None = None
         self.picked = 0
-        self.markers = QLineEdit(placeholderText=tr("id:ms, id:ms:name ... (or name:ms)"))
+        self.markers = QLineEdit(placeholderText=tr("common.id_ms_name"))
         self.rule = QSpinBox()
-        self.fields = QLineEdit(placeholderText=tr("sync_type=7, src_fade_time=3000 ..."))
+        self.rule.setMaximum(RULES_MOST)
+        self.fields = QLineEdit(placeholderText=tr("common.sync_type_eq_7_src"))
         self.fit = QComboBox()
         self.fit.addItems([musicedits.SCALE, musicedits.KEEP])
         form = QFormLayout(self)
         form.setContentsMargins(0, 0, 0, 0)
         self.rows = {
-            "markers": (tr("markers (ms)"), self.markers, ((N_("Apply the markers"), self._apply_markers),)),
+            "markers": (tr("common.markers_ms"), self.markers, ((N_("common.apply_markers"), self._apply_markers),)),
             "rules": (
-                tr("transition rule"),
+                tr("common.transition_rule"),
                 self.rule,
                 (
-                    (N_("Apply to the rule"), self._apply_rule),
-                    (N_("Add a rule (copy)"), self._add_rule),
-                    (N_("Remove the rule"), self._remove_rule),
+                    (N_("common.apply_to_rule"), self._apply_rule),
+                    (N_("common.add_rule_copy"), self._add_rule),
+                    (N_("common.remove_rule"), self._remove_rule),
                 ),
             ),
-            "fit": (tr("markers follow a new clip by"), self.fit, ()),
+            "fit": (tr("common.markers_follow_new_clip"), self.fit, ()),
         }
         self.widgets: dict[str, list[QWidget]] = {}
         for key, (label, widget, buttons) in self.rows.items():
             row = [widget]
             form.addRow(label, widget)
             if key == "rules":
-                form.addRow(tr("fields of the rule"), self.fields)
+                form.addRow(tr("common.fields_rule"), self.fields)
                 row.append(self.fields)
             row += formrows.add_buttons(form, buttons)
             self.widgets[key] = row
@@ -120,7 +125,7 @@ class MusicPanel(QWidget):
         try:
             entries = parse_markers(self.markers.text())
         except ValueError:
-            self.say(tr("write the markers as id:ms or name:ms, separated by commas"))
+            self.say(tr("common.write_markers_id_ms_name"))
             return
         self.edit("set_markers", segment=self.picked, markers=entries)
 
@@ -128,7 +133,7 @@ class MusicPanel(QWidget):
         try:
             return parse_fields(self.fields.text())
         except ValueError:
-            self.say(tr("write the fields as name=number, separated by commas"))
+            self.say(tr("common.write_fields_name_eq_number"))
             return None
 
     def _apply_rule(self) -> None:

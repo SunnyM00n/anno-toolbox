@@ -417,11 +417,11 @@ class Island2070:
         """Lay painted strokes (``material``: a ground texture GUID) into the chunks' texture
         layers: the painted layer gains what the stroke covers and the layers above it lose it.
         A chunk the stroke reaches gets the layer on top if it had none."""
-        from ....islands.islandground import stroke_cover
+        from ....islands.islandground import stroke_cover, stroke_material
 
         done = 0
         for st in strokes:
-            guid = int(st.get("material", -1))
+            guid = stroke_material(st)
             # the brush samples texel centres; corners sit half a tile earlier
             shifted = {**st, "points": [[p[0] + 0.5, p[1] + 0.5] for p in st.get("points", [])]}
             cover = stroke_cover(shifted, self.size + 1, 1)
@@ -522,7 +522,7 @@ class Island2070Editor(RdmModels, IslandEditor):
         if not source:
             return Reason.NO_MODEL
         if not self.tree2070.exists(source):
-            return f"{Reason.UNREADABLE}: " + tr("{source} is not in the game", source=source)
+            return f"{Reason.UNREADABLE}: " + tr("islands.source_not_game", source=source)
         return self._model_state()[0].get(source) or Reason.EMPTY
 
     def _objects(self):
@@ -679,7 +679,7 @@ class Island2070Editor(RdmModels, IslandEditor):
             except (AttributeError, OSError, KeyError, ValueError) as exc:
                 self.notes.append(
                     tr(
-                        "ground texture {guid} drawn in its mean colour: {error}",
+                        "islands.ground_texture_drawn_mean_colour",
                         guid=guid,
                         error=f"{type(exc).__name__}: {exc}",
                     )
@@ -758,7 +758,7 @@ class Island2070Editor(RdmModels, IslandEditor):
         """The config the view draws for a library model: the 2070 model itself, read from the game's files."""
         if not self.model_cfg(source):
             raise FileNotFoundError(
-                tr("{source} cannot be drawn: {why}", source=source, why=self._model_state()[0].get(source))
+                tr("islands.source_cannot_drawn_why", source=source, why=self._model_state()[0].get(source))
             )
         return source
 

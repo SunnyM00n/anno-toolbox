@@ -7,7 +7,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from annotoolbox.editor import editorapp
 from annotoolbox.editor.desktop import desktopislands, workbench
+from annotoolbox.infra.i18n import tr
 from annotoolbox.suite.settings import Settings
+
+RIBBON_TABS = ["islands.home", "common.object", "islands.terrain", "islands.grid", "islands.path"]  # the tabs' ids
 
 
 def test_the_window_lists_every_game_and_setup_only_without_a_workspace(tmp_path):
@@ -26,6 +29,50 @@ def test_the_window_lists_every_game_and_setup_only_without_a_workspace(tmp_path
     dialog = desktopislands.SettingsDialog(window.app.settings, window)
     assert set(dialog.values()) == {key for key, _ in desktopislands.FOLDERS} | {"theme", "language"}
     assert dialog.values()["anno117"] == str(tmp_path) and dialog.values()["theme"] == "system"
+    window.close()
+
+
+def test_reload_islands_reads_the_games_lists_off_the_window_thread(tmp_path, monkeypatch):
+    import threading
+
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.infra.i18n import tr
+
+    QApplication.instance() or QApplication([])
+    settings = Settings(anno117=str(tmp_path), mods=str(tmp_path / "mods"), workspace=str(tmp_path / "ws"))
+    path = tmp_path / "settings.json"
+    settings.save(path)
+    window = workbench.MainWindow(editorapp.App(path))
+    names = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+    release, readers, real = threading.Event(), [], window.app.catalogue
+
+    def slow():
+        readers.append(threading.current_thread())
+        assert release.wait(30)
+        return real()
+
+    monkeypatch.setattr(window.app, "catalogue", slow)
+    reload_action = next(
+        a for m in window.menuBar().actions() for a in m.menu().actions() if a.text() == tr("islands.reload_islands")
+    )
+    window.tabs.setCurrentIndex(1)
+    reload_action.trigger()
+    reload_action.trigger()  # asked for again while it reads: one refill, of the lists read last
+    assert window.statusBar().currentMessage() == tr("islands.reading_island_lists")
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == names  # the panel stays until it is read
+    filled = []
+    monkeypatch.setattr(window, "_fill_game_tabs", lambda *a, real=window._fill_game_tabs: (filled.append(1), real(*a)))
+    release.set()
+    window.background.join()
+    QApplication.processEvents()
+    assert len(readers) == 2 and threading.main_thread() not in readers and filled == [1]
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == names and window.tabs.currentIndex() == 1
+    monkeypatch.setattr(window.app, "catalogue", lambda: (_ for _ in ()).throw(OSError("the folder is gone")))
+    reload_action.trigger()
+    window.background.join()
+    QApplication.processEvents()
+    assert "the folder is gone" in window.statusBar().currentMessage() and window.tabs.count() == len(names)
     window.close()
 
 
@@ -733,7 +780,7 @@ def test_the_1800_preview_is_the_editor_restricted_to_1800(tmp_path):
     settings.save(tmp_path / "settings.json")
     window = workbench.MainWindow(editorapp.App(tmp_path / "settings.json", games=("anno1800",)))
     assert "1800" in window.windowTitle() and "preview" in window.windowTitle()
-    assert window.ribbon.tab_names() == ["Home", "Object", "Terrain", "Grid", "Path"]  # the rules check, no forest
+    assert window.ribbon.tab_names() == RIBBON_TABS  # the rules check, no forest
     assert not {"road_pieces", "check_slots", "check_falls", "tool_plant"} & set(window.actions)
     assert "check_rules" in window.actions
     assert {"tool_place", "tool_select", "duplicate", "build", "tool_paint", "tool_water", "point_insert"} <= set(
@@ -836,3 +883,275 @@ def test_the_gallery_offers_only_the_islands_own_games_vanilla_ground():
         gallery = MaterialGallery(doc)
         gallery.fill([], vanilla)
         assert [item.data(256)[1]["name"] for item in gallery.items()] == [wanted]  # 117 and 1800 never mixed
+
+
+def _open_fake(main, name: str = "isle"):
+    """The synthetic island opened in ``main`` (read on the window's thread); its document."""
+
+    def open_island(kind, name):
+        main.app.editor = _Editor()
+        return {"kind": "built", "name": name, "editable": True, "buildable": True}
+
+    main.app.open = open_island
+    main.open("built", name)
+    return main.doc
+
+
+def test_a_closed_island_is_let_go_by_the_window_and_its_view(tmp_path):
+    """Every closed island stayed alive: its document as a child of the window, and the view's place tool kept its
+    asset list (and through it the island) until the next one opened."""
+    import gc
+    import weakref
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    from annotoolbox.editor.desktop.desktopeditor import IslandDoc
+
+    qt, main = _window(tmp_path)
+    session = weakref.ref(_open_fake(main).session)
+    assert main.view.placer.panel is main.doc.buildings
+    main.close_island()
+    main.background.join()  # the side data and the minimap, still being read
+    qt.processEvents()
+    main.app.editor = None
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
+    assert main.findChildren(IslandDoc) == [] and main.view.placer.panel is None
+    assert session() is None
+    main.close()
+
+
+def test_a_property_field_only_left_changes_nothing_and_an_edit_keeps_the_other_values(tmp_path):
+    """A spin box reports "editing finished" when it is only tabbed through: the object took the field's rounded value
+    as a move (an undo step and an edit record), and a river its own width as an edit."""
+    qt, main = _window(tmp_path)
+    doc = _open_fake(main)
+    s, props = doc.session, doc.props
+    rock = next(e for e in s.entries if e.kind == "object" and not e.marker)
+    rock.position = [5.12345678, 0.7, 6.5]
+    main.view.select(rock)
+    for key in ("x", "y", "z", "yaw", "tx", "tz", "s"):
+        props._edited(key)
+    assert not s.undo.commands and not s.edits["objects"] and rock.position == [5.12345678, 0.7, 6.5]
+    props.fields["z"].setValue(9.25)
+    props._edited("z")
+    assert rock.position == [5.12345678, 0.7, 9.25] and len(s.undo.commands) == 1  # x is not the field's 5.123
+    main.view.tool = "water"
+    main.view.select_water({"river": 0, "point": 0})
+    for key in ("width", "level"):  # the lake's field is hidden for a river point
+        props._edited(key)
+    assert len(s.undo.commands) == 1 and not s.edits["rivers"] and not s.edits["lakes"]
+    props.fields["width"].setValue(s.river(0)["widths"][0] + 1.5)
+    props._edited("width")
+    assert len(s.undo.commands) == 2 and "0" in s.edits["rivers"]
+    s.undo.mark_clean()
+    main.close()
+
+
+@pytest.mark.parametrize(
+    "request_, name",
+    [
+        (("anno1800", "data/sessions/islands/pool/moderate_l_01/moderate_l_01.a7m"), "moderate_l_01.a7m"),
+        (("built", "n_s01"), "n_s01"),
+        (("blank", "anno1404", "data/levels/islands/south_l_01.isd", True), "south_l_01.isd"),
+        (("blank117", 192), "192"),
+        (("file", "data\\pool\\isle.a7m", None, None), "isle.a7m"),
+    ],
+)
+def test_the_status_bar_names_the_island_being_opened(request_, name):
+    """ "Opening None" and "Opening True": the request's last part is the edit file or an option, not the island."""
+    assert workbench.request_name(request_) == name
+
+
+def test_a_minimap_paint_that_fails_is_said_and_the_last_picture_stays(tmp_path, monkeypatch):
+    """A failed paint showed nothing and said nothing; without a background it stopped the island from opening."""
+    from annotoolbox.editor.desktop import minimappanel
+
+    qt, main = _window(tmp_path)
+    doc = _open_fake(main)
+    main.background.join()
+    qt.processEvents()
+    before, said = doc.minimap.picture.copy(), []
+    monkeypatch.setattr(main, "say", said.append)
+    monkeypatch.setattr(minimappanel.minimap, "paint", lambda *a, **k: 1 / 0)
+    doc.minimap.repaint_map()
+    main.background.join()
+    qt.processEvents()
+    assert len(said) == 1 and "ZeroDivisionError" in said[0]
+    assert (doc.minimap.picture == before).all() and not doc.minimap._painting
+    panel = minimappanel.MinimapPanel(doc.session, None, said.append)  # painted on the window's thread: the same
+    assert len(said) == 2 and panel.picture is None
+    main.close()
+
+
+def test_closing_the_window_waits_for_the_job_and_the_island_being_read(tmp_path, monkeypatch):
+    """The window closed at once: the job's and the reader's threads were cut off when the program ended (a build
+    half written), and an island read late was attached to the closed window."""
+    import threading
+    import time
+
+    from annotoolbox.editor.desktop import desktopjobs
+
+    monkeypatch.setattr(desktopjobs, "ask_stop_wait_cancel", lambda *_a: desktopjobs.WAIT)  # the default answer
+    qt, main = _window(tmp_path)
+    ended = []
+
+    def work(job):
+        time.sleep(0.3)
+        ended.append("job")
+
+    def open_island(kind, name):
+        time.sleep(0.3)
+        ended.append("read")
+        main.app.editor = _Editor()
+        return {"kind": "built", "name": name, "editable": True, "buildable": True}
+
+    main.app.open = open_island
+    main.app._start("a build", work)
+    main._open_after = "isle"  # what a build asks to open when it ends
+    main.open("built", "isle", wait=False)
+    assert main.loading is not None and main.busy_with() == "a build"
+    assert main.close()
+    assert sorted(ended) == ["job", "read"] and main.app.job.state == "done"
+    assert main.loading is None and main.doc is None and not main.closing
+    qt.processEvents()
+    assert main.doc is None and main.loading is None  # the ended build opened nothing either
+    assert not [t for t in threading.enumerate() if t in main.background._threads and t.is_alive()]
+
+
+def test_closing_during_a_job_asks_to_stop_it_wait_or_stay(tmp_path, monkeypatch):
+    """Wait is the path the window took before; Stop ends the job at its next step; Cancel keeps the window."""
+    import threading
+    import time
+
+    from annotoolbox.editor.desktop import desktopjobs
+
+    qt, main = _window(tmp_path)
+    main.show()
+    asked, answers, go = [], [desktopjobs.CANCEL], threading.Event()
+    monkeypatch.setattr(desktopjobs, "ask_stop_wait_cancel", lambda _w, _t, text: asked.append(text) or answers[0])
+    steps = []
+
+    def work(job):
+        for step in ("one", "two", "three"):
+            job.log(step)
+            steps.append(step)
+            assert go.wait(30)
+        job.note("installed")
+        return "built"
+
+    main.app._start("a build", work)
+    assert not main.close() and main.isVisible() and "a build" in asked[0]  # Cancel: the window and the job stay
+    assert main.app.job.state == "running"
+    answers[0] = desktopjobs.STOP
+    threading.Timer(0.2, go.set).start()  # the step under way ends while the window waits
+    assert main.close() and len(asked) == 2
+    assert main.app.job.state == "stopped" and steps == ["one"] and "stopped" in main.app.job.lines[-1]
+
+    qt, main = _window(tmp_path)
+    go.set()
+    main.app._start("a build", lambda job: (time.sleep(0.2), job.log("done"))[1])
+    answers[0] = desktopjobs.WAIT
+    assert main.close() and main.app.job.state == "done" and main.app.job.lines == ["done"]
+    assert main.close() and len(asked) == 3  # nothing runs any more: no question
+
+    box_buttons = []
+    monkeypatch.undo()
+    from PySide6.QtWidgets import QMessageBox
+
+    def exec_(box):
+        box_buttons.extend((b.text(), b is box.defaultButton(), b is box.escapeButton()) for b in box.buttons())
+        box.defaultButton().click()
+
+    monkeypatch.setattr(QMessageBox, "exec", exec_)
+    assert desktopjobs.ask_stop_wait_cancel(None, "t", "a build runs") == desktopjobs.WAIT  # Enter waits
+    assert sorted(box_buttons, key=lambda b: b[1:]) == [
+        ("Stop the build", False, False),
+        ("Cancel", False, True),
+        ("Wait", True, False),
+    ]
+
+
+def test_a_closed_islands_gpu_objects_are_freed_on_opengl():
+    """moderngl frees nothing on its own: every island opened in a session left its buffers, maps and programs on the
+    GPU until the window closed, and so did each batch the renderer replaced."""
+    import gc
+
+    moderngl = pytest.importorskip("moderngl")
+    try:
+        ctx = moderngl.create_standalone_context(require=330)
+    except Exception as exc:  # no OpenGL 3.3 driver here (a CI runner)
+        pytest.skip(f"no OpenGL context: {exc}")
+    from tests.test_editsession import island
+
+    from annotoolbox.editor.desktop import desktoprender, desktopview
+    from annotoolbox.editor.editsession import EditSession
+    from annotoolbox.render import camera
+
+    desktopview.collect_dropped(ctx)  # as the view sets its context up
+    s = EditSession(island())
+    s.finish_loading()
+    r = desktoprender.Renderer(ctx, s, None)
+    fbo = ctx.framebuffer([ctx.renderbuffer((64, 64), 4)], ctx.depth_renderbuffer((64, 64)))
+    r.render(fbo, (64, 64), camera.OrbitCamera((8, 1, 8), 12), desktoprender.ViewOptions())
+    gc.collect()
+    desktopview.free_dropped(ctx)
+    r.release()
+    del r
+    gc.collect()
+    assert desktopview.free_dropped(ctx) > 20  # the terrain, the programs, the targets, the batches' buffers
+    assert not ctx.objects
+    assert not s.listeners
+
+
+def test_a_look_made_again_for_another_quality_takes_the_compiled_shaders_source(monkeypatch):
+    """The shaders are compiled once a renderer; the look made again after a quality change read them from that job
+    and had no source of its own: its objects, decals, sea and post chain were never made, and the view stayed busy."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.editor.desktop import desktopgame
+    from annotoolbox.infra import dxc
+    from annotoolbox.models import shaderview
+
+    class Source:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def __getattr__(self, name):
+            return lambda *a, **k: {"vs": name, "ps": name}
+
+    monkeypatch.setattr(shaderview, "ShaderSource", Source)
+    monkeypatch.setattr(dxc.Dxc, "find", staticmethod(lambda **k: None))
+    first, again = object.__new__(desktopgame.GameIsland), object.__new__(desktopgame.GameIsland)
+    first.r = SimpleNamespace(editor=SimpleNamespace(files=SimpleNamespace(folder=None, archives=None)))
+    got = first._compile()  # the renderer's loader keeps it: the second look is handed the same
+    made = []
+    again.source, again._make = None, lambda *parts: made.append(parts)
+    again._adopt(got, "high")
+    assert again.source is first.source and isinstance(again.source, Source) and again.quality == "high"
+    assert len(made) == 1 and len(made[0]) == 8  # stages, shading, sky, detailed, pages, bake, shadow, native
+
+
+def test_the_island_view_releases_its_renderer_when_its_device_goes_away():
+    """A view moved to another window dropped its renderer unreleased: its session listener, loader threads and the
+    game look's parts stayed with a device that was gone."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.editor.desktop.desktoprhiview import RhiIslandView3D
+    from annotoolbox.editor.desktop.desktopview import IslandControls
+
+    released = []
+    view = SimpleNamespace(
+        renderer=SimpleNamespace(release=lambda: released.append("renderer")),
+        makeCurrent=lambda: None,
+        doneCurrent=lambda: None,
+        _pick=((4, 4), 1, 1),
+        _picked=("readback", {}),
+    )
+    view._release_renderer = lambda: IslandControls._release_renderer(view)
+    RhiIslandView3D.released(view, object())
+    assert released == ["renderer"] and view.renderer is None and view._pick is None and view._picked is None
+    RhiIslandView3D.released(view, object())  # told again with nothing to release
+    assert released == ["renderer"]

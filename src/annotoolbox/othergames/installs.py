@@ -172,6 +172,7 @@ GAMES = {
             ("data/",),
             ".a6m",
             "a6m",  # whole session maps (editor.formats.a7m.session): terrain, ground and objects
+            documents="Anno 2205",  # config, log and accounts (the live link's session file goes beside them)
         ),
         Game(
             "anno2070",

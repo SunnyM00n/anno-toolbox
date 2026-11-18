@@ -99,30 +99,30 @@ def check(source: str, target: str, one_line: bool = False) -> list[Problem]:
     """Everything wrong or doubtful about ``target`` as a translation of ``source``; errors first. ``one_line``: the
     game keeps one text per line, so a real line break would end the text."""
     if not target.strip():
-        return [Problem(WARNING, "length", tr("the text is empty"))] if source.strip() else []
+        return [Problem(WARNING, "length", tr("texts.text_empty"))] if source.strip() else []
     out: list[Problem] = []
     _, closed = braces(target)
     if not closed and braces(source)[1]:
-        out.append(Problem(ERROR, "braces", tr("a brace has no partner")))
+        out.append(Problem(ERROR, "braces", tr("texts.brace_no_partner")))
     missing, extra = _differences(placeholders(source), placeholders(target))
-    out += [Problem(ERROR, "placeholder", tr("missing {token}", token=t)) for t in missing]
-    out += [Problem(ERROR, "placeholder", tr("{token} is not in the source", token=t)) for t in extra]
+    out += [Problem(ERROR, "placeholder", tr("texts.missing_token", token=t)) for t in missing]
+    out += [Problem(ERROR, "placeholder", tr("texts.token_not_source", token=t)) for t in extra]
     missing, extra = _differences(_markup(source), _markup(target))
-    out += [Problem(ERROR, "markup", tr("missing tag {token}", token=t)) for t in missing]
-    out += [Problem(ERROR, "markup", tr("tag {token} is not in the source", token=t)) for t in extra]
+    out += [Problem(ERROR, "markup", tr("texts.missing_tag_token", token=t)) for t in missing]
+    out += [Problem(ERROR, "markup", tr("texts.tag_not_source", token=t)) for t in extra]
     if not (missing or extra):
         out += [
-            Problem(ERROR, "markup", tr("{token} is left open or closed twice", token=t))
+            Problem(ERROR, "markup", tr("texts.left_open_closed_twice", token=t))
             for t in (Counter(unbalanced(target)) - Counter(unbalanced(source))).elements()
         ]
     if one_line and "\n" in target:
-        out.append(Problem(ERROR, "break", tr("this game keeps one text per line: use <br/> for a break")))
+        out.append(Problem(ERROR, "break", tr("texts.game_keeps_one_text_per")))
     elif breaks(source) != breaks(target):
         out.append(
             Problem(
                 WARNING,
                 "breaks",
-                tr("{target} line breaks, the source has {source}", target=breaks(target), source=breaks(source)),
+                tr("texts.line_breaks_source", target=breaks(target), source=breaks(source)),
             )
         )
     if len(target) > max(len(source) * _LONG_FACTOR, len(source) + _LONG_EXTRA):
@@ -131,12 +131,12 @@ def check(source: str, target: str, one_line: bool = False) -> list[Problem]:
                 WARNING,
                 "length",
                 tr(
-                    "{target} characters, the source has {source}: it may not fit",
+                    "texts.characters_source_not_fit",
                     target=len(target),
                     source=len(source),
                 ),
             )
         )
     if (source[:1].isspace(), source[-1:].isspace()) != (target[:1].isspace(), target[-1:].isspace()):
-        out.append(Problem(HINT, "ends", tr("a space or a break at an end differs from the source")))
+        out.append(Problem(HINT, "ends", tr("texts.space_break_end_differs_source")))
     return sorted(out, key=lambda p: (ERROR, WARNING, HINT).index(p.severity))

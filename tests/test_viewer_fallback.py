@@ -94,6 +94,96 @@ def test_a_pass_that_cannot_draw_waits_for_nothing():
     p.sources.close()
 
 
+class _Pass:
+    """A game's pass as the renderer asks it: what it says it drew itself, why it cannot, what it left."""
+
+    ground, drawn_effects, drawn_decals = True, {"smoke.rdp"}, {"Decals/0"}
+    why, rest = "", []
+    switches: dict = {}
+
+    def why_not(self) -> str:
+        return self.why
+
+    def draw(self, drawn, *_frame):
+        return self.rest
+
+
+def test_a_pass_that_does_not_draw_leaves_the_ground_the_effects_and_the_decals_to_the_view():
+    """A pass that failed (or still compiles) kept saying it drew the ground, the effects and the decals of its last
+    frame, so the view drew none of them: the model stood without its ground and its smoke."""
+    pytest.importorskip("PySide6")
+    from annotoolbox.viewer.modellights import SHADERS
+    from annotoolbox.viewer.modelrender import ModelRenderer, ViewState
+
+    r = ModelRenderer.__new__(ModelRenderer)
+    r.game_pass, r.state, r.box, r.messages, r._game_drew = _Pass(), ViewState(look=SHADERS), None, [], False
+    light = {"sunDir": (0.0, 1.0, 0.0), "sunColor": (1.0, 1.0, 1.0)}
+    drawn = [("part", {"key": 0}, None)]
+    assert r._game_shaders(drawn, None, (4, 4), None, light) == []
+    assert r._by_game("ground", None) and r._by_game("drawn_effects", set()) == {"smoke.rdp"}
+    r.game_pass.rest = None  # a shader compiles: our look draws the frame, all of it
+    assert r._game_shaders(drawn, None, (4, 4), None, light) == drawn
+    assert not r._by_game("ground", None) and r._by_game("drawn_decals", set()) == set()
+    r.game_pass.rest, r.game_pass.why = [], "the frame failed: our look draws it"
+    assert r._game_shaders(drawn, None, (4, 4), None, light) == drawn
+    assert not r._by_game("ground", None) and r._by_game("drawn_effects", set()) == set()
+
+
+@pytest.mark.parametrize("name", ["fxcpass:FxcPass", "fxcpass1404:FxcPass1404", "forwardpass:ForwardPass"])
+def test_a_frame_without_a_sea_hands_the_ground_back_to_the_view(name):
+    """The sea of the frame before stood for the ground; a frame that draws nothing by the game's shaders (every part
+    hidden or left to our look) draws no sea, and said it still did."""
+    pytest.importorskip("PySide6")
+    from importlib import import_module
+    from types import SimpleNamespace as N
+
+    from annotoolbox.render.loader import Loader
+
+    module, _, cls = name.partition(":")
+    kind = getattr(import_module(f"annotoolbox.viewer.{module}"), cls)
+    p = kind.__new__(kind)
+    p.r = N(ctx=N(), scene=N(parts=[], decals=[], effects=[]), state=N(particles=False))
+    p.models, p.switches, p.sources, p.ground, p.frame = {}, {}, Loader(), True, None
+    camera = N(eye=lambda: (0.0, 0.0, 0.0))
+    assert p.draw([], None, (4, 4), camera, None, None, np.identity(4)) == [] and p.ground is False
+    p.sources.close()
+
+
+class _Held:
+    """A device object that counts its releases."""
+
+    def __init__(self, log: list, name: str) -> None:
+        self.log, self.name = log, name
+
+    def release(self) -> None:
+        self.log.append(self.name)
+
+    close = release_scene = release
+
+
+def test_a_released_renderer_gives_back_what_it_made_for_itself():
+    """A view makes a new renderer per game opened and releases the one before: its shadow map (2048 x 2048), ground,
+    stand-in textures, instance buffer and programs stayed on the device, every time."""
+    pytest.importorskip("PySide6")
+    from annotoolbox.viewer.modelrender import ModelRenderer
+
+    log: list[str] = []
+    r = ModelRenderer.__new__(ModelRenderer)
+    r.items, r._decals, r._targets, r.textures = {}, {}, None, {"missing": _Held(log, "checker"), "s:gone.dds": None}
+    r.game_pass, r.loader, r.particles = _Held(log, "pass"), _Held(log, "loader"), _Held(log, "particles")
+    r._ground = {"vaos": {"main": _Held(log, "ground vao")}, "vbo": _Held(log, "ground vbo"),
+                 "ibo": _Held(log, "ground ibo"), "joints": None}  # fmt: skip
+    r._shadow = (_Held(log, "shadow map"), _Held(log, "shadow target"))
+    r._dummy, r._dummy_3d, r._dummy_shadow = (_Held(log, n) for n in ("grey", "no table", "no shadow"))
+    r._rest_joints, r.inst = _Held(log, "rest joints"), _Held(log, "instance")
+    r.fullscreen, r.prog = {"sky": _Held(log, "sky vao")}, {"sky": _Held(log, "sky program")}
+    r.release()
+    made = {"ground vao", "ground vbo", "ground ibo", "shadow map", "shadow target", "grey", "no table", "no shadow",
+            "rest joints", "instance", "sky vao", "sky program", "checker", "particles"}  # fmt: skip
+    assert made <= set(log) and len([n for n in log if n in made]) == len(made)  # each once
+    assert r._ground is None and r._shadow is None and r.prog == {} and r.textures == {}
+
+
 def test_no_imitation_of_a_games_materials_is_left_in_the_plain_look():
     """The owner's decision of 2026-11-13: no prefiltered sky reflection, dye mix, metal, gloss or glow channels, or a
     game's own light falloff in our look; one look of ours besides the game's."""

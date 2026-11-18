@@ -41,14 +41,14 @@ def check(meta: dict, grid: int) -> list[str]:
     out = []
     angle = meta.get("start_coast")
     if angle is not None and not 0 <= float(angle) < 360:
-        out.append(tr("the start coast direction is {angle} degrees: it runs from 0 up to 360", angle=angle))
+        out.append(tr("islands.start_coast_direction_degrees_runs", angle=angle))
     rect = meta.get("active_rect")
     if rect is not None:
         x0, z0, x1, z1 = rect
         if not (0 <= x0 < x1 <= grid and 0 <= z0 < z1 <= grid):
             out.append(
                 tr(
-                    "the active rectangle {rect} must lie inside the {grid}-tile grid, corners in order",
+                    "islands.active_rectangle_must_lie_inside",
                     rect=tuple(rect),
                     grid=grid,
                 )
@@ -56,7 +56,7 @@ def check(meta: dict, grid: int) -> list[str]:
         elif any(v % CELL for v in rect):
             out.append(
                 tr(
-                    "the active rectangle {rect} is cut along {cell}-tile cells, as the game's own are",
+                    "islands.active_rectangle_cut_along_tile",
                     rect=tuple(rect),
                     cell=CELL,
                 )

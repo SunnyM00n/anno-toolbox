@@ -47,8 +47,8 @@ def window(qt, tmp_path):
 
 def test_the_file_menu_has_the_export_and_import_entries(window):
     titles = [a.text().replace("&", "") for a in window.menuBar().actions()[0].menu().actions()]
-    assert "Export..." in titles and "Import a model (glTF to .rdm)..." in titles
-    assert "Export the files the filter shows..." in titles
+    assert "Export…" in titles and "Import a model (glTF to .rdm)…" in titles
+    assert "Export the files the filter shows…" in titles
     assert "Inspect" in window.docks
 
 
@@ -172,3 +172,28 @@ def test_another_app_asks_the_viewer_to_export_through_the_suite(qt, tmp_path, m
     assert links.export_files("anno117", [DDS])
     assert asked == [[DDS]]
     window.close()
+
+
+def test_a_cancelled_export_does_not_show_its_progress_again_and_ends_with_its_window(qt, tmp_path):
+    """A step reported after Cancel set the dialog's value, which shows it again; and an export whose window was
+    destroyed went on to its last file."""
+    import shiboken6
+    from PySide6.QtWidgets import QWidget
+
+    from annotoolbox.exporting import run
+    from annotoolbox.viewer.exportdialog import ExportRun
+
+    parent = QWidget()
+    job = ExportRun(None, ["a.dds", "b.dds"], {"raw"}, run.Options(), tmp_path, parent)
+    job._step(1, 2, "a.dds")
+    assert job.dialog.value() == 1 and job.dialog.labelText() == "a.dds"
+    job.dialog.canceled.emit()  # the Cancel button
+    assert job.stop.is_set() and job.dialog.wasCanceled()
+    job._step(2, 2, "b.dds")  # the file that was under way when Cancel came
+    assert job.dialog.labelText() == "a.dds" and not job.dialog.isVisible()
+
+    other = ExportRun(None, ["a.dds"], {"raw"}, run.Options(), tmp_path, parent)
+    assert not other.stop.is_set()
+    shiboken6.delete(parent)  # the window goes, and the run with it
+    assert other.stop.is_set()
+    other._tell(other.signals.step, 1, 1, "a.dds")  # the worker's next report: no error for the window that went

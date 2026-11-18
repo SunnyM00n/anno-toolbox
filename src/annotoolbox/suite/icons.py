@@ -460,16 +460,6 @@ def _app_assets(p: QPainter) -> None:
         p.drawRoundedRect(QRectF(28, y - 6, 26, 12), 2, 2)
 
 
-def _app_ui(p: QPainter) -> None:
-    _stroke(p)
-    p.drawRoundedRect(QRectF(6, 10, 52, 44), 4, 4)
-    _line(p, (6, 20), (58, 20))
-    _stroke(p, ACCENT)
-    p.drawRoundedRect(QRectF(14, 28, 18, 18), 2, 2)
-    _line(p, (38, 30), (50, 30))
-    _line(p, (38, 40), (50, 40))
-
-
 def _app_phoenix(p: QPainter) -> None:
     _stroke(p)
     p.drawRoundedRect(QRectF(6, 10, 52, 44), 4, 4)
@@ -590,7 +580,6 @@ def _project(p: QPainter) -> None:
 ICONS = {
     "app_islands": _app_islands,
     "app_assets": _app_assets,
-    "app_ui": _app_ui,
     "app_phoenix": _app_phoenix,
     "app_viewer": _app_viewer,
     "app_converter": _app_converter,

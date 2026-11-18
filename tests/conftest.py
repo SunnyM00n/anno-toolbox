@@ -56,7 +56,11 @@ def _no_real_game_link(monkeypatch):
     from annotoolbox.suite import linkprotocol
 
     read = linkprotocol.read_session
-    monkeypatch.setattr(linkprotocol, "read_session", lambda user_dir=None: read(user_dir) if user_dir else None)
+    monkeypatch.setattr(
+        linkprotocol,
+        "read_session",
+        lambda user_dir=None, game=linkprotocol.DEFAULT_GAME: read(user_dir, game) if user_dir else None,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +98,20 @@ def _private_build_cache(tmp_path_factory, monkeypatch):
     """A test never reads or fills the user's build cache (buildcache.py), and starts with an empty one."""
     monkeypatch.setenv("ANNO2070_CACHE", str(tmp_path_factory.mktemp("build-cache")))
     monkeypatch.delenv("ANNO2070_NO_CACHE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _private_user_folders(tmp_path_factory, monkeypatch):
+    """On Linux the tool's data, settings and cache folders are the XDG ones (paths.py): a test never reads or writes
+    the user's own. (Windows tests that need the folders set ``LOCALAPPDATA`` themselves.)"""
+    for variable in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.setenv(variable, str(tmp_path_factory.mktemp(variable.lower())))
+
+
+@pytest.fixture(autouse=True)
+def _no_gpu_encoder(monkeypatch):
+    """No test probes this machine's graphics card: BC7 is the CPU encoder's unless a test hands ``bc7gpu`` one."""
+    monkeypatch.setenv("ANNO_BC7_GPU", "none")
 
 
 @pytest.fixture(autouse=True)
@@ -174,6 +192,9 @@ def fake_bc7(monkeypatch):
 
     monkeypatch.setattr(textures, "png_to_bc7", encode)
     monkeypatch.setattr(textures, "rgba_to_bc7", encode_pixels)
+    monkeypatch.setattr(
+        textures, "_encode", lambda px, srgb, srgb_in, mips: (encode_pixels(px, srgb, srgb_in, mips), True)
+    )
     return calls
 
 

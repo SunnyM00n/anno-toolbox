@@ -263,4 +263,5 @@ def test_painted_strokes_set_the_ground_texture_of_the_tiles_they_cover():
     isl = isd1701.Island1701(isd_bytes())
     stroke = {"material": 99, "radius": 0.8, "strength": 1.0, "points": [[0.5, 0.5]]}
     assert isc_edit.apply(isl, {"paint": [stroke]})["paint"] == 1
+    assert isc_edit.apply(isl, {"paint": [{**stroke, "material": "sand"}]})["paint"] == 0  # a hand-edited file
     assert isd1701.Island1701(isl.write()).tiles() == [[99, 82], [78, 82]]

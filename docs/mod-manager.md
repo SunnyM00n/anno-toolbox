@@ -64,7 +64,10 @@ profile alone:
 first is the mod lint of every mod that is on (`modlint`: the silent mistakes of `engine-modloader.md`). The second
 needs the game's folder to be set: every ModOp is applied to the game's files in the loader's order, and each operation
 that matches nothing is listed as `op:nomatch` with its file and line. Without the install only the lint runs. The
-result stays until you rescan.
+status line names the mod the check is at, and **Stop** at its right ends the check before the next mod (a stopped
+check reports nothing). The findings are those of the profile as it was checked: they go when another profile is
+picked, when a mod of the profile is switched or `EnableNewMods` changes, and when the mods folder is read again. A
+check that ends after such a change says so and is not shown.
 
 **Check > Compare the selected mod in Mod diff** and **Compare the mods that are on in Mod diff** open the Mod diff app
 ([`mod-diff.md`](mod-diff.md)) with that question and run it (a mod against the game; the open profile's conflicts, in
@@ -84,6 +87,10 @@ rewritten at each start. It is the only feedback the game gives.
 mods, or a zip with the mod at its top or one folder down. A zip entry that reaches outside its folder is refused. The
 folder gets the mod's own folder name, or its ModID. A name that is not one plain folder name (a path, `..`, a drive, a
 device name such as `con`) is refused. Every mod of one install is checked first: if one is refused, none is installed.
+The copy runs in the background. The status line says what it is at (the zip being unpacked, the mod being copied) and
+**Stop** at its right ends it between two files unpacked, two folders copied or two mods: the staging folder is
+removed, a mod that is not in whole is not in at all, and the status line names the mods that were installed until
+then (the running game is told of those).
 
 An older copy of the same ModID is replaced in three steps. The new one is copied into a staging folder, the old
 folder is renamed aside, and the new one is renamed into its place (the old one comes back when that fails). Only then
@@ -92,6 +99,10 @@ ModID under the same name is never overwritten.
 
 **Install the built project** does the same for the open project's build (the Project window). It refuses a folder
 that holds another mod.
+
+**Import the selected mod as a project...** makes a copy of the selected mod in a new project folder (hard-linked
+where the disk allows) and opens it as the project of the other apps; the installed mod is never changed. The copy runs
+in the background and **Stop** ends it (`docs/mod-import.md`).
 
 **Remove** moves the mod's folder to the recycle bin, or to a `.removed` folder beside it where the system has no bin.
 A mod folder that is a junction or symlink (a working copy linked in) is removed as the link only; its target is never

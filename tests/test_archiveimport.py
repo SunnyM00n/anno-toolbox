@@ -83,6 +83,16 @@ def test_a_file_no_form_holds_is_carried_and_written_with_the_asset_files(import
     assert any("New name" in v.decode("utf-16-le", "ignore") for k, v in out.items() if k.endswith(".txt"))
 
 
+def test_a_second_import_carries_the_archives_files_only(tmp_path):
+    game = open_game("anno2070", old_game(tmp_path / "game"), tmp_path / "cache")
+    stale = tmp_path / "carry" / "data" / "graphics" / "gone.bin"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"left by an earlier import")
+    result = archiveimport.import_archive(game, mod_archive(tmp_path / "My Mod.rda"), tmp_path / "carry")
+    assert sorted(f.name for f in (tmp_path / "carry").rglob("*.bin")) == ["extra.bin"]
+    assert "data/graphics/gone.bin" not in native.render(game.document(result.changes))
+
+
 def test_the_summary_names_the_archive(imported):
     lines = imported[1].lines()
     assert "My Mod.rda" in lines[0] and any("assets:" in line for line in lines)
@@ -168,3 +178,14 @@ def test_a_patch_archives_members_take_their_game_paths_from_the_index_entry(tmp
     assert 3002 in result.changes.new and result.carried == []  # the member was read as the game's asset file
     again = archiveimport.import_archive(game, odd, tmp_path / "carry2")  # without the index it is only a file
     assert again.carried == ["blob/1"]
+
+
+def test_an_asset_file_that_is_not_valid_xml_is_one_finding_and_the_rest_is_imported(tmp_path):
+    game = open_game("anno2070", old_game(tmp_path / "game"), tmp_path / "cache")
+    archive = tmp_path / "Broken.rda"
+    texts = b"\xff\xfe" + "100=New name".encode("utf-16-le")
+    members = {"data/config/game/assets.xml": b"<AssetList><Asset>", "data/loca/eng/txt/buildings.txt": texts}
+    archive.write_bytes(write_v20(members))
+    result = archiveimport.import_archive(game, archive, tmp_path / "carry")
+    assert [line for line in result.lost if "not valid XML" in line and "data/config/game/assets.xml" in line]
+    assert result.changes.texts == {"english": {"100": "New name"}} and not result.changes.assets

@@ -90,11 +90,47 @@ the icons from there by name.
   `tx = -20 * x`, `ty = -20 * y` (x, y the entry's top-left pixel; the packer leaves one pixel between entries). All
   six tables round trip; every entry lies inside its picture.
 - **Font**: `data/ui/<file in lower case>`; its glyphs `<name>_1.png` / `_1_0.dds` are a distance-field picture. The
-  `.ffd` descriptor itself (header, family name, glyph table) is **not decoded** here.
+  `.ffd` descriptor is read in part (`formats/ffdread.py`; "Font descriptors" below).
 - **Dependency list** `.dep.xml`: `<Dependencies>` with `<Texture FileId="extractedfirefiles\pngs\...png" />` per
   picture and `<Language Name="English"><FontDescriptor FileId="roboto_default.ffd"><Texture FileId="roboto_default_1.png"
   /></FontDescriptor></Language>`. Only 13 movies have one (`ui_release.dep.xml` is empty), so the game does not need
   it to load a movie. It is left as it is.
+
+## Font descriptors
+
+Read from the install on 2026-11-17 (the 2205 install of the owner). The game draws text from a **glyph picture per
+font**, not from outlines: no movie holds a `DefineFont` tag, a font reference (tag 251) names a descriptor, and the
+descriptor names the picture. Seven descriptors ship in `data/ui/`: `roboto_default`, `roboto_light_default`,
+`roboto_medium_default`, `roboto_thin_default`, `roboto_bold_default`, `arial_default` and `dfyuanw3-gb_default` (a
+Chinese font). Of the 733 text fields in the 89 movies, 569 use Roboto Light, 63 Roboto Thin, 50 Roboto Medium, 49
+Roboto, one Arial and one the Chinese font; none uses Bold (read from the movies).
+
+**A `.ffd`** (10 to 11 KB), little endian, checked against all six regular descriptors:
+
+| Part | Content |
+|---|---|
+| header | four u16 (the third is a glyph count that the bold stub does not honour, the fourth is 32), then 36 bytes that look like a hash (meaning not known) |
+| name | bytes `fd 0f`, two bytes, a length byte, the family name (`Roboto Light`; the reference's name agrees) |
+| tables | u16 glyph count again; count + 1 u16 offsets (`2 * count + 2` upward in steps of 2); count u16 of `0x11`; count u16 **Unicode characters**, sorted (291 to 296 of them, Latin and Cyrillic among them) |
+| two arrays | count u16 each (the first holds values 5,000 to 21,000, the second mostly 8): not decoded |
+| picture | the NUL-terminated file name of the glyph picture (`Roboto_Light_Default_1.png`) |
+| glyphs | count records of 27 bytes: u16 character, u8 0, four float32 (the glyph's rectangle in the picture as left, top, right, bottom, 0 to 1), four i16 (for `!`: 1, 123, 128, 422; for `A`: -34, 123, 382, 422) |
+| end | a u16 (0 or 1) |
+
+The pictures are 1024 x 1024 (Roboto Thin 1024 x 2048) RGBA files with a signed distance field. `roboto_bold_default`
+is a **stub**: its picture is 64 x 64 (487 bytes) and its descriptor does not follow the layout above, so the reader
+raises for it (the game draws no Bold of Roboto from this file; what it does for a bold text is not known).
+
+**Not decoded:** the unit of the four i16 numbers (the sizes of `A` and `m` fit a design size of about 460 units per em
+plus a margin of about 85), the advance widths and kerning (no field there matches the TrueType advances), the two
+arrays and the header's hash. Without the advances nothing can set a line of text from the picture alone, so the preview
+does **not** draw from the glyph pictures.
+
+**The TrueType files the install does ship.** `data/ui/chromium/roboto-light.ttf` and `roboto-regular.ttf` (for the
+game's embedded browser) carry the same family name as the descriptors (Roboto) and are taken as the faces the pictures were made from
+(inferred: the glyphs were not compared). A Roboto reference is drawn with them: Light at weight 300, Regular at 400. Roboto Medium, Thin and Bold have
+no file: the preview draws them in the nearest shipped weight (Thin as Light, Medium as Regular, Bold as Regular made
+bold by Qt) and says so. Arial and the Chinese font have no file either: the system's font stands in, and says so.
 
 ## ActionScript and how a movie talks to the game
 
@@ -136,7 +172,7 @@ The edit file of the Flash UI editor (`flashui/uiproject.py`, JSON) keeps those 
 - an atlas icon (the same size: pasted into the atlas picture, the table unchanged).
 
 A build applies the edit file to the game's own files every time. Not possible yet: a new picture or file (the
-archive index has no entry for it; see below), a new font (the `.ffd` is not decoded) and a different atlas layout.
+archive index has no entry for it; see below), a new font (the `.ffd` is only partly decoded) and a different atlas layout.
 
 ## Getting a changed file into the game
 
@@ -176,10 +212,15 @@ Note: searched on 2026-11-07.
 ## The preview
 
 The editor draws a movie's first frame (or one sprite's) with Qt: placements by depth with their matrix and alpha,
-shapes as filled outlines (solid, gradients, the game's pictures), directly placed images, and text fields in the
-system font of the family the font reference names. These are left out: masks (clip depths), filters, blend modes,
-colour transforms other than alpha, `PlaceObject3`'s visibility, scale-9 grids, the `.ffd` glyphs, later frames, and
-everything the code builds at run time (most lists and values). So a screen looks emptier than in the game.
+shapes as filled outlines (solid, gradients, the game's pictures; a clipped bitmap once, its edge pixels beyond),
+directly placed images, colour transforms (multiplier and offset, composed through nested sprites), masks (clip
+depths), the blend modes Qt composes (multiply, screen, lighten, darken, difference, add, overlay, hard light), and
+text fields in the game's own Roboto files where the install ships them ("Font descriptors"), else the system font of the
+family the reference names. These are left out: filters,
+`PlaceObject3`'s visibility, scale-9 grids, the `.ffd` glyph pictures, later frames, and everything the code builds at run
+time (most lists and values, and the colours it sets on the `color_*` bases). So a screen looks emptier than in the
+game; [`../ui/2205/flash-ui-editor.md`](../ui/2205/flash-ui-editor.md#what-the-preview-cannot-draw) says what the
+preview shows in place of what it cannot draw.
 
 ## Only the game can confirm
 
@@ -187,5 +228,6 @@ everything the code builds at run time (most lists and values). So a screen look
 - which of PNG and `_0.dds` it draws, and that it takes a picture of another size with the movies' and the size
   table's new size;
 - that a re-signed movie saved by a Flash tool (other code, other tags' layout) still runs;
-- what the 246 flag 1, the 251 flag 128 and the `.ffd` contents mean;
+- what the 246 flag 1, the 251 flag 128 and the `.ffd`'s unread parts (units, advances, the hash) mean, and whether the
+  game's text looks like the preview's TrueType Roboto;
 - where loose files are looked for with `PreferLocalFiles`.

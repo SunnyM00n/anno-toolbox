@@ -97,7 +97,7 @@ def test_the_terrain_shows_the_nodes_drawn_before_while_the_new_ones_bake():
     t.size, t._visible, t.cache = 16.0, None, SliceCache(8)
     t.pages = SimpleNamespace(ready={(0, 0, 0): page})
     t.models = {n: SimpleNamespace(node=n, kind=("grid", None, 0)) for n in (parent, *kids)}
-    t.models[parent].kind = ("detailed", (0, 0, 0), id(page))
+    t.models[parent].kind = ("detailed", (0, 0, 0), page)  # the entry itself: its id could be given again
     for n in (parent, *kids):
         t.cache.get(n)
     t.cache.baked(parent)

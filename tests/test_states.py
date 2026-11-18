@@ -48,17 +48,52 @@ def test_a_conditioned_motion_runs_only_while_its_bits_are_on():
     spin = motion.Spin((0.0, 1.0, 0.0), 1.0, when=COMMON01)
     m = motion.at_time((spin,), 2.5, lambda _l: None, motion.Env(States.of(seq, 2.5)))
     assert np.allclose(m, spin.matrix(1.5))
+    held = States.of(seq, 2.5, held=COMMON02)  # a bit held by hand counts all along
+    assert held.bits == COMMON01 | COMMON02 and held.on_seconds(COMMON02) == 2.5
+    assert held.on_seconds(COMMON01) == pytest.approx(1.5)  # the track's window alone
 
 
-def test_the_position_motion_is_the_engines_sine():
+def _listed_on_seconds(seq: Sequence, seconds: float, mask: int) -> float:
+    """The time ``mask`` was on, from every window of every pass since the start: the slow way, to compare with."""
+    length = seq.duration_ms / 1000 / seq.speed
+    passes = int(seconds // length) if seq.looped else 0
+    spans = sorted(
+        (e.start_ms / 1000 / seq.speed + k * length, min(e.end_ms / 1000 / seq.speed + k * length, seconds))
+        for k in range(passes + 1)
+        for track in seq.tracks
+        for e in track
+        if e.condition & mask
+    )
+    total, reach = 0.0, float("-inf")
+    for a, b in spans:
+        a = max(a, reach)
+        if b > a:
+            total += b - a
+            reach = b
+    return total
+
+
+@pytest.mark.parametrize("looped", [True, False])
+@pytest.mark.parametrize("ends_ms", [(3000, 4000), (5500, 4000), (13000, 2500)])  # windows that outlast their pass too
+def test_a_loop_left_open_costs_no_more_than_one_pass_and_counts_the_same(looped, ends_ms):
+    track = [
+        TrackElement(2, 1000, ends_ms[0], condition=COMMON01),
+        TrackElement(2, 2000, ends_ms[1], condition=COMMON02),
+    ]
+    seq = Sequence("Sequences/0", 1, looped, 2.0, [track])
+    for seconds in (0.0, 0.7, 1.9, 2.0, 3.3, 6.1, 9.99, 41.3):
+        for mask in (COMMON01, COMMON02, COMMON01 | COMMON02):
+            expected = _listed_on_seconds(seq, seconds, mask)
+            assert States.of(seq, seconds).on_seconds(mask) == pytest.approx(expected), (seconds, mask)
+    assert len(States.of(seq, 36000.0).windows) == 2  # hours later: still the two windows of one pass
+
+
+def test_the_position_motion_is_the_engines_sine_in_the_parents_space():
     bob = motion.Bob((1.0, 2.0, 3.0), 2.0, False, np.identity(4))
     for t in (0.0, 0.3, 1.1):
         phase = 2.0 * t
         expected = [math.sin(phase), 2 * math.cos(phase), -3 * math.sin(phase)]
         assert np.allclose(bob.matrix(t)[:3, 3], expected)
-
-
-def test_the_position_motion_moves_in_the_parents_space():
     local = np.identity(4)
     local[:3, :3] = motion.turn((0.0, 1.0, 0.0), math.pi / 2)[:3, :3]
     local[:3, 3] = (5.0, 0.0, 0.0)
@@ -203,12 +238,6 @@ def test_the_clock_alignments_turn_a_part_about_its_own_z_by_the_local_clock():
     assert motion.on_the_clock((own, motion.Align(7, own))) and not motion.on_the_clock((own, motion.Align(2, own)))
 
 
-def test_a_bit_held_by_hand_counts_all_along():
-    held = States.of(_sequence(), 2.5, held=COMMON02)
-    assert held.bits == COMMON01 | COMMON02 and held.on_seconds(COMMON02) == 2.5
-    assert held.on_seconds(COMMON01) == pytest.approx(1.5)  # the track's window alone
-
-
 def test_a_config_names_the_visibility_mask_and_the_motion():
     cfg = """<Config><Models><Config><ConfigType>MODEL</ConfigType><FileName>a.rdm</FileName>
 <Transformer><Config><ConfigType>VISIBILITY_TRANSFORM</ConfigType><Conditions>32</Conditions></Config>
@@ -219,3 +248,12 @@ def test_a_config_names_the_visibility_mask_and_the_motion():
     (spec,) = configtree.animation_transforms(node)
     assert spec.offset == (0.0, 0.5, 0.0) and spec.position_speed == 2 and spec.alignment == 2
     assert spec.conditions == COMMON02 and spec.speed == 1.0
+
+
+def test_a_part_scaled_to_nothing_moves_by_no_step_instead_of_failing_the_scene():
+    """A node with ``Scale`` 0 has no inverse placement: its position motion and alignment raised, so the config did
+    not open (the rest pose is worked out when the scene is built) or the frame did not draw."""
+    nothing = np.diag([0.0, 0.0, 0.0, 1.0])
+    steps = (nothing, motion.Align(2, nothing), motion.Bob((1.0, 0.0, 0.0), 1.0, False, nothing))
+    assert np.allclose(motion.rest(steps), nothing)
+    assert np.isfinite(motion.at_time(steps, 0.4, lambda _link: None, motion.Env(wind=(0.0, 1.0)))).all()

@@ -13,13 +13,15 @@ import numpy as np
 from ...infra.i18n import tr
 from ...render import gamedecals, gamedraw
 
-JOB = "game-decal:{}"
+# with a material's values, its loader job: the loader outlives a look (made again for another rendering
+# quality), so the key names the material itself, not the order it was met in
+JOB = "game-decal"
 
 
 class Look:
     """One material of the island's decals: its loader job, its decals by shape, its draws and their maps."""
 
-    def __init__(self, job: str, values: dict, shapes: dict) -> None:
+    def __init__(self, job: tuple, values: dict, shapes: dict) -> None:
         self.job, self.values, self.shapes = job, values, shapes
         self.draws: list = []
         self.maps: list = []  # the look's texture arrays (``gamedecals.decal_draws``)
@@ -37,7 +39,6 @@ class GameDecals:
     def __init__(self, island) -> None:
         self.island, self.r = island, island.r
         self.looks: dict[tuple, Look] = {}
-        self.jobs: dict[tuple, str] = {}  # material key -> its loader job (kept: compiled again only when new)
         self.programs: dict = {}
         self.waiting = 0  # looks still compiling
         self.error = ""  # why the game's decals do not draw (said once): the view's own from then on
@@ -75,8 +76,7 @@ class GameDecals:
             look.release()
         self.looks = {}
         for k, shapes in found.items():
-            job = self.jobs.setdefault(k, JOB.format(len(self.jobs)))
-            self.looks[k] = Look(job, dict(k), shapes)
+            self.looks[k] = Look((JOB, k), dict(k), shapes)
 
     def _draws(self, got: tuple, look: Look, textures) -> list:
         stages, material = got
@@ -89,7 +89,7 @@ class GameDecals:
 
     def _fail(self, why: str) -> None:
         self.error = why
-        self.r._message(tr("the game's decals: {reason}", reason=why[:300]))
+        self.r._message(tr("islands.games_decals_reason", reason=why[:300]))
         self.release()
 
     def take_failures(self, failed: list) -> None:

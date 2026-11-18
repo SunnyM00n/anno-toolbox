@@ -16,6 +16,7 @@ from dataclasses import replace
 import numpy as np
 
 from ..infra import fxc
+from ..infra.i18n import N_
 from ..models import shader2070, shaderview
 from ..models.shader2070 import NoPass
 from ..render import cloth2070, clothforward, frame2070, fxcdraw, lights2070, nativelook, ocean2070, post2070, sky2070
@@ -220,8 +221,8 @@ class FxcPass(OwnPass):
                 "shading",
                 lambda source: source.shaders.effect_pass(fx, FRAME_DEFINES, technique),
                 lambda stages: Frame2070(self.r.ctx, stages, self._dummies()),
-                "the game's deferred shading",
-                "our look",
+                N_("viewer.games_deferred_shading"),
+                N_("viewer.our_look"),
                 lambda: setattr(self, "shading_broken", True),
             )
         if self.frame is not None:
@@ -231,8 +232,8 @@ class FxcPass(OwnPass):
     def _set_parts(self, frame: Frame2070) -> None:
         """The frame's shadow, sky and lights as compiled and switched on (each off while it compiles)."""
         if self.parts is None and not self.parts_broken:
-            self.parts = self._part("parts2070", compile_parts, lambda got: got, "the game's shadow, sky and lights",
-                                    "the frame without them", lambda: setattr(self, "parts_broken", True))  # fmt: skip
+            self.parts = self._part("parts2070", compile_parts, lambda got: got, N_("viewer.games_shadow_sky_lights"),
+                                    N_("viewer.frame_without_them"), lambda: setattr(self, "parts_broken", True))  # fmt: skip
         got, ctx = self.parts, self.r.ctx
         if got is None:
             return
@@ -262,8 +263,8 @@ class FxcPass(OwnPass):
             "ocean2070",
             lambda source: {k: source.shaders.effect_pass(*v) for k, v in ocean2070.STAGES.items()},
             made,
-            "the game's ocean",
-            "no sea",
+            N_("viewer.games_ocean"),
+            N_("viewer.no_sea"),
             lambda: setattr(self, "ocean_broken", True),
         )
 
@@ -287,6 +288,7 @@ class FxcPass(OwnPass):
         """The G-buffer pass of every group the game's shaders draw, lit by its deferred shading, into ``target``
         with its depth; the rest of ``drawn`` is returned for the renderer, or None while a shader compiles."""
         ready, rest, waiting = self._split(drawn)
+        self.ground = False  # until the sea is drawn: a frame that draws none leaves the ground to the view
         found = []
         for _key, _group, item, place, model in ready:
             model.world = self._world(place)
@@ -318,8 +320,8 @@ class FxcPass(OwnPass):
                 "post2070",
                 lambda ready: post2070.compile_steps(ready.shaders),
                 lambda stages: post2070.PostChain2070(self.r.ctx, stages, self._dummies()),
-                "the game's post sequence",
-                "the view's finish",
+                N_("viewer.games_post_sequence"),
+                N_("viewer.views_finish"),
             )
         if self.post is None:
             return None

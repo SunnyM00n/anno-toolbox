@@ -133,7 +133,7 @@ def text_changes(vanilla: ET.Element | None, patched: ET.Element, key: str) -> t
     for tid, entries in after.items():
         old = before.get(tid, [])
         if len(entries) > max(1, len(old)):
-            lost.append(tr("text {id} is there {n} times; the change set keeps the last", id=tid, n=len(entries)))
+            lost.append(tr("assets.text_times_change_set_keeps", id=tid, n=len(entries)))
         entry = entries[-1]
         inner = entry.find("Text")
         extra = [c.tag for c in _elements(entry) if c.tag not in (key, "Text")]
@@ -142,13 +142,13 @@ def text_changes(vanilla: ET.Element | None, patched: ET.Element, key: str) -> t
         if extra or inner is not None and len(inner):
             lost.append(
                 tr(
-                    "text {id}: its fields {fields} beside the text are not kept",
+                    "assets.text_fields_beside_not_kept",
                     id=tid,
-                    fields=", ".join(extra) or tr("markup"),
+                    fields=", ".join(extra) or tr("assets.markup"),
                 )
             )
         changed[tid] = (inner.text or "") if inner is not None else ""
     for tid in before:
         if tid not in after:
-            lost.append(tr("text {id} was removed; the change set cannot remove a text", id=tid))
+            lost.append(tr("assets.text_removed_change_set_cannot", id=tid))
     return changed, lost

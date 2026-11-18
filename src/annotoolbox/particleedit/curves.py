@@ -228,10 +228,11 @@ class BraceGraph:
             return None
         lo, hi = self.range()
         olds = self.group.groups("Point")
+        by_x = sorted(olds, key=_point_x)  # as points() lists them: a file's points need not be in x order
         made: list[Line] = []
         for k, (x, value) in enumerate(sorted(points)):
             y = (value - lo) / ((hi - lo) or 1.0)
-            made += _point_lines(olds[k] if k < len(olds) else None, olds[0] if olds else None, self.group, x, y)
+            made += _point_lines(by_x[k] if k < len(by_x) else None, olds[0] if olds else None, self.group, x, y)
         lines = _replaced(self.doc, olds, self.group, made)
         single = self.group.entries("Single")
         if single and points:
@@ -250,6 +251,10 @@ class BraceColors:
     @property
     def name(self) -> str:
         return self.group.name
+
+    def range(self) -> tuple[float, float]:
+        """What the view's axes span: a colour list writes its colours as they are, 0..1."""
+        return 0.0, 1.0
 
     def stops(self) -> list[tuple[float, tuple[float, float, float, float]]]:
         out = []
@@ -273,6 +278,12 @@ class BraceColors:
                      Line(f"{inner}RGBA {' '.join(number(c) for c in (tuple(rgba) + (1.0,) * 4)[:4])}", end),
                      Line(f"{inner}Time {number(t)}", end), Line(f"{outer}}}", end)]  # fmt: skip
         return swap(self.doc.lines, _replaced(self.doc, olds, self.group, made), f"{self.name}: {len(stops)} colours")
+
+
+def _point_x(point: Group) -> float:
+    """The x of a 1701 graph's ``Point`` block (0 without a ``p``, as the graph reads it)."""
+    found = point.entries("p")
+    return finite(found[0].values[0]) if found and found[0].values else 0.0
 
 
 def _point_lines(old: Group | None, model: Group | None, holder: Group, x: float, y: float) -> list[Line]:
