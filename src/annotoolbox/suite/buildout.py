@@ -35,6 +35,11 @@ def read(data: bytes | FileRef | Path) -> bytes:
     return Path(data).read_bytes() if isinstance(data, FileRef | Path) else data
 
 
+def read_all(files: dict[str, bytes | FileRef | Path]) -> dict[str, bytes]:
+    """A part's files with every content read (only for a small set: a test, a delivery)."""
+    return {path: read(data) for path, data in files.items()}
+
+
 def same(a: bytes | FileRef | Path, b: bytes | FileRef | Path) -> bool:
     """Whether two files' content is equal (bytes, or files read in chunks)."""
     if isinstance(a, bytes) and isinstance(b, bytes):

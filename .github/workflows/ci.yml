@@ -31,6 +31,23 @@ jobs:
       - name: The link helper builds
         shell: cmd
         run: native\livelink\build.cmd "%GITHUB_WORKSPACE%\out\live-link"
+  linux-build:
+    # the Linux download (docs/installer.md, "Linux") builds on the oldest glibc the release supports, as the release
+    # builds it: the program, its smoke start, the AppImage and its start, the tarball. Nothing is published.
+    runs-on: ubuntu-22.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Qt needs a few system libraries on Linux
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libxcb-cursor0
+      - run: python -m pip install -e ".[gui,music,convert]" pyinstaller==6.22.3 velopack==1.2.161
+      - name: The installer's packer, at the version of the Python module
+        run: dotnet tool install vpk --version 1.2.161 --tool-path tools/vpk
+      - run: python scripts/build_app.py --edition public --smoke --pack
   render-module:
     # the game look's Direct3D 12 module (native/d3d12/README.md): built for the stable ABI with the runner's MSVC,
     # its own test program on Windows' software rasteriser, then the tests with the module in place

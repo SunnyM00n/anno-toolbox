@@ -118,6 +118,13 @@ def coast_distance(heights: np.ndarray, n: int, size: float) -> np.ndarray:
     return out
 
 
+def coast_for(infos: bytes, heights: np.ndarray, size: float) -> np.ndarray:
+    """The coast's distance ``set_island`` takes for these water maps: on the cells of their info map (a distance
+    pass over the island: seconds on a large one, so made where the window's thread does not wait for it)."""
+    cells = len(info_maps(infos)[0]) if infos else 2
+    return coast_distance(heights, cells, size)
+
+
 def place(eye, radius: float) -> np.ndarray:
     """``cMtxOceanLocal`` (row vectors): the grid scaled to ``radius`` around the eye, its centre on ``SNAP``."""
     m = np.diag([radius, 1.0, radius, 1.0])
@@ -258,11 +265,14 @@ class Sea:
         self._pending: dict[str, tuple] | None = None  # map name -> (format, pixels) to upload
         self._model: SeaModel | None = None
 
-    def set_island(self, infos: bytes, heights: np.ndarray, size: float, flow: bytes = b"") -> None:
+    def set_island(
+        self, infos: bytes, heights: np.ndarray, size: float, flow: bytes = b"", sdf: np.ndarray | None = None
+    ) -> None:
         """The island's water maps (``infos``, ``flow``) and the coast's distance from its heights (made anew: drawn
-        from the next frame)."""
+        from the next frame); ``sdf``: that distance made before (``coast_for``, off the caller's thread)."""
         rg, ba = info_maps(infos) if infos else (np.full((2, 2, 2), DEEP[:2], np.uint8), np.zeros((2, 2, 2), np.uint8))
-        sdf = coast_distance(heights, len(rg), size)
+        if sdf is None:
+            sdf = coast_distance(heights, len(rg), size)
         fmt = QRhiTexture.Format
         black = np.zeros((4, 4, 4), np.uint8)
         self._pending = {"cWaterInfoMapRG": (fmt.RG8, rg), "cWaterInfoMapBA": (fmt.RG8, ba),

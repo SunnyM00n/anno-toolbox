@@ -19,7 +19,7 @@ from annotoolbox.models import cfgdoc, cfgparts
 from annotoolbox.objbuild import objdoc, projectpart, shapes, writeback
 from annotoolbox.objbuild.objdoc import ObjectDoc
 from annotoolbox.sources import gametree
-from annotoolbox.suite import livelink
+from annotoolbox.suite import buildout, livelink
 from annotoolbox.suite.project import Project
 from annotoolbox.viewer.modelscene import Options
 
@@ -148,7 +148,10 @@ def test_a_save_lands_in_the_project_and_tells_the_game(game, tmp_path):
         project = Project(tmp_path / "proj", mod_id="my-mod")
         notice = projectpart.EDITS.save_announced(project, "anno117", {SHARED + ".xml": b"<ModOps />", SHARED: b"x"})
         assert projectpart.EDITS.saved_files(project)[SHARED].read_bytes() == b"x"
-        assert projectpart.PART.render(project, None, lambda _m: None) == {SHARED: b"x", SHARED + ".xml": b"<ModOps />"}
+        assert buildout.read_all(projectpart.PART.render(project, None, lambda _m: None)) == {
+            SHARED: b"x",
+            SHARED + ".xml": b"<ModOps />",
+        }
         assert projectpart.PART.has_work(project) and notice.sent and "files.changed" in link.names
     finally:
         livelink.reset()

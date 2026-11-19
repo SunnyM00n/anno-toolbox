@@ -10,12 +10,11 @@ reads such files before the game's; ``bring_in_all`` does it for an edit file's 
 
 from __future__ import annotations
 
+import io
 import re
-import tempfile
-from pathlib import Path
 
 from ..islands.terrain2070 import VANILLA_SET_DIR, vanilla_materials
-from .islandassets import finish_png
+from .islandassets import finish_image
 
 SET_DIRS = {"anno117": VANILLA_SET_DIR, "anno1800": "/config/engine/material_sets/"}
 IMPORTED = "data/imported"  # where another game's files go in a mod (its own paths below it)
@@ -59,11 +58,10 @@ def texture_png(files, path: str, normal: bool = False, opaque: bool = False, al
     found = textures(files, original_path(path))
     if not found:
         raise FileNotFoundError(path)
-    with tempfile.TemporaryDirectory(prefix="a2070_other_") as tmp:
-        out = Path(tmp) / "texture.png"
-        Image.fromarray(fileresolve.decode(files.read(found[0])), "RGBA").save(out, "PNG")
-        finish_png(out, normal, opaque, alpha)
-        return out.read_bytes()
+    img = finish_image(Image.fromarray(fileresolve.decode(files.read(found[0])), "RGBA"), normal, opaque, alpha)
+    out = io.BytesIO()  # in memory: a temp folder a closing program left open raised at its exit
+    img.save(out, "PNG")
+    return out.getvalue()
 
 
 class OtherMaterials:

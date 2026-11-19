@@ -90,6 +90,78 @@ class PageParts:
     deltas: list
 
 
+def page_values(c, key: Key, parts: PageParts, k: int | None, island: dict, size: float) -> None:
+    """``cbTerrainCompress`` for one dispatch of a page's chain: the synthesis of delta ``k`` (None: the steps after
+    the last one), the page's place on the island (``island``: ``cTrnIslandMatrix0/1``, ``size`` its tiles)."""
+    level, nx, nz = key
+    tiles = page_tiles(level)
+    c.set_rows("cScaleFactor", [[float(s), 0.0, 0.0, 0.0] for _codes, s, _bits in parts.deltas])
+    c.set_rows("cQuantBits", [[int(b), 0, 0, 0] for _codes, _s, b in parts.deltas])
+    if k is not None:
+        fine = parts.deltas[k][0].shape[0]
+        c.set("cSrc1Size", [fine, fine])
+        coarse = parts.deltas[k - 1][0] if k else parts.downsampled
+        c.set("cSrc2Size", [coarse.shape[1], coarse.shape[0]])
+        c.set("cCurrentMip", k)
+    else:
+        c.set("cSrc1Size", [PAGE_TEXELS, PAGE_TEXELS])
+    c.set("cHardThreshold", 0.0)
+    c.set("cTrnIslandMatrix0", island["cTrnIslandMatrix0"])
+    c.set("cTrnIslandMatrix1", island["cTrnIslandMatrix1"])
+    c.set("cNormalScale", 256.0 * INNER / tiles)  # unorm height steps into world units per world unit
+    c.set("cNumBorderTexels", BORDER)
+    c.set("cRecSessionTerrainSize", [1.0 / size, 1.0 / size])
+    c.set("cPagePosIS", [nx * tiles, nz * tiles])
+    c.set("cPageSizeIS", tiles)
+
+
+class PageQueue:
+    """What every way of making the pages keeps (``Pages`` on QRhi, ``pagesnative.NativePages`` on the native
+    backend): the pages asked for (``queue``), those made (``ready``: by key, the longest unused first; made again
+    after a coarse upload, ``version``), those this frame's nodes read (``wanted``: never let go for ``KEEP``) and
+    the coarse heights due. ``size``: the island's tiles; ``island``: ``cTrnIslandMatrix0/1``."""
+
+    def __init__(self, size: float, island: dict) -> None:
+        self.size, self.island = size, island
+        self.coarse = None
+        self._coarse_data: tuple[bytes, int] | None = None
+        self.ready: OrderedDict[Key, tuple] = OrderedDict()
+        self.queue: OrderedDict[Key, PageParts] = OrderedDict()
+        self.version = 0  # counts the coarse uploads: the pages compacted against an older one are made again
+        self._made: dict[Key, int] = {}
+        self.wanted: set[Key] = set()
+
+    def set_coarse(self, heights: np.ndarray, step: float) -> None:
+        """New coarse heights (world units): uploaded with the next ``run``, every page compacted again after."""
+        self._coarse_data = upload_heights(heights, step)
+
+    def want(self, key: Key, parts: PageParts) -> None:
+        """A page to rebuild (once; again after a coarse upload), its file's parts."""
+        self.wanted.add(key)
+        if key in self.ready and self._made.get(key) == self.version:
+            self.ready.move_to_end(key)
+        elif key not in self.queue:
+            self.queue[key] = parts
+
+    def busy(self) -> bool:
+        return bool(self.queue) or self._coarse_data is not None
+
+    def _evict(self, ctx) -> None:
+        """The longest unused go first, never one this frame's nodes read: a view of more pages than ``KEEP`` (a
+        continental island whole) let them go and made them again every frame, its nodes baked again for good."""
+        for key in [k for k in self.ready if k not in self.wanted][: max(0, len(self.ready) - KEEP)]:
+            self._let_go(ctx, self.ready.pop(key))
+        self.wanted = set()
+
+    def _let_go(self, ctx, pair: tuple) -> None:
+        """A page's (height, normal) let go after the frame in flight (the frame's nodes may still read it)."""
+        ctx.later(pair[0])
+        ctx.later(pair[1])
+
+    def _page_values(self, c, key: Key, parts: PageParts, k: int | None) -> None:
+        page_values(c, key, parts, k, self.island, self.size)
+
+
 def _texture(rhi, fmt, size: int, storage: bool = False, source: bool = False):
     flags = QRhiTexture.Flag.UsedWithLoadStore if storage else QRhiTexture.Flag(0)
     if source:
@@ -129,25 +201,19 @@ class _Slot:
             t.destroy()
 
 
-class Pages(ComputeChain):
+class Pages(PageQueue, ComputeChain):
     """The coarse texture and the pages (module docstring). ``island`` holds ``cTrnIslandMatrix0/1`` (the island's
     place, the same the terrain draws with); ``coarse`` the session's height texture once uploaded."""
 
     def __init__(self, rhi, stages: dict, size: float, island: dict) -> None:
-        self.rhi, self.size, self.island = rhi, size, island
+        super().__init__(size, island)
+        self.rhi = rhi
         self.upload = ComputeStage(rhi, stages["upload"])
         self.slots: list[_Slot] = []
         for _ in range(PER_FRAME):
             self.slots.append(_Slot(rhi, stages, self.slots[0] if self.slots else None))
-        self.coarse = None
         self._coarse_blocks = None
-        self._coarse_data: tuple[bytes, int] | None = None
         self._coarse_buffer = None
-        self.ready: OrderedDict[Key, tuple] = OrderedDict()
-        self.queue: OrderedDict[Key, PageParts] = OrderedDict()
-        self.version = 0  # counts the coarse uploads: the pages compacted against an older one are made again
-        self._made: dict[Key, int] = {}
-        self.wanted: set[Key] = set()  # the pages this frame's nodes asked for: never let go for ``KEEP``
         self.ctx = None
         self.read_back: Key | None = None  # a page whose synthesized heights and normals to read (the tests)
         self.readbacks: dict[str, QRhiReadbackResult] = {}
@@ -158,21 +224,6 @@ class Pages(ComputeChain):
         for k, slot in enumerate(self.slots):
             out.update({(k, i): s for i, s in enumerate(slot.stages)})
         return out
-
-    def set_coarse(self, heights: np.ndarray, step: float) -> None:
-        """New coarse heights (world units): uploaded with the next ``run``, every page compacted again after."""
-        self._coarse_data = upload_heights(heights, step)
-
-    def want(self, key: Key, parts: PageParts) -> None:
-        """A page to rebuild (once; again after a coarse upload), its file's parts."""
-        self.wanted.add(key)
-        if key in self.ready and self._made.get(key) == self.version:
-            self.ready.move_to_end(key)
-        elif key not in self.queue:
-            self.queue[key] = parts
-
-    def busy(self) -> bool:
-        return bool(self.queue) or self._coarse_data is not None
 
     def run(self, ctx) -> None:
         """The coarse upload when due, then up to ``PER_FRAME`` pages, each dispatch a compute pass of its own."""
@@ -187,13 +238,7 @@ class Pages(ComputeChain):
                 break
             key, parts = self.queue.popitem(last=False)
             ctx.native_pass(lambda cb, batch, s=slot, k=key, p=parts: self._run_page(cb, batch, s, k, p))
-        # the longest unused go first, never one this frame's nodes read: a view of more pages than ``KEEP`` (a
-        # continental island whole) let them go and made them again every frame, its nodes baked again for good
-        for key in [k for k in self.ready if k not in self.wanted][: max(0, len(self.ready) - KEEP)]:
-            height, normal = self.ready.pop(key)
-            ctx.later(height)
-            ctx.later(normal)
-        self.wanted = set()
+        self._evict(ctx)
 
     def _run_upload(self, cb, batch, data: bytes, width: int) -> None:
         rhi = self.rhi
@@ -220,28 +265,6 @@ class Pages(ComputeChain):
         cb.endComputePass(copy_into(rhi, self.coarse, self._coarse_blocks, (width // 4, width // 4)))
         for key in list(self.ready):  # compacted against the old heights: again, keeping the old until then
             self._made[key] = -1
-
-    def _page_values(self, c, key: Key, parts: PageParts, k: int | None) -> None:
-        level, nx, nz = key
-        tiles = page_tiles(level)
-        c.set_rows("cScaleFactor", [[float(s), 0.0, 0.0, 0.0] for _codes, s, _bits in parts.deltas])
-        c.set_rows("cQuantBits", [[int(b), 0, 0, 0] for _codes, _s, b in parts.deltas])
-        if k is not None:
-            fine = parts.deltas[k][0].shape[0]
-            c.set("cSrc1Size", [fine, fine])
-            coarse = parts.deltas[k - 1][0] if k else parts.downsampled
-            c.set("cSrc2Size", [coarse.shape[1], coarse.shape[0]])
-            c.set("cCurrentMip", k)
-        else:
-            c.set("cSrc1Size", [PAGE_TEXELS, PAGE_TEXELS])
-        c.set("cHardThreshold", 0.0)
-        c.set("cTrnIslandMatrix0", self.island["cTrnIslandMatrix0"])
-        c.set("cTrnIslandMatrix1", self.island["cTrnIslandMatrix1"])
-        c.set("cNormalScale", 256.0 * INNER / tiles)  # unorm height steps into world units per world unit
-        c.set("cNumBorderTexels", BORDER)
-        c.set("cRecSessionTerrainSize", [1.0 / self.size, 1.0 / self.size])
-        c.set("cPagePosIS", [nx * tiles, nz * tiles])
-        c.set("cPageSizeIS", tiles)
 
     def _run_page(self, cb, batch, slot: _Slot, key: Key, parts: PageParts) -> None:
         """One page through the chain: the file's parts uploaded, three syntheses, the compaction against the

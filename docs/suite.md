@@ -37,15 +37,17 @@ python -m annotoolbox                         # the island editor on its own
 **Without the need to separately install Python.** The Toolbox ships as a Windows installer
 (`AnnoToolbox-win-Setup.exe`), the one way to install it; the lines above run a developer's checkout. It installs per
 user, needs no administrator, starts the program with a short setup page (language, game folders, the Start menu entry
-and desktop shortcut, the update check) and adds `anno-toolbox.exe` for the command line. It carries no game files on
+and desktop shortcut, the update check) and adds `AnnoToolbox.com` (the console build, beside `AnnoToolbox.exe`) for the command line. It carries no game files on
 its own; the games are automatically searched for on your computer. [`installer.md`](installer.md) says what goes in,
 how updates and uninstall work (Help > *Setup...* and *Uninstall...*), the move from the older installer, why the
 installer is unsigned and how to verify a download.
 
 **Names.** The suite is called "Anno Toolbox". The package is `annotoolbox`, and the command and the repository are
-`anno-toolbox`. The commands are `anno-toolbox rdm ...`, `anno-toolbox export ...` and `anno-toolbox` alone for the
-window; in the installed program `anno-toolbox.exe` started without a command prints its help (it is the console
-program), where `AnnoToolbox.exe` opens the window. The Toolbox ships as the installer only; it is not on PyPI. A checkout of the repository (its README) installs
+`anno-toolbox`. The commands are `anno-toolbox rdm ...` and `anno-toolbox export ...` in a checkout, `AnnoToolbox rdm ...` and
+`AnnoToolbox export ...` in the installed program (on Windows `AnnoToolbox.com` runs in a terminal and `AnnoToolbox.exe` is
+the window, as with `devenv.com`; on Linux one program). Started without a command, the
+installed console program (`.com`) prints its help and the window program (`.exe`) opens the window; a checkout's
+`anno-toolbox` alone opens the window. The Toolbox ships as the installer only; it is not on PyPI. A checkout of the repository (its README) installs
 light (`pip install -e .`) or full (`pip install -e ".[gui]"`).
 
 **Two installs of a checkout, one program.** `pip install -e .` is the **light install**. It has no window and uses only

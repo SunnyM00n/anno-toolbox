@@ -30,6 +30,7 @@ Buffer* Device::buffer(uint64_t size, const std::string& usage, uint32_t stride,
     desc.isIndexBuffer = has(usage, "index");
     desc.isConstantBuffer = has(usage, "constant") || has(usage, "volatile");
     desc.isVolatile = has(usage, "volatile");
+    if (desc.isVolatile) desc.maxVersions = 64;  // Vulkan's ring per buffer; NVRHI's validation asks for one
     desc.isDrawIndirectArgs = has(usage, "indirect");
     nvrhi::ResourceStates state = nvrhi::ResourceStates::ShaderResource;
     if (desc.isVertexBuffer || desc.isIndexBuffer)

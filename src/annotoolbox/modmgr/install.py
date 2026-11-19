@@ -84,7 +84,7 @@ def _folders(source: Path) -> list[Path]:
 
 def _install_zip(path: Path, mods_dir: Path, anno: int | None, job: _Job) -> list[Installed]:
     mods_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=STAGING + "zip-", dir=mods_dir) as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING + "zip-", dir=mods_dir) as tmp:
         root = Path(tmp) / "unpacked"
         job.progress(tr("mods.unpacking_name", name=path.name))
         _extract(path, root, job.progress)

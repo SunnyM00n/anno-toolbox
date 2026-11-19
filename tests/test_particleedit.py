@@ -18,6 +18,7 @@ from annotoolbox.particleedit import outline, projectpart, rdptools, saving
 from annotoolbox.particleedit.curves import COLORS, BraceColors, BraceGraph, XmlCurve
 from annotoolbox.particleedit.effectdoc import BRACE, RDP, XML, EffectDoc
 from annotoolbox.sources import gametree
+from annotoolbox.suite import buildout
 from annotoolbox.suite.project import Project
 
 RDP_PATH = "data/base/fx/smoke.rdp"
@@ -273,7 +274,7 @@ def test_the_project_holds_the_save_and_reopens_it(tree117, tmp_path):
     plan = saving.plan(effect, saving.REPLACE)
     projectpart.EDITS.save_announced(project, "anno117", plan.files, plan.stale)
     saved = projectpart.EDITS.saved_files(project, "anno117")
-    assert projectpart.PART.render(project, None, lambda _m: None) == {RDP_PATH: effect.to_bytes()}
+    assert buildout.read_all(projectpart.PART.render(project, None, lambda _m: None)) == {RDP_PATH: effect.to_bytes()}
     again = EffectDoc.open(tree117, "anno117", RDP_PATH, held=lambda p: saved[p].read_bytes() if p in saved else None)
     assert again.to_bytes() == effect.to_bytes() and again.notes and not parse_rdp(again.to_bytes()).looped
 

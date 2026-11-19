@@ -216,6 +216,7 @@ class Part:
     title: str
     has_work: Callable[[Project], bool]
     render: Callable[[Project, object, Callable[[str], None]], dict[str, bytes | FileRef]]
+    handover: object | None = None  # a ``suite.handovers.Handover``: how the app takes an imported mod's carried files
 
 
 @dataclass(frozen=True)
@@ -270,8 +271,8 @@ class EditsFolder:
     def part(self, key: str, title: str, label: str) -> Part:
         """The app's ``Part``: every saved file goes into the mod as it is (``label`` heads the log line)."""
 
-        def render(project: Project, _settings, log: Callable[[str], None]) -> dict[str, bytes]:
-            files = {path: p.read_bytes() for path, p in self.saved_files(project).items()}
+        def render(project: Project, _settings, log: Callable[[str], None]) -> dict[str, bytes | FileRef]:
+            files = {path: FileRef(p) for path, p in self.saved_files(project).items()}  # taken from where they are
             log(f"{label}: {len(files)} files")
             return files
 
@@ -282,10 +283,12 @@ class EditsFolder:
 class Delivery:
     """How an older game takes the project: ``package(files, project, settings, log)`` turns the parts' merged files
     (game path -> bytes) into the archives to write (path in the install -> bytes), ``install(project, settings,
-    log)`` puts the built archives into the game (its own files kept first) and returns a line to show."""
+    log)`` puts the built archives into the game (its own files kept first) and returns a line to show. ``lazy``: the
+    files reach ``package`` as the parts gave them (bytes or ``FileRef``), not read."""
 
     package: Callable[[dict[str, bytes], Project, object, Callable[[str], None]], dict[str, bytes]]
     install: Callable[[Project, object, Callable[[str], None]], str]
+    lazy: bool = False
 
 
 @dataclass
@@ -371,7 +374,8 @@ def build(
             outputs.append((english(part.title), files))
     merged = merge_files(outputs)
     if delivery is not None:
-        merged = delivery.package({p: buildout.read(d) for p, d in merged.items()}, project, settings, log)
+        files = merged if delivery.lazy else {p: buildout.read(d) for p, d in merged.items()}
+        merged = delivery.package(files, project, settings, log)
     else:
         name, data = _modinfo_file(project, [t for t, _ in outputs])
         merged[name] = data

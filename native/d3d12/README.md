@@ -16,8 +16,8 @@ look. The installer carries the module; a source checkout builds it with `script
 | `src/gpu.h` | the layer's types: the device, one wrapper per resource, the pipeline state, a draw's arguments |
 | `src/device.cpp` | the device: made here (a device of its own, or Windows' software rasteriser for the tests), or taken over from QRhi; NVRHI's and the debug layer's messages; the names Python passes (NVRHI's format names, binding kinds, comparisons) |
 | `src/resources.cpp` | buffers, textures, samplers, binding layouts (by register space, bindless ranges), binding sets, descriptor tables, shaders from DXIL, input layouts, graphics and compute pipelines |
-| `src/commands.cpp` | command lists (uploads, clears, copies, draws, dispatches, timers) and the draw recorded into a command list someone else owns (QRhi's) |
-| `src/interop.cpp` | QRhi's own resources: a `QRhiTexture`'s or `QRhiBuffer`'s Direct3D 12 resource and the state QRhi tracks it in, wrapped for binding sets, and the transitions a draw on QRhi's list needs |
+| `src/commands.cpp` | command lists (uploads, clears, copies of a whole texture or a rectangle of a layer and level, draws, dispatches, timers, transitions of a texture someone else left in another state) and the draw recorded into a command list someone else owns (QRhi's) |
+| `src/interop.cpp` | QRhi's own resources: a `QRhiTexture`'s or `QRhiBuffer`'s Direct3D 12 resource and the state QRhi tracks it in, wrapped for binding sets, and the transitions a draw on QRhi's list needs; the other way, a module texture handed to a `QRhiTexture` (`qrhi_create_from`) |
 | `src/module.cpp` | the Python interface |
 | `tests/layer_test.cpp` | checks that need no GPU: the names, and on the software rasteriser the resources, the patched descriptors and a clear read back |
 | `deps.json` | the pinned sources and the module's version |
@@ -28,10 +28,15 @@ pinned with the commit): the comparison samplers (NVRHI writes `LESS` only; 117'
 descriptors are written again with the engine's comparison), the null texture views of a shader's dimension (NVRHI
 writes a buffer's), and an input element's semantic index (NVRHI counts from 0 per attribute; the engine's meshes
 name `TEXCOORD1` alone). Recording into QRhi's list reads the root signature and tables of NVRHI's pipeline and sets.
+`CommandList.transitions` records barriers on NVRHI's open list ahead of NVRHI's own (its permanent state assumed
+for a texture QRhi read since); a volatile constant buffer gets a version count only NVRHI's validation asks for.
 
-One place reaches past PySide6: `QRhiTexture::nativeTexture()` and `QRhiBuffer::nativeBuffer()` are not exposed to
-Python, so `interop.cpp` calls them through the object's virtual table, laid out as Qt 6's public `qrhi.h` declares it
-(the same from Qt 6.6 to 6.12, checked against 6.12.0's header on 2026-11-17). It first asks the object's
+One place reaches past PySide6: `QRhiTexture::nativeTexture()`, `QRhiTexture::createFrom()` (the slot after it) and
+`QRhiBuffer::nativeBuffer()` are not exposed to Python, so `interop.cpp` calls them through the object's virtual
+table, laid out as Qt 6's public `qrhi.h` declares it (the same from Qt 6.6 to 6.12, checked against 6.12.0's header
+on 2026-11-17). QRhi's Direct3D 12 backend keeps a resource it was given by `createFrom` without owning it (probed
+2026-11-18: no reference taken or dropped), so the module releases it, after QRhi's wrapper; `setNativeLayout`
+(exposed) tells QRhi the state the module left it in. It first asks the object's
 `resourceType()` and refuses anything but a texture or a buffer, and it checks the result with `QueryInterface` for
 `ID3D12Resource`. A Qt update that reorders those virtual functions breaks it, and the tests say so
 (`tests/test_terrainnative.py`). The wrapped resources never go into a command list of NVRHI's: NVRHI tracks no

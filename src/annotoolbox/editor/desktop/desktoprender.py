@@ -34,6 +34,12 @@ from .desktopground import GroundDraw
 from .desktoppick import Picking
 
 LAYERS = ("objects", "markers", "props", "grass", "forest", "water")
+# The threads that load the models. They parse and decode in Python, so more of them do not load faster, they take
+# the window's thread's turns at the interpreter lock: with 4 a continental island's frames took 7 to 13 seconds
+# while its models came, with 2 up to 6 and the scene was in sooner (known-issues "Island editor held the window
+# while an island opened").
+MODEL_WORKERS = 2
+FRAME_BUDGET = 0.03  # seconds of one frame the scene's uploads may take (the rest follows in the next frames)
 SHADOW_SIZE = 2048  # the view's own sun shadow map at the best quality (``render.quality``: half the game frame's)
 
 
@@ -98,7 +104,7 @@ class Renderer(GroundDraw, FramePasses, Picking):
             "overlay": P(vertex_shader=S.OVERLAY_VS, fragment_shader=S.OVERLAY_FS),
         }
         self.fullscreen = {k: ctx.vertex_array(self.prog[k], []) for k in ("sky", "final")}
-        self.library = ModelLibrary(editor) if editor is not None else None
+        self.library = ModelLibrary(editor, MODEL_WORKERS) if editor is not None else None
         self.particles = ParticleLayer(ctx, self.library, self._all_batches, self._gpu_texture)
         self.decals = DecalLayer(ctx)
         self._ground_version = 0  # counts the terrain's changes (the decals are laid again)
@@ -130,6 +136,7 @@ class Renderer(GroundDraw, FramePasses, Picking):
         self._weights_dirty = None
         self._water_meshes = None
         self._dots = None
+        self._sync_left = 0  # the batches the last ``_sync_batches`` left for the next frame (``FRAME_BUDGET``)
         self.game = None  # desktopgame.GameIsland, made when the look first asks for it
         self.seas: list = []  # desktopsea.IslandSea: the old games' seas by their own shaders (2070, 1404, 1701), on QRhi
         self.game_parts: set[tuple] = set()  # (batch key, part index) the game's shaders drew this frame
@@ -173,7 +180,7 @@ class Renderer(GroundDraw, FramePasses, Picking):
 
     def busy(self) -> int:
         """Things still loading: models, textures, ground data."""
-        n = self.loader.pending()
+        n = self.loader.pending() + self._sync_left + getattr(self.ctx, "make_left", 0)
         if self.library is not None:
             n += sum(1 for k in self.session.batches if k[0] != "markers" and k[1] and not self.library.ready(k[1]))
             n += sum(1 for b in self.batches.values() if b.lods_waiting)  # their coarser levels
@@ -339,10 +346,20 @@ class Renderer(GroundDraw, FramePasses, Picking):
                 b.dirty = True
                 if b.parts is None:
                     self._dots = None
+        start, self._sync_left = time.perf_counter(), 0
         for b in self._all_batches():
+            if (b.dirty or b.inst is None) and time.perf_counter() - start > FRAME_BUDGET:
+                self._sync_left += 1  # a continental island's thousands of batches took seconds in one frame
+                continue
             if b.dirty or b.inst is None:
                 self._write_instances(b)
+                if b.parts is None:
+                    self._dots = None  # its dots (``_dots_vao``) come from the matrices just written
             if b.parts is None or any(self.library.lods(p) is not None for p in b.lods_waiting):
+                ready = b.key[0] == "markers" or (self.library is not None and self.library.ready(b.key[1]))
+                if ready and time.perf_counter() - start > FRAME_BUDGET:
+                    self._sync_left += 1  # its meshes and buffers on the device: in a later frame
+                    continue
                 parts = self._batch_parts(b)  # the model arrived, or coarser levels of its parts did
                 if parts is not None:
                     self._dots = None if b.parts is None else self._dots
@@ -425,14 +442,15 @@ class Renderer(GroundDraw, FramePasses, Picking):
 
     def _dots_vao(self):
         if self._dots is None:
+            # from the instance matrices (the view's x mirrored already; a scale of 0 hides one): a loop over every
+            # entry each time a model came took seconds on a continental island's 48,000
             rows = []
             for b in self.batches.values():
-                if b.parts is None or not b.parts:
-                    for e in b.entries:
-                        if e.shown:
-                            x, y, z = e.position
-                            rows.append((self.size - x, y + 0.3, z, 0.95, 0.95, 0.95))
-            pts = np.asarray(rows, "f4").reshape(-1, 6)
+                if (b.parts is None or not b.parts) and b.mats is not None and len(b.mats):
+                    shown = np.abs(b.mats[:, :3, :3]).sum(axis=(1, 2)) > 0
+                    rows.append(b.mats[shown, :3, 3] + np.array([0.0, 0.3, 0.0], "f4"))
+            at = np.concatenate(rows) if rows else np.zeros((0, 3), "f4")
+            pts = np.hstack([at, np.full((len(at), 3), 0.95, "f4")]).astype("f4")
             self._dots = (
                 self.ctx.vertex_array(self.prog["flat"], [(self.ctx.buffer(pts.tobytes()), "3f 3f", "pos", "rgb")])
                 if len(pts)
@@ -602,12 +620,13 @@ class Renderer(GroundDraw, FramePasses, Picking):
             self._draw_ground(frame, opts)
         # the view keeps drawing while the game's look makes parts ahead of their first draw
         # and while its water and clouds move with the clock or it settles (bake, pages, cascades: ``GameIsland``)
-        game_moves = drew and (self.game.objects.ahead_left or self.game.animated)
-        self.animated = bool(opts.underwater and opts.caustics) or bool(game_moves)
+        game_moves = drew and (self.game.objects.ahead_left or self.game.animated or self.ctx.make_left)
+        self.animated = bool(opts.underwater and opts.caustics) or bool(game_moves) or self._sync_left > 0
         frame.now = time.monotonic() - self._start
         streets, models, translucent = self._visible_parts(frame, opts)
         self.drawn_opaque = streets + models  # the game's sea mirrors them (``desktopsea``)
-        self._lay_decals(frame, opts)
+        if not self.game_decals:  # the game's decal shader laid them itself: the view's own are not drawn
+            self._lay_decals(frame, opts)
         if not self.game_decals:  # the game's decal shader drew them into its G-buffer
             self.decals.draw(self, frame, decalmesh.BEFORE_STREETS)  # the game's ground stage (render.decalmesh)
         for b, p, vaos in streets:

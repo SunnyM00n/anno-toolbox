@@ -24,6 +24,7 @@ struct QRhiTextureLike {
     virtual void destroy() = 0;
     virtual bool create() = 0;
     virtual NativeTexture native_texture() = 0;
+    virtual bool create_from(NativeTexture src) = 0;  // the slot after nativeTexture()
 };
 
 struct QRhiBufferLike {
@@ -53,6 +54,18 @@ std::pair<uintptr_t, int> qrhi_texture(uintptr_t texture) {
     ID3D12Resource* r = checked(reinterpret_cast<const void*>(n.object));
     if (!r) throw Error("the QRhiTexture holds no Direct3D 12 resource (not a Direct3D 12 QRhi?)");
     return {uintptr_t(r), n.layout};
+}
+
+bool qrhi_create_from(uintptr_t texture, uintptr_t resource, int state) {
+    auto* t = reinterpret_cast<QRhiTextureLike*>(texture);
+    if (!t || t->resource_type() != QRHI_TEXTURE) throw Error("not a QRhiTexture");
+    if (!checked(reinterpret_cast<const void*>(resource))) throw Error("not a Direct3D 12 resource");
+    // QRhi's Direct3D 12 backend keeps the resource without owning it: the module releases it, after QRhi's wrapper
+    return t->create_from(NativeTexture{uint64_t(resource), state});
+}
+
+uintptr_t Texture::native() const {
+    return uintptr_t(get()->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource).pointer);
 }
 
 uintptr_t qrhi_buffer(uintptr_t buffer, int slot) {

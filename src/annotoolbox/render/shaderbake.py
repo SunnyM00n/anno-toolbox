@@ -174,7 +174,10 @@ def bake(ported: Ported) -> Baked:
     if files is None:
         # the two stages side by side (the baker is a program of its own); the uniform block is the vertex
         # stage's, so only it is read back (a first start bakes every program of the view's look on its thread)
-        with tempfile.TemporaryDirectory(prefix="qsb-") as tmp, ThreadPoolExecutor(2) as pool:
+        with (
+            tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="qsb-") as tmp,
+            ThreadPoolExecutor(2) as pool,
+        ):
             fragment = pool.submit(_bake_stage, qsb, ported.fragment, "frag", Path(tmp), False)
             vert, vinfo = _bake_stage(qsb, ported.vertex, "vert", Path(tmp))
             frag = fragment.result()[0]
@@ -238,7 +241,7 @@ def bake_compute(source: str) -> bytes:
     key = buildcache.digest(VERSION, " ".join(COMPUTE_TARGETS), source)
     files = buildcache.get_files(NAMESPACE, key)
     if files is None:
-        with tempfile.TemporaryDirectory(prefix="qsb-") as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="qsb-") as tmp:
             src, out = Path(tmp) / "shader.comp", Path(tmp) / "shader.comp.qsb"
             src.write_text(source, encoding="utf-8", newline="\n")
             _run(qsb, [*COMPUTE_TARGETS, "-o", str(out), str(src)])

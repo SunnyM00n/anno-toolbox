@@ -9,7 +9,7 @@ donor (117 borrows from 1800) is read from the user's own install at run time, n
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cached_property
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from .assetdoc import AssetDocument
 from .assetindex import AssetIndex, build_index
 from .changeset import ChangeSet
 from .gamefiles import LAYOUTS, GameFiles, Layout, asset_files, open_files
+from .origins import Layer
 from .schema import Schema, borrow, read_schema
 from .xmltree import parse, text
 
@@ -38,11 +39,13 @@ class Game:
     notes: list[str] = field(default_factory=list)
     icon_data: tuple[dict, dict] = field(default_factory=lambda: ({}, {}))  # the atlases and GUID -> tile (icons2070)
     _texts: dict[str, dict[str, str]] = field(default_factory=dict)
+    layer: Layer | None = None  # a mod laid over the game: ``files`` and ``index`` are the game with it (``layered``)
 
     def document(self, changes: ChangeSet | None = None, path: Path | None = None) -> AssetDocument:
         doc = AssetDocument(self.schema, self.index, changes or ChangeSet(self.layout.key), path)
         doc.game_texts = self.texts
         doc.files = self.files
+        doc.layer = self.layer
         return doc
 
     @cached_property
@@ -72,6 +75,34 @@ class Game:
         if language not in self._texts:
             self._texts[language] = read_texts(self.files, self.layout, language)
         return self._texts[language]
+
+
+class LayeredFiles(GameFiles):
+    """A game's files with some of them replaced by files of the mod laid over it: ``over`` maps a path (lower case) to
+    a real file holding the game's file with the mod applied; every other path is the game's. The stamp names the
+    layer, so a cached index of the game alone is never taken for the layered one."""
+
+    def __init__(self, base: GameFiles, over: dict[str, Path], layer_stamp: str) -> None:
+        super().__init__(lambda: base.tree, f"{base.stamp}|{layer_stamp}", base.cache)
+        self.base, self.over = base, {k.lower(): v for k, v in over.items()}
+
+    def exists(self, path: str) -> bool:
+        return path.lower() in self.over or self.base.exists(path)
+
+    def read(self, path: str) -> bytes:
+        return self.over[path.lower()].read_bytes() if path.lower() in self.over else self.base.read(path)
+
+    def local(self, path: str) -> Path:
+        return self.over.get(path.lower()) or self.base.local(path)
+
+
+def layered_game(game: Game, over: dict[str, Path], layer: Layer, layer_stamp: str) -> Game:
+    """``game`` with the mod laid over it: the files ``over`` replace the game's (the asset file with the mod's
+    operations applied), the asset index is built over them, and ``layer`` says which assets the mod added or changed.
+    The schema, the texts and the icons stay the game's."""
+    files = LayeredFiles(game.files, over, layer_stamp)
+    index = build_index(files, asset_files(game.layout, files), None, game.layout.follow_links)
+    return replace(game, files=files, index=index, layer=layer, _texts={})
 
 
 def read_schema_of(layout: Layout, files: GameFiles) -> Schema:

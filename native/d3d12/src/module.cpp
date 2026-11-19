@@ -145,6 +145,7 @@ NB_MODULE(_nativegpu, m) {
         .def_prop_ro("height", [](Texture& t) { return t.desc.height; })
         .def_prop_ro("mips", [](Texture& t) { return t.desc.mipLevels; })
         .def_prop_ro("format", [](Texture& t) { return format_name(t.desc.format); })
+        .def_prop_ro("native", &Texture::native, "its ID3D12Resource*")
         .def("release", &Texture::release);
     nb::class_<Sampler>(m, "Sampler").def("release", &Sampler::release);
     nb::class_<Layout>(m, "Layout").def_ro("bindless", &Layout::bindless).def("release", &Layout::release);
@@ -289,6 +290,10 @@ NB_MODULE(_nativegpu, m) {
         .def("clear_uint", &CommandList::clear_uint, "buffer"_a, "value"_a)
         .def("copy_to_staging", &CommandList::copy_to_staging, "staging"_a, "texture"_a)
         .def("copy_texture", &CommandList::copy_texture, "dst"_a, "src"_a)
+        .def("copy_region", &CommandList::copy_region, "dst"_a, "dst_layer"_a, "dst_mip"_a, "x"_a, "y"_a, "src"_a,
+             "src_layer"_a, "src_mip"_a, "width"_a, "height"_a)
+        .def("transitions", &CommandList::transitions, "items"_a,
+             "(resource, before, after) transitions ahead of NVRHI's own barriers on the open list")
         .def(
             "draw",
             [](CommandList& c, Framebuffer& fb, Pipeline& p, const nb::list& bindings, uint32_t count,
@@ -320,6 +325,8 @@ NB_MODULE(_nativegpu, m) {
     m.def("qrhi_texture", &qrhi_texture, "texture"_a,
           "(ID3D12Resource*, the state QRhi tracks it in) of a QRhiTexture* (shiboken's pointer)");
     m.def("qrhi_buffer", &qrhi_buffer, "buffer"_a, "slot"_a = 0, "a QRhiBuffer*'s ID3D12Resource* of a frame slot");
+    m.def("qrhi_create_from", &qrhi_create_from, "texture"_a, "resource"_a, "state"_a,
+          "QRhiTexture::createFrom of a QRhiTexture* not made yet: the module's resource, tracked from state");
     m.def("transitions", &transitions, "list"_a, "items"_a,
           "(resource, before, after) transitions recorded on a command list someone else owns");
     m.def(

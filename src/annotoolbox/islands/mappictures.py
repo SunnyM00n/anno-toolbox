@@ -113,7 +113,7 @@ def to_dds(pngs: dict[str, bytes]) -> dict[str, bytes]:
     from ..models.textures import png_to_bc7
 
     out: dict[str, bytes] = {}
-    with tempfile.TemporaryDirectory(prefix="a2070_maps_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_maps_") as tmp:
         for name, data in pngs.items():
             src = Path(tmp) / name
             src.write_bytes(data)

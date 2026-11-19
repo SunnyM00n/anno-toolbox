@@ -51,7 +51,7 @@ as PNG (texconv; `.tga` resolves to `_0.dds` like `.psd`), all cached in the wor
   object, all of that model or the whole category, and shows what is hidden again; hidden entries are dimmed. It
   changes the view only, not the edits. "Hide foliage" takes out every plant at once: tree and vegetation assets,
   models from tree, bush, grass and plant folders, and the forest and grass layers.
-- **Layers** (the view tab): objects, markers, effects (props), grass, forest, water, each on or off; the particle
+- **Layers** (the Home tab's Layers group, one toggle each): objects, markers, effects (props), grass, forest, water, each on or off; the particle
   effects of a model follow its layer.
 - **Theme**: the editor look's own colours follow the window's Light / Dark theme live (`viewcolors`, `render/light`):
   the sky gradient and the fog it fades to (a pale sky in Light, a slate one in Dark), the empty view before an

@@ -31,16 +31,21 @@ POINT_TEMPLATES = (
     "MapExitBlocker",
 )
 GROUPS = ("GameObject", "EditorObject")
+# one match at a time (``finditer``): a ``findall`` over the game's 60 MB asset file held the interpreter lock for
+# seconds, and the island window's thread waited for it
+ASSET_BLOCK = re.compile(r"<Asset>((?:(?!<Asset>).)*?)</Asset>", re.S)
 EDITOR_FLAGS = re.compile(r"<(OnlyVisibleInEditor|PlacableInEditor|AddToEditorObjectGrid)>1<")
 
 
 def catalogue(assets_text: str, templates_text: str) -> list[dict]:
     """Every editor-only asset of a point kind: ``{"guid", "name", "template"}``."""
-    editor_templates = set(
-        re.findall(r"<Name>([^<]+)</Name>(?:(?!<Name>).)*?<OnlyVisibleInEditor>1<", templates_text, re.S)
-    )
+    editor_templates = {
+        m.group(1)
+        for m in re.finditer(r"<Name>([^<]+)</Name>(?:(?!<Name>).)*?<OnlyVisibleInEditor>1<", templates_text, re.S)
+    }
     out = []
-    for block in re.findall(r"<Asset>((?:(?!<Asset>).)*?)</Asset>", assets_text, re.S):
+    for found in ASSET_BLOCK.finditer(assets_text):
+        block = found.group(1)
         g = re.search(r"<GUID>(\d+)</GUID>", block)
         t = re.search(r"<Template>([^<]*)</Template>", block)
         if not g or not t or t.group(1) not in POINT_TEMPLATES:
@@ -90,7 +95,8 @@ def samples(files, template_of: dict[int, str]) -> dict[str, tuple[str, filedb.T
 def template_map(assets_text: str) -> dict[int, str]:
     """Asset GUID -> template (117 writes the template ahead of the GUID)."""
     out = {}
-    for block in re.findall(r"<Asset>((?:(?!<Asset>).)*?)</Asset>", assets_text, re.S):
+    for found in ASSET_BLOCK.finditer(assets_text):
+        block = found.group(1)
         g = re.search(r"<GUID>(\d+)</GUID>", block)
         t = re.search(r"<Template>([^<]*)</Template>", block)
         if g and t:

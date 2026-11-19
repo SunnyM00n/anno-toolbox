@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc
 import threading
+import time
 from contextlib import contextmanager
 
 from PySide6.QtCore import QObject, Signal
@@ -108,6 +109,8 @@ class Background(QObject):
         return any(t.is_alive() for t in self._threads)
 
     def join(self, timeout: float = 10.0) -> None:
-        """Wait for the running work (a test; the callbacks still need the event loop)."""
+        """Wait for the running work, at most ``timeout`` seconds in all (a test; the callbacks still need the event
+        loop)."""
+        end = time.monotonic() + timeout
         for thread in list(self._threads):
-            thread.join(timeout)
+            thread.join(max(0.0, end - time.monotonic()))

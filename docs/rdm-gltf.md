@@ -7,7 +7,7 @@ is described in [`formats/rdm.md`](formats/rdm.md).
 ## Install and run
 
 The toolchain is part of the Toolbox. The installed program ([`installer.md`](installer.md)) has it as
-`anno-toolbox.exe rdm ...` and `anno-toolbox.exe export`. A developer's checkout has it too, light (no window
+`AnnoToolbox rdm ...` and `AnnoToolbox export` (a terminal runs its `AnnoToolbox.com`). A developer's checkout has it too, light (no window
 library) or full (with the windows):
 
 ```bash
@@ -258,7 +258,7 @@ its README and issue tracker describe, and where the toolchain stands:
 | `-v` verbosity | every note is printed: what was dropped, computed or could not be kept | - |
 | games 2070, 2205, 1800 | the same and Anno 117; both byte orders (rdm4 issue 144) | read over every shipped file (above) |
 | Explorer context menu (`.reg`) | **not provided**: a Python command; a context-menu entry is a later convenience | - |
-| a prebuilt `.exe` | the Toolbox's installer ([`installer.md`](installer.md)) carries the commands as `anno-toolbox.exe rdm ...` | - |
+| a prebuilt `.exe` | the Toolbox's installer ([`installer.md`](installer.md)) carries the commands as `AnnoToolbox rdm ...` | - |
 
 The next table lists what rdm4's files were measured to carry that the source did not (tainting), and what the
 toolchain does instead:

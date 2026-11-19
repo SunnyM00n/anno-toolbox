@@ -577,6 +577,11 @@ class GameModel:
         self.values: dict[str, object] = {}  # member path -> value its owner sets each frame (a cloth's cbCloth)
         self.raw: dict[str, bytes] = {}  # constant buffer -> the bytes it starts with (a cloth's simulated vertices)
 
+    def fresh(self) -> bool:
+        """Whether its resources are not made yet: its first ``prepare`` is the costly one (``nativepass.prepared``
+        spreads those over frames)."""
+        return not self.keep
+
     def _buffer(self, batch, usage, data: bytes):
         buf = immutable_buffer(self.rhi, batch, usage, data)
         self.keep.append(buf)

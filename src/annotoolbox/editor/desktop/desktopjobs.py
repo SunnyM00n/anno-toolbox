@@ -22,6 +22,7 @@ JOB_STATES = {
     "failed": N_("common.failed"),
     "stopped": N_("viewer.stopped"),
 }  # what ``editorapp.Job`` reports -> how it is shown
+CLOSE_WAIT = 0.5  # seconds the closing window gives the island's background reads (a continental island's took 4.5)
 WAIT_STEP = 0.03  # seconds between two looks at a worker the closing window waits for
 
 
@@ -133,10 +134,11 @@ class JobRunner:
         return ask_stop_wait_cancel(self, self.title, tr("islands.job_running_stop_wait", name=job.name))
 
     def finish_work(self) -> None:
-        """The window closes: wait for the running job and for the island being read, then for the background reads
-        of the island just closed. Their threads end with the program, and one cut off mid-write left a half-written
-        build or install behind. The window keeps painting and takes no input; the status line says what it waits
-        for (island-editor "Closing the window")."""
+        """The window closes: wait for the running job and for the island being read, then half a second for the
+        background reads of the island just closed (a continental island's took 4.5 s: the window closed late). They
+        only read and fill caches (written whole or not at all); a job cut off mid-write left a half-written build or
+        install behind. The window keeps painting and takes no input; the status line says what it waits for
+        (island-editor "Closing the window")."""
         self._open_after = None  # a build that ends now opens nothing into the closing window
         self.closing, said = True, None
         try:
@@ -148,7 +150,7 @@ class JobRunner:
                 time.sleep(WAIT_STEP)
         finally:
             self.closing = False
-        self.background.join()
+        self.background.join(CLOSE_WAIT)  # reads of the island just closed: cut off, they write nothing but caches
 
     def poll(self) -> None:
         """The running job's new log lines; when it has ended, the island lists are read again and the island it

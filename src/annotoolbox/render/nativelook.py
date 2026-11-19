@@ -10,6 +10,7 @@ says how far a game's path is built, ``part_on`` whether a pass draws a part, ``
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -230,6 +231,11 @@ class Options:
         return f is not None and f.enabled and f.on
 
 
+def direct3d_here() -> bool:
+    """Whether this system has Direct3D at all (Windows only): the game's own shaders and the native module need it."""
+    return sys.platform == "win32"
+
+
 def native_label(game: str) -> str:
     """The label of the look "the game's own shaders" for ``game``: its title, compiler and API."""
     g = GAMES.get(game)
@@ -252,6 +258,8 @@ def _native_why(native: NativeGame | None, found: Found, backends: set[str]) -> 
         if not native.note:
             return status_text(NOT_YET)
         return tr("common.title_own_shaders_not_yet", title=native.title, note=tr(native.note))
+    if native.backend not in backends and not direct3d_here():
+        return tr("common.game_look_windows_only")  # the compiler's absence is the lesser news
     if not found.text:
         return found.why or tr("common.shader_compiler_not_found")
     if native.backend not in backends:

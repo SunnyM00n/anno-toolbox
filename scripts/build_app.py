@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import installer_bundle as bundle
+import installer_linux as linux
 import installer_wix as wix
 
 try:  # the public edition's rules need the full source's layers; an exported tree is the public edition already
@@ -25,6 +26,8 @@ except ImportError:
     rules = None
 
 ROOT = bundle.ROOT
+WINDOWS = sys.platform == "win32"  # the other system the program is built for is Linux (docs/installer.md, "Linux")
+LINUX = sys.platform.startswith("linux")
 TOOLBOX_EXCLUDES = ("tkinter", "pytest", "IPython", "matplotlib")  # in the build's environment, never used
 VPK_VERSION = "1.2.161"  # the packer and the velopack wheel are pinned to the same version (docs/installer.md)
 MIGRATION_BELOW = (0, 3, 0)  # releases below this version carry the migration .msi (docs/installer.md)
@@ -32,8 +35,10 @@ UPLOAD_LIST = "upload-list.txt"  # what a release carries, one name per line (th
 FEED_FILES = ("releases.win.json", "RELEASES", "assets.win.json")  # the update feed's index files
 EPILOG = """\
 The Toolbox: PyInstaller's folder mode over suite/toolbox.py (the `gui` extra: PySide6, moderngl), into
-out/installer/<edition>/AnnoToolbox/: AnnoToolbox.exe (the window) and anno-toolbox.exe (the command line: rdm,
-export, or any window with --app), texconv (MIT) in tools/, the schemas read beside the program, the licences, and
+out/installer/<edition>/AnnoToolbox/: AnnoToolbox.exe (the window) and AnnoToolbox.com (the same program built as a
+console program: the command line rdm, export, or any window with --app; a terminal's PATHEXT picks it before the .exe)
+on Windows, one AnnoToolbox program on Linux (--pack there writes an AppImage, its feed and a tarball; docs/installer.md
+"Linux"), texconv (MIT) in tools/ (Windows), the schemas read beside the program, the licences, and
 the game look's Direct3D 12 module (render/_nativegpu.pyd, built first by scripts/build_native.py when it is missing
 or older than native/d3d12/; --no-native leaves it out). The games are not part of it: the program finds them on the
 machine it runs on (suite.settings.detect).
@@ -67,14 +72,16 @@ a = Analysis(
     [{launcher!r}],
     pathex=[{src!r}],
     binaries=[(os.path.join(_qt, n), "PySide6") for n in os.listdir(_qt) if n.split(".")[0] in {baker!r}],
-    hiddenimports=collect_submodules({package!r}) + collect_submodules("glcontext") + ["velopack"],
+    hiddenimports=collect_submodules({package!r}) + collect_submodules("glcontext") + ["velopack"]
+    + (["PySide6.QtShaderTools"] if sys.platform.startswith("linux") else []),  # pulls in qsb's Qt library
     datas=collect_data_files({package!r}),
     excludes={excludes!r},
 )
 pyz = PYZ(a.pure)
-gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name={program!r}, console=False)
-cli = EXE(pyz, a.scripts, [], exclude_binaries=True, name={command!r}, console=True)
-COLLECT(gui, cli, a.binaries, a.datas, name={program!r})
+programs = [EXE(pyz, a.scripts, [], exclude_binaries=True, name={program!r}, console=False)]
+if sys.platform == "win32":  # Linux has one program; Windows a console build beside it (renamed to .com after)
+    programs.append(EXE(pyz, a.scripts, [], exclude_binaries=True, name={console!r}, console=True))
+COLLECT(*programs, a.binaries, a.datas, name={program!r})
 """
 
 
@@ -86,7 +93,7 @@ def spec_text(launcher: Path, src: Path, edition: bundle.Edition) -> str:
     """The PyInstaller spec: one analysis, two exes (windowed and console) in one folder."""
     return SPEC.format(
         src=str(src), launcher=str(launcher), package=edition.package, excludes=list(TOOLBOX_EXCLUDES),
-        program=bundle.PROGRAM, command=edition.command, baker=list(SHADER_BAKER),
+        program=bundle.PROGRAM, console=bundle.CONSOLE_BUILD, baker=list(SHADER_BAKER),
     )  # fmt: skip
 
 
@@ -112,7 +119,8 @@ def add_beside_program(app: Path, tree: Path, edition: bundle.Edition, texconv: 
     for name in bundle.LICENSE_FILES:
         if (tree / name).is_file():
             shutil.copy2(tree / name, app / name)
-    (app / "THIRD-PARTY.txt").write_text(bundle.third_party_text(bundle.third_party()), encoding="utf-8", newline="\n")
+    notices = bundle.third_party_text(bundle.third_party(), windows=WINDOWS)
+    (app / "THIRD-PARTY.txt").write_text(notices, encoding="utf-8", newline="\n")
 
 
 NATIVE_MODULE = "render/_nativegpu.pyd"  # the game look's Direct3D 12 module, in the package (native/d3d12/README.md)
@@ -150,7 +158,7 @@ def check_program(app: Path, tree: Path, edition: bundle.Edition, work: Path, na
 
 def baker_problems(app: Path) -> list[str]:
     """The 3D views bake their shaders with Qt's baker at run time: it must be in the folder and start there."""
-    qsb = app / "_internal" / "PySide6" / "qsb.exe"
+    qsb = app / "_internal" / "PySide6" / exe_name("qsb")
     if not qsb.is_file():
         return [f"Qt's shader baker missing: {qsb.relative_to(app)} (the 3D views would draw nothing)"]
     done = subprocess.run([str(qsb), "--version"], capture_output=True, text=True, timeout=60, check=False)
@@ -166,29 +174,55 @@ def run_pyinstaller(tree: Path, edition: bundle.Edition, work: Path, dist: Path)
     cmd = [sys.executable, "-m", "PyInstaller", str(spec), "--noconfirm", "--clean"]
     cmd += ["--distpath", str(dist), "--workpath", str(work / "pyi")]
     subprocess.run(cmd, check=True, cwd=work, env=pyinstaller_env(tree / "src"))
+    if WINDOWS:  # the devenv way: AnnoToolbox.exe and AnnoToolbox.com, so a terminal's PATHEXT picks the console build
+        (dist / bundle.PROGRAM / f"{bundle.CONSOLE_BUILD}.exe").replace(dist / bundle.PROGRAM / console_name())
     return dist / bundle.PROGRAM
 
 
 def smoke_toolbox(app: Path, edition: bundle.Edition) -> list[str]:
     """The console exe: its version, an rdm help, and every app of the suite started once (own settings folder)."""
-    exe = str(app / (edition.command + ".exe"))
+    return run_smoke([str(app / console_name())], app, console_name())
+
+
+def console_name() -> str:
+    """The file that runs the command line: ``AnnoToolbox.com`` on Windows, the one program on Linux."""
+    return bundle.PROGRAM + ".com" if WINDOWS else bundle.PROGRAM
+
+
+def smoke_env(settings: str) -> dict[str, str]:
+    """The environment of a smoke start: the settings and caches in a folder of their own, Qt without a display."""
+    if WINDOWS:
+        return dict(os.environ, LOCALAPPDATA=settings)
+    return dict(
+        os.environ, HOME=settings, XDG_DATA_HOME=settings, XDG_CONFIG_HOME=settings, XDG_CACHE_HOME=settings,
+        QT_QPA_PLATFORM=os.environ.get("QT_QPA_PLATFORM", "offscreen"),
+    )  # fmt: skip
+
+
+def run_smoke(command: list[str], cwd: Path, label: str) -> list[str]:
+    """The three smoke starts of ``command`` (an exe, or an AppImage with its own flags); what failed."""
     problems = []
     with tempfile.TemporaryDirectory(prefix="toolbox-smoke-", ignore_cleanup_errors=True) as settings:
-        env = dict(os.environ, LOCALAPPDATA=settings)
+        env = smoke_env(settings)
         for argv in (["--version"], ["rdm", "--help"], ["--app", "islands", "--smoke"]):
-            done = subprocess.run([exe, *argv], capture_output=True, text=True, timeout=600, env=env, cwd=app)
-            print(f"{edition.command} {' '.join(argv)} -> exit {done.returncode}")
+            done = subprocess.run([*command, *argv], capture_output=True, text=True, timeout=600, env=env, cwd=cwd)
+            print(f"{label} {' '.join(argv)} -> exit {done.returncode}")
             print(done.stdout.strip())
             if done.returncode != 0:
                 problems.append(f"{' '.join(argv)}: exit {done.returncode} {done.stderr.strip()[-400:]}")
     return problems
 
 
+def exe_name(name: str) -> str:
+    """A program's file name on this system (``.exe`` on Windows only)."""
+    return f"{name}.exe" if WINDOWS else name
+
+
 def find_vpk() -> Path | None:
     """The installer's packer: ``ANNO_VPK``, ``tools/vpk/vpk.exe`` (``dotnet tool install vpk --tool-path tools/vpk``),
     then PATH."""
     options = [Path(os.environ["ANNO_VPK"])] if os.environ.get("ANNO_VPK") else []
-    options.append(ROOT / "tools" / "vpk" / "vpk.exe")
+    options.append(ROOT / "tools" / "vpk" / exe_name("vpk"))
     if on_path := shutil.which("vpk"):
         options.append(Path(on_path))
     return next((p for p in options if p.is_file()), None)
@@ -238,6 +272,10 @@ def pack(app: Path, tree: Path, edition: bundle.Edition, out: Path, args) -> lis
         token = os.environ.get("GITHUB_TOKEN", "")
         done = subprocess.run(download_command(str(vpk), args.delta_from, out, token), check=False)
         print("earlier release:", "downloaded" if done.returncode == 0 else "none found (no delta this time)")
+    if LINUX:
+        icon = args.icon or linux.write_icon(out / "build" / linux.ICON)
+        subprocess.run(linux.pack_command(str(vpk), edition, version, app, out, icon, args.notes), check=True)
+        return []
     subprocess.run(pack_command(str(vpk), edition, version, app, out, args.icon, args.notes, args.sign), check=True)
     return release_files(out, edition, version)
 
@@ -279,29 +317,43 @@ def build_toolbox(args) -> int:
         raise SystemExit("the source tree is not the public edition:\n  " + "\n  ".join(bad))
     out = args.out or ROOT / "out" / "installer" / edition.key
     texconv = bundle.find_texconv(tree, dict(os.environ))
-    if texconv is None and not args.no_texconv:
+    native = WINDOWS and not args.no_native  # the Direct3D 12 module and texconv are Windows only
+    if texconv is None and not args.no_texconv and WINDOWS:
         raise SystemExit("missing texconv (tools/README.md); --no-texconv leaves it out")
-    if not args.no_native and not args.skip_bundle:
+    if native and not args.skip_bundle:
         print(f"native module: {native_module(tree, edition)}")
     started = time.time()
     if not args.skip_bundle:
         app = run_pyinstaller(tree, edition, out / "build", out)
         add_beside_program(app, tree, edition, texconv)
+        if LINUX:
+            linux.add_files(out / bundle.PROGRAM)
     app = out / bundle.PROGRAM
     print(f"folder: {app} ({sum(p.stat().st_size for p in app.rglob('*') if p.is_file()) / 2**20:.0f} MB, "
           f"{time.time() - started:.0f} s)")  # fmt: skip
-    problems = check_program(app, tree, edition, out / "build", native=not args.no_native)
+    problems = check_program(app, tree, edition, out / "build", native=native)
     if args.smoke:
         problems += smoke_toolbox(app, edition)
     if problems:
         raise SystemExit("the program folder has problems:\n  " + "\n  ".join(problems))
     if args.pack:
-        started = time.time()
-        files = pack(app, tree, edition, out, args)
-        for f in files:
-            print(f"release file: {f.name} ({f.stat().st_size / 2**20:.1f} MB)")
-        print(f"packed in {time.time() - started:.0f} s")
-        version = bundle.package_version(tree / "src" / edition.package)
+        pack_release(app, tree, edition, out, args)
+    return 0
+
+
+def pack_release(app: Path, tree: Path, edition: bundle.Edition, out: Path, args) -> None:
+    """The packer, the files only this system's release carries, the checksums and the list of what a release attaches."""
+    started = time.time()
+    files = pack(app, tree, edition, out, args)
+    version = bundle.package_version(tree / "src" / edition.package)
+    if LINUX:
+        files = finish_linux(app, edition, out, version, args)
+    for f in files:
+        print(f"release file: {f.name} ({f.stat().st_size / 2**20:.1f} MB)")
+    print(f"packed in {time.time() - started:.0f} s")
+    if LINUX:
+        sums = linux.write_sums(out, files)
+    else:
         if carries_migration(edition, version):
             setup = out / f"{edition.pack_id}-win-Setup.exe"
             files.append(make_migration(tree, edition, out, setup, args.sign))
@@ -309,10 +361,23 @@ def build_toolbox(args) -> int:
         else:
             print(f"migration package: none for {edition.key} {version} (carried below {MIGRATION_BELOW})")
         sums = write_sums(out, files, edition)
-        names = [*(p.name for p in files), sums.name]
-        (out / UPLOAD_LIST).write_text("\n".join(names) + "\n", encoding="utf-8", newline="\n")
-        print(f"checksums: {sums} (verified); the files of the release are listed in {UPLOAD_LIST}")
-    return 0
+    names = [*(p.name for p in files), sums.name]
+    (out / UPLOAD_LIST).write_text("\n".join(names) + "\n", encoding="utf-8", newline="\n")
+    print(f"checksums: {sums} (verified); the files of the release are listed in {UPLOAD_LIST}")
+
+
+def finish_linux(app: Path, edition: bundle.Edition, out: Path, version: str, args) -> list[Path]:
+    """The AppImage under its release name, the tarball, and (with ``--smoke``) a start of the AppImage itself."""
+    built = out / linux.appimage_name(edition)
+    final = out / linux.release_appimage_name(edition)
+    built.replace(final)
+    linux.make_tarball(app, out, edition, version)
+    if args.smoke:
+        env_flag = "--appimage-extract-and-run"  # no FUSE needed: a CI runner or a container may have none
+        problems = run_smoke([str(final), env_flag], out, final.name)
+        if problems:
+            raise SystemExit("the AppImage does not start:\n  " + "\n  ".join(problems))
+    return linux.release_files(out, edition, version)
 
 
 def main(argv=None) -> int:

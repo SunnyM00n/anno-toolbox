@@ -1,4 +1,4 @@
-"""Locate and run the external tools (texconv required; ffmpeg and the Vorbis codebooks optional, tools/README.md),
+"""Locate and run the external tools (texconv, ffmpeg and the Vorbis codebooks, all optional: tools/README.md),
 and the number of parallel jobs of a run.
 
 Search order for each tool: its environment variable, the checkout's ``tools/`` folder (recursively), then PATH.
@@ -30,7 +30,8 @@ _TOOL_SPECS = {
 }
 
 WHERE_TO_GET = {
-    "texconv": "texconv.exe from https://github.com/microsoft/DirectXTex/releases (tools/README.md)",
+    "texconv": "texconv.exe from https://github.com/microsoft/DirectXTex/releases (tools/README.md; optional, the "
+    "built-in texture path does without)",
     "ffmpeg": "an ffmpeg build with libvorbis, https://ffmpeg.org/download.html (tools/README.md)",
     "wwcodebooks": "packed_codebooks_aoTuV_603.bin, the codebook file of the ww2ogg tool (tools/README.md)",
     "rad": "RAD Video Tools, https://www.radgametools.com/bnkdown.htm (set RAD_VIDEO to radvideo64.exe if elsewhere)",
@@ -184,6 +185,8 @@ def find_tool(name: str) -> Path | None:
     """The program ``name`` (``_TOOL_SPECS``), None when absent. A hit is remembered while the places searched stay
     and the file stands: a PATH search costs 40 ms, and every texture asks (build-cache "Where the time went")."""
     env_var, names = _TOOL_SPECS[name]
+    if os.name != "nt":  # a Windows program in tools/ does not run here (the variable may still name any file)
+        names = tuple(n for n in names if not n.lower().endswith(".exe"))
     key = (name, os.environ.get(env_var, ""), os.environ.get("PATH", ""), str(REPO_TOOLS_DIR))
     hit = _FOUND.get(key)
     if hit is not None and hit.is_file():
@@ -254,7 +257,7 @@ def ffmpeg_bytes(
     ffmpeg's last line when it fails or is missing."""
     ffmpeg = require_tool("ffmpeg")
     if in_suffix:
-        with tempfile.TemporaryDirectory(prefix="ffmpeg-") as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="ffmpeg-") as tmp:
             source, target = Path(tmp) / f"in{in_suffix}", Path(tmp) / f"out{out_suffix}"
             source.write_bytes(data)
             result = run_tool(ffmpeg, ["-y", "-v", "error", "-i", str(source), *args, str(target)], timeout=timeout)
@@ -272,9 +275,13 @@ def ffmpeg_bytes(
 
 
 def require_converters() -> None:
-    """Fail before a build writes anything when texconv or Pillow is missing (meshes need no external tool)."""
-    require_tool("texconv")
-    try:
-        import PIL  # noqa: F401
-    except ImportError:
-        raise ToolError("Pillow is not installed (pip install pillow, or pip install -e '.[dev]')") from None
+    """Fail before a build writes anything when Pillow or numpy is missing. texconv is no longer required: the
+    built-in path converts textures without it (``models.texbackend``); meshes need no external tool."""
+    if os.environ.get("ANNO_TEXTURE_BACKEND", "").strip().lower() == "texconv":  # texbackend.BACKEND_ENV: forced
+        require_tool("texconv")
+    for module, package in (("PIL", "pillow"), ("numpy", "numpy")):
+        try:
+            __import__(module)
+        except ImportError:
+            name = "Pillow" if module == "PIL" else module
+            raise ToolError(f"{name} is not installed (pip install {package}, or pip install -e '.[dev]')") from None

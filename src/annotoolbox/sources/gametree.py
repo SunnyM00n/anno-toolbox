@@ -15,7 +15,7 @@ import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from ..othergames import installs
+from ..othergames import installs, linuxfinder
 from ..paths import documents_dir
 from .overlay import normalize
 
@@ -130,9 +130,12 @@ def _record(key: str) -> installs.Game:
 
 
 def user_dir(key: str) -> Path:
-    """Where the game keeps its mods, logs and saves (the moved Documents folder included)."""
+    """Where the game keeps its mods, logs and saves (the moved Documents folder included; off Windows the folder in
+    the Wine prefix of an install found, ``othergames.linuxfinder``, else the one under Documents)."""
     if key not in DOCUMENTS:
         raise ValueError(f"{key} has no folder under Documents")
+    if linuxfinder.applies() and (found := linuxfinder.user_dir(key)) is not None:
+        return found
     return documents_dir() / DOCUMENTS[key]
 
 

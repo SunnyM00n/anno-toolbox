@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PROGRAM = "AnnoToolbox"  # the window's exe; the console exe is the command's name
+PROGRAM = (
+    "AnnoToolbox"  # the program's name: AnnoToolbox.exe (the window) and, on Windows, AnnoToolbox.com (the console)
+)
+CONSOLE_BUILD = PROGRAM + "-console"  # the console build's name inside PyInstaller, renamed to AnnoToolbox.com
 RUNTIME_FILES = (  # read beside the program at run time (paths.REPO_ROOT / ...); the apps stop without the first
     "docs/formats/phoenix-schema.json",
     "docs/formats/phoenix-schema-1800.json",
@@ -36,6 +39,7 @@ THIRD_PARTY = (
     "miniaudio",
     "velopack",
 )
+WINDOWS_ONLY = ("texconv", "NVRHI", "DirectX-Headers", "nanobind")  # of THIRD_PARTY_FIXED: not in the Linux folder
 THIRD_PARTY_FIXED = (
     ("Python", "PSF-2.0", "the interpreter and its standard library"),
     ("Qt", "LGPL-3.0", "the Qt libraries are separate files in _internal/PySide6 and can be replaced"),
@@ -57,10 +61,6 @@ class Edition:
     upgrade_code: str  # stable for ever: a newer version of this edition replaces the older one through it
     registry_key: str
     suffix: str  # in the migration package's file name
-
-    @property
-    def command(self) -> str:
-        return "anno-toolbox"
 
     @property
     def pack_id(self) -> str:
@@ -163,11 +163,12 @@ def third_party(names=THIRD_PARTY) -> list[tuple[str, str, str]]:
     return out
 
 
-def third_party_text(found: list[tuple[str, str, str]]) -> str:
-    """THIRD-PARTY.txt: what the program folder carries besides this project's code."""
+def third_party_text(found: list[tuple[str, str, str]], windows: bool = True) -> str:
+    """THIRD-PARTY.txt: what the program folder carries besides this project's code (the Linux folder has no texconv
+    and no Direct3D 12 module)."""
     lines = ["Third-party software in this folder", ""]
     lines += [f"{name} {version} - {licence}" for name, version, licence in found]
-    lines += [f"{name} - {licence} ({note})" for name, licence, note in THIRD_PARTY_FIXED]
+    lines += [f"{n} - {lic} ({note})" for n, lic, note in THIRD_PARTY_FIXED if windows or n not in WINDOWS_ONLY]
     lines += ["", "Each project's licence text is in its folder under _internal/ where it ships one."]
     return "\n".join(lines) + "\n"
 

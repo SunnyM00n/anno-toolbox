@@ -24,6 +24,7 @@ from ...render.cull import boxes_in_view
 from ...render.gamecompute import carry
 from ...render.gameframe import GameFrame, Light, Passes
 from ...render.gamelight import DeferredShading, Sky
+from ...render.gamesea import coast_for
 from ..editchange import Change, union_box
 from .desktopgamebake import GROUND_JOB, IslandBake, PaintedMaps
 from .desktopgeometry import triangulate
@@ -32,6 +33,7 @@ BACKEND = "D3D12"
 JOB = "game-island-shaders"
 FILES_JOB = "game-island-files"
 SEA_JOB = "game-island-sea-maps"
+COAST_JOB = "game-island-coast-distance"
 INLAND_JOB = "game-island-inland-water"  # the file's rivers' and lakes' flow speeds and looks
 FOG_JOB = "game-island-fog-map"
 COAST_SECONDS = 1.0  # an edited coast's distance for the sea is made again at most this often (a distance pass)
@@ -122,14 +124,22 @@ def shadow_stages(source) -> dict:
 
 
 def native_shaders(game, compiler):
-    """The terrain's shipped shaders for the native backend (``render.terrainnative``), read and reflected; None
-    where it does not draw (switched off, no module)."""
-    if not terrainnative.enabled():
+    """The shipped shaders of the native backend's terrain parts (``render.terrainnative``, ``pagesnative``,
+    ``bakenative``) read and reflected, in the ``NativeShaders`` that keep them; None where none draws natively
+    (switched off, no module). A part whose shaders do not read raises again when it is made, which says why."""
+    from ...render import bakenative, pagesnative
+
+    parts = [p for p in (terrainnative, pagesnative, bakenative) if p.enabled()]
+    if not parts:
         return None
     from ...models import shadernative
 
     natives = shadernative.NativeShaders(game, compiler)
-    terrainnative.shaders(natives)
+    for part in parts:
+        try:
+            part.shaders(natives)
+        except Exception:  # that part alone draws the earlier way (``GameIsland._make``)
+            continue
     return natives
 
 
@@ -194,6 +204,11 @@ class GameIsland(IslandBake):
         self._coast_edited, self._coast_at = False, 0.0  # heights edited since the sea's coast was made, and when
         self.inland_waiting = False  # the game's rivers and lakes compile or the file's flow and look load
         self.native = None  # render.terrainnative.NativeTerrain: the terrain by the shipped shaders (None: the rewrite)
+        # the native backend's device over QRhi's and its textures handed to QRhi (the pages' and the bake's); the
+        # current path's page shaders (the native pages' fallback) and the shipped ones
+        self._device = self._handover = None
+        self._page_stages: dict | None = None
+        self._natives = None
         self._inland_key: tuple | None = None  # the lines and heights their bodies were made from
         from .desktopgamedecals import GameDecals
         from .desktopgameground import GroundMaps
@@ -334,9 +349,7 @@ class GameIsland(IslandBake):
         # the ground stage's order: the terrain, the cut-outs clearing its depth, the decals, the models
         drawn = (models if native is None else []) + objects.cutouts + decals + objects.gbuffer
         self.frame.render(target, size, drawn, cam, light, finish=False, shading=shading, passes=passes)
-        if native is not None:
-            native.end_frame()
-        self.r.stats["terrain_native"] = int(native is not None)
+        self._end_native(native)
         self.r.stats["terrain_nodes"] = len(models)
         native_casters = len(passes.native.caster_list) if passes.native is not None else 0  # the terrain's
         self.r.stats["terrain_casters"] = len(passes.casters) + native_casters
@@ -351,6 +364,17 @@ class GameIsland(IslandBake):
         settling = self._unbaked or (self.pages is not None and self.pages.busy()) or fitted
         self.animated = bool(moving or settling)
         return True
+
+    def _end_native(self, native) -> None:
+        """The frame's end for the native parts (``native``: the terrain's, None when the current path drew it):
+        the device's frame ended once for all of them (their late releases count in it), which ways drew."""
+        if native is not None:
+            native.end_frame()
+        if self._device is not None:
+            self._device.end_frame()
+        self.r.stats["terrain_native"] = int(native is not None)
+        self.r.stats["pages_native"] = int(getattr(self.pages, "native", False))
+        self.r.stats["bake_native"] = int(getattr(self.bake, "native", False))
 
     def _terrain_passes(self, passes, models: list, object_casters: list, shadows: bool):
         """The frame's shadow casters and fit, and the terrain's way: drawn first in the G-buffer's and the shadow's
@@ -392,7 +416,13 @@ class GameIsland(IslandBake):
                 return None
             if isinstance(maps, Exception):  # the maps do not read: the sea as open sea
                 maps = (b"", b"")
-            sea.set_island(maps[0], s.heights, float(s.size), maps[1])
+            coast = self.r.loader.get(COAST_JOB, lambda: coast_for(maps[0], s.heights.copy(), float(s.size)))
+            if coast is None:  # the distance pass runs off the window's thread
+                self.sea_waiting = True
+                return None
+            sea.set_island(
+                maps[0], s.heights, float(s.size), maps[1], coast if not isinstance(coast, Exception) else None
+            )
             self._coast_edited, self._coast_at = False, time.monotonic()
         elif self._coast_edited and time.monotonic() - self._coast_at >= COAST_SECONDS:
             sea.set_coast(s.heights)  # the shore's foam and fade follow an edited coast, at most once a second
@@ -538,9 +568,14 @@ class GameIsland(IslandBake):
             self.r._message(tr("islands.games_tessellated_terrain", reason=patches[0][1][:300]))
             terrain.set_heights(terrain.heights, None)
         if self.pages is not None and self.pages.error:
-            self.r._message(tr("islands.games_height_pages", reason=self.pages.error[:300]))
+            native = getattr(self.pages, "native", False)  # the native pages: the current path's from now on
+            said = "islands.games_native_pages" if native else "islands.games_height_pages"
+            self.r._message(tr(said, reason=self.pages.error[:300]))
             self.pages.release()
-            self.pages = terrain.pages = None
+            if native and getattr(self.bake, "native", False):  # it reads the native pages: the current path's too
+                self._drop_native_bake(tr("islands.games_native_pages", reason=self.pages.error[:300]))
+            self.pages = terrain.pages = self._new_pages(self._page_stages, native=False) if native else None
+            self._coarse = False
             terrain.set_heights(terrain.heights, None)
         mine = [x for x in mine if all(x is not y for y in patches)]
         shadows = [x for x in mine if terrain.shadow is not None and x[0].program in terrain.shadow]
@@ -549,7 +584,9 @@ class GameIsland(IslandBake):
             self.r._message(tr("islands.games_terrain_shadow", reason=shadows[0][1][:300]))
         mine = [x for x in mine if all(x is not y for y in shadows)]
         baking = [x for x in mine if self.bake is not None and x[0].program is self.bake.program]
-        if baking or (self.bake is not None and self.bake.error):
+        if self.bake is not None and self.bake.error and getattr(self.bake, "native", False):
+            self._drop_native_bake(self.bake.error)  # the native bake alone: the current path's from now on
+        elif baking or (self.bake is not None and self.bake.error):
             self._drop_bake(baking[0][1] if baking else self.bake.error)
         mine = [x for x in mine if all(x is not y for y in baking)]
         if mine:
@@ -572,10 +609,9 @@ class GameIsland(IslandBake):
         self.extras = FrameExtras(ctx.rhi, lambda: self.source, self.r.loader.get, self.r._message)
         said = {"sky": lambda why: tr("islands.games_sky_passes", reason=why),
                 "detailed": lambda why: tr("islands.games_tessellated_terrain", reason=why),
-                "pages": lambda why: tr("islands.games_height_pages", reason=why),
                 "bake": lambda why: tr("islands.games_ground_bake", reason=why),
                 "shadow": lambda why: tr("islands.games_terrain_shadow", reason=why)}  # fmt: skip
-        for key, got in (("sky", sky), ("detailed", detailed), ("pages", pages), ("bake", bake), ("shadow", shadow)):
+        for key, got in (("sky", sky), ("detailed", detailed), ("bake", bake), ("shadow", shadow)):
             if isinstance(got, Exception):
                 self.r._message(said[key](f"{type(got).__name__}: {got}"[:300]))
         if not isinstance(sky, Exception):
@@ -586,27 +622,51 @@ class GameIsland(IslandBake):
             tessellated = Program(detailed["vs"], detailed["ps"], hs=detailed["hs"], ds=detailed["ds"])
         self.terrain = terraindraw.Terrain(ctx.rhi, Program(stages["vs"], stages["ps"]), float(s.size), s.step,
                                            s.width, tessellated)  # fmt: skip
-        if isinstance(pages, dict):
-            self.pages = self.terrain.pages = terrainpages.Pages(ctx.rhi, pages, float(s.size), self.terrain.island)
+        self._page_stages = pages if isinstance(pages, dict) else None
         self._bake_stages = bake if isinstance(bake, dict) else None
         if isinstance(shadow, dict):
             self._make_shadow(shadow, tessellated is not None)
         self._make_native(native)
+        self.pages = self.terrain.pages = self._new_pages(pages)
 
     def _make_native(self, natives) -> None:
-        """The terrain by the game's shipped shaders on the native backend (``terrainnative``) where its shaders
-        read; else, or when its pipelines are refused, the current path draws it (said once)."""
+        """The native backend on QRhi's device where the shipped shaders read, and the terrain by them
+        (``terrainnative``); else, or when its pipelines are refused, the current path draws it (said once)."""
         if natives is None:
             return
         try:
             if isinstance(natives, Exception):
                 raise natives
-            from ...render import nativegpu
+            from ...render import nativecompute, nativegpu
 
-            self.native = terrainnative.NativeTerrain(nativegpu.attach(self.r.ctx.rhi), natives, stencil=True)
+            self._device = nativegpu.attach(self.r.ctx.rhi)
+            self._handover = nativecompute.Handover(self._device, self.r.ctx.rhi)
+            self._natives = natives
+            if terrainnative.enabled():
+                self.native = terrainnative.NativeTerrain(self._device, natives, stencil=True)
         except Exception as exc:
             self.native = None
             self.r._message(tr("islands.games_native_terrain", reason=f"{type(exc).__name__}: {exc}"[:300]))
+
+    def _new_pages(self, stages, native: bool = True):
+        """The height pages by the shipped shaders on the native backend where they read (``pagesnative``), else by
+        the current path's compile (``stages``; its error said); None without either."""
+        from ...render import pagesnative
+
+        s, ctx = self.r.session, self.r.ctx
+        if native and self._handover is not None and pagesnative.enabled():
+            try:
+                return pagesnative.NativePages(self._device, self._natives, self._handover, float(s.size),
+                                               self.terrain.island)  # fmt: skip
+            except Exception as exc:
+                self.r._message(tr("islands.games_native_pages", reason=f"{type(exc).__name__}: {exc}"[:300]))
+        if isinstance(stages, Exception):
+            self.r._message(tr("islands.games_height_pages", reason=f"{type(stages).__name__}: {stages}"[:300]))
+        return (
+            terrainpages.Pages(ctx.rhi, stages, float(s.size), self.terrain.island)
+            if isinstance(stages, dict)
+            else None
+        )
 
     def _make_shadow(self, shadow: dict, tessellated: bool) -> None:
         """The terrain's shadow programs (the tessellated one for tessellated nodes) and the cascades' analysis."""
@@ -644,12 +704,12 @@ class GameIsland(IslandBake):
         self.objects.release()
         self.decals.release()
         for part in (self.bake, self.terrain, self.pages, self.sky, self.fit, self.shading, self.frame, self.extras,
-                     getattr(self, "native", None)):  # fmt: skip
+                     getattr(self, "native", None), self._handover):  # fmt: skip
             if part is not None:
                 part.release()
         self.ground.release()
         self.bake = self.terrain = self.pages = self.sky = self.fit = self.shading = self.frame = self.extras = None
-        self.native = None
+        self.native = self._device = self._handover = self._natives = None
         self._baked_with.clear()
         self._own_rects.clear()
         self._painted = None

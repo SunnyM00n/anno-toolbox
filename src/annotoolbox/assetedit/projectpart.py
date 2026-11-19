@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..infra.i18n import N_
+from ..suite import appfolders
 from ..suite.project import ARCHIVE_GAMES, Part, Project
 from . import modops, native
 from .assetgame import open_installed
@@ -24,6 +25,8 @@ def change_set_path(project: Project) -> Path:
 
 
 def has_work(project: Project) -> bool:
+    if appfolders.layered_record(project) is not None:
+        return True  # a layered project's Assets part writes the mod's patch file (with or without the include)
     path = change_set_path(project)
     if not path.is_file():
         return False
@@ -32,6 +35,10 @@ def has_work(project: Project) -> bool:
 
 
 def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, bytes]:
+    if appfolders.layered_record(project) is not None:
+        from . import layered  # the layered way builds on top of the mod's own patch file (docs/mod-import.md, 3.5 B)
+
+        return layered.render(project, settings, log)
     changes = replace(ChangeSet.load(change_set_path(project)), texts={})  # the Texts part writes every text
     game = open_installed(settings, project.game, log)
     doc = game.document(changes)

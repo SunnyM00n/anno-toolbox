@@ -34,6 +34,7 @@ from . import (
     linkhandover,
     linkroute,
     links,
+    linuxnotice,
     livelink,
     migrate,
     setuppage,
@@ -343,6 +344,7 @@ def run(
     window.show_app(first)
     window.show()
     window.setup = setuppage.attach(window)
+    linuxnotice.attach(window)
     if window.updates:
         window.updates.check_at_start()
     setuppage.first_start(window, settings_existed, carried)

@@ -10,6 +10,7 @@ the start page can say so (island-editor "Other games"). 117 and 2070 have recor
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -104,7 +105,13 @@ class Game:
         return self.key.removeprefix("anno") + "_"
 
     def is_install(self, folder: Path) -> bool:
-        return any((folder / exe).is_file() for exe in self.exes) and all((folder / n).is_file() for n in self.needs)
+        if any((folder / exe).is_file() for exe in self.exes) and all((folder / n).is_file() for n in self.needs):
+            return True
+        if os.name == "nt":
+            return False
+        from .linuxfinder import is_install_ci  # a file system that tells case apart: a copied Windows disk
+
+        return is_install_ci(self, folder)
 
     def present(self, folder: Path) -> bool:
         """Whether ``folder`` holds the game's archives (else it is read as loose files)."""

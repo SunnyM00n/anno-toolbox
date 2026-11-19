@@ -71,6 +71,7 @@ struct Buffer : Held {
 
 struct Texture : Held {
     nvrhi::ITexture* get() const { return static_cast<nvrhi::ITexture*>(handle.Get()); }
+    uintptr_t native() const;  // its ID3D12Resource*
     nvrhi::TextureDesc desc;
 };
 
@@ -247,6 +248,13 @@ public:
     void clear_uint(Buffer& b, uint32_t value);
     void copy_to_staging(Staging& s, Texture& t);
     void copy_texture(Texture& dst, Texture& src);
+    // a rectangle of src's layer and level into dst's at (x, y) (src's texels: a BC texture's blocks copied from a
+    // texture of their bits)
+    void copy_region(Texture& dst, uint32_t dst_layer, uint32_t dst_mip, uint32_t x, uint32_t y, Texture& src,
+                     uint32_t src_layer, uint32_t src_mip, uint32_t width, uint32_t height);
+    // (resource, before, after) recorded on the open list ahead of NVRHI's own barriers: a texture someone else
+    // left in another state than NVRHI's permanent one (QRhi's reads of a texture the module handed over)
+    void transitions(const std::vector<std::tuple<uintptr_t, int, int>>& items);
     void draw(Framebuffer& fb, const Draw& d, bool indexed, float x, float y, float w, float h);
     void dispatch(const Draw& d, uint32_t x, uint32_t y, uint32_t z);
     void begin_timer(Timer& t);
@@ -270,6 +278,8 @@ void record_external(Device& device, uintptr_t list, const Draw& d, bool indexed
 // A QRhiTexture's resource and the state QRhi tracks it in; a QRhiBuffer's resource of a frame slot (interop.cpp)
 std::pair<uintptr_t, int> qrhi_texture(uintptr_t texture);
 uintptr_t qrhi_buffer(uintptr_t buffer, int slot);
+// QRhiTexture::createFrom on a texture not made yet: QRhi's wrapper of a module texture, tracked from ``state``
+bool qrhi_create_from(uintptr_t texture, uintptr_t resource, int state);
 // transitions on a list: (resource, state before, state after), D3D12_RESOURCE_STATES
 void transitions(uintptr_t list, const std::vector<std::tuple<uintptr_t, int, int>>& items);
 

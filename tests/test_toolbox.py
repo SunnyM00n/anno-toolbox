@@ -73,24 +73,6 @@ def test_the_window_names_the_extra_to_install_when_the_gui_libraries_are_missin
     assert "[gui]" in done.stderr and "pip install" in done.stderr
 
 
-def test_the_installed_console_program_started_bare_prints_its_help(monkeypatch, capsys):
-    assert toolbox.console_program("C:/x/anno-toolbox.exe", frozen=True)
-    assert not toolbox.console_program("C:/x/AnnoToolbox.exe", frozen=True)  # the window program opens the window
-    assert not toolbox.console_program("/opt/x/anno-toolbox", frozen=False)  # a source checkout's command too
-    monkeypatch.setattr(toolbox, "console_program", lambda: True)
-    monkeypatch.setattr(toolbox, "run_window", lambda argv: pytest.fail("a bare console start opened the window"))
-    assert toolbox.main([]) == 0 and "rdm" in capsys.readouterr().out
-
-
-def test_the_window_programs_name_is_the_installers():
-    from annotoolbox.paths import REPO_ROOT
-
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    import installer_bundle
-
-    assert installer_bundle.PROGRAM == toolbox.WINDOW_PROGRAM
-
-
 def test_the_groups_are_the_toolboxs_sub_commands(capsys):
     parser = toolbox.group_parser()
     args = parser.parse_args(["rdm", "validate", "model.rdm"])
@@ -103,6 +85,30 @@ def test_the_groups_are_the_toolboxs_sub_commands(capsys):
                  ["viewer-files", "anno117"], ["rdm", "granny", "m.glb"]):  # fmt: skip
         assert parser.parse_args(argv).func.__name__.startswith("cmd_")
         assert argv[0] in toolbox.GROUPS
+
+
+def test_the_installed_console_program_started_bare_prints_its_help(monkeypatch, capsys):
+    assert toolbox.console_program("C:/x/AnnoToolbox.com", frozen=True)
+    assert not toolbox.console_program("C:/x/AnnoToolbox.exe", frozen=True)  # the window program opens the window
+    assert not toolbox.console_program("/opt/x/AnnoToolbox", frozen=True)  # Linux: one program, the window
+    assert not toolbox.console_program("/opt/x/anno-toolbox", frozen=False)  # a source checkout's command too
+    monkeypatch.setattr(toolbox, "console_program", lambda: True)
+    monkeypatch.setattr(toolbox, "run_window", lambda argv: pytest.fail("a bare console start opened the window"))
+    assert toolbox.main([]) == 0 and "rdm" in capsys.readouterr().out
+
+
+def test_the_help_names_the_installed_program_and_a_checkout_its_command():
+    assert toolbox.prog_name(frozen=True) == toolbox.WINDOW_PROGRAM
+    assert toolbox.prog_name(frozen=False) == toolbox.PROG
+
+
+def test_the_window_programs_name_is_the_installers():
+    from annotoolbox.paths import REPO_ROOT
+
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import installer_bundle
+
+    assert installer_bundle.PROGRAM == toolbox.WINDOW_PROGRAM
 
 
 def test_the_rda_group_runs_without_any_gui_library(tmp_path):

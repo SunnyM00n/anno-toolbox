@@ -90,6 +90,9 @@ def delete_requested(folder: Path | None = None, now: float | None = None) -> bo
 
 def _spawn_remove(path: Path) -> None:
     """``rmdir`` apart from this program, so a big cache does not run into the event's time limit."""
+    if sys.platform != "win32":
+        subprocess.Popen(["rm", "-rf", "--", str(path)], close_fds=True, start_new_session=True)
+        return
     comspec = os.environ.get("ComSpec", r"C:\Windows\System32\cmd.exe")
     subprocess.Popen([comspec, "/c", "rmdir", "/s", "/q", str(path)], close_fds=True, **NO_WINDOW)
 
@@ -119,7 +122,7 @@ def before_uninstall(
     """The uninstall event: our shortcuts go; the settings and caches go only on a fresh request. Returns what it did."""
     folder = folder or local_data_dir()
     where = where if where is not None else shortcuts.places()
-    root = root if root is not None else install.root()
+    root = root if root is not None else install.root() or install.appimage()  # the AppImage file on Linux
     removed = shortcuts.remove_ours(where, root) if where is not None and root is not None else []
     wanted = delete_requested(folder, now)
     cancel_request(folder)
@@ -152,8 +155,8 @@ def run(app_factory: Callable[[], Any] | None = None) -> bool:
     """Start the installer's events; True when they are armed. The installed program only (not a source run, not the
     plain command line of a Python environment); a missing ``velopack`` module is no error."""
     if app_factory is None:
-        if not getattr(sys, "frozen", False):
-            return False
+        if not getattr(sys, "frozen", False) or (sys.platform != "win32" and install.appimage() is None):
+            return False  # a source run, or on Linux a program that is not an AppImage (the tarball): nothing to arm
         try:
             import velopack
         except ImportError:

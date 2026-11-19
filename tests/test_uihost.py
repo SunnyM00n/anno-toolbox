@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QMainWindow
 
+from annotoolbox.suite import buildout
 from annotoolbox.suite.settings import Settings
 from annotoolbox.uiedit import projectpart, uihost
 
@@ -82,4 +83,6 @@ def test_one_part_covers_both_editors(tmp_path):
     assert not projectpart.UI_PART.has_work(phoenix_project)
     projectpart.save_file(phoenix_project, "anno117", "data/ui/a.xml", b"a")
     assert projectpart.UI_PART.has_work(phoenix_project)
-    assert projectpart.UI_PART.render(phoenix_project, None, lambda _m: None) == {"data/ui/a.xml": b"a"}
+    assert buildout.read_all(projectpart.UI_PART.render(phoenix_project, None, lambda _m: None)) == {
+        "data/ui/a.xml": b"a"
+    }

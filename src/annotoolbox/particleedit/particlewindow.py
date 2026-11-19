@@ -33,7 +33,7 @@ from ..models.cfgdoc import Doc
 from ..render import rhiview
 from ..sources import gametree
 from ..sources.overlay import normalize
-from ..suite import gameopen, gamesync, links, project, widgets
+from ..suite import appfolders, gameopen, gamesync, links, project, widgets
 from ..suite.background import Background
 from ..viewer import modelscene
 from ..viewer.browser import FileBrowser
@@ -181,7 +181,7 @@ class ParticleWindow(QMainWindow):
                 )
                 return
             self.close_effect()
-            self.set_tree(tree)
+            self.set_tree(appfolders.laid(tree, project.current(self.settings), projectpart.EDITS))
             self.settings.apps.setdefault(APP, {})["game"] = key
             if then:
                 self.open_path(then, model)
@@ -227,7 +227,7 @@ class ParticleWindow(QMainWindow):
         if not self.confirm_discard():
             return False
         tree, game = self.tree, self.tree.game
-        saved = projectpart.EDITS.saved_files(project.current(self.settings), game)
+        saved = appfolders.edited(project.current(self.settings), projectpart.EDITS, game)  # not the imported base
         self._opening += 1
         asked = self._opening
 

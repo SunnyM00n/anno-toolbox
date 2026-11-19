@@ -236,6 +236,27 @@ def root_info(ctx, root: dict) -> RootInfo:
     return info
 
 
+def feeds_picture(ctx, root: dict, uid: int, depth: int = 3) -> bool:
+    """Whether the property ``uid`` of the file ``root`` ends in a picture's ``DynamicImageId``: a binding writes it
+    there, or into a property of a placed file that does (``depth`` files down)."""
+    info = root_info(ctx, root)
+    for b in info.graph.bindings:
+        if not any(
+            s.ids == [uid] and (s.kind == "own" or (s.kind == "path" and s.mode == bindings.SELF)) for s in b.sources
+        ):
+            continue
+        for t in b.targets:
+            if t.kind != "path" or not t.ids:
+                continue
+            if t.ids[-1] in placeholders.PICTURE_IDS:
+                return True
+            node = info.children.get(t.instance or "") if depth > 0 and len(t.ids) == 1 else None
+            placed = ctx.root(fields.get(node, "Template")) if node is not None else None
+            if placed is not None and feeds_picture(ctx, placed, t.ids[0], depth - 1):
+                return True
+    return False
+
+
 def widget_types(ctx, root: dict) -> tuple[tuple[tuple[str, int], ...], list[dict]]:
     """The widget type files of a widget file (its ``WidgetType`` and that type's parents) and the custom properties
     they declare, which every widget of the type has as its own (bindings read them by their UniqueId)."""
@@ -278,6 +299,9 @@ class Scope:
         shared = root_info(ctx, root)
         self.graph, self.by_node, self.children = shared.graph, shared.by_node, shared.children
         self.inputs, self.own = inputs, {}
+        self.pinned: frozenset[int] = getattr(
+            host, "pinned", frozenset()
+        )  # own values the host holds as given (a dump's)
         self.given: dict[tuple[int, ...], object] = {}  # fields the placing file wrote below an own property
         # the fields of each game object this file holds, by who wrote them: STORED and GIVEN (the placing instance),
         # an instance of this file (what its file wrote), OWN (this file's bindings); keyed by (holder, key)
@@ -688,6 +712,8 @@ class Scope:
         if value is None:
             return
         uid = self._own_end(end)
+        if uid is not None and uid in self.pinned:
+            return
         if uid is not None:
             new = with_axis(self.own.get(uid), end.field, value)
             if new != self.own.get(uid):
@@ -754,14 +780,21 @@ class Scope:
         uid = self._own_end(end)
         if uid is not None:
             info = self.own_info.get(uid, {})
-            return OWN_TYPES.get(info.get("type", -1), "value"), info.get("name", "")
+            return self._typed(OWN_TYPES.get(info.get("type", -1), "value"), self.root, uid), info.get("name", "")
         if end.kind == "path" and end.ids and end.ids[-1] >= 0x80000000:
             return placeholders.target_kind(end.ids[-1])
         node = self.children.get(self._target(end) or "") if end.kind == "path" and len(end.ids) == 1 else None
         if node is not None:  # a property of the widget file the child places, as that file declares it
             info = self._placed_info(node, end.ids[0])
-            return OWN_TYPES.get(info.get("type", -1), "value"), info.get("name", "")
+            placed = self.ctx.root(fields.get(node, "Template"))
+            return self._typed(OWN_TYPES.get(info.get("type", -1), "value"), placed, end.ids[0]), info.get("name", "")
+        if end.kind == "path" and len(end.ids) > 1:  # a field of a game object: the game's name for it
+            return "value", gamedata.field_name(self.ctx, end.ids[-1])
         return "value", ""
+
+    def _typed(self, vtype: str, root: dict | None, uid: int) -> str:
+        """A text property that the file feeds into a picture's ``DynamicImageId`` holds a picture's name."""
+        return "picture" if vtype == "string" and root is not None and feeds_picture(self.ctx, root, uid) else vtype
 
     def _game_side(self, end: bindings.End):
         """What the game's side of a two-way binding holds, where the preview knows it: a value set by hand (or in

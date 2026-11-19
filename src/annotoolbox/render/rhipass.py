@@ -190,6 +190,10 @@ class Recorder:
         self._dummies: dict = {}
         self.errors: list[str] = []
         self.failed_models: list[tuple[object, str]] = []  # a native pass's model that did not prepare, its error
+        self.make_spent, self.make_left = (
+            0.0,
+            0,
+        )  # this frame's time on parts new on the device, those left (``nativepass.prepared``)
         self.pass_errors: list[str] = []  # the native passes that raised (also in ``errors``), for their owner
         self._open_batches: list = []
         self._begun = ""  # the kind of pass ("render", "compute") that began and did not end: a failure ends it

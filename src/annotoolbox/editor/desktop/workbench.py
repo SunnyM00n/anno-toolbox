@@ -44,11 +44,12 @@ from ...suite import features, gamesync, icons, theme, widgets
 from ...suite.background import Background, long_lived, release_long_lived
 from .. import archivedelivery, editorapp
 from . import flycamera
-from .desktopeditor import LOOKS, LOOKS_2070, IslandDoc, game_tools, open_session
+from .desktopeditor import LOOKS, LOOKS_2070, IslandDoc, game_tools, look_blocker, open_session
 from .desktopforms import edit_menu as forms_menu
 from .desktopgroup import edit_menu
 from .desktopislands import GameTab, SettingsDialog, tab_title
 from .desktopjobs import CANCEL, STOP, JobRunner
+from .desktopprogress import OpenProgress
 from .desktoprhiview import make_island_view
 from .desktopribbon import (
     MODES,
@@ -65,7 +66,6 @@ from .desktopribbon import (
 TITLE = "Anno Island Editor"
 PAGES = {
     "Viewport": N_("islands.viewport"),
-    "Layers": N_("islands.layers"),
     "Checks": N_("common.checks"),
     "History": N_("common.history"),
     "Log": N_("common.log"),
@@ -83,6 +83,10 @@ DOCK_TITLES = {
 LAYOUT_VERSION = 2  # the state version: raise it when docks change, an older remembered layout is then ignored
 SMOKE_MIN, SMOKE_WAIT = 4.0, 90.0  # seconds: before ``--smoke`` looks, and how long it waits for the island to draw
 HELP = N_("islands.left_drag_orbits_middle_pans")
+# How long Python lets one thread run before it hands the interpreter lock on (the default is 5 ms). The island's
+# reads run in worker threads in Python; with the default the window's thread waited up to a second for its turn
+# between two events while three of them ran (known-issues "Island editor held the window while an island opened").
+SWITCH_INTERVAL = 0.0005
 
 
 def window_size(available: tuple[int, int]) -> tuple[int, int]:
@@ -143,6 +147,7 @@ class MainWindow(JobRunner, QMainWindow):
         programs): the Islands panel fills when the games' lists are read, off the window's thread, instead of the
         window waiting for them (known-issues "Island editor held the window")."""
         super().__init__()
+        sys.setswitchinterval(min(sys.getswitchinterval(), SWITCH_INTERVAL))
         self.app = app or editorapp.App(games=games)
         names = " / ".join(k.removeprefix("anno") for k in self.app.games or ())
         self.title = TITLE if self.app.games is None else tr("islands.anno_island_editor_preview", names=names)
@@ -177,6 +182,7 @@ class MainWindow(JobRunner, QMainWindow):
         bar = self.menuBar()
         self.ribbon.set_access_keys(widgets.access_letters(a.text() for a in bar.actions()), widgets.menu_groups(bar))
         self._status()
+        self.progress = OpenProgress(self)
         self._default_layout = self.saveState(LAYOUT_VERSION)
         self.persist_layout = True  # False: this window neither reads nor writes the remembered layout
         self.restore_layout()
@@ -248,7 +254,6 @@ class MainWindow(JobRunner, QMainWindow):
     def _pages(self) -> None:
         self.pages = QStackedWidget()
         self.holders = {
-            "Layers": Holder(tr("islands.views_layers_appear_here_once")),
             "Checks": Holder(tr("islands.checks_results_appear_here_grid")),
             "History": Holder(tr("islands.islands_changes_appear_here_once")),
         }
@@ -303,6 +308,7 @@ class MainWindow(JobRunner, QMainWindow):
             self._menu_item(file, id)
         file.addSeparator()
         file.addAction(tr("islands.open_island_mod"), self.open_from_mod)
+        file.addAction(tr("islands.open_island_project"), self.open_from_project)
         file.addAction(tr("islands.games_folders"), self.edit_settings)
         file.addAction(tr("islands.reload_islands"), lambda: self.reload(wait=False))
         self.close_island_action = file.addAction(tr("islands.close_island"), self.close_island)
@@ -318,6 +324,7 @@ class MainWindow(JobRunner, QMainWindow):
         forms_menu(self, edit)
         rendering = bar.addMenu(tr("common.menu.rendering"))
         self.look_actions: dict[str, QAction] = {}
+        self.look_tips: dict[str, str] = {}
         looks = LOOKS if self.app.games is None else ()  # the rules and looks are 117's and 2070's
         basics = (
             ("shadows", N_("islands.shadows"), N_("islands.sun_shadows_following_camera")),
@@ -334,6 +341,7 @@ class MainWindow(JobRunner, QMainWindow):
             act.setToolTip(tr(tip))
             act.triggered.connect(lambda on, key=key: self.doc and self.doc.set_look(key, on))
             self.look_actions[key] = act
+            self.look_tips[key] = act.toolTip()
             if key == "particles_frozen":
                 rendering.addSeparator()
         self._quality_menu(rendering)
@@ -423,6 +431,8 @@ class MainWindow(JobRunner, QMainWindow):
                 handlers[id] = lambda _=False, id=id: self.doc is not None and self.doc.set_tool(id)
             elif id.startswith("gizmo_"):
                 handlers[id] = lambda _=False, id=id: self.doc is not None and self.doc.set_gizmo(id)
+            elif id.startswith("layer_"):
+                handlers[id] = lambda on=False, id=id: self.doc is not None and self.doc.set_layer(id[6:], on)
         missing = [id for id in self.actions if id not in handlers]
         if missing:
             raise KeyError(f"ribbon buttons without a handler: {missing}")
@@ -496,6 +506,8 @@ class MainWindow(JobRunner, QMainWindow):
                 action.setChecked(id == want)
             elif id.startswith("gizmo_"):
                 action.setChecked(doc is not None and id == gizmo_action(v.gizmo))
+            elif id.startswith("layer_"):
+                action.setChecked(not doc or v.opts.layers.get(id[6:], True))
         self.actions["foliage"].setChecked(bool(doc) and v.hidden.foliage)
         looks = doc.look_state() if doc else {}
         offers_2070 = bool(doc) and doc.offers_2070_looks()
@@ -503,6 +515,7 @@ class MainWindow(JobRunner, QMainWindow):
             enabled, on = looks.get(key, (False, False))
             action.setVisible(key not in LOOKS_2070 or offers_2070)
             action.setEnabled(enabled)
+            action.setToolTip(look_blocker(key) or self.look_tips[key])
             action.setChecked(on)
         q = doc.view.opts.quality if doc else None
         for key, action in getattr(self, "quality_actions", {}).items():
@@ -651,6 +664,19 @@ class MainWindow(JobRunner, QMainWindow):
         if ok:
             self.open_file(island, Path(folder))
 
+    def open_from_project(self) -> None:
+        """Pick one of the islands of the mod the open project imported and load it: the project's file is the base."""
+        islands = self.app.project_islands()
+        if not islands:
+            QMessageBox.information(self, TITLE, tr("islands.project_holds_no_islands"))
+            return
+        island, ok = QInputDialog.getItem(self, TITLE, tr("islands.islands_of_project"), islands, 0, False)
+        if ok:
+            self.open_project_island(island)
+
+    def open_project_island(self, island: str, wait: bool = True) -> None:
+        self._load(("project", island), lambda: self.app.open_project_island(island), wait)
+
     def open_file(self, island: str, mod: Path | None = None, edits: Path | None = None, wait: bool = True) -> None:
         """Load an island file of a mod folder or the game (the ``desktop ISLAND`` command line); ``wait`` as in
         ``open``."""
@@ -665,11 +691,12 @@ class MainWindow(JobRunner, QMainWindow):
         if self.loading is not None or not self.close_island():
             return
         self.loading = request
-        self.statusBar().showMessage(tr("islands.opening_name", name=request_name(request)))
+        self.progress.begin(request_name(request))
 
         def read():
             with long_lived():
                 info = opener()
+                self.progress.reading(request_name(request))
                 return info, open_session(self.app.editor, info)
 
         self.background.run(read, lambda got: self._loaded(request, got), wait=wait)
@@ -683,17 +710,20 @@ class MainWindow(JobRunner, QMainWindow):
             if isinstance(got, Exception):
                 raise got
             info, prepared = got
+            self.progress.building(request_name(request))
             doc = IslandDoc(self, info["name"].rsplit("/", 1)[-1], info, opened=request, prepared=prepared)
         except Exception as exc:  # the reason, not a crash
+            self.progress.end()
             reason = f"{type(exc).__name__}: {exc}"
             QMessageBox.warning(self, TITLE, reason)
             for k in range(self.tabs.count()):  # the island stays in its list, with the reason on its row
                 for lst in getattr(self.tabs.widget(k), "lists", ()):
-                    if request[0] != "file" and request[1] in lst.names:
+                    if request[0] not in ("file", "project") and request[1] in lst.names:
                         lst.mark(request[1], reason.splitlines()[0][:160])
             self.sync()
             return
         self._attach(doc)
+        self.progress.follow(doc)
 
     def _attach(self, doc: IslandDoc) -> None:
         """Put the island's panels into the docks and view pages, and the brush and save settings on the ribbon."""
@@ -705,7 +735,6 @@ class MainWindow(JobRunner, QMainWindow):
             "Properties": doc.props,
             "On the island": doc.objects,
             "Minimap": doc.minimap,
-            "Layers": doc.layers,
             "Checks": doc.checks,
             "History": doc.history,
         }
@@ -726,6 +755,7 @@ class MainWindow(JobRunner, QMainWindow):
         if not doc.confirm_close():
             return False
         self.doc = None
+        self.progress.end()
         doc.close()
         release_long_lived()
         for holder in (*self.dock_holders.values(), *self.holders.values()):

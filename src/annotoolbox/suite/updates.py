@@ -28,6 +28,9 @@ from .. import __version__
 RELEASES = "SunnyM00n/anno-toolbox"  # the release page, "owner/name"; set by the edition's build, empty means no update check
 TIMEOUT = 10.0  # seconds, for every request
 SUMS = "SHA256SUMS"
+SUMS_LINUX = (
+    "SHA256SUMS-linux"  # the Linux build's own list: the Windows and Linux jobs each attach one (docs/installer.md)
+)
 HELPER_SUMS = "live-link-SHA256SUMS"  # the link helper's checksum on a release page (docs/live-link.md)
 HELPER_FILE = "version.dll"
 HELPER_MARK = b"library inert"  # text of our helper's log, in its file: tells it from another library of that name
@@ -119,21 +122,33 @@ def http_get(url: str) -> bytes:
 NET = Net(http_get)
 
 
+def windows() -> bool:
+    """Whether the Windows build's release files are the ones to look for (a test stands in for it)."""
+    return sys.platform == "win32"
+
+
+def sums_name() -> str:
+    """The checksum file of the release for this system."""
+    return SUMS if windows() else SUMS_LINUX
+
+
 def parse_release(raw: bytes) -> Release:
-    """The release record from the release page's answer; ``UpdateError`` when it is not one we can use."""
+    """The release record from the release page's answer; ``UpdateError`` when it is not one we can use (on Linux also
+    a release that has no Linux build: the Linux files come from the first release after 0.2.0)."""
     try:
         data = json.loads(raw)
         version = parse_version(data["tag_name"])[0]
         text = ".".join(map(str, version))
         assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
         notes = data.get("body") or ""
-        sums = assets[SUMS]
+        sums = assets[sums_name()]
         page = data.get("html_url") or ""
     except (ValueError, KeyError, TypeError) as exc:
         raise UpdateError(f"the release page's answer is not usable: {exc!r}") from exc
     if not (isinstance(notes, str) and isinstance(sums, str) and isinstance(page, str)):
         raise UpdateError("the release page's answer is not usable")
-    return Release(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], sums, page, assets.get(HELPER_SUMS, ""))
+    helper = assets.get(HELPER_SUMS, "") if windows() else ""  # the link helper is a Windows library
+    return Release(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], sums, page, helper)
 
 
 def latest(net: Net = NET) -> Release | None:
@@ -155,7 +170,7 @@ def checksum_for(sums_text: str, name: str) -> str:
         parts = line.split(None, 1)
         if len(parts) == 2 and parts[1].strip().lstrip("*") == name:
             return parts[0].lower()
-    raise UpdateError(f"{name} is not in {SUMS}")
+    raise UpdateError(f"{name} is not in {sums_name()}")
 
 
 def verify_feed(info, sums_text: str, version: str) -> None:
@@ -170,7 +185,7 @@ def verify_feed(info, sums_text: str, version: str) -> None:
         if not have:
             raise UpdateError(f"{asset.FileName}: the update feed carries no SHA256")
         if have != checksum_for(sums_text, asset.FileName):
-            raise UpdateError(f"{asset.FileName} does not match its checksum in {SUMS}")
+            raise UpdateError(f"{asset.FileName} does not match its checksum in {sums_name()}")
 
 
 def manager():
@@ -253,15 +268,14 @@ def is_our_helper(path: Path, seen: str = "") -> bool:
 
 
 def helper_check(release: Release, game_dir: str, seen: str = "", net: Net = NET) -> HelperCheck | None:
-    """Compare the release's link helper with the installed one (``<game_dir>/Bin/Win64``) when it is ours, else with
-    ``seen``, the hash the last release had. None: no helper on the release. Nothing but the checksum file is fetched;
-    the helper itself is never downloaded."""
+    """Whether the release brings a new link helper: its hash against ``seen``, the one the last checked release had,
+    so a helper uploaded again unchanged is no news; an installed helper (``<game_dir>/Bin/Win64``) that already is
+    the new one is none either. The first look has nothing to compare and only records. None: no helper on the
+    release. Nothing but the checksum file is fetched; the helper itself is never downloaded."""
     if not release.helper_sums_url:
         return None
     new = checksum_for(net.get(release.helper_sums_url).decode("utf-8", "replace"), HELPER_FILE)
     path = helper_path(game_dir) if game_dir else None
     ours = path is not None and path.is_file() and is_our_helper(path, seen)
-    reference = file_sha256(path) if ours else seen
-    if not reference:
-        return HelperCheck(new, False, False)
-    return HelperCheck(new, reference != new, ours)
+    already = ours and file_sha256(path) == new
+    return HelperCheck(new, bool(seen) and seen != new and not already, ours)

@@ -35,7 +35,7 @@ from ..othergames import installs
 from ..suite import gamesync, guidrangedialog, linkannounce, links, livelink, project, theme, widgets
 from ..suite.background import Background
 from ..suite.settings import Settings, settings_file
-from . import assetgame, checks, compare, modops, native
+from . import assetgame, checks, compare, handover, layered, modops, native
 from .assetdoc import AssetDocument
 from .assetform import AssetForm
 from .assetgame import Game
@@ -330,7 +330,10 @@ class AssetWindow(ExchangeActions, QMainWindow):
         self.open_menu.setEnabled(False)  # a second game opened meanwhile would race this one for the window
 
         def work():
-            return assetgame.open_game(key, folder, assetgame.cache_dir(self.settings.workspace), donor)
+            game = assetgame.open_game(key, folder, assetgame.cache_dir(self.settings.workspace), donor)
+            return layered.open_layered(
+                project.current(self.settings), game, None, handover.mods_folders(self.settings, key)
+            )
 
         if wait:
             result = work()
@@ -594,6 +597,11 @@ class AssetWindow(ExchangeActions, QMainWindow):
         """The ModOps mod into the game's mods folder (after the check), both off the window's thread; ``wait``: here,
         and the mod's folder comes back. The check and the write read the same snapshot of the document."""
         built: list[Path] = []
+        if (
+            self.doc.layer is not None
+        ):  # the edits are on top of the project's mod: its build writes them (Project window)
+            self.say(tr("assets.layered_build_in_project"))
+            return None
         snapshot = self.doc.snapshot()
 
         def checked(found) -> None:

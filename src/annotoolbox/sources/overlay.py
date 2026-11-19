@@ -104,7 +104,10 @@ def normalize(rel: str | Path, *, lower: bool = True, studio: bool = False) -> s
     """A game path as a key: forward slashes, no ``./``, leading or doubled slash (1800 writes ``maps//x.psd``),
     lower case unless ``lower`` is False; ``studio`` cuts a path on the studio's machine (``d:/projects/anno8/game/
     data/x``, 117) back to its ``data/`` or ``shared/`` folder."""
-    s = re.sub(r"/{2,}", "/", str(rel).replace("\\", "/").strip())
+    s = str(rel)
+    if not studio and "\\" not in s and "//" not in s and not s.startswith(("/", "./")) and s == s.strip():
+        return s.lower() if lower else s  # the usual key, already clean: the half-million of an install's list
+    s = re.sub(r"/{2,}", "/", s.replace("\\", "/").strip())
     if studio and (rooted := STUDIO_PATH.match(s)):
         s = s[rooted.end() :]
     while s.startswith("./"):
@@ -209,7 +212,23 @@ class SourceTree:
             archives.append(Archive(name, child, rank, lang, rda))
         return sorted(archives, key=lambda a: a.rank)
 
+    LIST_NAME = "overlay-index"
+
     def _build_index(self) -> None:
+        from ..infra import buildcache, listcache  # not at the top: the cache modules import this one
+
+        folders = [a.path for a in self.archives if a.rda is None]
+        files = [a.path for a in self.archives if a.rda is not None]
+        self._signature = buildcache.digest(
+            listcache.files_signature(files, buildcache.code_version("sources.overlay")),
+            *(listcache.folder_signature(f) for f in folders),
+            *(f"{a.name}:{a.rank}:{a.path}" for a in self.archives),
+        )
+        self._scope = "|".join(
+            [str(self.root), self.language, *sorted(self.skip), *(str(a.path) for a in self.archives)]
+        )
+        if self._load_list(listcache.load(self.LIST_NAME, self._scope, self._signature)):
+            return
         for i, archive in enumerate(self.archives):  # ascending rank: later writes win
             if archive.rda is not None:
                 for entry in archive.rda:
@@ -220,6 +239,21 @@ class SourceTree:
                     if p.is_file():
                         key = normalize(p.relative_to(base).as_posix())
                         self._index[key] = (archive.rank, i, str(p))
+        listcache.store(self.LIST_NAME, self._scope, self._signature, self._list())
+
+    def _list(self) -> dict[str, tuple[int, str | int]]:
+        """The index as plain data for ``listcache``: the archive's place, and the stored path (0: the key itself)."""
+        return {key: (at, 0 if stored == key else stored) for key, (_rank, at, stored) in self._index.items()}
+
+    def _load_list(self, kept) -> bool:
+        try:
+            index = {
+                key: (self.archives[at].rank, at, key if stored == 0 else stored) for key, (at, stored) in kept.items()
+            }
+        except (AttributeError, TypeError, ValueError, IndexError):  # none kept, or not what ``_list`` writes
+            return False
+        self._index = index
+        return True
 
     # Lookups
 

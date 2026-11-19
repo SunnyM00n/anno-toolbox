@@ -15,12 +15,17 @@ import struct
 import tempfile
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..infra import buildcache
 from ..infra.tools import require_tool, run_tool
-from . import bc7encode, bc7gpu, ddsdecode, mipchain
+from . import bc7encode, bc7gpu, bc7simple, ddsdecode, mipchain, texbackend
 
-# "cpu": no GPU encoder; "texconv": texconv on the CPU for every texture even when the in-process encoder is installed
+if TYPE_CHECKING:
+    import numpy as np
+
+# "cpu": no GPU encoder; "texconv": texconv on the CPU for every texture even when the in-process encoder is installed;
+# "simple": the numpy mode-6 encoder even when etcpak is installed
 ENCODER_ENV = "ANNO_BC7_ENCODER"
 _VECTORS = contextvars.ContextVar("bc7_vectors", default=False)
 CACHE: Path | None = None  # another folder for the BC7 results (the tests); the run's own is cache_base() / "bc7"
@@ -31,39 +36,72 @@ class TextureConversionError(RuntimeError):
     pass
 
 
+def read_pixels(data: bytes) -> np.ndarray:
+    """The top mip of any DDS the in-process decoders read (2070's, the DX10 formats BC7 and BC6H, cubes' first face)
+    as ``(h, w, 4)`` uint8; ``ddsdecode.UnsupportedDds`` for the rest."""
+    try:
+        return ddsdecode.read_dds(data)
+    except ddsdecode.UnsupportedDds:
+        try:
+            return ddsdecode.DdsFile(data).level(0)
+        except IndexError as exc:
+            raise ddsdecode.UnsupportedDds(str(exc)) from exc
+
+
 def dds_to_png(src: Path, out_dir: Path) -> Path:
-    """``src`` as a PNG of the stored values: numpy decodes what 2070 ships, texconv anything else."""
+    """``src`` as a PNG of the stored values: numpy decodes every format it reads (``read_pixels``), texconv the rest
+    (``TextureConversionError`` when texconv is not there either)."""
+    from PIL import Image
+
     out_dir.mkdir(parents=True, exist_ok=True)
     png = out_dir / (src.stem + ".png")
     try:
-        from PIL import Image
-
-        Image.fromarray(ddsdecode.read_dds(src.read_bytes()), "RGBA").save(png)
+        Image.fromarray(read_pixels(src.read_bytes()), "RGBA").save(png)
         return png
-    except (ddsdecode.UnsupportedDds, OSError):
-        pass
-    texconv = require_tool("texconv")
+    except (ddsdecode.UnsupportedDds, OSError) as exc:
+        reason = exc
+    texconv = texbackend.texconv()
+    if texconv is None:
+        raise TextureConversionError(f"{src}: a DDS the built-in decoder does not read ({reason}) and no texconv")
     res = run_tool(texconv, ["-ft", "png", "-o", str(out_dir), "-y", "-nologo", str(src)])
     if not res.ok or not png.is_file():
         raise TextureConversionError(f"texconv failed on {src}:\n{res.stderr or res.stdout}")
     return png
 
 
+def bc7_engine() -> str:
+    """Which encoder writes BC7: ``etcpak`` (installed), ``texconv`` (forced, or etcpak is missing and texconv is
+    found) or ``simple`` (``bc7simple``, numpy only). ``ANNO_BC7_ENCODER`` and ``ANNO_TEXTURE_BACKEND`` force one."""
+    choice = os.environ.get(ENCODER_ENV, "")
+    if choice in ("texconv", "simple"):
+        return choice
+    if texbackend.mode() == "texconv":
+        return "texconv"
+    if bc7encode.available():
+        return "etcpak"
+    return "texconv" if texbackend.texconv() else "simple"
+
+
 def in_process() -> bool:
-    """Whether BC7 is written by the in-process encoder (else by texconv on the CPU)."""
-    return os.environ.get(ENCODER_ENV, "") != "texconv" and bc7encode.available()
+    """Whether BC7 is written in this process (etcpak or the numpy encoder), not by texconv."""
+    return bc7_engine() != "texconv"
 
 
 def gpu_on() -> bool:
-    """Whether this run sends its large pictures to the graphics card (``bc7gpu``; ``ANNO_BC7_ENCODER=cpu`` not)."""
-    return os.environ.get(ENCODER_ENV, "") not in ("cpu", "texconv") and bool(bc7gpu.adapters())
+    """Whether this run sends its large pictures to the graphics card (``bc7gpu``; ``ANNO_BC7_ENCODER`` set to
+    anything else, or no texconv, not)."""
+    allowed = not os.environ.get(ENCODER_ENV) and texbackend.mode() == "auto"
+    return allowed and bool(bc7gpu.adapters())
 
 
 def encoder_id() -> str:
     """What the cache keys hold of the encoder: its build and settings, or the texconv build, and the GPU encoder's
     when it takes the large pictures (a texture's bytes depend on which encoder ran: never one key for both)."""
-    if in_process():
+    engine = bc7_engine()
+    if engine == "etcpak":
         cpu = bc7encode.identity()
+    elif engine == "simple":
+        cpu = bc7simple.identity()
     else:
         cpu = f"texconv-cpu-{buildcache.file_digest(require_tool('texconv'))[:16]}-s{bc7encode.SETTINGS_VERSION}"
     return f"{cpu}+{bc7gpu.identity()}" if gpu_on() else cpu
@@ -105,7 +143,7 @@ def _rgba_dds(levels, srgb: bool) -> bytes:
 def _texconv_bc7(levels, srgb: bool) -> bytes:
     """The fallback: our mip levels compressed by texconv on the CPU (the GPU path is not deterministic)."""
     texconv = require_tool("texconv")
-    with tempfile.TemporaryDirectory(prefix="a2070_tex_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_tex_") as tmp:
         src, out = Path(tmp) / "levels.dds", Path(tmp) / "out"
         out.mkdir()
         src.write_bytes(_rgba_dds(levels, srgb))
@@ -141,8 +179,11 @@ def _encode(px, srgb: bool, srgb_in: bool, mips: int) -> tuple[bytes, bool]:
 
 
 def _cpu_bc7(levels, srgb: bool) -> bytes:
-    if in_process():
+    engine = bc7_engine()
+    if engine == "etcpak":
         return bc7encode.encode_dds(levels, srgb, perceptual=srgb)
+    if engine == "simple":
+        return bc7simple.encode_dds(levels, srgb)
     return _texconv_bc7(levels, srgb)
 
 
@@ -244,15 +285,33 @@ def cube_mean(data: bytes) -> tuple[float, float, float]:
 
 
 def env_cube_mean(src: Path) -> tuple[float, float, float]:
-    """The mean colour of a 2070 environment cube (2070 draws it unfiltered, as stored values)."""
-    texconv = require_tool("texconv")
-    with tempfile.TemporaryDirectory(prefix="a2070_env_") as tmp:
+    """The mean colour of a 2070 environment cube (2070 draws it unfiltered, as stored values): texconv's
+    R8G8B8A8 copy when texconv is there, else the cube's faces read in numpy."""
+    texconv = texbackend.texconv()
+    if texconv is None:
+        return _cube_mean_faces(src.read_bytes())
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_env_") as tmp:
         args = ["-f", "R8G8B8A8_UNORM", "-m", "1", "-ft", "dds", "-o", tmp, "-y", "-nologo", str(src)]
         res = run_tool(texconv, args)
         out = Path(tmp) / (src.stem + ".dds")
         if not res.ok or not out.is_file():
             raise TextureConversionError(f"texconv failed on {src}:\n{res.stderr or res.stdout}")
         return cube_mean(out.read_bytes())
+
+
+def _cube_mean_faces(data: bytes) -> tuple[float, float, float]:
+    """``env_cube_mean`` without texconv: the mean stored colour over the first mip of the six faces."""
+    import numpy as np
+
+    try:
+        dds = ddsdecode.DdsFile(data)
+        if dds.info.faces != 6:
+            raise TextureConversionError("not a six-face cube")
+        faces = np.concatenate([dds.level(0, face)[..., :3].reshape(-1, 3) for face in range(6)])
+    except (ddsdecode.UnsupportedDds, IndexError) as exc:
+        raise TextureConversionError(f"a cube the built-in decoder does not read: {exc}") from exc
+    r, g, b = (faces.mean(axis=0, dtype=np.float64) / 255.0).tolist()
+    return r, g, b
 
 
 def _resized_mask(mask_png: Path, size: tuple[int, int]):
@@ -393,6 +452,33 @@ def grey_to_bc4(grey, dst: Path, half: bool = True) -> Path:
     return dst
 
 
+def png_to_bc4(src: Path, dst: Path) -> Path:
+    """The red channel of a PNG as a BC4_UNORM DDS with its full mip chain (the ground materials' height maps):
+    texconv when it is there, else ``bc4encode`` with our own mips and the same DX10 header."""
+    texconv = texbackend.texconv()
+    if texconv is not None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_bc4_") as tmp:
+            res = run_tool(texconv, ["-f", "BC4_UNORM", "-m", "0", "-ft", "dds", "-o", tmp, "-y", "-nologo", str(src)])
+            produced = Path(tmp) / (src.stem + ".dds")
+            if not res.ok or not produced.is_file():
+                raise TextureConversionError(f"texconv BC4 failed on {src}: {res.stderr or res.stdout}")
+            buildcache.write_atomic(dst, produced.read_bytes())
+        return dst
+    import numpy as np
+    from PIL import Image
+
+    from . import bc4encode
+
+    try:
+        with Image.open(src) as img:
+            px = np.asarray(img.convert("RGBA"), np.uint8)
+    except OSError as exc:
+        raise TextureConversionError(f"{src} is not an image: {exc}") from exc
+    levels = mipchain.mip_chain(px)
+    buildcache.write_atomic(dst, bc4encode.encode_dds([level[..., 0] for level in levels], dx10=True))
+    return dst
+
+
 def metal_png(metallic, occlusion, size: tuple[int, int], dst: Path) -> Path:
     """117's metal map at ``size`` (width, height): metallic in red, green and blue (as vanilla's), occlusion in
     alpha; either may be None (0 and 1)."""
@@ -485,7 +571,7 @@ def bc7_like(px, original: bytes) -> bytes:
         raise TextureConversionError(f"the original is not BC7 (DXGI format {dxgi})")
     if px.shape[:2] != (height, width):
         raise TextureConversionError(f"{px.shape[1]}x{px.shape[0]} pixels for a {width}x{height} original")
-    with tempfile.TemporaryDirectory(prefix="a2070_like_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_like_") as tmp:
         png = Path(tmp) / "texture.png"
         Image.fromarray(px, "RGBA").save(png)
         srgb = dxgi == DXGI_BC7_SRGB  # the PNG holds the values the original stores: no gamma step
@@ -513,5 +599,5 @@ def convert_dds(src: Path, dst: Path, srgb: bool = False) -> Path:
     try:
         return _cached_bc7("dds", data, make, dst, srgb, srgb, 0, True)
     except ddsdecode.UnsupportedDds:
-        with tempfile.TemporaryDirectory(prefix="a2070_tex_") as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_tex_") as tmp:
             return png_to_bc7(dds_to_png(src, Path(tmp)), dst, srgb=srgb, srgb_in=srgb)

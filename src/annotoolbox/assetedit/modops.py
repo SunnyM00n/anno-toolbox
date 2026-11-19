@@ -146,7 +146,7 @@ def write_mod(
     _check_ours(folder, mod_id)
     written = {**render(doc, layout), "modinfo.json": info(doc, layout)}
     folder.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=STAGING, dir=folder.parent) as stage:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=folder.parent) as stage:
         staged = Path(stage) / mod_id
         for path, text in written.items():
             dest = staged / path

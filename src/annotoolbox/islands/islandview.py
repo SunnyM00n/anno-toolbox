@@ -182,7 +182,7 @@ class IslandView(IslandChecks):
         except Exception:
             self._tex_cache[psd_path] = None
             return None
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             src = Path(tmp) / Path(dds_path).name
             src.write_bytes(data)
             img = Image.open(dds_to_png(src, Path(tmp))).convert("RGB").resize((size, size))

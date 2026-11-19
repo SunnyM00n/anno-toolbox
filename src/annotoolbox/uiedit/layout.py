@@ -15,7 +15,19 @@ from types import SimpleNamespace
 
 from ..formats import phoenixedit
 from ..infra.i18n import tr
-from . import arrange, effects, elements, fields, gamedata, labels, listlayout, loaders, playstate, previewdefaults
+from . import (
+    arrange,
+    baseline,
+    effects,
+    elements,
+    fields,
+    gamedata,
+    labels,
+    listlayout,
+    loaders,
+    playstate,
+    previewdefaults,
+)
 from .arrange import vector
 from .fields import property_values
 from .labels import TextStyle
@@ -123,6 +135,7 @@ class TemplateRun:
     data_owner: str | None = None
     scale: tuple[float, float] = (1.0, 1.0)  # the placing container's own scale (what FixedToParent divides by)
     trail: tuple = ()  # the placing instances from the open file down (``playstate.Trail``)
+    placing: str = ""  # the baseline's key of the placing container (``Placer._placing_key``)
 
 
 @dataclass
@@ -162,6 +175,7 @@ class Context:
     # the rest a running game's widgets show (Visible, an image's id, own property values), by the same keys
     live_values: dict[str, dict[tuple[int, ...], object]] = field(default_factory=dict)
     defaults: object = None  # what the preview assumes of the player's game (``previewdefaults.current``)
+    baseline: baseline.Baseline | None = None  # what the game showed in many sessions, over the install (None: off)
     game_data: object = None  # the installed game's data for what the game fills (``gamedata.GameData``)
     node_values: dict[int, tuple[dict, dict]] = field(default_factory=dict)  # id(node) -> (node, ``values``)
     prefixes: set[str] = field(default_factory=set)  # the sample key prefixes a list counted its elements under
@@ -206,7 +220,7 @@ class Context:
         """What the kept results depend on besides the files and the sample values: the view's switches."""
         return (id(self.files), self.language, self.design, self.editor_hidden, self.window_aspect, id(self.samples),
                 self.samples.fill, tuple(sorted(self.live_text.items())), repr(sorted(self.live_values.items())),
-                previewdefaults.current(self).key(), gamedata.stamp(self))  # fmt: skip
+                previewdefaults.current(self).key(), gamedata.stamp(self), id(self.baseline))  # fmt: skip
 
     def live_of(self, el: elements.Element) -> dict[tuple[int, ...], object]:
         """What the running game's widget of this element shows, as property values (by instance GUID, else by the
@@ -387,6 +401,7 @@ class Placer:
         self.parent_scale = (1.0, 1.0)  # the own scale of the widget whose children are being placed
         self.filled: dict[str, dict] = {}  # what the game fills in a list's item being placed, by instance GUID
         self.trail: tuple = ()  # the placing instances down to the file being placed (``TemplateRun.trail``)
+        self.placing = ""  # the baseline's key of the container placing the file (``baseline.Baseline.entry``)
 
     # sizes
 
@@ -486,7 +501,19 @@ class Placer:
         """An instance's values: its stored ones, what its scope's bindings write, what the game fills in a list's
         item (``filled``), then what the game shows (held)."""
         filled = self.filled.get(el.guid or "", {})
-        return {**self.ctx.values(el.node), **scope.writes.get(el.guid, {}), **filled, **self.ctx.live_of(el)}
+        mine = {**self.ctx.values(el.node), **scope.writes.get(el.guid, {}), **filled}
+        return {**mine, **self._baseline(el, scope, mine), **self.ctx.live_of(el)}
+
+    def _baseline(self, el: elements.Element, scope: Scope, values: dict) -> dict:
+        """What the game's baseline sets over the values of an instance (``baseline.Baseline.apply``): not in Play
+        mode, whose values are the input's."""
+        base = self.ctx.baseline
+        crc = elements.crc_key(el) if base is not None and self.ctx.play is None else None
+        top = root_info(self.ctx, scope.root).top if crc else None
+        if top is None or not top.guid:
+            return {}
+        context = self.placing if self.stack and self.stack[-1] == scope.key else ""
+        return base.apply(self.ctx, top.guid, crc[4:], context, el.kind, values, scope.writes.get(el.guid, {}))
 
     def size_of(self, node: dict, scope: Scope) -> tuple[float, float]:
         """The size a binding reads from an instance of ``scope``'s template (``scope.Host``)."""
@@ -617,6 +644,7 @@ class Placer:
         measure_only, owner, data_owner = run.measure_only, run.owner, run.data_owner
         paint = run.paint or Paint()
         self.stack, self.parent_scale, self.trail = [*run.stack, key], run.scale, run.trail
+        self.placing = run.placing
         info = self._seed(key, root)
         owner_key = key if not run.stack else f"{run.stack[0]}:{key}"
         listed = self._list(key, root, inputs, owner_key, data_owner, bool(run.stack))
@@ -647,6 +675,11 @@ class Placer:
                 self.frame.boxes[hash((id(item.node), i))] = box
         self.filled.pop(item.guid or "", None)
         return scope
+
+    def _placing_key(self, el: elements.Element, scope: Scope) -> str:
+        """The baseline's key of a container that places a file: its file's GUID and its name CRC."""
+        crc, top = elements.crc_key(el), root_info(self.ctx, scope.root).top
+        return f"{top.guid}/{crc[4:]}" if crc and top.guid and self.ctx.baseline is not None else ""
 
     def _sector(self, item: elements.Element, scope: Scope, sector: tuple[float, float, float, float]) -> None:
         """What the game gives a radial list's item (``filled``): its place, its point on the arc, and the
@@ -872,7 +905,8 @@ class Placer:
         elif not measure_only:
             index = scope.slot.index if scope.slot is not None else None
             run = TemplateRun(stack=self.stack, owner=me, paint=paint, data_owner=f"{scope.key}:{el.guid}",
-                              scale=own_scale(kid.slot.local), trail=(*self.trail, (el.guid, index)))  # fmt: skip
+                              scale=own_scale(kid.slot.local), trail=(*self.trail, (el.guid, index)),
+                              placing=self._placing_key(el, scope))  # fmt: skip
             mk = ("draw", id(root), el.template, inputs_key(self.ctx.samples, kid.inputs), world, me, run.data_owner,
                   paint_key(paint), tuple(self.stack), run.trail)  # fmt: skip
 

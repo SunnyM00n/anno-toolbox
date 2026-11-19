@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ..infra import buildcache
 from ..infra.tools import find_tool, run_tool
+from . import texbackend
 
 ADAPTERS_ENV = "ANNO_BC7_GPU"  # texconv adapter numbers to try in order ("0,2"), or "none"; set by the probe
 JOBS_ENV = "ANNO_BC7_GPU_JOBS"  # GPU encodes at once on the machine
@@ -37,7 +38,7 @@ class GpuError(RuntimeError):
 
 
 def _texconv() -> Path | None:
-    return find_tool("texconv") if os.name == "nt" else None
+    return find_tool("texconv") if os.name == "nt" and texbackend.mode() != "builtin" else None
 
 
 def _dds_in(width: int, height: int, data: bytes, srgb: bool) -> bytes:
@@ -51,7 +52,7 @@ def _dds_in(width: int, height: int, data: bytes, srgb: bool) -> bytes:
 def run_encode(texconv: Path, index: int, dds: bytes, srgb: bool) -> tuple[str | None, bytes | None]:
     """``dds`` (uncompressed, its mips included) as texconv's BC7 on adapter ``index``: the adapter's name and the
     file, or None for each when the encode did not run on that adapter (texconv silently takes its CPU codec)."""
-    with tempfile.TemporaryDirectory(prefix="a2070_gpu_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_gpu_") as tmp:
         src, out = Path(tmp) / "levels.dds", Path(tmp) / "out"
         out.mkdir()
         src.write_bytes(dds)

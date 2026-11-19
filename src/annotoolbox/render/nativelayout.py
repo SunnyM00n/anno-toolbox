@@ -61,8 +61,10 @@ class BindingPlan:
     samplers: dict[tuple[int, int], str] = field(default_factory=dict)  # (space, register) -> name
 
     @classmethod
-    def of(cls, reflections: list) -> BindingPlan:
-        """The union of every stage's bindings (a register two stages share is bound once)."""
+    def of(cls, reflections: list, bindless: tuple = (), volatile: bool = False) -> BindingPlan:
+        """The union of every stage's bindings (a register two stages share is bound once). ``bindless``: arrays
+        the engine declares bindless, bound as unbounded ranges (a descriptor table); ``volatile``: the constant
+        buffers written per dispatch on the module's own lists (NVRHI's volatile ones)."""
         seen: dict[tuple[int, str, int], tuple[str, int]] = {}
         sizes = {cb.name: cb.size for refl in reflections for cb in refl.cbuffers}
         samplers: dict[tuple[int, int], str] = {}
@@ -71,7 +73,9 @@ class BindingPlan:
                 kind = KINDS.get(b.kind, "texture")
                 if kind == "sampler":
                     samplers.setdefault((b.space, b.register), b.name)
-                seen.setdefault((b.space, kind, b.register), (b.name, b.count))
+                if volatile and kind == "cbuffer" and b.space != ROOT_SPACE:
+                    kind = "volatile"
+                seen.setdefault((b.space, kind, b.register), (b.name, 0 if b.name in bindless else b.count))
         layouts: dict[int, LayoutSpec] = {}
         open_ranges: list[LayoutSpec] = []
         roots: list[Item] = []

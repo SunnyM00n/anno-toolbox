@@ -25,12 +25,18 @@ from ..suite.background import Background
 from . import filters
 from .assetdoc import AssetDocument
 from .icons import IconSource
+from .origins import MOD_CHANGED, MOD_NEW
 
 ICON_ROWS = 300  # rows a fill or an opened group gives an icon (each is a file read and decoded once, off-thread)
 SEARCH_DELAY = 250  # ms the search waits after a key before it fills the tree
 SHOWN = 2000  # rows a search or a filter lists at once
 FILTERED = 20000  # assets a value filter looks at (it resolves each one's layers)
 GROUPS, TEMPLATES = N_("assets.groups"), N_("assets.templates")
+ORIGIN_MARKS = {MOD_NEW: N_("assets.mark_mod_new"), MOD_CHANGED: N_("assets.mark_mod_changed")}  # a row's suffix
+ORIGIN_NOTES = {  # a row's tooltip line: where the asset comes from (the game's own and the person's say nothing)
+    MOD_NEW: N_("assets.origin_mod_new"),
+    MOD_CHANGED: N_("assets.origin_mod_changed"),
+}
 GUID_ROLE = Qt.ItemDataRole.UserRole
 MEMBERS_ROLE = Qt.ItemDataRole.UserRole + 1  # every asset of a group row, its subgroups' too
 OWN_ROLE = Qt.ItemDataRole.UserRole + 2  # the assets a group row holds itself
@@ -95,9 +101,12 @@ class AssetTree(QWidget):
     def _row(self, guid: int, icon: bool = True) -> QTreeWidgetItem:
         c = self.doc.changes
         mark = " *" if guid in c.new or (guid in c.assets and not c.assets[guid].empty) else ""
+        origin = self.doc.origin(guid)
+        mark += tr(ORIGIN_MARKS[origin]) if origin in ORIGIN_MARKS else ""
         item = QTreeWidgetItem([f"{self.doc.name(guid) or tr('assets.no_name')}{mark}", str(guid)])
         item.setData(0, GUID_ROLE, guid)
-        item.setToolTip(0, self.doc.template(guid))
+        note = f"{chr(10)}{tr(ORIGIN_NOTES[origin])}" if origin in ORIGIN_NOTES else ""
+        item.setToolTip(0, self.doc.template(guid) + note)
         if icon and self.icons is not None and self._icon_budget > 0:
             key = self.icons.key_of(self.doc, guid)
             if key:

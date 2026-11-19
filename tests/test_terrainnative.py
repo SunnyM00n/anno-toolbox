@@ -112,3 +112,5 @@ def test_an_islands_terrain_draws_natively_in_the_island_view():
     got = _child(DRAW)
     assert not got["failed"] and not got["said"], got
     assert got["nodes"]["close"]["terrain_native"] == 1 and got["nodes"]["close"]["terrain_nodes"] > 0, got
+    # its pages and its ground's bake by the shipped shaders on the module too (pagesnative, bakenative)
+    assert got["nodes"]["close"]["pages_native"] == 1 and got["nodes"]["close"]["bake_native"] == 1, got

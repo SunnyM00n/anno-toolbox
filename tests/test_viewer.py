@@ -26,6 +26,7 @@ from annotoolbox.models.configtree import Node, fnv1a32
 from annotoolbox.models.mipchain import exposed_srgb8
 from annotoolbox.models.rdmmesh import read_meshes
 from annotoolbox.sources import gametree
+from annotoolbox.suite import buildout
 from annotoolbox.viewer import browser, dataview, modelscene, panels
 from annotoolbox.viewer.modelfiles import ModelFiles
 
@@ -641,7 +642,7 @@ def test_imported_models_are_kept_whole_in_the_project_and_go_into_the_mod(tmp_p
     projectpart.EDITS.save_files(project, "anno117", {"/data/a/x.rdm": b"rdm"})
     assert projectpart.EDITS.saved_files(project)["data/a/x.rdm"].read_bytes() == b"rdm"
     assert projectpart.PART.has_work(project)
-    assert projectpart.PART.render(project, None, lambda _m: None) == {"data/a/x.rdm": b"rdm"}
+    assert buildout.read_all(projectpart.PART.render(project, None, lambda _m: None)) == {"data/a/x.rdm": b"rdm"}
     with pytest.raises(ValueError):
         projectpart.EDITS.save_files(project, "anno117", {"../x.rdm": b"no"})
 

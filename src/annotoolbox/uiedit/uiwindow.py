@@ -22,10 +22,11 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import N_, tr, trn
 from ..sources import gametree
-from ..suite import gameopen, gamesync, linkannounce, linkscenes, livelink, project, widgets
+from ..suite import appfolders, gameopen, gamesync, linkannounce, linkscenes, livelink, project, widgets
 from ..suite.background import Background
 from . import (
     animations,
+    baseline,
     bindingdialogs,
     bindings,
     canvas,
@@ -155,6 +156,7 @@ class UiWindow(QMainWindow):
         self.fonts = fonts.GameFonts(game.files)
         self.ctx = layout.Context(game.files, self.samples, canvas.measure, fonts=self.fonts.lookup)
         self.ctx.editor_hidden = self.hidden_action.isChecked()
+        self.ctx.baseline = self._baseline()
         previewdefaults.attach(self, key)  # what the preview assumes of the player's game (``preview_store``)
         gamedataview.game_opened(self, game)  # its languages; the game's data, built in the background
         self.namer = library.Namer(game.library, game.files.root, self.names.short())
@@ -181,7 +183,7 @@ class UiWindow(QMainWindow):
         self.file_list.clear()
         if self.game is None:
             return
-        saved = set(projectpart.EDITS.saved_files(self.project(), self.game.key))
+        saved = set(appfolders.edited(self.project(), projectpart.EDITS, self.game.key))  # not the imported base
         uiframe.fill_files(self.file_list, self.game.files, self.file_filter.text(), saved)
 
     def open_file(self, key: str) -> None:
@@ -456,6 +458,15 @@ class UiWindow(QMainWindow):
         fill = self.fill_action.isChecked()
         self._when_idle(lambda: (setattr(self.samples, "fill", fill), self._redraw()))
 
+    def _baseline(self) -> baseline.Baseline | None:
+        """The game's baseline over the open game's files (117's only; None with the View switch off)."""
+        found = baseline.shipped() if self.game is not None and self.game.key == "anno117" else None
+        return found.for_install(self.game.files) if found and self.baseline_action.isChecked() else None
+
+    def _baseline_toggled(self) -> None:
+        if self.ctx is not None:
+            self._set_view(baseline=self._baseline())
+
     def _play_toggled(self) -> None:
         self.preview.set_play_effects(self.play_action.isChecked())
 
@@ -678,7 +689,7 @@ class UiWindow(QMainWindow):
 
     def _revert(self, doc: uidoc.UiDoc) -> None:
         entry = self.game.files.entries.get(doc.key)
-        saved = projectpart.EDITS.saved_files(self.project(), self.game.key).get(entry.path) if entry else None
+        saved = appfolders.edited(self.project(), projectpart.EDITS, self.game.key).get(entry.path) if entry else None
         key = doc.key
         if saved is not None:
             if (

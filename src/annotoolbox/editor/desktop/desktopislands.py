@@ -30,7 +30,7 @@ from ...infra.i18n import N_, languages, tr
 from ...islands import regions
 from ...othergames import installs
 from ...suite import features, theme
-from ...suite.settings import THEMES, Settings
+from ...suite.settings import THEMES, Settings, found_text
 from ...suite.widgets import access_keys, access_letters
 from .. import archivedelivery, editorapp
 from ..editlists import group_rows
@@ -100,8 +100,11 @@ class SettingsDialog(QDialog):
             row = QHBoxLayout()
             row.addWidget(edit, 1)
             row.addWidget(pick)
+            edit.setToolTip(found_text(edit.text()))  # off Windows: the launcher's library or prefix it came from
             form.addRow(tr(label, game=installs.GAMES[key].name if key in installs.GAMES else ""), row)
             self.edits[key] = edit
+            if text := found_text(edit.text()):
+                form.addRow("", QLabel(text))
         self.theme = QComboBox()
         for key in THEMES:
             self.theme.addItem(tr(THEME_LABELS[key]), key)

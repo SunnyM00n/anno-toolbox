@@ -1,6 +1,6 @@
 # The Windows installer
 
-The Anno Toolbox is provided as a Windows program (a folder with two exes) and as an installer, `Setup.exe`, that sets
+The Anno Toolbox is provided as a Windows program (a folder with `AnnoToolbox.exe` and `AnnoToolbox.com`) and as an installer, `Setup.exe`, that sets
 it up for one user and keeps it up to date from the project's releases. The installer is **Velopack** (MIT licence;
 [docs.velopack.io](https://docs.velopack.io)). This page says what goes in and what never does, how the
 program installs, starts, updates and uninstalls, how a download is verified, how people on the older installer move
@@ -11,7 +11,7 @@ over, and how to build it. [`suite.md`](suite.md) says how the Toolbox is used.
 | In the program folder | What |
 |---|---|
 | `AnnoToolbox.exe` | The window: every app of the suite, with no console. A shortcut starts it with no arguments: the installed program then opens the suite's window on the island editor (`--app islands`). An error that nothing caught goes to `%LOCALAPPDATA%\anno-toolbox\logs` and into a message box. The program's log lines (a lost game link, an update that failed) go to `toolbox.log` in that folder: 512 KB a file at most, two older files kept, and only the 20 newest error reports stay |
-| `anno-toolbox.exe` | The same program as a console program: the light command line (`anno-toolbox rdm ...`, `anno-toolbox export ...`; started without a command it prints its help) and, for a check, `anno-toolbox --app islands --smoke` (every app is started once; it gives the exit code and one line per app) |
+| `AnnoToolbox.com` | The same program built as a console program, beside the window's exe under the same name (the way Visual Studio has `devenv.com` and `devenv.exe`): in a terminal `AnnoToolbox rdm ...` runs this file, because the shell's `PATHEXT` puts `.com` before `.exe`. The light command line (`AnnoToolbox rdm ...`, `AnnoToolbox export ...`; started without a command it prints its help) and, for a check, `AnnoToolbox --app islands --smoke` (every app is started once; it gives the exit code and one line per app). PyInstaller builds it as an `.exe`; the build renames it. The separate `anno-toolbox.exe` of earlier builds is gone (an update replaces the whole `current` folder, so none is left behind). A checkout's own `anno-toolbox` command is unchanged |
 | `_internal/` | Python, Qt (PySide6, with its shader baker `qsb.exe`, which the 3D views need), moderngl, numpy, scipy, Pillow, the `velopack` module and the package with its data files (the interface languages, the descriptions, the tables) |
 | `_internal/<package>/render/_nativegpu.pyd` | The game look's Direct3D 12 module (NVRHI, MIT; the DirectX headers, MIT; nanobind, BSD-3-Clause; about 1 MB, its C++ runtime linked in). It binds the game's own compiled shaders (`rendering/native-backend.md`); without it, or without Direct3D 12, the island view draws its own look. Built by `scripts/build_native.py` ([`../native/d3d12/README.md`](../native/d3d12/README.md)); its licences are in `THIRD-PARTY.txt` |
 | `docs/formats/` | The three files the program reads next to its exes: the Phoenix schemas of 117 and 1800 and the enum table of 117 |
@@ -71,7 +71,7 @@ again from Help > *Setup...*, changes it.
 
 The installer starts the program itself at four moments and expects an immediate exit, so `suite/installevents.run()` is
 **the first call of the program** (`suite/toolbox.main`), before Qt and before the arguments are read (Velopack's
-documentation: the builder runs first in the main process). `anno-toolbox` (the console exe) goes through the same call.
+documentation: the builder runs first in the main process). `AnnoToolbox.com` (the console build) goes through the same call.
 Outside an installed program (not packaged, or no `velopack` module) it does nothing.
 
 | Moment | Time limit | What the program does |
@@ -173,11 +173,12 @@ what the attestation of layer 3 is for.
 
 The release carries the link helper (`version.dll`, with `live-link-SHA256SUMS`; [`live-link.md`](live-link.md)
 section 15). At each check (the latest release is looked at even when the program is up to date) the updater reads
-that checksum file, and only that file, and compares it with the installed helper, `<Anno 117>/Bin/Win64/version.dll`,
-when there is one and it is ours (its file holds the helper's marker text, or its hash is the one the last checked
-release had). Without such a file the reference is the hash the last checked release had (`helper_seen` in the
-settings). A difference shows the status-bar notice "A new link helper is available"; a click opens the release page in
-the browser. **The helper is never downloaded or installed by the program:** it goes into the game's folder, so the
+that checksum file, and only that file, and compares it with the hash the last checked release had (`helper_seen` in
+the settings), so a release that carries the same helper again announces nothing. The first check only records the
+hash. An installed helper that already is the new one (`<Anno 117>/Bin/Win64/version.dll`, ours by its marker text
+or its hash) announces nothing either; the installed file is never the reference, since a build of the full helper
+library has the marker but never the release's hash. A new helper shows the status-bar notice "A new link helper is
+available"; a click opens the release page in the browser. **The helper is never downloaded or installed by the program:** it goes into the game's folder, so the
 person fetches it, verifies it as in "Verifying a download", and puts it there.
 
 ## Uninstall
@@ -309,7 +310,7 @@ with a certificate in the store, or a script that hands the file to a signing se
 
 Each release has `SHA256SUMS` next to `Setup.exe` and the packages, in the format of `sha256sum`. It lists `Setup.exe`,
 the full and delta packages of the release, the update feed's index files, the migration package (while it is built) and
-the two exes and any library our package ships, as they are in the program folder. The release's files carry **build
+`AnnoToolbox.exe` and `AnnoToolbox.com` and any library our package ships, as they are in the program folder. The release's files carry **build
 provenance attestations** made by GitHub's CI. An attestation is a signed statement that this exact file was built from
 this repository's tagged commit by the release workflow.
 
@@ -326,6 +327,64 @@ sha256sum -c --ignore-missing SHA256SUMS     # the exes in it exist only after a
 The attestation says where the file came from, and the checksum says that it was not changed on the way. Neither is a
 signature that a Windows dialog shows. The build itself writes `SHA256SUMS` and reads it back
 (`installer_bundle.verify_sums`). A mismatch stops the build.
+
+## Linux
+
+**Linux support is experimental** (2026-11-19): it was built and run in WSL with software rendering only, never on a real desktop with a
+GPU or with the games under Proton. The program says so on the first-start page and in Help > About, with a link to the
+issue tracker; please report what does not work there.
+
+From the first release after 0.2.0 the releases page also carries a Linux download (the owner's decisions of
+2026-11-18). Only the Toolbox runs on Linux: there is no link helper for it, and the Windows-only features (the Bink
+video screens, the RAD-encoded videos, the GPU BC7 encoder, the Direct3D 12 island view) stay off.
+
+| File | What |
+|---|---|
+| `AnnoToolbox-linux-x86_64.AppImage` | The release: one file, run it (`chmod +x`, double click) or put it anywhere. It holds the same program as the Windows folder, with one program file `AnnoToolbox` (the window; started with a command, `AnnoToolbox rdm ...`, it is the command line too: no split into two files), without texconv and without the Direct3D 12 module |
+| `AnnoToolbox-<version>-linux-x86_64.tar.gz` | The same program folder as a plain archive, for a computer without FUSE or for a look inside. It has no installer and no updater (the update notice sends to the release page); `install-desktop-entry.sh` in it writes a menu entry for the folder it sits in |
+| `AnnoToolbox-<version>-linux-full.nupkg`, `-linux-delta.nupkg`, `releases.linux.json`, `RELEASES-linux`, `assets.linux.json` | The update feed of the AppImage: the packer's (Velopack's) Linux channel, delta packages included. The names carry `linux` so they never meet the Windows files on the same release |
+| `SHA256SUMS-linux` | The checksums of the Linux files above (the Windows job attaches `SHA256SUMS`; two jobs cannot write one file). Both lists are attested by the release workflow |
+
+**What the system provides.** The AppImage brings Python, Qt (PySide6), numpy, scipy, Pillow, moderngl, miniaudio and the
+packer's updater. Qt's window plugin loads a few system libraries that are on every desktop distribution: `libEGL`,
+`libGL`, `libxkbcommon`, `libfontconfig`, `libdbus-1`, and on X11 `libxcb-cursor0` (Qt 6.5 and later); a minimal
+container needs `apt install libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libxcb-cursor0`. Starting an
+AppImage itself needs FUSE 2 (`libfuse2`; Ubuntu 22.04 and later: `libfuse2t64` on 24.04) or the flag
+`--appimage-extract-and-run`. The 3D views need OpenGL 3.3 (Mesa is enough). The release is built on **Ubuntu 22.04
+(glibc 2.35)**, the oldest system it supports, and runs on newer ones.
+
+**The install.** There is none: an AppImage is the program. It keeps the settings in `~/.config/anno-toolbox`, its
+data and logs in `~/.local/share/anno-toolbox` and its caches in `~/.cache/anno-toolbox` (the XDG folders).
+The first start opens the setup page for a person with no settings file yet (the packer fires no first-run call on
+Linux that was seen: see "What was verified, Linux"). The setup page's two boxes are **Applications menu entry** and
+**Desktop shortcut**: they write `anno-toolbox.desktop` into `~/.local/share/applications` and the desktop folder
+(`XDG_DESKTOP_DIR`), pointing at the AppImage file, with the icon copied to `~/.local/share/icons`
+(`suite/shortcuts.py`). Move the AppImage and the entry points at nothing: open Help > *Setup...* again.
+
+**Updates.** The same flow as on Windows (above): the check reads `releases/latest`, needs `SHA256SUMS-linux` on the
+release (a release without Linux files says so and offers nothing), `updates.verify_feed` ties the packer's feed to
+that file, the download is the delta when one fits, and the packer's updater (`UpdateNix`, inside the AppImage) replaces
+the AppImage file and restarts it. The link helper's notice does not exist on Linux. A tarball copy has no updater and
+says "download the new version".
+
+**Uninstall.** Help > *Uninstall...* (an AppImage only) asks the same question with the box *Also delete my settings and
+caches*; it then closes the window, removes the desktop entries that point at the AppImage and the icon, removes the
+three XDG folders when the box is ticked (each moved aside at once, removed apart from the program by `rm -rf`) and
+deletes the AppImage file. With no box ticked the settings stay.
+
+**Build it** on Linux (Python 3.12 or newer with the `gui`, `music` and `convert` extras, PyInstaller, the `velopack`
+module, and the packer, which needs .NET 8: `dotnet tool install vpk --version 1.2.161 --tool-path tools/vpk`):
+
+```bash
+python scripts/build_app.py --smoke --pack      # out/installer/full/: the folder, the AppImage, the feed, the tarball
+```
+
+The script is the same as on Windows; what it does differently on Linux (`scripts/installer_linux.py`): one program
+file, no texconv, no Direct3D 12 module, `vpk pack` writes an AppImage, an icon PNG drawn by the script is packed in,
+the AppImage is renamed after its architecture, the tarball is made, `SHA256SUMS-linux` is written and `--smoke` also
+starts the AppImage with `--appimage-extract-and-run`. `.github/workflows/release.yml` has a `linux` job (Ubuntu 22.04)
+that does this on a tag and attaches the files next to the Windows ones; a `v0.2.0` tag builds the Windows files only.
+The public repository's CI builds the same on every push without publishing (`linux-build`).
 
 ## Build it
 
@@ -354,10 +413,10 @@ The result is in `out/installer/public/`: `AnnoToolbox/` (the program folder), `
 (`releases.win.json`, `RELEASES`, `assets.win.json`), `AnnoToolbox-<version>.msi` (the migration package, while it is
 built), `SHA256SUMS` and `upload-list.txt` (what a release attaches). The build runs these steps:
 
-1. The PyInstaller spec is written (one analysis, two exes, one folder).
+1. The PyInstaller spec is written (one analysis, two exes, one folder; the console one is renamed `AnnoToolbox.com` after the build).
 2. The schemas, texconv and the licences are put next to the exes.
 3. The folder is checked (the package data, the schemas, and that Qt's shader baker is there and starts).
-4. `--smoke` runs the console exe (`--version`, `rdm --help`, and every app of the suite started once, with a settings
+4. `--smoke` runs the console build (`AnnoToolbox.com`) (`--version`, `rdm --help`, and every app of the suite started once, with a settings
    folder of its own).
 5. `vpk pack` packs the folder: `--packId AnnoToolbox`, the version (a `rc` suffix becomes SemVer's `-rc1`),
    `--packTitle`, `--packAuthors`, `--runtime win-x64`, `--shortcuts None`, `--noPortable`, `--delta BestSpeed`. **The
@@ -433,6 +492,27 @@ machine, as agreed):
 7. The per-user registry layout the old-install detection reads (`Software\Microsoft\Windows\CurrentVersion\Uninstall`
    keyed by the product code), and the old installer's component records the package searches.
 8. Signing (there is no certificate), and a start on a computer that has no Python installed.
+
+### Linux (2026-11-18)
+
+Run in WSL on Ubuntu 24.04 (**glibc 2.39**, not the release's 22.04 floor: a build there links to older symbols, so it
+runs where this one runs, but the 2.35 floor itself was not seen), Python 3.12.3, PySide6 6.12, PyInstaller 6.22.3,
+velopack 1.2.161, vpk 1.2.161 on .NET 8 (installed per user): `build_app.py --smoke --pack` built the program folder
+(375 MB), checked it (the package data, that Qt's shader baker is there and starts), ran the console smoke (`--version`,
+`rdm --help`, all 13 apps started once, Qt offscreen), packed the AppImage (152 MB), the full update package (151 MB), the
+feed and the tarball (147 MB), wrote `SHA256SUMS-linux` and read it back, and started the AppImage itself with
+`--appimage-extract-and-run` (the same three starts, exit 0). The window program started from the AppImage stayed up for
+20 s offscreen. The tarball's program started (`--version`) and its `install-desktop-entry.sh` wrote a valid entry.
+`ldd` of the program shows no missing library on that system. The desktop entry, its reading back, the removal by the
+uninstall event, the AppImage's place check, the tarball and the release names are covered by `tests/test_linux_package.py`.
+
+**Not run:** a real desktop session (X11, Wayland), FUSE (WSL has none: only extract-and-run), Ubuntu 22.04 itself, a
+second distribution, the updater's download and restart (one version only: no delta, no feed on a server; the packer's
+`download github` on Linux was not run), whether the packer fires its first-run and uninstall calls for an AppImage
+(the program arms them only when `APPIMAGE` names the file; the setup page opens anyway for a person with no settings
+file), a double click on the created `.desktop` file (GNOME's "trust" prompt: the program asks `gio` to mark it trusted),
+Help > Uninstall's removal of a real AppImage, the release workflow's `linux` job and the CI's `linux-build` (read, not
+run), attesting the Linux files.
 
 Note: written 2026-11-16 for the move to Velopack in 0.2.0; the earlier
 Windows-installer results (a per-user install, smoke start and uninstall of the old `.msi`, 2026-11-13) no longer

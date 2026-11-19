@@ -408,6 +408,7 @@ def parts() -> list[project.Part]:
     """Each app's share of a project's mod, in the order the build merges them (the imported mod's carried files,
     islands, assets, the UI, sound, the imported models, the object builder's configs, the effects, the texts, the
     maps)."""
+    from ..assetedit import handoverdialog
     from ..assetedit import projectpart as assets
     from ..editor import projectpart as islands
     from ..mapedit import projectpart as maps
@@ -421,7 +422,7 @@ def parts() -> list[project.Part]:
     return [
         carried.PART,
         islands.PART,
-        assets.PART,
+        replace(assets.PART, handover=handoverdialog.HANDOVER),
         ui.UI_PART,
         sound.PART,
         models.PART,
@@ -433,7 +434,9 @@ def parts() -> list[project.Part]:
 
 
 def deliveries() -> dict[str, project.Delivery]:
-    """How the games that load archives take a project (``suite.project.Delivery``)."""
+    """How the games that load archives take a project (``suite.project.Delivery``): the islands' delivery, with the
+    imported archive mods in front (``archivemodbuild``)."""
     from ..editor.archivedelivery import DELIVERIES
+    from . import archivemodbuild
 
-    return dict(DELIVERIES)
+    return archivemodbuild.deliveries(DELIVERIES)

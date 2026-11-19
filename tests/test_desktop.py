@@ -675,6 +675,12 @@ def test_opening_an_island_loads_it_into_the_one_window(tmp_path, monkeypatch):
     assert view.tool == "water" and main.mode_label.text() == "Path Mode"
     main.actions["gizmo_scale"].trigger()
     assert view.gizmo.mode == "scale"
+    layers = [main.actions[f"layer_{key}"] for key in view.opts.layers]  # the Home tab's Layers group
+    assert len(layers) == 6 and all(a.isEnabled() and a.isChecked() for a in layers)
+    main.actions["layer_grass"].trigger()
+    assert view.opts.layers["grass"] is False and not main.actions["layer_grass"].isChecked()
+    main.actions["layer_grass"].trigger()
+    assert view.opts.layers["grass"] is True
     main.ribbon.fields["radius"][0].setValue(9)  # the brush on the Object tab follows the Terrain, Grid and Path tabs
     assert view.brush["radius"] == 9 and [w.value() for w in main.ribbon.fields["radius"]] == [9, 9, 9, 9]
     main.fov.setValue(60)

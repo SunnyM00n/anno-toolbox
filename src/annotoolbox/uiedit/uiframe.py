@@ -201,6 +201,9 @@ def menus(window) -> None:
     window.all_bindings.setCheckable(True)
     fill = tr("ui.fill_unbound_data_placeholders")
     window.fill_action = widgets.kept_switch(window, view, fill, window._fill_toggled, (APP, "placeholders"))
+    window.baseline_action = widgets.kept_switch(
+        window, view, tr("ui.baseline_typical_values"), window._baseline_toggled, (APP, "baseline")
+    )
     window.game_data_action = gamedataview.add_view_action(window, view, APP)
     window.values_action = livevalues.add_view_action(window, view, APP)
     window.settings_action = view.addAction(

@@ -22,6 +22,20 @@ TEXTS = {
 NUMBERS = (("percent", 75.0), ("progress", 0.6), ("ratio", 0.6), ("factor", 1.0), ("count", 12),
            ("amount", 250), ("money", 1500), ("cost", 1500), ("price", 1500), ("index", 0), ("level", 3),
            ("tier", 3))  # fmt: skip
+FILLERS = frozenset(TEXTS.values())  # the texts the preview makes up
+COUNT_WORDS = ("amount", "count", "money", "cost", "price", "percent", "level", "tier", "quantity", "population")
+ID_NAMES = ("id", "guid", "assetguid", "refguid")
+PICTURE_WORDS = (
+    "icon",
+    "image",
+    "picture",
+    "portrait",
+    "artwork",
+    "emblem",
+    "logo",
+    "model2d",
+)  # a text slot's picture
+PICTURE_TEXT_WORDS = ("text", "label", "name", "title", "caption", "tooltip", "desc", "header", "info")
 BOOL_FAMILIES = {"Logical"}
 NUMBER_FAMILIES = {"Numerical", "Maths", "Comparison"}
 TEXT_IDS = {0x80000008}  # a label's Text
@@ -149,12 +163,23 @@ def text_for(name: str) -> str:
         return TEXTS["short"]
     if any(w in low for w in ("desc", "info", "tooltip", "hint", "body", "paragraph")):  # a bare "Text": medium
         return TEXTS["long"]
+    if low in ID_NAMES or any(
+        w in low for w in COUNT_WORDS
+    ):  # a number shown as text: the value the game counts at run time
+        return str(number_for(name))
     return TEXTS["medium"]
 
 
 def number_for(name: str):
     low = name.lower()
     return next((v for word, v in NUMBERS if word in low), 42)
+
+
+def is_picture_name(name: str) -> bool:
+    """Whether a text property of this name holds a picture's name (``Icon``, ``Model2D``), not the text shown with
+    one (``IconText``)."""
+    low = name.lower()
+    return any(w in low for w in PICTURE_WORDS) and not any(w in low for w in PICTURE_TEXT_WORDS)
 
 
 def _by_type(vtype: str, name: str):
@@ -165,7 +190,7 @@ def _by_type(vtype: str, name: str):
     if vtype in ("float", "int"):
         return number_for(name)
     if vtype == "string":
-        return text_for(name)
+        return PICTURE + name if is_picture_name(name) else text_for(name)
     if vtype == "color":
         return (255, 255, 255)
     return None
@@ -207,6 +232,12 @@ def guess(binding, index: int, describe: Callable[[object], tuple[str, str]], lo
         if target.kind == "path" and target.ids and target.ids[-1] in TEXT_IDS:
             return text_for(source_name)
         vtype, name = describe(target)
+        if vtype == "picture":  # a text property its file feeds into a picture
+            return PICTURE + (source_name or name or "picture")
+        if name in FIXED:  # what the target is decides, whatever the source is called
+            if FIXED[name] is not None:
+                return FIXED[name]
+            continue
         if vtype == "bool" and family not in NUMBER_FAMILIES and (source_name or name) not in FIXED:
             return flag_for(binding, index, describe, locked, stored, readers)
         value = _by_type(vtype, source_name or name)

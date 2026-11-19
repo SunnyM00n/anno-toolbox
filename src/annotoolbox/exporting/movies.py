@@ -84,7 +84,7 @@ def _run_dll(ffmpeg: Path, data: bytes, key: str, roots: Sequence[Path], target:
 def _run(ffmpeg: Path, data: bytes, suffix: str, key: str, roots: Sequence[Path] = ()) -> bytes:
     """ffmpeg over a temporary copy of the movie; the output's bytes, or a RuntimeError with ffmpeg's last line.
     A Bink 2 movie goes through the game's Bink DLL when one is found (ffmpeg cannot read it)."""
-    with tempfile.TemporaryDirectory(prefix="export-movie-") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="export-movie-") as tmp:
         source, target = Path(tmp) / f"in{suffix}", Path(tmp) / f"out.{key}"
         if suffix == ".bk2" and binkdll.available(data, roots):
             return _run_dll(ffmpeg, data, key, roots, target)

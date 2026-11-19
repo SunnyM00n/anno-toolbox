@@ -46,6 +46,7 @@ SHADOW_CUT_OUT_PS = (
     "psCutOutShadowStencil",
     "ps_6_2",
 )
+MAKE_BUDGET = 0.025  # seconds of a frame the device side of new parts may take (``_part``); the rest: the next frames
 AHEAD = 2  # parts made on the device ahead of their first draw, a frame (a part's first pipelines: tens of ms) [ours]
 # a model within AHEAD_REACH times the distance it can be drawn at has its parts compiled and made ahead; past
 # KEEP_REACH times it for KEEP_SECONDS they are let go, compiled again as it nears (island-117-view.md "Speed",
@@ -517,6 +518,7 @@ class GameObjects:
         self.instances: FrameInstances | None = None  # the frame's instance data of every draw
         self.failures = 0  # parts sent back to the view's look (a frame's draws are made again)
         self.ahead_left = 0  # compiled parts within reach not yet made on the device (``_ahead``)
+        self._made = 0.0  # this frame's time on the device side of new parts (``MAKE_BUDGET``)
         self.adapt = False  # the frame hands the session's terrain: the models adapt to it (``FrameInstances``)
         self.near_at: dict[str, float] = {}  # model -> when it was last within ``KEEP_REACH`` (``_near``)
         self._kept: list[str] = []  # the models within ``KEEP_REACH`` at the last frame worked out
@@ -558,7 +560,11 @@ class GameObjects:
             self.pool = MapPool(self.r.ctx.rhi, q.max_texture if q is not None else 0)
             self.instances = FrameInstances(self.r.ctx.rhi)
             self.instances.adapt = self.adapt
+        if self._made > MAKE_BUDGET:
+            return None  # made in a later frame (a continental island's came in one frame, seconds)
+        started = time.perf_counter()
         self.parts[key] = _Part(self.r.ctx.rhi, got, self.programs, textures, self.pool, self.instances)
+        self._made += time.perf_counter() - started
         return self.parts[key]
 
     def frame(self, f, opts, shadows: bool, size: tuple[int, int] = (1, 1), cascades=None) -> Drawn:
@@ -582,6 +588,7 @@ class GameObjects:
         if still:  # the camera stands and nothing changed: the last frame's draws and instances
             return self._last[1]
         out, self.drawn, self.waiting = Drawn(), set(), 0
+        self._made = 0.0
         if self.instances is not None:
             self.instances.begin()
             self.instances.adapt = self.adapt

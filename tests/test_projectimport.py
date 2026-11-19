@@ -89,7 +89,15 @@ def do_import(tmp_path, mod: Path, link: bool = True, settings=None, say=lambda 
 
 
 def build(proj: project.Project, parts=None) -> project.BuildResult:
-    return project.build(proj, parts or [carriedpart.PART], Settings(), lambda _t: None)
+    from annotoolbox.editor import projectpart as islands
+    from annotoolbox.mapedit import projectpart as maps
+    from annotoolbox.objbuild import projectpart as objects
+    from annotoolbox.particleedit import projectpart as particles
+    from annotoolbox.soundedit import projectpart as sound
+    from annotoolbox.uiedit import projectpart as ui
+
+    whole_file_apps = [carriedpart.PART, objects.PART, ui.UI_PART, sound.PART, particles.PART, maps.PART, islands.PART]
+    return project.build(proj, parts or whole_file_apps, Settings(), lambda _t: None)
 
 
 def test_the_sort_names_each_files_kind_and_owner():
@@ -129,7 +137,7 @@ def test_an_import_makes_the_project_from_the_mods_identity_and_guids(tmp_path):
     assert proj.guid_range == (2_100_000_000, 2_100_009_999) and proj.guid_choice == "own"
     assert report.guid_added == 2 and report.guid_range == proj.guid_range
     assert [n[1:] for n in report.nested] == [("inner-mod", "0.5.0")]
-    assert report.owners["assets"] == 1 and report.owners["islands"] == 2 and report.owners["ui"] == 1
+    assert report.owners["assets"] == 1 and report.taken["islands"] == 2 and report.taken["ui"] == 1
     assert report.carried[".rdm"] == 1 and report.not_understood[".weird"] == 1
     assert report.files == 18 and report.linked + report.copied == 18
     meta = importmeta.read_meta(proj.folder)
@@ -234,7 +242,7 @@ def test_an_edit_next_to_the_carried_files_joins_modops_and_never_writes_into_th
     assert built.index("2100000005") < built.index("<!-- Assets -->") < built.index("remove")
     assert (mod / ASSETS).read_bytes() == MODOPS
     assert (carriedpart.carried_root(proj) / ASSETS).read_bytes() == MODOPS
-    clash = project.Part("other", "Other", lambda _p: True, lambda *_a: {"data/graphics/x.cfg": b"other bytes"})
+    clash = project.Part("other", "Other", lambda _p: True, lambda *_a: {"data/graphics/x.rdm": b"other bytes"})
     with pytest.raises(project.Clash):
         build(proj, [carriedpart.PART, clash])
 

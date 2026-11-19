@@ -2,16 +2,24 @@
 
 The installer makes none (the setup page asks, ``docs/installer.md`` "Shortcuts"). A shortcut points at the install
 root's launcher, never at the versioned folder, so it survives updates. The Windows shell-link interface is called through
-``ctypes`` (no extra library); a test passes its own folders, so no real Start menu or desktop is touched.
+``ctypes`` (no extra library); a test passes its own folders, so no real Start menu or desktop is touched. On Linux the
+same calls write a freedesktop.org desktop entry (``anno-toolbox.desktop``) in the applications folder and on the
+desktop, pointing at the AppImage (``docs/installer.md``, "Linux").
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from ..infra.tools import NO_WINDOW
+from ..paths import _xdg, _xdg_user_dir
+from . import install
 
 TITLE = "Anno Toolbox"  # the shortcut's name
 
@@ -52,13 +60,54 @@ def known_folder(guid: str) -> Path | None:
 
 
 def places() -> Places | None:
+    if sys.platform != "win32":  # the applications menu's folder and the desktop of the freedesktop.org specs
+        desktop = _xdg_user_dir("DESKTOP") or Path.home() / "Desktop"
+        return Places(_xdg("XDG_DATA_HOME", ".local/share") / "applications", desktop)
     programs = known_folder("A77F5D77-2E2B-44C3-A6A2-ABA601054A51")  # FOLDERID_Programs (the user's)
     desktop = known_folder("B4BFCC3A-DB2C-424C-B029-7FE99A87C641")  # FOLDERID_Desktop
     return Places(programs, desktop) if programs and desktop else None
 
 
 def link_path(folder: Path, title: str = TITLE) -> Path:
-    return folder / f"{title}.lnk"
+    """The shortcut's file in ``folder``: ``Anno Toolbox.lnk`` on Windows, ``anno-toolbox.desktop`` on Linux."""
+    return folder / ("anno-toolbox.desktop" if sys.platform != "win32" else f"{title}.lnk")
+
+
+def desktop_entry(target: Path, icon: Path | None, description: str = "") -> str:
+    """A freedesktop.org desktop entry that starts ``target`` (a path, quoted as the specification asks)."""
+    quoted = str(target)
+    for char in ("\\", '"', "`", "$"):  # escaped for the argument, and its backslash again for the file's string rules
+        quoted = quoted.replace(char, "\\\\" + ("\\\\" if char == "\\" else char))
+    exec_line = '"' + quoted.replace("%", "%%") + '"'  # a lone % starts a field code in Exec
+    lines = ["[Desktop Entry]", "Type=Application", f"Name={TITLE}", f"Comment={description or TITLE}"]
+    lines += [f"Exec={exec_line}", f"TryExec={target}", "Terminal=false", "Categories=Utility;Development;"]
+    lines += [f"Icon={icon}"] if icon else []
+    return "\n".join(lines) + "\n"
+
+
+def _entry_value(text: str, key: str) -> str | None:
+    for line in text.splitlines():
+        name, _, value = line.partition("=")
+        if name == key:
+            return value
+    return None
+
+
+def create_entry(path: Path, target: Path, description: str = "") -> None:
+    """Write the desktop entry ``path`` for the AppImage ``target`` (Linux): its icon is copied from beside the program
+    to the user's icon folder first, because the AppImage's own folder is a mount that lives for one run only."""
+    icon = None
+    if (shipped := install.icon_file()) is not None:
+        icon = _xdg("XDG_DATA_HOME", ".local/share") / "icons" / "hicolor" / "256x256" / "apps" / shipped.name
+        icon.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(shipped, icon)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(desktop_entry(target, icon, description), encoding="utf-8", newline="\n")
+    path.chmod(0o755)  # a desktop's own entry must be executable to be started from the desktop folder
+    if shutil.which("gio"):  # GNOME asks "trust and launch?" on a desktop file otherwise; best effort
+        subprocess.run(
+            ["gio", "set", str(path), "metadata::trusted", "true"], check=False, capture_output=True, **NO_WINDOW
+        )
 
 
 def _method(obj, index: int, restype, *argtypes):
@@ -97,9 +146,11 @@ def _release(*objects) -> None:
 
 
 def create_link(path: Path, target: Path, description: str = "", arguments: str = "") -> None:
-    """Write the shortcut ``path`` to ``target`` (the folder is made); ``OSError`` when the shell refuses."""
+    """Write the shortcut ``path`` to ``target`` (the folder is made); ``OSError`` when the shell refuses. On Linux a
+    desktop entry for the AppImage ``target``."""
     if sys.platform != "win32":
-        raise OSError("shortcuts are made on Windows only")
+        create_entry(path, target, description)
+        return
     import ctypes
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,9 +172,16 @@ def create_link(path: Path, target: Path, description: str = "", arguments: str 
 
 
 def link_target(path: Path) -> Path | None:
-    """Where the shortcut ``path`` points; None when it is not a readable shortcut."""
-    if sys.platform != "win32" or not path.is_file():
+    """Where the shortcut ``path`` points; None when it is not a readable shortcut. On Linux the desktop entry's
+    ``TryExec`` (the AppImage's path, written plain)."""
+    if not path.is_file():
         return None
+    if sys.platform != "win32":
+        try:
+            value = _entry_value(path.read_text(encoding="utf-8"), "TryExec")
+        except (OSError, UnicodeDecodeError):
+            return None
+        return Path(value) if value else None
     import ctypes
 
     link, persist = _shell_link()
@@ -176,7 +234,9 @@ def remove_ours(where: Places, root: Path, read: Callable[[Path], Path | None] =
 
 
 def _inside(path: Path, root: Path) -> bool:
-    return os.path.normcase(str(path)).startswith(os.path.normcase(str(root)).rstrip("\\/") + os.sep)
+    """Whether ``path`` is ``root`` itself (the AppImage file) or below it (the install folder)."""
+    here, there = os.path.normcase(str(path)), os.path.normcase(str(root)).rstrip("\\/")
+    return here == there or here.startswith(there + os.sep)
 
 
 def present(where: Places) -> tuple[bool, bool]:

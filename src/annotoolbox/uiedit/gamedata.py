@@ -469,7 +469,7 @@ def want_of(scope) -> str:
     vtype, name = scope.describe(binding.targets[0]) if binding.targets else ("value", "")
     source = scope.describe(binding.sources[index])[1] if index < len(binding.sources) else ""
     low = _flat(source or name)
-    if any(w in low for w in PICTURE_LEAVES) and vtype in ("string", "value"):
+    if vtype == "picture" or (any(w in low for w in PICTURE_LEAVES) and vtype in ("string", "value")):
         return "picture"
     if vtype == "string":
         return "long" if any(w in low for w in LONG_LEAVES) else "text"

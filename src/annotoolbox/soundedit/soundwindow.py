@@ -38,7 +38,7 @@ from ..exporting import banks
 from ..formats import bnkgraph, bnkmusic
 from ..infra.i18n import N_, tr
 from ..sources import gametree
-from ..suite import gameopen, gamesync, widgets
+from ..suite import appfolders, gameopen, gamesync, widgets
 from ..suite import project as suite_project
 from ..suite.background import Background
 from ..suite.clipplayer import ClipPlayer
@@ -196,7 +196,7 @@ class SoundWindow(QMainWindow):
             self.settings.apps.setdefault(APP, {})["game"] = key
             self.pages.setCurrentIndex(1 if key in OLD_GAMES else 0)
             if key in OLD_GAMES:
-                self.started = set(projectpart.EDITS.saved_files(self.project(), key))
+                self.started = set(appfolders.edited(self.project(), projectpart.EDITS, key))  # not the imported base
                 self.old.open_game(tree)
                 return
             self._fill_banks()

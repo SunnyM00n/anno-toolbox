@@ -10,8 +10,6 @@ section 9.
 
 from __future__ import annotations
 
-from collections import OrderedDict
-
 import numpy as np
 from PySide6.QtCore import QSize
 from PySide6.QtGui import (
@@ -105,15 +103,13 @@ class Pages1800(terrainpages.Pages):
     117's: the height R16 (``cNodeHeightMap``), the normal BC1 of x, z, y (``cNodeNormalMap``)."""
 
     def __init__(self, rhi, stages: dict, size: float, island: dict) -> None:
-        self.rhi, self.size, self.island = rhi, size, island
+        terrainpages.PageQueue.__init__(self, size, island)  # not 117's slots: 1800's own (``_Slot``)
+        self.rhi = rhi
         self.slots = []
         for _ in range(PER_FRAME):
             self.slots.append(_Slot(rhi, stages, self.slots[0] if self.slots else None))
-        self.coarse = self._coarse_blocks = self._coarse_buffer = None
-        self._coarse_data = None
-        self.ready, self.queue = OrderedDict(), OrderedDict()
+        self._coarse_blocks = self._coarse_buffer = None
         self.granularity: dict = {}  # each ready page's granularity map (``cNodeGranularityMap``) by key
-        self.version, self._made, self.wanted = 0, {}, set()
         self.ctx, self.read_back, self.readbacks = None, None, {}
 
     @property

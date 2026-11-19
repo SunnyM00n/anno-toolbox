@@ -34,6 +34,7 @@ GAMEDATA = "data/ui/studio/gamedata/"  # the History Editions keep their UI file
 STUDIO = "data/ui/studio/"  # ... and the editor's JSON documents of them, ``<folder>/<name>_<file guid>.json``
 TEXTS = ("data/base/config/gui/texts_{language}.xml", "data/config/gui/texts_{language}.xml")
 CACHE_FORMAT = 2
+LINE_ID_DIGITS = 16  # 117's line ids are 16 hex digits; 1800's are decimal numbers (its texts are ``<GUID>``)
 LOADED = 600  # decoded files kept: one scene places a few hundred, and a smaller set re-decodes them all per frame
 
 
@@ -245,14 +246,17 @@ class UiFiles:
         return list(dict.fromkeys(s for s in states if s))
 
     def texts(self, language: str = "english") -> dict[int, str]:
-        """The game's texts by line id (a label's ``LocalizationId`` is the id's 16 hex digits)."""
+        """The game's texts by line id (a label's ``LocalizationId`` is the id's 16 hex digits; 1800's a decimal
+        number)."""
         if language not in self._texts:
             out: dict[int, str] = {}
             for pattern in TEXTS:
                 path = pattern.format(language=language)
                 if self.tree.exists(path):
                     text = self.tree.read(path).decode("utf-8", "replace")
-                    for m in re.finditer(r"<LineId>(-?\d+)</LineId>\s*<Text>(.*?)</Text>", text, re.S):
+                    for m in re.finditer(
+                        r"<(?:LineId|GUID)>(-?\d+)</(?:LineId|GUID)>\s*<Text>(.*?)</Text>", text, re.S
+                    ):
                         out[int(m.group(1))] = _unescape(m.group(2))
                     break
             self._texts[language] = out
@@ -264,7 +268,7 @@ class UiFiles:
             return None
         digits = loca_id.replace(" ", "")
         try:
-            value = int(digits, 16)
+            value = int(digits) if digits.isdigit() and len(digits) < LINE_ID_DIGITS else int(digits, 16)
         except ValueError:
             return None
         if value >= 1 << 63:

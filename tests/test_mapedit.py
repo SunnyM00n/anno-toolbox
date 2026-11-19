@@ -26,6 +26,7 @@ from annotoolbox.mapedit import (
 from annotoolbox.mapedit.references import KEPT, MOVED, Report
 from annotoolbox.mapedit.template import KIND_FIXED, KIND_SLOT, KIND_START
 from annotoolbox.sources import gametree
+from annotoolbox.suite import buildout
 from annotoolbox.suite.project import Project
 
 STEM = "data/base/provinces/roman/templates/pool/t_01/t_01"
@@ -456,7 +457,7 @@ def test_the_project_keeps_the_files_and_drops_what_an_undo_took_back(tmp_path):
     assert projectpart.PART.has_work(project)
     assert (tmp_path / "p" / "map-edits" / "reports" / "x.grow.json").is_file()
     projectpart.save(project, "anno117", {"a/x.a7tinfo": b"3"}, earlier={"a/x.a7tinfo", "a/x.a7t"})
-    assert projectpart.PART.render(project, None, lambda _t: None) == {"a/x.a7tinfo": b"3"}
+    assert buildout.read_all(projectpart.PART.render(project, None, lambda _t: None)) == {"a/x.a7tinfo": b"3"}
 
 
 # Faults the audit of 2026-11-13 found, one test each (docs/audit-2026-11.md).

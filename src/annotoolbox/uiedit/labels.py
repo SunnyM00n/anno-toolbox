@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import elements, fields
+from . import baseline, elements, fields, placeholders
 
 TEXT = 0x80000008  # a label's Text, the built-in a binding writes
 PLANE = 0x8000000F  # its TextPlane
@@ -99,17 +99,22 @@ def _pair(value) -> tuple[float, float]:
 
 
 def label_text(ctx, node: dict, overrides: dict) -> str:
+    """What a label shows: the game's held text, a binding's, else the line its ``LocalizationId`` names (with an id
+    the label shows the line, as the game does: ui/117/loading-screen-and-main-menu.md "Texts"), else its stored
+    text. A filler a binding got from the preview (``placeholders.TEXTS``) gives way to the label's own line."""
     live = elements.held_for(ctx.live_text, elements.Element(node, "label"))
     if live is not None:  # the game's own text, held by an optional panel, in place of the sample value
         return live
     text = overrides.get((TEXT,))
-    if text is None:
-        text = fields.get(node, "Text") or ""
-    if not text:
+    if not text or (isinstance(text, str) and text in placeholders.FILLERS):
         loca = overrides.get((0x8000000A,)) or fields.get(node, "LocalizationId") or ""
         loca = loca if isinstance(loca, str) else ""
-        text = (ctx.files.text_of(loca, ctx.language) or f"[{loca}]") if loca else ""
-    return str(text)
+        line = ctx.files.text_of(loca, ctx.language) if loca else None
+        stored = fields.get(node, "Text") if text is None else None  # a binding that wrote "" keeps it empty
+        shown = overrides.get(baseline.BASELINE_TEXT)  # set only where the text is a filler or none (``baseline``)
+        own = shown if shown is not None else text or stored or (f"[{loca}]" if loca else "")
+        text = line or own
+    return str(text) if isinstance(text, (str, int, float)) else ""  # a game object is no text (a list's reference)
 
 
 def mode(node: dict, overrides: dict | None, name: str) -> int:

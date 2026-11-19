@@ -10,23 +10,16 @@ import io
 
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QIcon, QImage, QPixmap
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QGridLayout,
-    QListWidget,
-    QListWidgetItem,
-    QMessageBox,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMessageBox
 
 from ...infra.i18n import N_, tr
-from ...render import quality
+from ...render import nativelook, quality
 from ...suite import features
 from .. import islandrules, terraintools
 from ..editsession import EditSession, game_of
 from .desktoppanels import LibraryPanel, MaterialGallery, ObjectsPanel, PropertiesPanel
 from .desktopplace import PlaceablesPanel
+from .desktopslotstab import SLOT_GAMES
 from .desktopview import BRUSHES, TOOLS
 from .minimappanel import MinimapPanel
 
@@ -49,20 +42,18 @@ NO_TOOLS = {
     "built": {"blocker", "active", "surf"},
     "file": {"blocker", "active", "surf"},
 }
-LAYER_NAMES = {  # the view's layers (``desktoprender.LAYERS``) as a person reads them
-    "objects": N_("islands.objects"),
-    "markers": N_("islands.markers"),
-    "props": N_("common.effects_lower"),
-    "grass": N_("islands.grass"),
-    "forest": N_("islands.forest_lower"),
-    "water": N_("islands.water"),
-}
 CHECK_NAMES = {
     "rules": N_("islands.rules"),
     "slots": N_("islands.slots"),
     "falls": N_("islands.falls"),
 }  # the checks of the Grid tab
 OTHER_NO_TOOLS = {"water", "forest", "place", "blocker", "spray", "active", "surf"}  # an island of another game
+
+
+def look_blocker(key: str) -> str:
+    """Why the look ``key`` cannot be switched on on this system ("" when it can): the game's own shaders are
+    Direct3D shaders (docs/linux.md "Phase 3 done")."""
+    return tr("common.game_look_windows_only") if key == "native" and not nativelook.direct3d_here() else ""
 
 
 def game_tools(games: tuple[str, ...] | None) -> set[str]:
@@ -79,31 +70,6 @@ def modes(info: dict, island: dict) -> dict:
         tools = {"select"}
     game = island.get("game_name") or ("Anno 2070" if island.get("mode") == "2070" else "Anno 117")
     return {"tools": tools, "game": game, "buildable": info.get("buildable", kind in ("built", "anno117", "anno2070"))}
-
-
-class LayersPanel(QWidget):
-    """What the view draws: its layers and the shadows (the view tab "Layers")."""
-
-    def __init__(self, doc: IslandDoc) -> None:
-        super().__init__()
-        self.doc, view = doc, doc.view
-        layout = QVBoxLayout(self)
-        grid = QGridLayout()
-        self.boxes = {}
-        for k, key in enumerate(view.opts.layers):
-            cb = QCheckBox(tr(LAYER_NAMES.get(key, key)), checked=True)
-            cb.toggled.connect(lambda on, key=key: self._layer(key, on))
-            self.boxes[key] = cb
-            grid.addWidget(cb, k // 3, k % 3)
-        layout.addLayout(grid)
-        layout.addStretch(1)
-
-    def set_layer(self, key: str, on: bool) -> None:
-        self.boxes[key].setChecked(on)
-
-    def _layer(self, key: str, on: bool) -> None:
-        self.doc.view.opts.layers[key] = on
-        self.doc.view.update()
 
 
 class ChecksPanel(QListWidget):
@@ -161,10 +127,18 @@ class HistoryPanel(QListWidget):
 def open_session(editor, info: dict) -> tuple:
     """(editor, island, session): the opened island's data and its edit session, made off the window's thread when
     the island is large (``workbench.MainWindow._load``)."""
+    from . import desktopgame  # noqa: F401  # imported here, not by the window's thread when the look is chosen (1.4 s)
+
     island = editor.island_data()
     island["readonly"] = not info.get("editable", True)  # the app decides (the island's JSON is cached)
     session = EditSession(island, editor.edits(), readonly=not info.get("editable", True))
     session.finish_loading()
+    prime = getattr(editor, "slot_assets", None)
+    if prime is not None and game_of(island, kind=str(info.get("kind", ""))) in SLOT_GAMES:
+        try:  # the Slots list reads the game's asset files: here, not on the window's thread
+            prime()
+        except Exception:  # the list says why itself when it asks again
+            pass
     return editor, island, session
 
 
@@ -190,7 +164,6 @@ class IslandDoc(QObject):
         self.buildings = PlaceablesPanel(self)
         self.objects = ObjectsPanel(self)
         self.props = PropertiesPanel(self)
-        self.layers = LayersPanel(self)
         self.checks = ChecksPanel(self)
         self.history = HistoryPanel(self)
         self.minimap = MinimapPanel(self.session, self.background, self.say)
@@ -214,8 +187,19 @@ class IslandDoc(QObject):
                 tiles=len(counts[2]),
             )
         )
+        self.side_loading = True  # the materials and the model list are read in the background (``_load_side_data``)
         self._load_side_data()
         self.report_notes()
+
+    def loading_text(self) -> str:
+        """What the island still loads in the background, for the status bar ("" when nothing): the ground materials
+        and the model list, then the models and textures the view draws."""
+        parts = [tr("islands.loading_materials_models_list")] if self.side_loading else []
+        renderer = getattr(self.view, "renderer", None)
+        left = renderer.busy() if renderer is not None else 0
+        if left:
+            parts.append(tr("islands.loading_n_models_textures", n=left))
+        return ", ".join(parts)
 
     def report_notes(self) -> None:
         """What the island's reader left out (``IslandEditor.notes``): into the Log, the first in the status bar."""
@@ -269,6 +253,11 @@ class IslandDoc(QObject):
             self.view.opts.game_terrain = game in GAME_TERRAIN
             self.view.update()
 
+    def set_layer(self, key: str, on: bool) -> None:
+        """Draw (or leave out) one of the view's layers (``desktoprender.LAYERS``): the ribbon's Layers group."""
+        self.view.opts.layers[key] = on
+        self.view.update()
+
     def look_state(self) -> dict[str, tuple[bool, bool]]:
         """Per look and ``shadows``: (enabled, checked). 117's rules are for 117's islands, built or vanilla, and the
         game's own shaders also for the games with a look of theirs (with the game's terrain where the island has
@@ -282,6 +271,7 @@ class IslandDoc(QObject):
         for key, _label, _tip in LOOKS:
             ok = (key in LOOKS_2070) == (island.get("mode") == "2070") and not game
             ok = ok or (key == "native" and game in GAME_LOOKS) or (key == "game_terrain" and game in GAME_TERRAIN)
+            ok = ok and not look_blocker(key)
             out[key] = (ok and (o.underwater or key != "caustics"), getattr(o, key))
         return out
 
@@ -323,6 +313,7 @@ class IslandDoc(QObject):
 
     # ribbon actions
     def say(self, text: str) -> None:
+        self.last_said = text  # what the status bar goes back to when the progress line ends
         self.shell.say(text)
 
     def set_look(self, key: str, on: bool) -> None:
@@ -529,6 +520,7 @@ class IslandDoc(QObject):
             return own, vanilla, library, problems
 
         def done(result):
+            self.side_loading = False
             if not self.alive:
                 return
             if isinstance(result, Exception):

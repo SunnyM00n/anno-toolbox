@@ -6,12 +6,15 @@ before the streets, after them, the vehicle tracks after the models). island-edi
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from ...render import decalmesh
 from ...render.camera import gl
 
 DECAL_KIND = 3  # the model shader's decal: blended, in the sun's shadow (shaders.MODEL_FS)
+DECAL_BUDGET = 0.025  # seconds of a frame the laying of the decals may take; it goes on in the next frames
 
 
 class DecalLayer:
@@ -22,15 +25,32 @@ class DecalLayer:
         self.key: object = None
         self.groups: list[tuple[int, dict, object, object, object]] = []  # (pass, material, vao, vbo, ibo)
         self.inst = ctx.buffer(np.identity(4, "f4").tobytes())  # one instance: the grids are in the view's space
+        self._work: tuple | None = None  # (key, the laying as a generator, what it found) while it goes on
 
-    def update(self, key, placed, height_at, step: float, program) -> None:
+    def update(self, key, placed, height_at, step: float, program) -> bool:
         """Make the meshes anew when ``key`` changed: ``placed`` yields (instance matrices [n, 4, 4], the config's
-        decals) of every shown model, ``height_at(x, z)`` the drawn ground."""
+        decals) of every shown model, ``height_at(x, z)`` the drawn ground. The laying takes ``DECAL_BUDGET`` of a
+        frame at most (a continental island's took 12 seconds at once), the old meshes stay until the new are made;
+        True while it still goes on (the next frame calls again)."""
         if key == self.key:
-            return
+            return False
+        if self._work is None or self._work[0] != key:
+            found: dict[tuple, list] = {}
+            self._work = (key, self._lay(placed, height_at, step, found), found)
+        start = time.perf_counter()
+        for _ in self._work[1]:
+            if time.perf_counter() - start > DECAL_BUDGET:
+                return True
+        found = self._work[2]
+        self._work = None
         self.release_meshes()
         self.key = key
-        found: dict[tuple, list] = {}
+        self._upload(found, program)
+        return False
+
+    @staticmethod
+    def _lay(placed, height_at, step: float, found: dict):
+        """The decals' grids into ``found`` by their look, handing control back after each."""
         for mats, decals in placed:
             for d in decals:
                 look = (decalmesh.pass_of(d["kind"], d["on_streets"]), d["diffuse"], d["normal"],
@@ -40,6 +60,9 @@ class DecalLayer:
                         found.setdefault(look, []).append(
                             decalmesh.conform(d["extents"], m @ d["matrix"], height_at, step)
                         )
+                        yield
+
+    def _upload(self, found: dict, program) -> None:
         for (kind, diffuse, normal, color, opacity), meshes in found.items():
             verts, idx, base = [], [], 0
             for v, i in meshes:
@@ -88,6 +111,7 @@ class DecalLayer:
         ctx.disable(ctx.BLEND)
 
     def release_meshes(self) -> None:
+        self._work = None
         for _kind, _m, vao, vbo, ibo in self.groups:
             for r in (vao, vbo, ibo):
                 r.release()

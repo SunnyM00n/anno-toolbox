@@ -555,7 +555,7 @@ def to_ogg(data: bytes, library: Library) -> bytes:
 def decode(data: bytes, library: Library, ffmpeg: Path) -> tuple[bytes, int, int]:
     """PCM (16 bit, interleaved) of a Wwise Vorbis file through ffmpeg: (pcm, channels, rate)."""
     wem = parse_wem(data)
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         src = Path(tmp) / "in.ogg"
         src.write_bytes(to_ogg(data, library))
         done = subprocess.run(

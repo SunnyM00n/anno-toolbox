@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..infra.i18n import N_, number, tr
 from ..modloader.mods import walk_sizes
-from . import importmeta
+from . import appfolders, importmeta
 from . import project as projects
 from .buildout import WORKERS, FileRef, same
 
@@ -38,7 +38,7 @@ def files_of(root: Path) -> dict[str, int]:
 
 def _has_work(project: projects.Project) -> bool:
     return (
-        project.game in projects.GAMES
+        project.game in projects.ALL_GAMES
         and carried_root(project).is_dir()
         and importmeta.read_meta(project.folder) is not None
     )
@@ -46,7 +46,8 @@ def _has_work(project: projects.Project) -> bool:
 
 def _render(project: projects.Project, _settings, log: Callable[[str], None]) -> dict[str, FileRef]:
     root = carried_root(project)
-    files = {rel: FileRef(os.path.join(root, rel)) for rel in files_of(root)}
+    held = appfolders.held_paths(project)  # a whole-file app's file is written by the app's part, once
+    files = {rel: FileRef(os.path.join(root, rel)) for rel in files_of(root) if rel.lower() not in held}
     log(tr("common.carried_files_n", n=number(len(files))))
     return files
 

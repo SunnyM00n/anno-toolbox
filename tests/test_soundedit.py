@@ -17,6 +17,7 @@ from annotoolbox.soundedit import clipcodec, containers, nodebase, outputs
 from annotoolbox.soundedit.bankdoc import BankDoc
 from annotoolbox.soundedit.registry import EditError
 from annotoolbox.sources import gametree
+from annotoolbox.suite import buildout
 
 VERSIONS = (112, 135, 172)
 NEW = 172
@@ -449,9 +450,9 @@ def test_saving_keeps_the_files_in_the_project_and_announces_banks(tmp_path):
     assert link.names == [] and notice.text.startswith(
         "saved in the project: build and install"
     )  # sent with the install
-    assert projectpart.PART.has_work(project) and projectpart.PART.render(project, None, lambda _t: None) == {
-        "data/sound/generatedsoundbanks/windows/9.bnk": b"x"
-    }
+    assert projectpart.PART.has_work(project) and buildout.read_all(
+        projectpart.PART.render(project, None, lambda _t: None)
+    ) == {"data/sound/generatedsoundbanks/windows/9.bnk": b"x"}
 
 
 BANK_PATH = "data/sound/generatedsoundbanks/windows/9.bnk"

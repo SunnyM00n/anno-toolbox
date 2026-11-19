@@ -10,6 +10,7 @@ to the release page. ``docs/installer.md`` "Updates".
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from datetime import date
@@ -54,7 +55,11 @@ class UpdateDialog(QDialog):
             go.setDefault(True)
             buttons.addButton(tr("objects.later"), QDialogButtonBox.ButtonRole.RejectRole)
         else:
-            layout.addWidget(QLabel(tr("common.update_with_installer")))
+            layout.addWidget(
+                QLabel(
+                    tr("common.update_with_installer") if sys.platform == "win32" else tr("common.update_with_download")
+                )
+            )
             buttons = QDialogButtonBox()
             buttons.addButton(tr("common.open_release_page"), QDialogButtonBox.ButtonRole.AcceptRole)
             buttons.addButton(tr("common.close"), QDialogButtonBox.ButtonRole.RejectRole)

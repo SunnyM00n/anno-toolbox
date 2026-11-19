@@ -284,7 +284,7 @@ def feed_ffmpeg(movie: Movie, ffmpeg: Path, args: Sequence[str], target: Path, t
     line when it fails. The sound (first track) is read by a second open of the same file, with a Bink 2 library;
     without one the video has no sound."""
     info = movie.info
-    with tempfile.TemporaryDirectory(prefix="bink-ffmpeg-") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="bink-ffmpeg-") as tmp:
         cmd = [str(ffmpeg), "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgra"]
         cmd += ["-s", f"{info.width}x{info.height}", "-r", f"{info.fps:.6f}", "-i", "-"]
         sound_dll = _audio_dll(movie) if info.tracks else None

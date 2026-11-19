@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
 from ..infra.i18n import N_, english, number, tr
 from ..modloader.mods import DEPENDENCY_KINDS
 from ..sources import gametree
-from . import guidrangedialog, importdialog, projectdeps
+from . import guidrangedialog, importdialog, importmeta, importresume, projectdeps
 from . import guidranges as gr
 from . import project as projects
 from .background import Background, JobTalk
@@ -58,8 +59,10 @@ class ProjectDialog(QDialog):
         self.stop_button = QPushButton(tr("common.stop"))
         self.stop_button.clicked.connect(self.stop_import)
         self.stop_button.hide()
+        self._importing: Path | None = None  # the folder of the import that runs
         self._layout()
         self.load_current()
+        QTimer.singleShot(0, self.offer_pending)  # a half-made import of an earlier run: resume or remove it
 
     def _layout(self) -> None:
         top = QHBoxLayout()
@@ -104,6 +107,9 @@ class ProjectDialog(QDialog):
         ):
             actions.addWidget(self._button(label, slot))
         actions.addWidget(self.stop_button)
+        for key, one in self.handovers().items():
+            actions.addWidget(self._button(one.take_label, lambda key=key: self.take_handover(key)))
+            actions.addWidget(self._button(one.undo_label, lambda key=key: self.undo_handover(key)))
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addLayout(form)
@@ -124,6 +130,14 @@ class ProjectDialog(QDialog):
         menu = QMenu(button)
         menu.addAction(tr("common.import_mod_folder")).triggered.connect(lambda _c=False: self.ask_import())
         menu.addAction(tr("common.import_mod_zip")).triggered.connect(lambda _c=False: self.ask_import(True))
+        menu.addAction(tr("common.archive_mod_import_button")).triggered.connect(
+            lambda _c=False: self.ask_import_archive()
+        )
+        menu.addAction(tr("common.archive_mod_import_folder")).triggered.connect(
+            lambda _c=False: self.ask_import_archive(True)
+        )
+        menu.addSeparator()
+        menu.addAction(tr("common.reimport_menu")).triggered.connect(lambda _c=False: self.ask_reimport())
         button.setMenu(menu)
         self.buttons[english(N_("common.import_mod_button"))] = button
         return button
@@ -202,6 +216,41 @@ class ProjectDialog(QDialog):
                 else:
                     note = tr("common.part_nothing_game", part=title)
             QListWidgetItem(note, self.contents)
+        self._show_handover()
+
+    def handovers(self) -> dict:
+        """The apps' ways to take an imported mod's carried files (``Part.handover`` and its ``more``), by the part's key
+        (the further ways: ``<key>+<n>``)."""
+        out = {}
+        for part in self.parts:
+            if part.handover is not None:
+                out[part.key] = part.handover
+                out.update({f"{part.key}+{n}": more for n, more in enumerate(part.handover.more, 1)})
+        return out
+
+    def _show_handover(self) -> None:
+        """Each hand-over's two buttons: the first for an imported project that can still hand over, the other for one
+        that has."""
+        for one in self.handovers().values():
+            self.buttons[english(one.take_label)].setEnabled(one.can_take(self.project))
+            self.buttons[english(one.undo_label)].setEnabled(one.can_undo(self.project))
+
+    def take_handover(self, key: str = "assets", wait: bool = False, confirm=None) -> None:
+        """Hand the imported mod's carried files to the app ``key`` after the report of what that loses."""
+        self._busy(True)
+        extra = {"confirm": confirm} if confirm else {}
+        self.handovers()[key].start_take(
+            self, self.project, self.shell.settings, self.background, self.say, self._handover_done, wait, **extra
+        )
+
+    def undo_handover(self, key: str = "assets", confirm=None) -> None:
+        extra = {"confirm": confirm} if confirm else {}
+        self.handovers()[key].undo(self, self.project, self.say, **extra)
+        self.show_contents()
+
+    def _handover_done(self) -> None:
+        self._busy(False)
+        self.show_contents()
 
     def edited(self) -> projects.Project:
         """The project as the fields say (``ValueError`` with the reason when they do not make one)."""
@@ -271,14 +320,50 @@ class ProjectDialog(QDialog):
             self.import_mod(source, folder)
 
     def import_mod(self, source: Path, folder: Path, wait: bool = False) -> None:
-        """The import off the window's thread, its steps in the log, Stop ends it; the project opens when it is done
-        (``wait``: in this thread, for a test)."""
+        """The import off the window's thread, its steps in the log, Stop ends it and keeps what was made for a
+        resume; the project opens when it is done (``wait``: in this thread, for a test)."""
+        path = self.shell.settings_path
+        self._job(
+            folder,
+            lambda talk, done: importdialog.start(
+                talk, self.background, source, folder, self.shell.settings, done, wait, path
+            ),
+        )
+
+    def ask_import_archive(self, loose_files: bool = False) -> None:
+        """Ask for an older game's archive mod (or a folder of its files), its game and an empty folder, then import
+        it there as a project (docs/mod-import.md, section 16)."""
+        chosen = importdialog.ask_archive(self, loose_files)
+        folder = importdialog.ask_target(self, chosen[0]) if chosen else None
+        if chosen and folder:
+            self.import_archive(chosen[0], chosen[1], folder)
+
+    def import_archive(self, source: Path, game: str | None, folder: Path, wait: bool = False) -> None:
+        """The archive import off the window's thread, as ``import_mod`` (Stop removes the half-made project)."""
+        self._job(
+            folder,
+            lambda talk, done: importdialog.start_archive(
+                talk, self.background, source, game, folder, self.shell.settings, done, wait
+            ),
+        )
+
+    def resume_import(self, folder: Path, wait: bool = False) -> None:
+        """Continue a half-made import where it stopped."""
+        self._job(
+            folder,
+            lambda talk, done: importdialog.start_resume(
+                talk, self.background, folder, self.shell.settings, done, wait, self.shell.settings_path
+            ),
+        )
+
+    def _job(self, folder: Path, starter) -> None:
         self._busy(True)
+        self._importing = folder
         self.talk = JobTalk(self)
         self.talk.said.connect(self.say)
         self.stop_button.setEnabled(True)
         self.stop_button.show()
-        importdialog.start(self.talk, self.background, source, folder, self.shell.settings, self._imported, wait)
+        starter(self.talk, self._imported)
 
     def stop_import(self) -> None:
         if self.talk is not None:
@@ -286,17 +371,81 @@ class ProjectDialog(QDialog):
             self.stop_button.setEnabled(False)
 
     def _imported(self, result) -> None:
+        self._ended()
+        for line in importdialog.explain(result, self._importing):
+            self.say(line)
+        if not isinstance(result, Exception):
+            self.shell.save_settings()  # the remembered project and the own GUID reserve
+            self.use(result.folder)
+
+    def _ended(self) -> None:
         self.stop_button.hide()
         if self.talk is not None:
             self.talk.said.disconnect()
             self.talk.deleteLater()
             self.talk = None
         self._busy(False)
-        for line in importdialog.explain(result):
+
+    def offer_pending(self, wait: bool = False) -> None:
+        """A half-made import (a stop that kept its work, or a run that ended in the middle): resume it, remove it, or
+        leave it for the next start."""
+        registry = importdialog.registry_of(self.shell.settings_path)
+        choice = importdialog.ask_pending(self, importresume.pending(registry))
+        if choice is None:
+            return
+        action, one = choice
+        if action == "resume":
+            self.resume_import(one.folder, wait)
+        elif importresume.discard(one.folder, registry):
+            self.say(tr("common.import_discarded", folder=one.folder))
+
+    def ask_reimport(self) -> None:
+        """Compare the project's mod with its source again and take what changed (a file both sides changed asks)."""
+        meta = importmeta.read_meta(self.project.folder)
+        if meta is None:
+            QMessageBox.information(
+                self, tr("common.project"), tr("common.reimport_not_imported", folder=self.project.folder)
+            )
+            return
+        source = Path(meta.source) if Path(meta.source).exists() else importdialog.ask_source(self)
+        if source is not None:
+            self.reimport(source)
+
+    def reimport(self, source: Path, choices=None, wait: bool = False) -> None:
+        """The comparison off the window's thread, then the question (``choices``: answered already, for a test), then
+        the change."""
+        folder = self.project.folder
+        self._job(
+            folder,
+            lambda talk, _done: importdialog.start_reimport_plan(
+                talk, self.background, folder, source, lambda made: self._planned(made, choices, wait), wait
+            ),
+        )
+
+    def _planned(self, made, choices, wait: bool) -> None:
+        self._ended()
+        if isinstance(made, Exception):
+            self.say(tr("common.import_failed", error=made))
+            return
+        for line in made.lines():
             self.say(line)
-        if not isinstance(result, Exception):
-            self.shell.save_settings()  # the remembered project and the own GUID reserve
-            self.use(result.folder)
+        if choices is None:
+            choices = importdialog.ask_conflicts(self, made)
+        if choices is None:
+            made.dispose()
+            return
+        self._job(
+            made.folder,
+            lambda talk, _done: importdialog.start_reimport_apply(
+                talk, self.background, made, choices, self._reapplied, wait
+            ),
+        )
+
+    def _reapplied(self, result) -> None:
+        self._ended()
+        for line in [tr("common.import_failed", error=result)] if isinstance(result, Exception) else result:
+            self.say(line)
+        self.load_current()
 
     def use_workspace(self) -> None:
         self.shell.settings.project = ""

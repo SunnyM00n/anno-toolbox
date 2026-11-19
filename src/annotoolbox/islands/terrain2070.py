@@ -18,9 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..infra import buildcache
-from ..infra.tools import require_tool, run_tool, tool_id
-from ..models import fileresolve
-from ..models.textures import dds_to_png, encoder_id, png_to_bc7, vector_data
+from ..models import fileresolve, texbackend
+from ..models.textures import dds_to_png, encoder_id, png_to_bc4, png_to_bc7, vector_data
 from ..sources.balancingtext import tag_text
 from ..sources.overlay import SourceTree
 from . import riverbed
@@ -80,17 +79,6 @@ def read_ground_textures(tree: SourceTree) -> list[GroundTexture]:
     return out
 
 
-def _to_bc4(src_png: Path, dst: Path) -> None:
-    texconv = require_tool("texconv")
-    with tempfile.TemporaryDirectory(prefix="a2070_bc4_") as tmp:
-        res = run_tool(texconv, ["-f", "BC4_UNORM", "-m", "0", "-ft", "dds", "-o", tmp, "-y", "-nologo", str(src_png)])
-        produced = Path(tmp) / (src_png.stem + ".dds")
-        if not res.ok or not produced.is_file():
-            raise RuntimeError(f"texconv BC4 failed on {src_png}: {res.stderr or res.stdout}")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(produced.read_bytes())
-
-
 def paint_curve(alpha):
     """How much of a texel a 2070 ground layer covers for each painted alpha 0..255: 2070 lays a
     layer on with sat(5 * (a - 1) + 6 * c), ``a`` its diffuse's alpha (rendering-2070.md 2.2),
@@ -112,7 +100,7 @@ def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
 
     key = buildcache.digest(
         "material",
-        tool_id("texconv"),
+        texbackend.identity(),
         encoder_id(),
         buildcache.code_version("islands.terrain2070"),
         buildcache.libs_version(),
@@ -182,7 +170,7 @@ def _render_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
     height = detail.point(lambda v: max(0, min(40, 8 + (v - 128) // 2)))
     height_png = work / f"{name}_height.png"
     height.save(height_png)
-    _to_bc4(height_png, dst / f"{name}_height_0.dds")
+    png_to_bc4(height_png, dst / f"{name}_height_0.dds")
 
     xml = (
         f"<Material>\n<DiffuseFileName>{folder}/{name}_diff.psd</DiffuseFileName>\n"
@@ -261,7 +249,7 @@ def build_material_set(tree: SourceTree, anno117_files, out: Path) -> tuple[dict
     material_of = {}
     transfer = {}
     curves = {}
-    with tempfile.TemporaryDirectory(prefix="a2070_terrain_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_terrain_") as tmp:
         work = Path(tmp)
         for mid, tex in enumerate(textures):
             path, mean_alpha, curves[tex.guid] = convert_texture(tree, tex, out, work)
@@ -359,7 +347,7 @@ def material_colour(files, material: str) -> tuple[int, int, int] | None:
     try:
         img = Image.fromarray(fileresolve.decode(data), "RGBA").convert("RGB").resize((16, 16))
     except fileresolve.DecodeError:  # a format the in-process decoders do not read: texconv
-        with tempfile.TemporaryDirectory(prefix="a2070_mat_") as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_mat_") as tmp:
             src = Path(tmp) / "diffuse.dds"
             src.write_bytes(data)
             img = Image.open(dds_to_png(src, Path(tmp))).convert("RGB").resize((16, 16))

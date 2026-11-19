@@ -503,6 +503,10 @@ class Cast:
         self.draw_call, self.run, self.instances = draw, run, 1
         self.pairs: np.ndarray | None = None  # the (instance, cascade) pairs drawn (``cull_casts``); None: all of them
 
+    def fresh(self) -> bool:
+        """Whether its draw's resources are not made yet (``nativepass.prepared`` spreads the first prepares)."""
+        return not self.draw_call.keep
+
     def count(self) -> int:
         """The copies one draw makes: the pairs, or every instance into each cascade the frame reads."""
         if self.pairs is not None:
@@ -546,6 +550,10 @@ class Run:
         self.world = np.asarray(worlds[0], float) if len(worlds) else np.identity(4)
         self.centres, self.radii = spheres
         self.prepass: FxcDraw | None = None  # its draw in the frame's normals-and-depth pre-pass (``with_prepass``)
+
+    def fresh(self) -> bool:
+        """Whether its draw's resources are not made yet (``nativepass.prepared`` spreads the first prepares)."""
+        return not self.draw_call.keep
 
     def with_prepass(self, draw: FxcDraw | None) -> None:
         """Its draw of the same instances in the frame's pre-pass (an opaque part's; None: none)."""

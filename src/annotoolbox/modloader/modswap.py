@@ -138,7 +138,7 @@ def place_folder(source: Path, dest: Path, trash: Trash = recycle, *, move: bool
     notes."""
     source, dest = Path(source), Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=STAGING, dir=dest.parent) as stage:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=dest.parent) as stage:
         staged = Path(stage) / dest.name
         try:
             if move:
@@ -176,7 +176,7 @@ def staged(dest: Path, mod_id: str, trash: Trash = recycle, log: Callable[[str],
         raise InstallError(f"refusing to write {dest}: not an absolute path ending in the mod id {mod_id!r}")
     check_holds(dest, mod_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=STAGING, dir=dest.parent) as stage:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=dest.parent) as stage:
         folder = Path(stage) / dest.name
         folder.mkdir()
         yield folder

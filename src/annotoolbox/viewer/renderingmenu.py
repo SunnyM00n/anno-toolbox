@@ -47,7 +47,7 @@ class RenderingMenu:
     def backends(self) -> set[str]:
         """The backends this window can draw with (probed once)."""
         if self._backends is None:
-            found = {"gl"}
+            found = set() if rhiview.blocked("gl") else {"gl"}
             for name in ("d3d12", "d3d11", "vulkan", "opengl"):
                 try:
                     if rhiview.available(name):
@@ -145,10 +145,14 @@ class RenderingMenu:
         chosen = nativelook.Choice.of(self.w.settings.rendering, self.game()).backend
         auto.setChecked(not chosen)
         for key, text in BACKENDS.items():
-            act = backends.addAction(text, lambda k=key: self._choose(backend=k))
+            usable = key in self.backends()
+            why = "" if usable else rhiview.blocked(key) or tr("common.needs_backend_cannot_draw", backend=text)
+            act = backends.addAction(tr("viewer.label_why", label=text, why=why) if why else text,
+                                     lambda k=key: self._choose(backend=k))  # fmt: skip
             act.setCheckable(True)
             act.setChecked(key == chosen)
-            act.setEnabled(key in self.backends())
+            act.setEnabled(usable)
+            act.setToolTip(why)
         self._quality_menu(m)
         m.addSeparator()
         for f in opts.features:
@@ -165,6 +169,8 @@ class RenderingMenu:
             tr("viewer.compiler_name", name=opts.compiler or "-"),
             tr("viewer.game_build_name", name=opts.build or "-"),
         ]
+        if not nativelook.direct3d_here():
+            lines.append(tr("viewer.direct3d_module_off", why=tr("common.direct3d_12_windows_only")))
         ctx = getattr(self.w.model, "ctx", None)
         if ctx is not None and hasattr(ctx, "rhi"):
             adapter = nativelook.adapter_of(ctx.rhi)

@@ -23,7 +23,7 @@ from ..render.particlefx import load_rdp
 def whole_file(out: Path) -> Iterator[Path]:
     """A scratch path to make a cached file at: ``out`` appears whole when the block ends, so a killed editor never
     leaves half a file that later reads take for a finished one."""
-    with tempfile.TemporaryDirectory(prefix="a2070_cache_") as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_cache_") as tmp:
         scratch = Path(tmp) / out.name
         yield scratch
         write_atomic(out, scratch.read_bytes())
@@ -109,7 +109,7 @@ class IslandAssets:
             return
         except fileresolve.DecodeError:
             pass
-        with tempfile.TemporaryDirectory(prefix="a2070_editor_") as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_editor_") as tmp:
             src = Path(tmp) / Path(dds).name
             src.write_bytes(data)
             dds_to_png(src, Path(tmp)).replace(out)
@@ -118,21 +118,30 @@ class IslandAssets:
 def finish_png(png: Path, normal: bool, opaque: bool, alpha: bool = False) -> None:
     from PIL import Image
 
+    if normal or opaque or alpha:
+        with Image.open(png) as img:
+            done = finish_image(img, normal, opaque, alpha)
+        done.save(png, "PNG")
+
+
+def finish_image(img, normal: bool, opaque: bool, alpha: bool = False):
+    """``finish_png`` on a PIL image in memory: a plain normal map (``full_normal``), opaque RGB or the alpha as RGB."""
     if normal:
-        full_normal(png)
-    elif opaque:
-        Image.open(png).convert("RGB").save(png, "PNG")
-    elif alpha:
-        Image.open(png).convert("RGBA").getchannel("A").convert("RGB").save(png, "PNG")
+        return full_normal(img)
+    if opaque:
+        return img.convert("RGB")
+    if alpha:
+        return img.convert("RGBA").getchannel("A").convert("RGB")
+    return img
 
 
-def full_normal(png: Path) -> None:
+def full_normal(img):
     """An Anno normal map (RG normal, B empty, A gloss) as a plain one: B rebuilt, A opaque. An image
     decoded with premultiplied alpha blacked out the whole normal where the gloss was near 0."""
     from PIL import Image
 
-    rgba = np.asarray(Image.open(png).convert("RGBA"), np.float32)
+    rgba = np.asarray(img.convert("RGBA"), np.float32)
     xy = rgba[..., :2] / 127.5 - 1
     z = np.sqrt(np.clip(1 - (xy**2).sum(axis=-1), 0, 1))
     rgb = np.dstack([rgba[..., :2], (z + 1) * 127.5])
-    Image.fromarray(np.clip(np.round(rgb), 0, 255).astype(np.uint8), "RGB").save(png, "PNG")
+    return Image.fromarray(np.clip(np.round(rgb), 0, 255).astype(np.uint8), "RGB")

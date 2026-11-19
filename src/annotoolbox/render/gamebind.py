@@ -21,6 +21,34 @@ B = QRhiShaderResourceBinding
 RAW = ("byteaddress", "uav_rwbyteaddress")
 
 
+def shared_stand_in(rhi, kind: str, declared: str, batch) -> tuple:
+    """A sampled stand-in texture of a declared type, made once for every pass of the device (each stage made its own:
+    dozens of one-pixel resources at the first frame, 0.15 s a stage). (resource, its key); ``give_back`` lets go."""
+    if not hasattr(rhi, "__dict__"):
+        return stand_in(rhi, kind, declared, batch), None
+    table = rhi.__dict__.setdefault("_stand_ins", {})
+    key = (kind, declared)
+    entry = table.get(key)
+    if entry is None:
+        entry = table[key] = [stand_in(rhi, kind, declared, batch), 0]
+    entry[1] += 1
+    return entry[0], (table, key)
+
+
+def give_back(owner: tuple) -> None:
+    """One pass is done with a shared stand-in: the last one destroys it."""
+    if owner is None:
+        return
+    table, key = owner
+    entry = table.get(key)
+    if entry is None:
+        return
+    entry[1] -= 1
+    if entry[1] <= 0:
+        entry[0].destroy()
+        del table[key]
+
+
 class Resources:
     """What a shader binds and the frame's constants (module docstring).
 
@@ -47,6 +75,7 @@ class Resources:
         self.hook, self.raw, self.address = stand_in, raw, address
         self.buffers: dict[str, object] = {}
         self.made: dict[str, object] = {}  # the default stand-ins, made once
+        self.shared: list = []  # the device's stand-ins it uses (``give_back`` on release)
         self.keep: list = []  # everything made here, and what the owner adds (its pipeline): destroyed on release
         self.srb = None
         self._bound: tuple | None = ()
@@ -70,6 +99,10 @@ class Resources:
             if name not in self.made:
                 if kind == "sampler":
                     self.made[name] = fixed_sampler(self.rhi, name, self.address)
+                elif kind == "texture":  # sampled only: one for the device (``shared_stand_in``)
+                    self.made[name], owner = shared_stand_in(self.rhi, kind, self.declared(name), batch)
+                    (self.shared if owner is not None else self.keep).append(owner or self.made[name])
+                    return self.made[name]
                 else:
                     self.made[name] = stand_in(self.rhi, kind, self.declared(name), batch)
                 self.keep.append(self.made[name])
@@ -123,5 +156,8 @@ class Resources:
     def release(self) -> None:
         for r in [*self.keep, *self._retired, *([self.srb] if self.srb is not None else [])]:
             r.destroy()
+        for owner in self.shared:
+            give_back(owner)
+        self.shared = []
         self.keep, self._retired, self.buffers, self.made = [], [], {}, {}
         self.srb, self._bound, self._held = None, (), ()

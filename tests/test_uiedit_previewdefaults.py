@@ -44,6 +44,11 @@ def test_names_of_slots_and_properties_take_the_characters_values():
     assert PD.bool_for("IsGamepadModeActive", d) is False and PD.bool_for("IsMultiplayer", d) is False
     assert PD.bool_for("IsGamepadModeActive", PD.Defaults(input="xbox")) is True
     assert PD.number_for("Money", d) == d.money
+    assert PD.text_for("Text_Input", d) == "Marcia" and PD.text_for("CharacterName", d) == "Marcia"
+    assert (
+        PD.text_for("SessionName", d) == "Latium" and PD.text_for("IslandName", d) is None
+    )  # a place is the session's
+    assert PD.number_for("PlayerCount", d) == 1 and PD.number_for("PlayerCount", PD.Defaults(session="multi")) == 2
 
 
 def test_the_components_the_game_fills_take_the_players_region_and_input():

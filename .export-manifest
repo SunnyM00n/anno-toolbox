@@ -58,6 +58,7 @@ pyproject.toml
 scripts/build_app.py
 scripts/build_native.py
 scripts/installer_bundle.py
+scripts/installer_linux.py
 scripts/installer_wix.py
 scripts/native_probe.py
 src/annotoolbox/__init__.py
@@ -81,10 +82,15 @@ src/annotoolbox/assetedit/descriptions.py
 src/annotoolbox/assetedit/filters.py
 src/annotoolbox/assetedit/game1701.py
 src/annotoolbox/assetedit/gamefiles.py
+src/annotoolbox/assetedit/handover.py
+src/annotoolbox/assetedit/handovercommands.py
+src/annotoolbox/assetedit/handoverdialog.py
 src/annotoolbox/assetedit/icons.py
+src/annotoolbox/assetedit/layered.py
 src/annotoolbox/assetedit/modimport.py
 src/annotoolbox/assetedit/modops.py
 src/annotoolbox/assetedit/native.py
+src/annotoolbox/assetedit/origins.py
 src/annotoolbox/assetedit/picker.py
 src/annotoolbox/assetedit/printing.py
 src/annotoolbox/assetedit/projectpart.py
@@ -140,6 +146,7 @@ src/annotoolbox/editor/desktop/desktopoverlays.py
 src/annotoolbox/editor/desktop/desktoppanels.py
 src/annotoolbox/editor/desktop/desktoppick.py
 src/annotoolbox/editor/desktop/desktopplace.py
+src/annotoolbox/editor/desktop/desktopprogress.py
 src/annotoolbox/editor/desktop/desktoprender.py
 src/annotoolbox/editor/desktop/desktoprhiview.py
 src/annotoolbox/editor/desktop/desktopribbon.py
@@ -291,6 +298,7 @@ src/annotoolbox/formats/phoenixhistory.py
 src/annotoolbox/formats/phoenixread.py
 src/annotoolbox/formats/phoenixwrite.py
 src/annotoolbox/formats/rda.py
+src/annotoolbox/formats/rdalayout.py
 src/annotoolbox/formats/rdmbanner.py
 src/annotoolbox/formats/rdmglb.py
 src/annotoolbox/formats/rdmio.py
@@ -325,6 +333,7 @@ src/annotoolbox/infra/gpuinfo.py
 src/annotoolbox/infra/i18n.py
 src/annotoolbox/infra/lang/de.json
 src/annotoolbox/infra/lang/en.json
+src/annotoolbox/infra/listcache.py
 src/annotoolbox/infra/piecejson.py
 src/annotoolbox/infra/shadertrack.py
 src/annotoolbox/infra/tools.py
@@ -412,6 +421,8 @@ src/annotoolbox/models/bc6hdecode.py
 src/annotoolbox/models/bc7decode.py
 src/annotoolbox/models/bc7encode.py
 src/annotoolbox/models/bc7gpu.py
+src/annotoolbox/models/bc7simple.py
+src/annotoolbox/models/blockencode.py
 src/annotoolbox/models/cfg2070.py
 src/annotoolbox/models/cfgbfg.py
 src/annotoolbox/models/cfgdoc.py
@@ -447,6 +458,7 @@ src/annotoolbox/models/shadernative.py
 src/annotoolbox/models/shaderview.py
 src/annotoolbox/models/skinning.py
 src/annotoolbox/models/tangents.py
+src/annotoolbox/models/texbackend.py
 src/annotoolbox/models/textures.py
 src/annotoolbox/modloader/__init__.py
 src/annotoolbox/modloader/activations.py
@@ -499,6 +511,7 @@ src/annotoolbox/othergames/grid1701.py
 src/annotoolbox/othergames/index2205.py
 src/annotoolbox/othergames/installs.py
 src/annotoolbox/othergames/isd1701.py
+src/annotoolbox/othergames/linuxfinder.py
 src/annotoolbox/othergames/ui2205.py
 src/annotoolbox/particleedit/__init__.py
 src/annotoolbox/particleedit/curves.py
@@ -539,6 +552,7 @@ src/annotoolbox/refgraph/wwise.py
 src/annotoolbox/render/__init__.py
 src/annotoolbox/render/ambientforward.py
 src/annotoolbox/render/bake1800.py
+src/annotoolbox/render/bakenative.py
 src/annotoolbox/render/camera.py
 src/annotoolbox/render/cloth2070.py
 src/annotoolbox/render/clothcollide.py
@@ -589,6 +603,7 @@ src/annotoolbox/render/lightsforward.py
 src/annotoolbox/render/loader.py
 src/annotoolbox/render/mipchain.py
 src/annotoolbox/render/modellibrary.py
+src/annotoolbox/render/nativecompute.py
 src/annotoolbox/render/nativegpu.py
 src/annotoolbox/render/nativelayout.py
 src/annotoolbox/render/nativelook.py
@@ -601,6 +616,7 @@ src/annotoolbox/render/ocean1800.py
 src/annotoolbox/render/ocean2070.py
 src/annotoolbox/render/oceanfft1800.py
 src/annotoolbox/render/pages1800.py
+src/annotoolbox/render/pagesnative.py
 src/annotoolbox/render/particledraw.py
 src/annotoolbox/render/particleforward.py
 src/annotoolbox/render/particlefx.py
@@ -634,6 +650,7 @@ src/annotoolbox/render/terrainnative.py
 src/annotoolbox/render/terrainnodes.py
 src/annotoolbox/render/terrainpages.py
 src/annotoolbox/render/viewcolors.py
+src/annotoolbox/render/vulkanprobe.py
 src/annotoolbox/render/waves1800.py
 src/annotoolbox/saveedit/__init__.py
 src/annotoolbox/saveedit/commands.py
@@ -697,7 +714,11 @@ src/annotoolbox/sources/toolone.py
 src/annotoolbox/sources/valuediff.py
 src/annotoolbox/sources/workscripts2070.py
 src/annotoolbox/suite/__init__.py
+src/annotoolbox/suite/appfolders.py
 src/annotoolbox/suite/apps.py
+src/annotoolbox/suite/archivemod.py
+src/annotoolbox/suite/archivemodbuild.py
+src/annotoolbox/suite/archiverecord.py
 src/annotoolbox/suite/background.py
 src/annotoolbox/suite/buildout.py
 src/annotoolbox/suite/carriedpart.py
@@ -712,10 +733,13 @@ src/annotoolbox/suite/gameopen.py
 src/annotoolbox/suite/gamesync.py
 src/annotoolbox/suite/guidrangedialog.py
 src/annotoolbox/suite/guidranges.py
+src/annotoolbox/suite/handovers.py
 src/annotoolbox/suite/icons.py
+src/annotoolbox/suite/importchecks.py
 src/annotoolbox/suite/importcommands.py
 src/annotoolbox/suite/importdialog.py
 src/annotoolbox/suite/importmeta.py
+src/annotoolbox/suite/importresume.py
 src/annotoolbox/suite/install.py
 src/annotoolbox/suite/installevents.py
 src/annotoolbox/suite/islandguids.py
@@ -729,6 +753,7 @@ src/annotoolbox/suite/linkprotocol.py
 src/annotoolbox/suite/linkroute.py
 src/annotoolbox/suite/links.py
 src/annotoolbox/suite/linkscenes.py
+src/annotoolbox/suite/linuxnotice.py
 src/annotoolbox/suite/livelink.py
 src/annotoolbox/suite/migrate.py
 src/annotoolbox/suite/modcheck.py
@@ -739,6 +764,7 @@ src/annotoolbox/suite/projectdeps.py
 src/annotoolbox/suite/projectimport.py
 src/annotoolbox/suite/projectpanel.py
 src/annotoolbox/suite/qtlang.py
+src/annotoolbox/suite/reimport.py
 src/annotoolbox/suite/settings.py
 src/annotoolbox/suite/setupchoices.py
 src/annotoolbox/suite/setuppage.py
@@ -778,10 +804,12 @@ src/annotoolbox/textedit/voices.py
 src/annotoolbox/uiedit/__init__.py
 src/annotoolbox/uiedit/animations.py
 src/annotoolbox/uiedit/arrange.py
+src/annotoolbox/uiedit/baseline.py
 src/annotoolbox/uiedit/bindingdialogs.py
 src/annotoolbox/uiedit/bindings.py
 src/annotoolbox/uiedit/canvas.py
 src/annotoolbox/uiedit/data/field-names-117.json
+src/annotoolbox/uiedit/data/ui-baseline-117.json
 src/annotoolbox/uiedit/effects.py
 src/annotoolbox/uiedit/elements.py
 src/annotoolbox/uiedit/fields.py
@@ -881,7 +909,9 @@ tests/rdmsamples.py
 tests/test_activemap.py
 tests/test_ambient2070.py
 tests/test_ambientforward.py
+tests/test_appfolders.py
 tests/test_archiveimport.py
+tests/test_archivemod.py
 tests/test_assetdb.py
 tests/test_assetdescriptions.py
 tests/test_assetedit.py
@@ -1021,6 +1051,8 @@ tests/test_leb128.py
 tests/test_linkclient.py
 tests/test_linkdebug.py
 tests/test_links.py
+tests/test_linux_drawing.py
+tests/test_linux_package.py
 tests/test_livelink.py
 tests/test_mapedit.py
 tests/test_mapedit_extras.py
@@ -1029,6 +1061,10 @@ tests/test_mapedit_window.py
 tests/test_memorygate.py
 tests/test_minimap.py
 tests/test_mipchain.py
+tests/test_mod_handover.py
+tests/test_mod_import_edges.py
+tests/test_mod_layered.py
+tests/test_mod_maps_islands.py
 tests/test_modarchive.py
 tests/test_modcheck.py
 tests/test_moddeps.py
@@ -1059,6 +1095,7 @@ tests/test_oldsoundwindows.py
 tests/test_othermaterials.py
 tests/test_overlay.py
 tests/test_page_grid.py
+tests/test_pagesnative.py
 tests/test_particleedit.py
 tests/test_particleedit_audit.py
 tests/test_particleedit_installed.py
@@ -1080,6 +1117,7 @@ tests/test_projectimport.py
 tests/test_qtcleanup.py
 tests/test_quality.py
 tests/test_rawbuffers.py
+tests/test_rdalayout.py
 tests/test_rdmgltf.py
 tests/test_rdmread.py
 tests/test_rdmtools.py
@@ -1134,6 +1172,7 @@ tests/test_textedit.py
 tests/test_textedit_fonts.py
 tests/test_textedit_installed.py
 tests/test_textedit_voices.py
+tests/test_texture_builtin.py
 tests/test_textures.py
 tests/test_tintpages.py
 tests/test_toolbox.py
@@ -1141,12 +1180,14 @@ tests/test_toolone.py
 tests/test_ui2205.py
 tests/test_uiedit.py
 tests/test_uiedit_arrange.py
+tests/test_uiedit_baseline.py
 tests/test_uiedit_compose.py
 tests/test_uiedit_effects.py
 tests/test_uiedit_history.py
 tests/test_uiedit_livevalues.py
 tests/test_uiedit_mirror.py
 tests/test_uiedit_motion.py
+tests/test_uiedit_noplaceholders.py
 tests/test_uiedit_placeholderstate.py
 tests/test_uiedit_playinput.py
 tests/test_uiedit_playmode.py

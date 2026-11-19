@@ -50,7 +50,9 @@ def cmd_viewer_files(args: argparse.Namespace) -> int:
 
         from ..editor.islandfiles import check_islands
 
-        with tempfile.TemporaryDirectory(prefix="anno-island-files check-") as scratch:  # the editor's PNGs: gone after
+        with tempfile.TemporaryDirectory(
+            ignore_cleanup_errors=True, prefix="anno-island-files check-"
+        ) as scratch:  # the editor's PNGs: gone after
             islands = check_islands(args.game, folder, Path(scratch), args.islands,
                                     lambda p: print(f"  island {p}", file=sys.stderr))  # fmt: skip
         placed = tuple(sorted(islands.configs))

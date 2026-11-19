@@ -25,7 +25,7 @@ from pathlib import Path
 
 from ..infra.i18n import number, tr
 from ..modloader.mods import DEPENDENCY_KINDS, LATE, MODINFO_NAMES, localized, parked, read_mod, walk_sizes
-from . import buildout, guidranges, importmeta, modclassify, projectdeps
+from . import appfolders, buildout, guidranges, importchecks, importmeta, importresume, modclassify, projectdeps
 from . import project as projects
 
 CHUNK = 1000  # files placed between two chances to stop
@@ -54,13 +54,15 @@ class ImportReport:
     size: int = 0
     linked: int = 0
     copied: int = 0
-    owners: Counter = field(default_factory=Counter)  # app -> files recorded for it
+    owners: Counter = field(default_factory=Counter)  # app -> files recorded for it, still carried
+    taken: Counter = field(default_factory=Counter)  # whole-file app -> files placed in its own folder
     carried: Counter = field(default_factory=Counter)  # extension -> files no app edits
     not_understood: Counter = field(default_factory=Counter)  # extension -> files the sort has no kind for
     nested: list = field(default_factory=list)  # (path, ModID, version) of the mods inside the mod
     guid_range: tuple[int, int] = (0, 0)
     guid_added: int = 0  # the assets the mod adds, whose numbers gave the range
     notes: list = field(default_factory=list)
+    resumed: int = 0  # files a resumed import found placed already
     seconds: float = 0.0
 
     def lines(self) -> list[str]:
@@ -76,6 +78,8 @@ class ImportReport:
             ),
             tr("common.import_placed", linked=number(self.linked), copied=number(self.copied)),
         ]
+        if self.taken:
+            out.append(tr("common.import_taken", list=_counts(self.taken)))
         if self.owners:
             out.append(tr("common.import_owners", list=_counts(self.owners)))
         if self.carried:
@@ -89,6 +93,8 @@ class ImportReport:
             out.append(tr("common.import_guid_detected", lo=number(lo), hi=number(hi), n=number(self.guid_added)))
         else:
             out.append(tr("common.import_guid_none", lo=number(lo), hi=number(hi)))
+        if self.resumed:
+            out.append(tr("common.import_resumed", n=number(self.resumed)))
         return [*out, *self.notes]
 
 
@@ -116,10 +122,6 @@ def _scan(root: Path) -> _Scan:
     scan = _Scan()
     for here, base, dirs, names in walk_sizes(root):
         prefix = "" if base == "." else f"{base}/"
-        seen: dict[str, str] = {}
-        for name in [*dirs, *(n for n, _s in names)]:
-            if seen.setdefault(name.lower(), name) != name:
-                scan.notes.append(tr("common.import_case_clash", path=f"{prefix}{name}"))
         for d in dirs:
             if (here / d).is_symlink():
                 scan.notes.append(tr("common.import_symlink", path=f"{prefix}{d}"))
@@ -129,6 +131,22 @@ def _scan(root: Path) -> _Scan:
             if base != "." or name.lower() not in MODINFO_NAMES:  # Windows finds ``ModInfo.json`` too
                 scan.files.append((f"{prefix}{name}", size))
     return scan
+
+
+def _case_clashes(folder: Path, scan: _Scan) -> list[str]:
+    """Report the paths that differ only in case; where the project's disk cannot hold both (Windows, the usual
+    macOS) the later one is left out of the import, else both are kept as written."""
+    clashes = importchecks.case_clashes(scan.files)
+    if not clashes:
+        return []
+    probe = folder / ".case-probe"
+    probe.write_bytes(b"")
+    insensitive = (folder / ".CASE-PROBE").exists()
+    probe.unlink()
+    if insensitive:
+        left = {later for _first, later in clashes}
+        scan.files[:] = [f for f in scan.files if f[0] not in left]
+    return importchecks.case_clash_lines(clashes, insensitive)
 
 
 def _unpack(archive: Path, into: Path, say: Say) -> Path:
@@ -179,15 +197,32 @@ def _identity(root: Path):
     return mod, name, (root / name).read_bytes(), GAME_OF_ANNO.get(anno, "anno1800")
 
 
+@dataclass
+class Options:
+    """How an import runs: ``link`` hard-links (else copies), ``hashed`` reads every file for its SHA-256,
+    ``resumable`` keeps the half-made project when ``say`` stops it (``importresume``), ``context`` is what the checks
+    look at, ``resume`` continues a cut-short import (``existed``: its folder was there before)."""
+
+    link: bool = True
+    hashed: bool = True
+    resumable: bool = False
+    context: importchecks.ImportContext | None = None
+    resume: bool = False
+    existed: bool = False
+
+
 class _Placer:
     """Puts one file into the project and hashes it: a hard link where the disk allows, else a copy."""
 
-    def __init__(self, root: Path, dest: Path, link: bool, hashed: bool) -> None:
-        self.root, self.dest, self.hashed, self.placer = str(root), str(dest), hashed, buildout.Placer(link)
+    def __init__(self, root: Path, dest: Callable[[str], str], options: Options) -> None:
+        self.root, self.dest, self.hashed = str(root), dest, options.hashed
+        self.again, self.placer = options.resume, buildout.Placer(options.link)
 
     def __call__(self, item: tuple[str, int]) -> tuple[str, int, str, bool]:
         rel, size = item
-        src, target = os.path.join(self.root, rel), os.path.join(self.dest, rel)
+        src, target = os.path.join(self.root, rel), os.path.join(self.dest(rel), rel)
+        if self.again and os.path.lexists(target):
+            buildout.remove(target)  # cut short in the middle of this file: only the project's name goes
         linked = self.placer.put(src, target)
         digest = ""  # not hashed: the manifest keeps size only (``import_mod(hash_files=False)``)
         if self.hashed:
@@ -196,24 +231,70 @@ class _Placer:
         return rel, size, digest, linked
 
 
+def _placed_already(target: str, size: int, known: tuple[int, str] | None) -> int:
+    """For a file a cut-short import listed whole: 1 hard link, 2 copy; 0 when it must be placed again."""
+    try:
+        st = os.stat(target)
+    except OSError:
+        return 0
+    return 0 if known is None or known[0] != size or st.st_size != size else (1 if st.st_nlink > 1 else 2)
+
+
+def _keep_resumed(project_dir: Path, files: list, folder_of: Callable[[str], str]) -> dict[str, int]:
+    """The files a cut-short import placed whole and listed (``rel -> _placed_already``); the manifest is cut down to
+    exactly those lines, so each file has one line when the import ends."""
+    listed, kept = importresume.valid_manifest(project_dir), {}
+    lines = []
+    for rel, size in files:
+        how = _placed_already(os.path.join(folder_of(rel), rel), size, listed.get(rel))
+        if how:
+            kept[rel] = how
+            lines.append(json.dumps([rel, size, listed[rel][1]], ensure_ascii=False) + "\n")
+    (project_dir / importmeta.FILES_FILE).write_text("".join(lines), encoding="utf-8", newline="\n")
+    return kept
+
+
 def _place_all(
-    root: Path, project_dir: Path, game: str, files: list, options: tuple[bool, bool], say: Say, report: ImportReport
+    root: Path, project_dir: Path, game: str, files: list, options: Options, say: Say, report: ImportReport
 ) -> None:
-    """Every file into ``mod-files/<game>`` and one manifest line each, a chunk at a time."""
-    dest = project_dir / importmeta.MOD_FILES / game
-    dest.mkdir(parents=True, exist_ok=True)
-    placer, made, total = _Placer(root, dest, *options), set(), len(files)
+    """Every file into its owner's folder of the project (``mod-files/<game>``, or the whole-file app's) and one manifest
+    line each, a chunk at a time; a resumed import keeps the files its manifest lists whole."""
+    (project_dir / importmeta.MOD_FILES / game).mkdir(parents=True, exist_ok=True)
+    nested = tuple(p for p, _i, _v in report.nested)
+    by_owner = {o: str(appfolders.root_for(project_dir, game, o)) for o in (*appfolders.FOLDERS, modclassify.CARRIED)}
+
+    def folder_of(rel: str) -> str:
+        return by_owner[appfolders.owner_of(game, rel, nested)]
+
+    placer, made, total = _Placer(root, folder_of, options), set(), len(files)
+    kept = _keep_resumed(project_dir, files, folder_of) if options.resume else {}
     with (
         ThreadPoolExecutor(buildout.WORKERS) as pool,
-        (project_dir / importmeta.FILES_FILE).open("w", encoding="utf-8", newline="\n") as manifest,
+        (project_dir / importmeta.FILES_FILE).open(
+            "a" if options.resume else "w", encoding="utf-8", newline="\n"
+        ) as manifest,
     ):
         for start in range(0, total, CHUNK):
             chunk = files[start : start + CHUNK]
-            buildout.make_parents(dest, [rel for rel, _size in chunk], made)
-            for rel, size, digest, linked in pool.map(placer, chunk):
+            todo = []
+            for rel, size in chunk:
+                how = kept.get(rel, 0)
+                if how:
+                    report.resumed += 1
+                    report.linked += how == 1
+                    report.copied += how == 2
+                else:
+                    todo.append((rel, size))
+            groups: dict[str, list[str]] = {}
+            for rel, _size in todo:
+                groups.setdefault(folder_of(rel), []).append(rel)
+            for folder, rels in groups.items():
+                buildout.make_parents(folder, rels, made)
+            for rel, size, digest, linked in pool.map(placer, todo):
                 manifest.write(json.dumps([rel, size, digest], ensure_ascii=False) + "\n")
                 report.linked += linked
                 report.copied += not linked
+            manifest.flush()
             done = start + len(chunk)
             say(
                 tr("common.import_progress", done=number(done), total=number(total))
@@ -223,13 +304,17 @@ def _place_all(
 
 
 def _sort(game: str, files: list, report: ImportReport) -> None:
-    """Count what each app is to take and what is carried, by extension."""
+    """Count what the whole-file apps take (``taken``), what the other apps are to take later (``owners``) and what
+    is carried, by extension."""
+    nested = tuple(p for p, _i, _v in report.nested)
     for rel, size in files:
         kind = modclassify.classify(game, rel)
         report.files += 1
         report.size += size
         ext = modclassify.extension(rel)
-        if not kind.understood:
+        if appfolders.owner_of(game, rel, nested) != modclassify.CARRIED:
+            report.taken[kind.owner] += 1
+        elif not kind.understood:
             report.not_understood[ext] += 1
         elif kind.owner == modclassify.CARRIED:
             report.carried[ext] += 1
@@ -335,29 +420,64 @@ def _check_target(source: Path, folder: Path) -> None:
 
 
 def import_mod(
-    source: Path, folder: Path, settings=None, say: Say = lambda _t: None, link: bool = True, hash_files: bool = True
+    source: Path,
+    folder: Path,
+    settings=None,
+    say: Say = lambda _t: None,
+    link: bool = True,
+    hash_files: bool = True,
+    context: importchecks.ImportContext | None = None,
+    resumable: bool = False,
 ) -> ImportReport:
     """Import the mod at ``source`` (a mod folder, or a ``.zip``) as a new project in ``folder``. ``settings`` gives
     the own GUID reserve for a mod that adds no asset (and notes the project); ``say`` is told the steps and may raise
     to stop; ``link`` False copies every file; ``hash_files`` False leaves the SHA-256 out (a mod of tens of GB is
-    read once less; the manifest keeps the sizes). Raises ``ImportRefused`` with a sentence; nothing stays after a failure."""
-    started = time.monotonic()
+    read once less; the manifest keeps the sizes); ``context`` is what the report's checks look at; ``resumable``:
+    a stop keeps the half-made project for ``importresume.resume``, else it is removed. Raises ``ImportRefused`` with
+    a sentence; nothing stays after a failure."""
     source, folder = Path(source), Path(folder)
     if not source.exists():
         raise ImportRefused(tr("common.import_source_missing", path=source))
     _check_target(source, folder)
-    existed = folder.is_dir()
+    options = Options(link, hash_files, resumable, context, existed=folder.is_dir())
+    return run(source, folder, settings, say, options)
+
+
+def run(source: Path, folder: Path, settings, say: Say, options: Options) -> ImportReport:
+    """The import into ``folder`` (new, or cut short before and ``options.resume``): the journal is written first and
+    goes with a normal end; a failure removes the project, a stop does too unless ``options.resumable``."""
+    started = time.monotonic()
+    registry = options.context.registry if options.context else None
     folder.mkdir(parents=True, exist_ok=True)
+    importresume.write_journal(folder, importresume.Journal(str(source), options.link, options.hashed, options.existed))
+    importresume.register(registry, folder)
+    stopped: list[bool] = []
+
+    def talk(text: str) -> None:
+        try:
+            say(text)
+        except BaseException:
+            stopped.append(True)
+            raise
+
     try:
-        report = _import(source, folder, settings, say, (link, hash_files))
+        report = _import(source, folder, settings, talk, options)
     except BaseException:
-        _clear(folder, remove=not existed)
+        if stopped and options.resumable:
+            importresume.write_journal(
+                folder,
+                importresume.Journal(str(source), options.link, options.hashed, options.existed, importresume.STOPPED),
+            )
+        else:
+            clear(folder, remove=not options.existed)
+            importresume.unregister(registry, folder)
         raise
+    importresume.finish(folder, registry)
     report.seconds = time.monotonic() - started
     return report
 
 
-def _clear(folder: Path, remove: bool) -> None:
+def clear(folder: Path, remove: bool) -> None:
     """Take out what a failed import made (the folder was empty or new): links go, the source files stay. What cannot
     be removed stays without a word here: the caller's error is the one to show."""
 
@@ -382,7 +502,7 @@ def _clear(folder: Path, remove: bool) -> None:
             pass
 
 
-def _import(source: Path, folder: Path, settings, say: Say, options: tuple[bool, bool]) -> ImportReport:
+def _import(source: Path, folder: Path, settings, say: Say, options: Options) -> ImportReport:
     say(tr("common.import_reading", name=source.name))
     staging = folder / STAGING
     root = _unpack(source, staging, say) if source.is_file() else source
@@ -391,10 +511,13 @@ def _import(source: Path, folder: Path, settings, say: Say, options: tuple[bool,
     scan = _scan(root)
     report.notes += scan.notes
     report.nested = _nested_mods(root, scan.nested, report.notes)
+    report.notes += _case_clashes(folder, scan)
     _sort(game, scan.files, report)
     project = _project_for(mod, game, folder, report.notes)
     report.mod_id = project.mod_id
     _place_all(root, folder, game, scan.files, options, say, report)
+    checks = importchecks.run_checks(root, game, scan.files, options.context or importchecks.ImportContext(), say)
+    report.notes += checks  # after the files, so a resume runs them once
     originals = folder / importmeta.MOD_FILES
     originals.mkdir(parents=True, exist_ok=True)
     (originals / importmeta.MODINFO_ORIGINAL).write_bytes(modinfo_bytes)
@@ -432,6 +555,7 @@ def _meta(source: Path, project: projects.Project, modinfo_name: str, report: Im
         linked=report.linked,
         copied=report.copied,
         owners=dict(report.owners),
+        taken=dict(report.taken),
         carried=dict(report.carried),
         not_understood=dict(report.not_understood),
         guid={"added": report.guid_added, "range": list(report.guid_range), "detected": bool(report.guid_added)},

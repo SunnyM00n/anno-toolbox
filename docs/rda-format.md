@@ -194,6 +194,29 @@ mod's archives through the helper library"). `rda.write_v11_file` writes V1.1 to
 
 Note: `rda.RdaWriter` was added on 2026-11-07.
 
+### Writing an archive again as it was (2026-11-19)
+
+`formats/rdalayout.py` keeps what a reader drops and writes the archive back (docs/mod-import.md, section 16):
+`read_layout` (version, blocks with flags and counts, member order, times, zlib level, shared copies; deleted and empty
+blocks included), `pack(layout, members, dest, original=...)`, `differences` (names what a rebuild does not keep).
+It rests on four additions to `rda.py`:
+
+- `RdaWriter.add_empty(flags)`: a block that lists no file. The games' tools leave some at the end of an archive
+  (`eng2.rda` ends in five; 2070's `patch1` to `patch8` hold 18 to 53 each, 44 in `patch3`), and the archive's bytes include them.
+- `RdaWriter(allow_empty=True)`: members of size 0 are written (the shipped archives hold a few, with offset 0 and no
+  stored bytes); without it they stay refused.
+- `rda.Stored(archive, entry)`: a member taken as it lies in another archive. The games' tool does not compress like zlib
+  (no level 0 to 9 reproduced a member), so a rebuilt archive keeps its stored bytes only this way. A `Stored` member
+  shares a copy only as it did in its archive.
+- `RdaWriter(reuse=...)`: a directory, or a resident block's blob, that comes out as one the original stored is written as
+  the original stored it (keyed by the BLAKE2 digest of the decoded bytes and the flags); otherwise it is compressed at
+  level 1. `RdaArchive.block_members`, `directory_of`, `blob_of` and `stored_bytes` give the writer's inputs.
+
+With these, every 2070 archive tried (`Data0` to `Data5`, `addon0`, `addon1`, `eng2`, `eng7`, `exedata`, `patch1` to
+`patch9`), two of 1404's and two of 2205's were written again to **the same bytes** from their members alone (read only;
+`tests/test_rdalayout.py` has the same on synthetic archives, `tests/test_archivemod.py` one shipped archive behind
+`ANNO2070_DIR`).
+
 ## The command line
 
 `anno-toolbox rda list|info|extract|pack` (`commands.md`, `rda`) wraps the reader and the

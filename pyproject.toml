@@ -1,6 +1,6 @@
 [project]
 name = "anno-toolbox"
-version = "0.2.1"
+version = "0.2.2"
 description = "A toolbox for the Anno games (117, 1800, 2205, 2070, 1701, 1404): island editor, asset editor, viewer, UI editors, and the model, texture and sound exports"
 readme = "README.md"
 requires-python = ">=3.12"

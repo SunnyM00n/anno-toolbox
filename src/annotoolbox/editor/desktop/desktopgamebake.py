@@ -158,6 +158,7 @@ class IslandBake:
     ARRAYS = True  # into arrays of a slice a node; False: a node's own textures (``terrain.slot_textures``)
     ARRAY_FORMATS = {"cBakedDiffTexArray": QRhiTexture.Format.RGBA16F}  # the rest RGBA8
     LANES = 0  # nodes baked a frame, each into targets of its own; 0: all of them into the same targets
+    _native_bake_off = False  # the native bake failed once: the current path's bake from then on
 
     def _bake_state(self, opts) -> tuple:
         """What the view's own ground depends on: its layers, which of them have their looks, the weights texture,
@@ -198,10 +199,36 @@ class IslandBake:
         return True
 
     def _new_bake(self, ground, size: int):
-        """The game's bake of ``ground`` at ``size`` texels a node (1800's and 2205's looks: their own bake)."""
+        """The game's bake of ``ground`` at ``size`` texels a node (1800's and 2205's looks: their own bake): by the
+        game's shaders on the native backend where they read and the pages are the native ones (or none: it reads
+        the module's), else by the current path's."""
+        from ...render import bakenative
+
         q = self.quality
+        most = q.max_texture if q is not None else 0
+        handover = getattr(self, "_handover", None)
+        pages_ok = self.pages is None or getattr(self.pages, "native", False)
+        if handover is not None and pages_ok and bakenative.enabled() and not self._native_bake_off:
+            try:
+                return bakenative.NativeBake(self._device, self._natives, handover, ground, self._bake_stages["flip"],
+                                             size=size, max_texture=most)  # fmt: skip
+            except Exception as exc:  # said once: the current path's from now on
+                self._native_bake_off = True
+                self.r._message(tr("islands.games_native_bake", reason=f"{type(exc).__name__}: {exc}"[:300]))
         return terrainbake.Bake(self.r.ctx, self._bake_stages, ground, size=size, alike=self.terrain.island,
-                                max_texture=q.max_texture if q is not None else 0)  # fmt: skip
+                                max_texture=most)  # fmt: skip
+
+    def _drop_native_bake(self, why: str) -> None:
+        """The native bake failed (said once): the current path's bake from the next frame, of the ground read
+        again (the native one let its maps go), the nodes made again to read its arrays."""
+        self.r._message(tr("islands.games_native_bake", reason=why[:300]))
+        for name in self.bake.arrays:
+            self.terrain.textures.pop(name, None)
+        self.bake.release()
+        self.bake, self._painted, self._bake_key, self._unbaked = None, None, None, 0
+        self._native_bake_off = True
+        self._baked_with.clear()
+        self.terrain.set_heights(self.terrain.heights, None)
 
     def _drop_bake(self, why: str) -> None:
         """The game's bake failed (said once): our own bake from now on, the nodes made again without its arrays."""
@@ -252,7 +279,7 @@ class IslandBake:
         if page is not None:
             height, normal = self.pages.ready[page]
             own = {"cHeightPageTex": height, "cNormalPageTex": normal, "cTerrainHeightTex": self.pages.coarse}
-        return terrainbake.bake_model(self.r.ctx.rhi, bake.program, mesh, values, own, bake.common)
+        return bake.model(mesh, values, own)
 
     def _paint(self, box) -> None:
         """The paint changed (``box``: weight texels): the strokes painted into the bake's material maps as the

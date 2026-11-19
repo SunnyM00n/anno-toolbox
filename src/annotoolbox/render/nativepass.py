@@ -1,20 +1,23 @@
 """What the own-shader frames record on the QRhi device besides their draws: one render pass of the game's draws into a
 framebuffer of ours (``draw_pass``), and the composite of a frame's offscreen picture into the view's target
 (``Composite``), which writes the frame's depth so that what the view draws itself meets the models.
-
 ``draw_pass(ctx, fbo, prepare, draw)`` records a pass, ``draw_models`` a pass of models each prepared on its own
-(``prepared``: one that raises is left out and kept in the device's ``failed_models``, so that its owner draws it by
-our look from the next frame); ``Composite(ctx, fragment)`` is one composite program. The frames that use them:
-``frame2070``, ``frameforward``, ``gameframe``, ``gameshadow``, ``shadowforward``; docs/viewer.md "When a pass fails".
+(``prepared``: new parts are made within ``MAKE_BUDGET`` of a frame; one that raises is left out and kept in
+``failed_models``, so that its owner draws it by our look from the next frame); ``Composite(ctx, fragment)`` is one
+composite program. Used by ``frame2070``, ``frameforward``, ``gameframe``, ``gameshadow``, ``shadowforward``;
+docs/viewer.md "When a pass fails".
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from PySide6.QtGui import QColor, QRhiCommandBuffer, QRhiDepthStencilClearValue
 
 from .shaders import FINAL_VS
+
+MAKE_BUDGET = 0.025  # seconds of one frame the first draws of new parts may take (``prepared``)
 
 # (the target's render pass descriptor, (colour targets, samples), the batch the pass begins with)
 Prepare = Callable[[object, tuple[int, int], object], None]
@@ -51,12 +54,20 @@ def prepared(ctx, models: list, prepare: Callable[[object], None]) -> list:
     ``ctx.failed_models`` (an exception inside the frame's end would otherwise end the whole frame)."""
     out = []
     for m in models:
+        fresh = getattr(m, "fresh", None)
+        new = fresh is not None and fresh()
+        if new and ctx.make_spent > MAKE_BUDGET:
+            ctx.make_left += 1  # a continental island's parts took seconds in one frame: it is drawn from a later one
+            continue
+        started = time.perf_counter()
         try:
             prepare(m)
         except Exception as exc:
             ctx.failed_models.append((m, f"{type(exc).__name__}: {exc}"))
         else:
             out.append(m)
+        if new:
+            ctx.make_spent += time.perf_counter() - started
     return out
 
 

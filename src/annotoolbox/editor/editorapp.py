@@ -210,6 +210,23 @@ class App(IslandCatalogue):
         build's ``_base`` copies, which only carry what the editor draws edits on, are left out."""
         return [p for p in self.files(Path(mod)).mod_paths(".a7m") if not Path(p).stem.endswith("_base")]
 
+    def project_islands(self) -> list[str]:
+        """The islands (game paths of ``.a7m`` files) of the mod the open project imported: the base its edit files are
+        made against (``projectpart.base_folder``); the build's ``_base`` copies are left out."""
+        root = self.edits_dir / "anno117"
+        if not root.is_dir():
+            return []
+        found = Files(self.game117(), root).mod_paths(".a7m")
+        return [p for p in found if not Path(p).stem.endswith("_base")]
+
+    def open_project_island(self, path: str) -> dict:
+        """An island of the imported mod as the project holds it: that file is the base, the edit file
+        (``island-edits/117_<island>.json``) holds what is changed, and nothing is changed by opening it."""
+        files = Files(self.game117(), self.edits_dir / "anno117")
+        path = path.replace("\\", "/")
+        edits = self.edits_dir / a7m_edit117.edit_name(path)
+        return self._open117(files, path, edits, "anno117", Path(path).stem, buildable=True, meta={"source": path})
+
     def game_tree(self, key: str):
         """The archives of another game's install (``installs``), read once per folder."""
         folder = getattr(self.settings, key)

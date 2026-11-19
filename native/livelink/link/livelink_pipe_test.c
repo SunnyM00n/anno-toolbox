@@ -2,10 +2,10 @@
    the UI frame played by this program's main loop, the game's Lua runner, its log files and its asset reload faked from
    files. The Python client of the suite (pipe_run.py) talks to it over the real named pipe. Not the game: it shows the
    order of things, the refusals and the answers, not that the engine does what the stubs say.
-   build.cmd test; the working folder of the "user" is the first argument, the scenario's switches are the files
-   there (see pipe_run.py): humans.txt, loading.txt, drop.txt (no engine lines), hang.txt (the Lua call blocks),
-   session.txt (a session is in; fast.txt: at speed 3, paused.txt: paused already, nopause.txt: the pause never lands),
-   scenario.txt (the asset data manager holds a scheduled scenario load). */
+   build.cmd test; the "user" folder is the first argument, the scenario's switches are files there (pipe_run.py):
+   humans.txt, loading.txt, drop.txt (no engine lines), hang.txt (the Lua call blocks), session.txt (a session is in;
+   fast.txt: speed 3, paused.txt: paused already, nopause.txt: the pause never lands),
+   scenario.txt (a scheduled scenario load). */
 #define _CRT_SECURE_NO_WARNINGS
 #include "hlib.h"
 #include "debug_logic.h"
@@ -72,7 +72,7 @@ int hlib_config_int(const char *key, int dflt) {
     if (!strcmp(key, "live_link_commands")) return flag("commands.txt");
     return dflt;
 }
-int hlib_feature_on(const char *name) { (void)name; return 1; }
+int hlib_feature_on(const char *name) { return strcmp(name, "probe") || !flag("nodump.txt"); }
 int hlib_guarded(const char *site, HlibThunk fn, void *ctx) {
     (void)site;
     fn(ctx);

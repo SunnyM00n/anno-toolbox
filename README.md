@@ -53,12 +53,18 @@ can confirm that an edit is drawn.
 
 ## Install
 
-The Toolbox ships as a Windows installer only: `AnnoToolbox-win-Setup.exe`, with updates from the releases, on the
+The Toolbox ships as a Windows installer: `AnnoToolbox-win-Setup.exe`, with updates from the releases, on the
 [releases page](https://github.com/SunnyM00n/anno-toolbox/releases/latest). It needs no Python. It carries the island
 view's Direct3D 12 module, which a source checkout builds itself (`python scripts/build_native.py`,
 [`native/d3d12/README.md`](native/d3d12/README.md)). There is no pip install and the package is not on PyPI.
 
-The program's command line (`anno-toolbox.exe` beside the window's exe) has two commands:
+**Linux support is experimental.** From the release after 0.2.0 the releases page also has an AppImage and a tarball
+(`AnnoToolbox-linux-x86_64.AppImage`). They were run on software rendering in WSL only, never on a real desktop with
+a GPU or with the games under Proton; the island view's Direct3D 12 module and the game's own shaders are Windows only, so
+the Toolbox draws its own look through OpenGL (or Vulkan). Please report what does not work on the
+[issue tracker](https://github.com/SunnyM00n/anno-toolbox/issues).
+
+The program's command line (`AnnoToolbox.com` beside the window's `AnnoToolbox.exe`; `AnnoToolbox rdm ...` in a terminal) has two commands:
 
 - `rdm`: the models of the games as glTF 2.0 and back, inspect, diff, validate and relayout
   ([`docs/rdm-gltf.md`](docs/rdm-gltf.md))

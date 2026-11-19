@@ -152,7 +152,8 @@ class FramePasses:
         s = self.session
         heights = f.game_heights if f.game_heights is not None else s.heights
         height_at = decalmesh.heights_sampler(heights, s.step, (s.width - 1) * s.step)
-        self.decals.update(key, placed, height_at, s.step, self.prog["model"])
+        if self.decals.update(key, placed, height_at, s.step, self.prog["model"]):
+            self.animated = True  # the rest is laid in the next frames
 
     def _draw_sky(self, view_proj, lt: dict, eye) -> None:
         """The sky behind everything: the editor's gradient, the game's HDR sky or 2070's."""

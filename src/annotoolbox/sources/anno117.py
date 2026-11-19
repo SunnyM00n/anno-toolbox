@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..formats import filedb
 from ..formats.rda import RdaArchive
+from ..infra import buildcache, listcache
 from .overlay import normalize
 
 ASSETS_XML_PATH = "data/base/config/export/assets.xml"
@@ -74,6 +75,7 @@ class Anno117Assets:
 
 ARCHIVE_INDEX_SUBDIR = "index117"
 ARCHIVE_MAP = "file_h.db"
+LIST_NAME, HOLDERS_NAME = "anno117-index", "anno117-holders"  # what ``listcache`` keeps of an install
 FLAG_DELETED = 8  # a path the game does not have any more (the entry stays in the map)
 
 
@@ -135,17 +137,33 @@ class Anno117Files:
             RdaArchive(p, cache_dir=Path(cache_dir) / ARCHIVE_INDEX_SUBDIR if cache_dir else None)
             for p in sorted(maindata.glob("*.rda"))
         ]
-        self._index: dict[str, tuple[RdaArchive, str]] = {}
         self._holders: dict[str, list[str]] | None = None  # path -> every archive carrying it, made when asked
+        self._db = maindata / ARCHIVE_MAP
+        self._map: dict[str, MapEntry] | None = None
+        self._scope = str(maindata)
+        self._signature = listcache.files_signature(
+            [*(a.path for a in self.archives), self._db], buildcache.code_version("sources.anno117")
+        )
+        self._index: dict[str, tuple[RdaArchive, str]] = {}
+        self._deleted: list[str] = []
+        if self._load_kept():  # the same archives as when the list was made: no archive is opened
+            return
         # by name: the patches are zz_patchfiles_<3 digits>, so they sort last and in order (engine-notes
         # "Anno 117 archives"); a later archive overrides the earlier ones
         for archive in self.archives:
             for entry in archive:
                 self._index[normalize(entry.path)] = (archive, entry.path)
-        db = maindata / ARCHIVE_MAP
-        self.archive_map = read_archive_map(db.read_bytes()) if db.is_file() else None
         if self.archive_map is not None:
             self._apply_archive_map()
+        self._deleted = self._find_deleted()
+        listcache.store(LIST_NAME, self._scope, self._signature, self._kept())
+
+    @property
+    def archive_map(self) -> dict[str, MapEntry] | None:
+        """The archive map (``file_h.db``), read on first use; None when the install has none."""
+        if self._map is None and self._db.is_file():
+            self._map = read_archive_map(self._db.read_bytes())
+        return self._map
 
     def _apply_archive_map(self) -> None:
         """The game's own choice: the archive the map names, and no file where it marks the path deleted. A path the
@@ -162,6 +180,25 @@ class Anno117Files:
                 if key in table:
                     self._index[key] = (archive, table[key])
 
+    def _load_kept(self) -> bool:
+        kept = listcache.load(LIST_NAME, self._scope, self._signature)
+        try:
+            index = {
+                key: (self.archives[at], key if stored == 0 else stored) for key, (at, stored) in kept["index"].items()
+            }
+            deleted = list(kept["deleted"])
+        except (TypeError, KeyError, IndexError, ValueError):  # not what ``_kept`` writes: made again
+            return False
+        self._index, self._deleted = index, deleted
+        return True
+
+    def _kept(self) -> dict:
+        """The index as plain data for ``listcache``: the archive's place in ``archives``, and the stored path
+        (0 where it is the key itself)."""
+        place = {id(a): i for i, a in enumerate(self.archives)}
+        index = {k: (place[id(a)], 0 if stored == k else stored) for k, (a, stored) in self._index.items()}
+        return {"index": index, "deleted": self._deleted}
+
     def exists(self, path: str) -> bool:
         return normalize(path) in self._index
 
@@ -174,15 +211,22 @@ class Anno117Files:
         """Every archive that carries ``path``, in the order they are read (the name rule's: the last would win); the
         archive map may choose another or mark the path deleted (``archive_of``, ``deleted``)."""
         if self._holders is None:
-            held: dict[str, list[str]] = {}
-            for archive in self.archives:
-                for entry in archive:
-                    held.setdefault(normalize(entry.path), []).append(archive.path.name)
-            self._holders = held
+            self._holders = listcache.cached(HOLDERS_NAME, self._scope, self._signature, self._all_holders)
         return list(self._holders.get(normalize(path), []))
+
+    def _all_holders(self) -> dict[str, list[str]]:
+        held: dict[str, list[str]] = {}
+        for archive in self.archives:
+            name = archive.path.name  # one string object for the archive: the stored list shares it
+            for entry in archive:
+                held.setdefault(normalize(entry.path), []).append(name)
+        return held
 
     def deleted(self) -> list[str]:
         """The paths an archive carries but the archive map marks deleted: files the game does not have."""
+        return list(self._deleted)
+
+    def _find_deleted(self) -> list[str]:
         if self.archive_map is None:
             return []
         return sorted(key for key, entry in self.archive_map.items() if entry.deleted and self.holders(key))

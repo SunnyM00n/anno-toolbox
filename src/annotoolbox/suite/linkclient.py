@@ -273,6 +273,7 @@ class PipeLink(livelink.LiveLink):
             self._lost(str(error))
             return Reply(livelink.NOT_CONNECTED, tr("common.game_link_not_connected_lower"))
         limit = RELOAD_TIMEOUT if request.name.startswith("reload.") else REQUEST_TIMEOUT
+        limit += request.args.get("delay_ms", 0) / 1000  # a request with a delay answers after it
         if not slot.done.wait(limit):
             self._forget(request_id)
             return Reply(livelink.UNAVAILABLE, tr("common.game_not_answer_s", seconds=int(limit)))

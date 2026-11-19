@@ -105,6 +105,12 @@ TABS = (
                            _b("focus", N_("islands.focus"), "focus", "selection", N_("islands.fly_camera_selection_f")))),
             (N_("islands.camera"), (Item("goto", N_("islands.go_x_z_distance_turn"), "", "text", "island",
                              N_("islands.x_z_tiles_how_far")),)),
+            (N_("islands.layers"), (_t("layer_objects", N_("islands.layer_objects"), "models", "island", N_("islands.tip.layer_objects")),
+                         _t("layer_markers", N_("islands.layer_markers"), "focus", "island", N_("islands.tip.layer_markers")),
+                         _t("layer_props", N_("islands.layer_effects"), "noise", "island", N_("islands.tip.layer_effects")),
+                         _t("layer_grass", N_("islands.layer_grass"), "plant", "island", N_("islands.tip.layer_grass")),
+                         _t("layer_forest", N_("islands.layer_forest"), "plant", "island", N_("islands.tip.layer_forest")),
+                         _t("layer_water", N_("islands.layer_water"), "water", "island", N_("islands.tip.layer_water")))),
         ),
     ),
     (

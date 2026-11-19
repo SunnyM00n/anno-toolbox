@@ -430,6 +430,10 @@ class InstanceRun:
     def instances(self) -> int:
         return len(self.worlds)
 
+    def fresh(self) -> bool:
+        """Whether its first prepare is still to come: the part's resources or this mesh's inputs are not made."""
+        return not self.setup.keep or id(self.mesh) not in self.setup.inputs
+
     def prepare(self, rp, signature, batch, camera: gs.Camera, fill=None, shared: dict | None = None) -> None:
         self.setup.prepare(rp, signature, batch, camera, fill, shared)
         self._inputs = self.setup.mesh_inputs(self.mesh, rp, signature, batch)

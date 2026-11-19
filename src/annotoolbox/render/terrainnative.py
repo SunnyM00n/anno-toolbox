@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from PySide6.QtGui import QRhiBuffer, QRhiTexture
 
-from ..infra.dxc import ConstantBuffer, Variable
+from ..infra.dxc import ConstantBuffer
 from . import gameshader as gs
-from . import gameshadow, nativegpu, nativelayout, terraindraw
+from . import gameshadow, nativecompute, nativegpu, nativelayout, terraindraw
 
 ENV = "ANNO_NATIVE_TERRAIN"  # "0": the terrain by the current path (the rewrite), to hold the two against each other
 EFFECT = "terrain"
@@ -198,9 +198,7 @@ def technique(device, natives, name: str, state: dict) -> Technique:
 def camera_buffer(element: ConstantBuffer) -> ConstantBuffer:
     """``cCameraBuffer`` (a structured buffer of ``CAMERAS`` camera records) as a buffer of one array, so the frame's
     camera is written by the paths ``gameshader.fill_frame`` writes (``cCameraBuffer[i].MtxView``)."""
-    one = element.variables[0]
-    array = Variable("cCameraBuffer", 0, element.size * CAMERAS, one.type, elements=CAMERAS, members=one.members)
-    return ConstantBuffer("cCameraBuffer", element.size * CAMERAS, [array])
+    return nativecompute.records(element, CAMERAS)
 
 
 @dataclass
@@ -462,12 +460,12 @@ class NativeTerrain:
         return [values, fill] if fill is not None else [values]
 
     def end_frame(self) -> None:
-        """One frame done: the nodes not drawn for a few frames let go, the wrapped QRhi resources likewise."""
+        """One frame done: the nodes not drawn for a few frames let go, the wrapped QRhi resources likewise (the
+        device's own frame is its owner's to end, once for all its native parts)."""
         self.frame += 1
         for key in [k for k, (_m, d) in self.nodes.items() if self.frame - d.last > KEEP_FRAMES]:
             self.nodes.pop(key)[1].release()
         self.bridge.end_frame()
-        self.device.end_frame()
 
     def release(self) -> None:
         for _m, d in self.nodes.values():

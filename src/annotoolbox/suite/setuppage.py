@@ -10,6 +10,7 @@ has: the settings' detected game folders and their check, and the "Games and fol
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -33,8 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..infra.i18n import languages, tr
-from ..paths import local_data_dir
-from . import install, installevents, migrate, setupchoices, shortcuts, updates
+from ..paths import cache_dir, config_dir, local_data_dir
+from . import install, installevents, linuxnotice, migrate, setupchoices, shortcuts, updates
+from .settings import found_text
 from .setupchoices import Choices
 
 log = logging.getLogger(__name__)
@@ -90,6 +92,8 @@ class SetupDialog(QDialog):
         intro = QLabel(tr("common.welcome_confirm_change_once_help"))
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        if (experimental := linuxnotice.label()) is not None:
+            layout.addWidget(experimental)
         form = QFormLayout()
         self.language = QComboBox()
         for code, name in languages().items():
@@ -113,7 +117,13 @@ class SetupDialog(QDialog):
             self.edits[key], self.states[key] = edit, state
             self._state(key)
         layout.addLayout(form)
-        self.start_menu = QCheckBox(tr("common.start_menu_entry"), checked=start.start_menu)
+        origins = [f"{self._game_name(k)}: {t}" for k in self.edits if (t := found_text(start.folders.get(k, "")))]
+        if origins:  # off Windows: which launcher's library or prefix each game was found in
+            where = QLabel("\n".join(origins))
+            where.setWordWrap(True)
+            layout.addWidget(where)
+        menu_label = tr("common.start_menu_entry") if sys.platform == "win32" else tr("common.applications_menu_entry")
+        self.start_menu = QCheckBox(menu_label, checked=start.start_menu)
         self.desktop = QCheckBox(tr("common.desktop_shortcut"), checked=start.desktop)
         if can_shortcut:
             layout.addWidget(self.start_menu)
@@ -155,7 +165,8 @@ class SetupDialog(QDialog):
         self.states[key].setText(
             tr("common.not_set") if not text else tr("viewer.not_found") if problem else tr("common.found")
         )
-        self.states[key].setToolTip(problem)
+        self.states[key].setToolTip(problem or found_text(text))
+        self.edits[key].setToolTip(found_text(text))
 
     def _pick(self, edit: QLineEdit) -> None:
         folder = QFileDialog.getExistingDirectory(self, tr("islands.choose_folder"), edit.text())
@@ -257,13 +268,26 @@ class UninstallDialog(QDialog):
     measured = Signal(int)
 
     def __init__(
-        self, parent, folder: Path, size: int | None = None, measure: Callable[[Path], int] = installevents.data_size
+        self,
+        parent,
+        folder: Path,
+        size: int | None = None,
+        measure: Callable[[Path], int] = installevents.data_size,
+        appimage: bool = False,
+        more: tuple[Path, ...] = (),
     ) -> None:
+        """``appimage``: the program is one AppImage file; ``more``: further data folders (Linux keeps settings, data
+        and caches apart), counted and named with ``folder``."""
         super().__init__(parent)
         self.folder = folder
+        self.more = more
         self.setWindowTitle(tr("ui.uninstall"))
         layout = QVBoxLayout(self)
-        text = QLabel(tr("common.program_closes_removed_computer_your"))
+        text = QLabel(
+            tr("common.program_closes_appimage_removed")
+            if appimage
+            else tr("common.program_closes_removed_computer_your")
+        )
         text.setWordWrap(True)
         layout.addWidget(text)
         self.delete = QCheckBox(tr("common.also_delete_my_settings_caches"))
@@ -284,24 +308,26 @@ class UninstallDialog(QDialog):
         layout.addWidget(buttons)
 
     def _measure(self, measure: Callable[[Path], int]) -> None:
-        size = measure(self.folder)
+        size = sum(measure(f) for f in (self.folder, *self.more))
         try:
             self.measured.emit(size)
         except RuntimeError:  # the dialog was answered and deleted meanwhile: nobody to tell
             pass
 
     def _show_size(self, size: int) -> None:
-        self.where.setText(tr("common.folder_size_mb", folder=self.folder, size=round(size / 2**20)))
+        names = ", ".join(str(f) for f in (self.folder, *self.more))
+        self.where.setText(tr("common.folder_size_mb", folder=names, size=round(size / 2**20)))
 
 
 def uninstall(window) -> bool:
     """Ask, then close the window the usual way and start the installer's uninstaller. False when the person cancels,
     or the program could not be closed or the uninstaller could not be started."""
-    where = install.root()
-    if where is None:
+    where, image = install.root(), install.appimage()
+    if where is None and image is None:
         return False
     folder = local_data_dir()
-    dialog = UninstallDialog(window, folder)
+    more = tuple(dict.fromkeys(f for f in (config_dir(), cache_dir()) if f != folder)) if image else ()
+    dialog = UninstallDialog(window, folder, appimage=image is not None, more=more)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
     if not window.close():
@@ -309,6 +335,8 @@ def uninstall(window) -> bool:
     from .toolbox import stop_log
 
     stop_log()  # the log file is in the data folder, which the uninstaller moves away when asked to delete it
+    if image is not None:
+        return uninstall_appimage(window, image, [folder, *more] if dialog.delete.isChecked() else [])
     installevents.request_uninstall(dialog.delete.isChecked(), folder)
     try:
         install.start_uninstall(where)
@@ -316,6 +344,26 @@ def uninstall(window) -> bool:
         installevents.cancel_request(folder)
         QMessageBox.warning(window, tr("ui.uninstall"), tr("common.could_not_start_uninstaller", error=exc))
         return False
+    app = QApplication.instance()
+    if app is not None:
+        app.quit()
+    return True
+
+
+def uninstall_appimage(window, image: Path, folders: list[Path]) -> bool:
+    """The uninstall of an AppImage (Linux has no uninstaller): the file goes first (when it cannot, nothing else is
+    touched), then the desktop entries that point at it and the data ``folders`` the person ticked (moved aside at
+    once, removed apart from here); the program ends."""
+    try:
+        install.remove_appimage(image)
+    except OSError as exc:
+        QMessageBox.warning(window, tr("ui.uninstall"), tr("common.could_not_start_uninstaller", error=exc))
+        return False
+    where = shortcuts.places()
+    if where is not None:
+        shortcuts.remove_ours(where, image)
+    for folder in folders:
+        installevents.delete_data(folder)
     app = QApplication.instance()
     if app is not None:
         app.quit()

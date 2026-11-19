@@ -336,7 +336,8 @@ menu the name and icon of the residence or production building the Preview setti
 entries as the data holds, up to what the list shows.
 
 - **Which value wins**: live values and recordings, then a value set by hand (or the file's own preview data), then
-  the game's data, then a placeholder.
+  the game's data, then the baseline of the values the game showed (below, where the preview would otherwise make a
+  value up), then a placeholder.
 - **Where a value came from**: Properties lists, on top, what the selected element is given by the open file's
   bindings and where each value came from: live from the game, recorded, the game's data (the asset and its field),
   a sample value or a placeholder.
@@ -349,6 +350,141 @@ entries as the data holds, up to what the list shows.
 - It reads the game's asset index (the asset editor's, built once and kept in the workspace) off the window's thread
   when a game opens; the preview lays out again once it is there. A scene with game data places more of its parts
   apart (a quick tools wheel about 5 s, the options scene about 40 s, the first time).
+
+## The baseline: what the game showed in many sessions
+
+Without a running game the preview made a value up wherever a scene reads one at run time. The **baseline**
+(`uiedit/baseline.py`, the shipped file `uiedit/data/ui-baseline-117.json`, **View > Use the game's typical values**,
+on by default, 117 only) replaces such a value by the one the game itself held most often.
+
+**Where it comes from.** Recordings of the widgets of the running game (4,283 of them, 2026-11-16 to 19, game build
+392218104, mostly in German): per widget file and widget (its name CRC, as live values match), and per placing
+context (the container that places the file) where the context changes the value, the value held most often across the
+recordings with its share. Several widgets of one file in one recording (a list's items) share that recording's one
+vote, so a widget that shows a different text per item is not given one of them.
+
+**What it holds** (references and plain values, no game content: a text id is not its text, a picture is a path, no
+picture is stored). The file is regenerated from the recordings by a script of the maintainers' tooling; it names the
+build, the dates and the counts.
+
+| Field | Value | Kept when its share of the recordings is at least |
+|---|---|---|
+| `t` | a label's text as the id of its line (the line is read in the language of the preview) | 50 % [I] |
+| `n` | a text that is no line and has no letter (`0 %`, `12/20`), and "" for a label the game left empty | 80 % [I] |
+| `r` | a label that showed a campaign character's name: the character's role and place in it (the cast of the Preview settings gives the name) | 50 % [I] |
+| `i` | an image's `DynamicImageId`: a game path, or "" (the game showed none) | 50 % [I] |
+| `p` | an image that showed a character's portrait or logo: role, place, which (the Preview settings give the picture) | 50 % [I] |
+| `v` | whether the widget is visible | 60 % [I] |
+
+Left out on purpose: a text with letters that is no line of the game (a player's, island's or quest's name, a number
+with a unit), run-time pictures (`rtt_<n>`), and visibilities from a recording of a scene that was loaded but not shown
+(under 5 % [I] of its widgets shown) or below a hidden widget. A widget's own property values are not kept: the label
+or image inside the placed file holds the value the placing file hands it. The counts of the shipped file: 1,895
+widget files, 10,891 widgets with 14,899 values (9,434 visibilities, 5,031 pictures, 418 texts, 140 plain texts, 16
+characters), and 572 context entries.
+
+**How the preview uses it** (the order of sources is: live values and recordings, a value set by hand, then the
+baseline where the preview would make a value up, the Preview settings' campaign data for what is per player or per
+session, the game's data, a placeholder):
+
+- a label's text that would be a filler, or none (a stored designers' text such as `!Reset` counts), shows the
+  baseline's: the line of its id in the preview's language, or the plain text;
+- an image that would draw a stand-in for a picture the game names at run time shows the baseline's picture, or none
+  where the game showed none;
+- a visibility a binding computed from a made-up flag is the baseline's.
+
+A value the game's data or a binding really gave is not replaced (the game's data and the baseline agree where both
+exist, and the game's data is exact for the open scene). A baseline value that does not resolve on the install (a line
+or picture another build or DLC set does not have) is skipped, and Play mode, live values and recordings win over all of
+it. The Properties "where a value came from" list is not changed: the baseline is the preview's own fill.
+
+**What is per player or per session** comes from the Preview settings' campaign data, not from the recordings: the
+player's name and portrait, the rivals, the emperor, the pirates (`previewdefaults`; the baseline keeps only the role
+of a character a widget showed). The preview also takes a name field the player types into (`Text_Input`, `NameInput`),
+a character's, session's or province's name and the number of players from there.
+
+**Measured** (2026-11-19, 117's 195 scenes, English, the default Preview settings, no recording, the same count
+before and after; the counting differs a little from the table below it, which also counts empty texts):
+
+| What the preview draws | before | after |
+|---|---|---|
+| texts drawn | 1,834 | 1,630 |
+| filler texts | 1,057 | 875 |
+| picture slots (a stand-in icon) | 1,112 | 811 |
+| pictures the game names that this install has | 7,557 | 7,906 |
+| pictures the game has no file for | 7 | 11 |
+| stored texts of the files (`!Headline`) | 55 | 68 |
+| picture items drawn | 37,234 | 36,290 |
+
+The Preview settings' part alone takes 2 more fillers off (1,057 to 1,055).
+
+**What is left.** 875 fillers and 811 slots stay where no recording holds a value the game showed in at least half of
+its sessions: a script's text (a quest objective, a headline), a name or a count that differs per game, a list's item
+icon (the asset the item stands for: a plan per scene would give it), and 46 scenes the recordings do not cover. The
+fewer texts drawn are labels the game showed empty or hidden in nearly every recording (the construction menu's nine
+filler labels). Two scenes show no picture at all now: the two gamepad prompts, which the game hides on a mouse. The
+**stored texts** went up because a label the game showed is now visible. Not built: the baseline for 1800 (its dumps
+do not exist), numbers and flags beyond visibility (what a count or a flag is in a typical state is `placeholders`'
+and the Preview settings').
+
+## What the preview fills, and what stays a sample
+
+Counted offscreen on 2026-11-19 over every scene of the installs (117: 195 scenes; 1800: 303), English, the default
+preview settings, no recording; "before" is the state of 2026-11-18. A **filler** is a text the preview makes up
+("Lorem ipsum ..."), a **picture slot** a picture the game names at run time that the preview stands in for with an
+icon of the game picked by the slot's name (not the picture the game shows).
+
+| What the preview draws | 117 before | 117 after | 1800 before | 1800 after |
+|---|---|---|---|---|
+| texts drawn | 2210 | 2195 | 7616 | 7624 |
+| filler texts | 1266 | 1058 | 4538 | 4217 |
+| text ids shown raw (`[id]`) | 0 | 0 | 576 | 0 |
+| stored texts of the files (the designers' own, `!Headline`, `asdsad`) | 125 | 95 | 1166 | 756 |
+| pictures the game has no file for | 737 | 86 | 4072 | 18 |
+| of which a filler text taken for a picture name | 651 | 0 | 4054 | 0 |
+| picture slots (a stand-in icon) | 414 | 1114 | 237 | 4291 |
+
+What changed, each rule read from the game's files (`labels.py`, `scope.py`, `placeholders.py`, `uifiles.py`):
+
+- **A label with a text id shows its line.** The game shows the line a `LocalizationId` names, and the label's stored
+  `Text` is only what the editor showed (seen in the game, 2026-09-21); the preview showed the
+  stored text first (`!Pyramid Restored` for the line "Pyramid Restored"). A binding's filler gives way to the label's
+  own line as well; a value a binding really gives (a name, a number) wins as before.
+- **1800's text ids resolve.** 1800 numbers its texts (`<GUID>5998</GUID>` in `data/config/gui/texts_<language>.xml`,
+  the id a decimal number); the preview read 117's tables only and drew 576 labels as `[5998]`.
+- **A text property that ends in a picture is a picture slot.** A string property a file binds into an image's
+  `DynamicImageId`, or hands on to a placed file that does, and a string property named like a picture (`Icon`,
+  `Portrait`, `Model2D`, not `IconText`) got a filler text, and the picture it fed was a grey box named "Lorem ipsum
+  dolor sit amet" in Checks. It is a picture slot now: a game icon (or the game's data where a scene plan gives it).
+- **A game field's name names its filler.** A filler took its kind from the target alone; the source's game name
+  (`Amount`, `PlayerCount`, `IsLocked`, `Icon`) is read from the field table now, so a count is a number, an id a
+  number, a flag has the state its name says (a typical state, see above), and a field that is the target's text id
+  stays unfilled. About 470 image layers fewer are drawn in 117's scenes than before: flags that were `true`
+  by default (a visibility) take their name's state.
+- **A game object is no text.** A list's reference reaching a label drew `GameObjectRef(...)`; it is empty now.
+
+**What stays a placeholder, and why** (117; every one is a value the game has only while running, or one the files do
+not map to an asset):
+
+- *Texts, 1058 of 2195.* The leaf names, by count: `Text` of a text object (760: a headline, a description, a
+  button's line, set by the scene's script), `ButtonText` (84), `Value` (56), `ButtonAction`, `FeedbackLabel`,
+  `CurrentValue`, `TimerValue`, a name typed by the player (`Text_Input`, `Name`, `IslandName`). The values are the
+  running game's state, a script's choice of a text line or a player's input: no file names which line. The texts a
+  scene's config asset or the five plans (`gameplans`) hold are filled; no other scene has a plan (`ui/117/game-data.md` "Left out").
+- *Picture slots, 1114.* An `Icon` of a list element (a good, a building, a research node) is the asset that element
+  stands for: known only with a plan for that scene. The stand-in is an icon of the game's own folders for the slot's
+  name, never a blank tile.
+- *Stored texts, 95.* A designers' text the label keeps and no line replaces (`asdsad`, `!Subline`).
+- *Pictures the game has no file for, 86.* Image assets and widget files the shipped game does not carry (the
+  scenes' notes say "not in the game"), and the DLC category picture of an uninstalled DLC.
+- *Numbers and flags.* A count, a progress, a timer or a selection is a typical value by its name (docs above);
+  only a recording or the Preview settings give the real one.
+- *An object menu's object.* A scene of an object menu (`om...scene`) shows its object's name, icon and texts
+  only for a residence and a production building (the Preview settings); no asset says which building a menu
+  scene belongs to (the menu is chosen in the game's code), so the other menus keep fillers.
+
+Open (not built): a plan for the scenes whose lists are assets (the goods, the research nodes, the shop's
+packages); 1800's field table (its fields stay unnamed, so a filler there takes its kind from the target alone).
 
 ## The language of the game's texts
 

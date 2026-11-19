@@ -112,7 +112,7 @@ def build_migration(wix: Path, edition: Edition, version: str, setup_exe: Path, 
 def signable(files: list[str], package: str) -> list[str]:
     """What the signing step signs: the program's own exes and the libraries and extension modules of the package itself
     (not the libraries of others, which carry their own signatures or none)."""
-    ours = [f for f in files if f.lower().endswith(".exe") and "/" not in f]
+    ours = [f for f in files if f.lower().endswith((".exe", ".com")) and "/" not in f]  # AnnoToolbox.exe and .com
     ours += [f for f in files if f.lower().endswith(SIGNABLE) and f.startswith(f"_internal/{package}/")]
     return sorted(ours)
 

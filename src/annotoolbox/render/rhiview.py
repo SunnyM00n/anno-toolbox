@@ -2,10 +2,9 @@
 frame to a renderer through ``rhidevice.RhiContext``.
 
 ``chosen(setting)`` is the backend in use (``ANNO_RENDERER`` over the setting over Direct3D 12 where there is one,
-else ``DEFAULT``); ``gl`` is the OpenGL device (moderngl, the views' own ``QOpenGLWidget``), the others are QRhi's
-backends. ``RhiView`` is the
-widget: a subclass draws in ``draw(ctx, screen, size)``; ``picture()`` draws one frame without showing the widget
-(the offscreen pictures and the tests). docs/tool-suite.md section 21, "The device layer"; docs/viewer.md.
+else ``DEFAULT``: ``gl`` on Linux, QRhi's OpenGL under Wayland); ``gl`` is the OpenGL device (moderngl, the views'
+own ``QOpenGLWidget``), the others are QRhi's. ``RhiView`` is the widget: a subclass draws in ``draw(ctx, screen,
+size)``; ``picture()`` draws a frame unshown. docs/tool-suite.md section 21; docs/viewer.md; docs/linux.md.
 """
 
 from __future__ import annotations
@@ -20,6 +19,9 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QOpenGLContext, QRhi, QRhiGles2InitParams, QSurfaceFormat
 from PySide6.QtWidgets import QRhiWidget
 
+from ..infra.i18n import tr
+from . import vulkanprobe
+from .nativelook import direct3d_here
 from .rhidevice import RhiContext
 from .shaderbake import TARGETS
 
@@ -27,6 +29,7 @@ ENV = "ANNO_RENDERER"
 DEBUG_ENV = "ANNO_D3D12_DEBUG"  # "1": the graphics API's debug layer, where Windows' Graphics Tools are installed
 BACKENDS = ("gl", "d3d12", "d3d11", "vulkan", "opengl")  # gl: moderngl; opengl: QRhi's OpenGL backend
 DEFAULT = "gl"
+EGL_PLATFORMS = ("wayland", "eglfs", "minimalegl")  # Qt platforms whose OpenGL contexts are EGL
 _API = {
     "d3d12": QRhiWidget.Api.Direct3D12,
     "d3d11": QRhiWidget.Api.Direct3D11,
@@ -38,11 +41,54 @@ _API = {
 def chosen(setting: str = "") -> str:
     """The backend a view uses: ``ANNO_RENDERER``, else the setting, else Direct3D 12 where the machine can make a
     device of it (117's islands open in the game's look there: island-117-view.md "Speed", part 7), else
-    ``DEFAULT``; an unknown name counts as none."""
+    ``DEFAULT``; an unknown name counts as none, and so does one this system cannot draw with (a Direct3D name kept
+    by a settings file from Windows, a Vulkan the probe does not find)."""
     for name in (os.environ.get(ENV, ""), setting):
-        if name.lower() in BACKENDS:
+        if name.lower() in BACKENDS and _usable(name.lower()):
             return name.lower()
-    return "d3d12" if _has_d3d12() else DEFAULT
+    return "d3d12" if _has_d3d12() else _default()
+
+
+def _default() -> str:
+    """``DEFAULT``; under Wayland QRhi's OpenGL, since moderngl cannot attach to its EGL contexts."""
+    if not _moderngl_attaches() and _opengl_fits():
+        return "opengl"
+    return DEFAULT
+
+
+def _moderngl_attaches() -> bool:
+    """False where Qt's OpenGL contexts are EGL (Wayland): moderngl's detector looks for GLX ones and failed there."""
+    from PySide6.QtGui import QGuiApplication
+
+    return not (sys.platform.startswith("linux") and QGuiApplication.platformName().startswith(EGL_PLATFORMS))
+
+
+def _opengl_fits() -> bool:
+    try:
+        return available("opengl")
+    except Exception:  # no QRhi device at all
+        return False
+
+
+def _usable(name: str) -> bool:
+    if name in ("d3d12", "d3d11"):
+        return direct3d_here()
+    if name == "gl":
+        return _moderngl_attaches()
+    if name == "vulkan" and not direct3d_here():
+        return vulkanprobe.probe().ok
+    return True
+
+
+def blocked(name: str) -> str:
+    """Why a backend is not offered here, in the interface language ("" when it can be)."""
+    if name in ("d3d12", "d3d11") and not direct3d_here():
+        return tr("common.backend_windows_only")
+    if name == "vulkan" and not (probe := vulkanprobe.probe()).ok:
+        return probe.why
+    if name == "gl" and not _moderngl_attaches():
+        return tr("common.backend_gl_not_wayland")
+    return ""
 
 
 @functools.cache
@@ -84,7 +130,7 @@ def available(name: str) -> bool:
         params.fallbackSurface = QRhiGles2InitParams.newFallbackSurface()
         return QRhi.probe(QRhi.Implementation.OpenGLES2, params) and _opengl_runs_our_glsl()
     if name == "vulkan":
-        return True  # QRhi needs a Vulkan instance first; the widget says when it cannot make one
+        return vulkanprobe.probe().ok
     return False
 
 

@@ -314,6 +314,14 @@ class RdaArchive:
         with self._open() as f:
             yield from self._walk_blocks(f)
 
+    def block_members(self) -> Iterator[tuple[RdaBlock, list[RdaEntry]]]:
+        """Every block with the entries its directory lists, in chain order (V2 only; a deleted block's entries too)."""
+        if self.version is V1_1:
+            raise RdaError(f"{self.path}: a V1.1 archive has no blocks")
+        with self._open() as f:
+            for block in self._walk_blocks(f):
+                yield block, list(self._parse_block(f, block))
+
     def _walk_blocks(self, f: BinaryIO) -> Iterator[RdaBlock]:
         v = self.version
         file_size = f.seek(0, os.SEEK_END)
@@ -410,6 +418,29 @@ class RdaArchive:
             raise RdaError(f"{self.path.name}:{entry.path}: truncated data")
         return _decode(raw, entry.flags, self.version.seed, entry.size)
 
+    def stored_bytes(self, entry: RdaEntry) -> bytes:
+        """The member's bytes as they lie in the file (compressed, encrypted); not for a resident member."""
+        with self._open() as f:
+            f.seek(entry.offset)
+            return f.read(entry.compressed_size)
+
+    def directory_of(self, block: RdaBlock) -> tuple[bytes, bytes]:
+        """A block's file directory as ``(stored, decoded)``: the bytes in the file and what they decode to."""
+        with self._open() as f:
+            f.seek(block.headers_start)
+            stored = f.read(block.headers_size)
+        flags = block.flags & (FLAG_COMPRESSED | FLAG_ENCRYPTED)
+        return stored, _decode(stored, flags, self.version.seed, block.headers_decoded_size)
+
+    def blob_of(self, block: RdaBlock) -> tuple[bytes, bytes]:
+        """A resident block's data blob as ``(stored, decoded)``."""
+        with self._open() as f:
+            f.seek(block.blob_offset)
+            stored = f.read(block.blob_stored_size)
+        return stored, _decode(
+            stored, block.flags & (FLAG_COMPRESSED | FLAG_ENCRYPTED), self.version.seed, block.blob_size
+        )
+
     def _blob(self, entry: RdaEntry) -> bytes:
         blob = self._blobs.get(entry.blob_offset)
         if blob is None:
@@ -430,6 +461,25 @@ class RdaArchive:
         return dest
 
 
+@dataclass(frozen=True)
+class Stored:
+    """A member taken as it lies in another archive: ``packed`` is its bytes as stored (compressed and encrypted as that
+    block's flags say), ``size`` its size. A writer given one uses the bytes as they are, so a member nobody changed
+    stays what it was whatever made the compression (not for a resident member)."""
+
+    archive: RdaArchive
+    entry: RdaEntry
+
+    @property
+    def size(self) -> int:
+        return self.entry.size
+
+    @property
+    def packed(self) -> bytes:
+        return self.archive.stored_bytes(self.entry)
+
+
+Member = bytes | Path | Stored
 Stamps = int | Mapping[str, int]  # one modification time for every file, or one per path
 
 
@@ -463,14 +513,16 @@ def write_v20(files: dict[str, bytes], timestamp: Stamps = 0, *, flags: int = WR
     return _write(files, V2_0, flags, timestamp)
 
 
-def _v11_record(path: str, data: bytes, offset: int, flags: int, stamp: int) -> tuple[bytes, bytes]:
-    """A V1.1 directory record and the bytes of the file as stored."""
+def _v11_record(path: str, data: bytes | Stored, offset: int, flags: int, stamp: int) -> tuple[bytes, bytes]:
+    """A V1.1 directory record and the bytes of the file as stored (a ``Stored`` member as it is)."""
     try:
         raw_path = path.encode("latin-1")
     except UnicodeEncodeError:
         raise RdaError(f"path {path!r}: V1.1 paths are Latin-1") from None
     if len(raw_path) > V1_PATH_CHARS:
         raise RdaError(f"path {path!r} is over {V1_PATH_CHARS} characters")
+    if isinstance(data, Stored):
+        return V1_ENTRY.pack(raw_path, offset, data.entry.compressed_size, data.size, flags, stamp), data.packed
     packed = zlib.compress(data, 1) if flags == V1_FLAGS_ZLIB else data
     return V1_ENTRY.pack(raw_path, offset, len(packed), len(data), flags, stamp), packed
 
@@ -490,7 +542,7 @@ def write_v11(files: dict[str, bytes], timestamp: Stamps = 0, *, compress: bool 
 
 
 def write_v11_file(
-    dest: str | Path, members: Iterable[tuple[str, bytes | Path]], timestamp: Stamps = 0, *, compress: bool = True
+    dest: str | Path, members: Iterable[tuple[str, Member]], timestamp: Stamps = 0, *, compress: bool = True
 ) -> Path:
     """``write_v11`` to disk, one member at a time (files are read when their turn comes), under ``<dest>.part``."""
     dest = Path(dest)
@@ -503,7 +555,7 @@ def write_v11_file(
             f.write(bytes(V1_HEADER + len(members) * V1_ENTRY.size))
             table = bytearray()
             for path, source in members:
-                data = source if isinstance(source, bytes) else Path(source).read_bytes()
+                data = source if isinstance(source, bytes | Stored) else Path(source).read_bytes()
                 record, packed = _v11_record(path, data, f.tell(), flags, _stamp(timestamp, path))
                 table += record
                 f.write(packed)
@@ -555,14 +607,20 @@ class RdaWriter:
         *,
         dedup: bool = True,
         allow_resident: bool = False,
+        reuse: Mapping[tuple[str, bytes, int], bytes] | None = None,
+        allow_empty: bool = False,
     ) -> None:
         if version not in VERSIONS:
             raise RdaError(f"cannot write version {version.name} with RdaWriter")
+        self._reuse = (
+            reuse or {}
+        )  # ("directory" or "blob", blake2b-16 of the decoded bytes, flags) -> as an archive stored it
         self.dest = Path(dest)
         self.version = version
         self.timestamp = timestamp
         self.dedup = dedup
         self.allow_resident = allow_resident
+        self.allow_empty = allow_empty  # the games' own archives hold a few members of size 0
         self.members = 0
         self._uint = struct.Struct("<" + version.uint)
         self._paths: set[str] = set()
@@ -600,7 +658,7 @@ class RdaWriter:
 
     def add_block(
         self,
-        members: Iterable[tuple[str, bytes | Path]],
+        members: Iterable[tuple[str, Member]],
         flags: int = FLAG_COMPRESSED,
         level: int | Callable[[str], int] = 1,
     ) -> None:
@@ -612,14 +670,21 @@ class RdaWriter:
                 f"block flags {flags}: resident members (flag 4) are refused, the game finds none (allow_resident)"
             )
         _check_flags(flags & ~FLAG_CONTIGUOUS)
-        chunk: list[tuple[str, bytes | Path]] = []
+        chunk: list[tuple[str, Member]] = []
         weight = 0
         for member in members:
             if resident and chunk and weight >= RESIDENT_BYTES:
                 self._write_resident(chunk, flags, level)
                 chunk, weight = [], 0
             chunk.append(member)
-            weight += len(member[1]) if isinstance(member[1], bytes) else Path(member[1]).stat().st_size
+            source = member[1]
+            weight += (
+                len(source)
+                if isinstance(source, bytes)
+                else source.size
+                if isinstance(source, Stored)
+                else Path(source).stat().st_size
+            )
             if len(chunk) == BLOCK_MEMBERS:
                 (self._write_resident if resident else self._write_block)(chunk, flags, level)
                 chunk, weight = [], 0
@@ -639,15 +704,19 @@ class RdaWriter:
                 directory, bytes(directory), FLAG_DELETED, len(directory) // self.version.file_header_size
             )
 
+    def add_empty(self, flags: int) -> None:
+        """A block that lists no file (the games' tools leave some at the end of an archive): a header, no directory."""
+        self._finish_block(b"", b"", flags, 0)
+
     def _register(self, path: str) -> None:
         if path in self._paths:
             raise RdaError(f"path {path!r} is in the archive twice")
         self._paths.add(path)
 
-    def _member(self, path: str, source: bytes | Path) -> bytes:
+    def _member(self, path: str, source: Member) -> bytes | Stored:
         archive_path(path)
-        data = source if isinstance(source, bytes) else Path(source).read_bytes()
-        if not data:
+        data = source if isinstance(source, bytes | Stored) else Path(source).read_bytes()
+        if not data and not self.allow_empty:
             raise RdaError(f"member {path!r} is empty (the game never finds an empty member)")
         self._register(path)
         return data
@@ -662,23 +731,35 @@ class RdaWriter:
         self._fits()
         self.members += count
 
+    def _store(self, data: bytes | Stored, flags: int, level: int) -> tuple[tuple[int, int], int]:
+        """Write one member's bytes: ``((offset, stored size), size)``. Equal content shares one copy (``dedup``); a
+        ``Stored`` member shares only as it did in its archive; a member that stores nothing lies at offset 0."""
+        if isinstance(data, Stored):
+            packed, size = data.packed, data.size
+            key = (f"{data.entry.offset}:{data.entry.compressed_size}".encode(), flags, -1)
+        else:
+            packed, size, key = None, len(data), (hashlib.blake2b(data, digest_size=16).digest(), flags, level)
+        where = self._shared.get(key) if self.dedup else None
+        if where is None:
+            packed = packed if packed is not None else _encode(data, flags, level, self.version.seed)
+            where = (self._f.tell() if packed else 0, len(packed))
+            self._f.write(packed)
+            self._fits()
+            self._shared[key] = where
+        return where, size
+
     def _write_block(self, chunk: list, flags: int, level: int | Callable[[str], int]) -> None:
-        v, f = self.version, self._f
+        v = self.version
         directory = bytearray()
         for path, source in chunk:
             data = self._member(path, source)
             lvl = level(path) if callable(level) else level
-            key = (hashlib.blake2b(data, digest_size=16).digest(), flags, lvl)
-            where = self._shared.get(key) if self.dedup else None
-            if where is None:
-                packed = _encode(data, flags, lvl, v.seed)
-                where = (f.tell(), len(packed))
-                f.write(packed)
-                self._fits()
-                self._shared[key] = where
+            where, size = self._store(data, flags, lvl)
             directory += path.encode("utf-16-le").ljust(FILE_PATH_BYTES, b"\0")
-            directory += v.file_header_tail.pack(where[0], where[1], len(data), _stamp(self.timestamp, path), 0)
-        self._finish_block(directory, _encode(bytes(directory), flags, 1, v.seed), flags, len(chunk))
+            directory += v.file_header_tail.pack(where[0], where[1], size, _stamp(self.timestamp, path), 0)
+        digest = hashlib.blake2b(directory, digest_size=16).digest()
+        stored = self._reuse.get(("directory", digest, flags)) or _encode(bytes(directory), flags, 1, v.seed)
+        self._finish_block(directory, stored, flags, len(chunk))
 
     def _write_resident(self, chunk: list, flags: int, level: int | Callable[[str], int]) -> None:
         """One block whose file data is a single blob: blob, file headers, the blob's two sizes, the block header."""
@@ -686,13 +767,22 @@ class RdaWriter:
         blob, directory = bytearray(), bytearray()
         for path, source in chunk:
             data = self._member(path, source)
+            if isinstance(data, Stored):
+                raise RdaError(
+                    f"member {path!r}: a resident block holds one blob, its members cannot be taken as stored"
+                )
             directory += path.encode("utf-16-le").ljust(FILE_PATH_BYTES, b"\0")
             directory += v.file_header_tail.pack(len(blob), len(data), len(data), _stamp(self.timestamp, path), 0)
             blob += data
-        packed = _encode(bytes(blob), flags, level(chunk[0][0]) if callable(level) else level, v.seed)
+        blob_key = ("blob", hashlib.blake2b(blob, digest_size=16).digest(), flags)
+        packed = self._reuse.get(blob_key) or _encode(
+            bytes(blob), flags, level(chunk[0][0]) if callable(level) else level, v.seed
+        )
         self._f.write(packed)
         sizes = v.blob_info.pack(len(packed), len(blob))
-        self._finish_block(directory, _encode(bytes(directory), flags, 1, v.seed), flags, len(chunk), sizes)
+        digest = hashlib.blake2b(directory, digest_size=16).digest()
+        stored = self._reuse.get(("directory", digest, flags)) or _encode(bytes(directory), flags, 1, v.seed)
+        self._finish_block(directory, stored, flags, len(chunk), sizes)
 
     def close(self) -> Path:
         """Chain the blocks, move the archive to its name, return it."""

@@ -38,6 +38,7 @@ class Meta:
     linked: int = 0
     copied: int = 0
     owners: dict = field(default_factory=dict)
+    taken: dict = field(default_factory=dict)  # whole-file app -> files the import put into its own folder
     carried: dict = field(default_factory=dict)  # extension -> files, for the files no app takes
     not_understood: dict = field(default_factory=dict)  # extension -> files the sort has no kind for
     guid: dict = field(default_factory=dict)  # {"added": n, "range": [lo, hi], "detected": bool}

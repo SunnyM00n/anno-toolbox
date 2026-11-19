@@ -17,7 +17,7 @@ from pathlib import Path
 from ..infra import i18n
 from ..infra.buildcache import write_atomic
 from ..infra.i18n import N_, tr
-from ..othergames import installs
+from ..othergames import installs, linuxfinder
 from ..paths import config_dir, local_data_dir
 from ..sources import gametree
 
@@ -82,6 +82,8 @@ def anno_folders(parent: Path) -> list[Path]:
 
 
 def candidates() -> list[Path]:
+    if linuxfinder.applies():
+        return linuxfinder.candidates(linuxfinder.machine())
     out = registry_installs()
     for drive in "CDEFGH":
         for parent in (
@@ -95,8 +97,25 @@ def candidates() -> list[Path]:
 
 
 def detect() -> dict[str, str]:
-    """The game folders this machine has, as far as they can be found."""
+    """The game folders this machine has, as far as they can be found (off Windows: Steam, Proton and the Wine
+    launchers, ``linuxfinder``; ``mods`` is then empty until 117 has made its folder in its prefix)."""
+    if linuxfinder.applies():
+        return linuxfinder.detect()
     return {"mods": str(gametree.user_dir("anno117") / "mods"), **installs.detect(candidates())}
+
+
+def found_text(folder: str) -> str:
+    """Where the finder took a settings folder from, for the setup page and the folders dialog ("" on Windows, and for a
+    folder typed by hand)."""
+    if not linuxfinder.applies() or (hit := linuxfinder.origin_of(folder)) is None:
+        return ""
+    found, user = hit
+    launcher = linuxfinder.LAUNCHERS[found.kind]
+    if user:
+        return tr("common.user_folder_from_prefix", launcher=launcher, where=found.where)
+    if found.via == "library":
+        return tr("common.found_in_library", launcher=launcher, where=found.where)
+    return tr("common.found_in_prefix", launcher=launcher, where=found.where)
 
 
 def is_2070(folder: Path) -> bool:
@@ -184,6 +203,8 @@ class Settings:
             return
         if today is not None and self.last_game_scan == today.isoformat():
             return
+        if today is None:
+            linuxfinder.forget()  # asked for by the person: look again
         for k, v in detect().items():
             if not getattr(self, k) and v:
                 setattr(self, k, v)

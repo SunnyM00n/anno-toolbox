@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from annotoolbox.infra.tools import ToolResult, find_tool, run_tool
-from annotoolbox.models import bc7encode, textures
+from annotoolbox.infra.tools import ToolResult
+from annotoolbox.models import bc7encode, ddsdecode, textures
 
 np = pytest.importorskip("numpy")
 Image = pytest.importorskip("PIL.Image")
@@ -166,21 +166,14 @@ def _dds_rgba_mips(data: bytes):
 
 
 def test_a_low_gloss_normal_map_keeps_its_normals_in_the_small_mips(tmp_path, monkeypatch):
-    """With the real texconv (skipped without it): a normal map whose alpha is a low gloss, as on
-    2070's rocks, kept its RG only in mip 0 before ``-sepalpha``."""
+    """A normal map whose alpha is a low gloss, as on 2070's rocks, kept its RG only in mip 0 before ``-sepalpha``
+    (read back by the in-process decoder, so it runs with any encoder and on Linux)."""
     Image = pytest.importorskip("PIL.Image")
-    texconv = find_tool("texconv")
-    if texconv is None:
-        pytest.skip("texconv not available")
     src = tmp_path / "rock_norm.png"
     Image.new("RGBA", (64, 64), (200, 60, 0, 3)).save(src)
     bc7 = textures.png_to_bc7(src, tmp_path / "rock_norm_0.dds", cache=False)
-    (tmp_path / "raw").mkdir()
-    res = run_tool(
-        texconv, ["-f", "R8G8B8A8_UNORM", "-ft", "dds", "-o", str(tmp_path / "raw"), "-y", "-nologo", str(bc7)]
-    )
-    assert res.ok
-    mips = _dds_rgba_mips((tmp_path / "raw" / bc7.name).read_bytes())
+    dds = ddsdecode.DdsFile(bc7.read_bytes())
+    mips = [(dds.size_of(k)[0], dds.level(k).tobytes()) for k in range(dds.info.mips)]
     assert len(mips) == 7
     for _width, pixels in mips:
         assert abs(sum(pixels[0::4]) / (len(pixels) / 4) - 200) < 6
@@ -268,11 +261,9 @@ def test_bc7_like_follows_the_original(bc7_dds, fake_bc7):
 
 
 def test_bc7_like_with_the_real_texconv_keeps_format_and_nearly_every_alpha(tmp_path, monkeypatch):
-    """Skipped without texconv: the header equals the original's and a soft alpha survives within BC7's error."""
+    """The header equals the original's and a soft alpha survives within BC7's error (any encoder)."""
     np = pytest.importorskip("numpy")
     Image = pytest.importorskip("PIL.Image")
-    if find_tool("texconv") is None:
-        pytest.skip("texconv not available")
     monkeypatch.setattr(textures, "CACHE", tmp_path / "cache")
     ramp = np.arange(64, dtype=np.uint8).reshape(8, 8) * 4
     px = np.dstack(

@@ -527,6 +527,7 @@ class RhiContext(rhipass.Recorder):
 
     def end(self) -> None:
         """Run what the frame recorded (the passes in order) into the command buffer ``begin`` was given."""
+        self.make_spent, self.make_left = 0.0, 0  # (``nativepass.prepared`` counts them while the frame runs)
         self._run(self._cb)
         self._cb = None
 

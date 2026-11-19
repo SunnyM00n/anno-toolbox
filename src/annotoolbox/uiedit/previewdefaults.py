@@ -75,6 +75,8 @@ PIRATES = (
 CAMPAIGN = {"player": (PLAYER,), "emperor": (EMPEROR,), "rival": RIVALS, "pirate": PIRATES}
 
 LATIUM, ALBION, AEGYPTUS = 3245, 6627, 149679  # the provinces (SessionModerate): the campaign starts in Latium
+PROVINCE_NAMES = {LATIUM: "Latium", ALBION: "Albion", AEGYPTUS: "Aegyptus"}  # as the game names the provinces
+TYPED_NAMES = ("textinput", "nameinput")  # the property names of a name field the player types into
 REGION_OF_SESSION = {LATIUM: "Roman", ALBION: "Celtic", AEGYPTUS: "Egyptian"}
 PROVINCE = {"Roman": 1589870007, "Celtic": 1563518157, "Egyptian": 1450740567}  # halo.Province (enums-117)
 PLATFORM = {"mouse": 1562123227, "xbox": 1477197053, "playstation": 1506049635}  # halo.Platform: PC, Xbox, Playstation
@@ -263,13 +265,17 @@ def text_for(name: str, d: Defaults) -> str | None:
     """A text whose property's name names a character's name (the player's, the emperor's, a rival's or a
     pirate's); None for any other."""
     low = _words(name)
+    if low in TYPED_NAMES:  # what the player types into a name field (the company's, the profile's)
+        return d.player().name
     if "name" not in low:
         return None
     for words, role, _ in WORDS_PICTURE:
         if role != "player" and any(w in low for w in words if w not in ("portrait", "encounter")):
             return d.cast(role)[0].name
-    if any(w in low for w in ("player", "profile", "company", "governor", "user")):
+    if any(w in low for w in ("player", "profile", "company", "governor", "user", "character", "nickname")):
         return d.player().name
+    if any(w in low for w in ("province", "session", "region")):
+        return PROVINCE_NAMES.get(d.region)
     return None
 
 
@@ -288,6 +294,8 @@ def bool_for(name: str, d: Defaults) -> bool | None:
 
 def number_for(name: str, d: Defaults) -> int | None:
     low = _words(name)
+    if low == "playercount":  # the session's players: the player alone, or the player and one more [I]
+        return 1 if d.session == "single" else 2
     if any(w in low for w in ("money", "coins", "denarii", "gold", "balance")):
         return d.money
     if any(w in low for w in ("stock", "storage", "goodsamount")):

@@ -87,6 +87,65 @@ jobs:
           mapfile -t files < <(sed 's#^#out/installer/public/#' out/installer/public/upload-list.txt)
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" out/live-link/version.dll out/live-link-SHA256SUMS --clobber
 
+  # The Linux download (docs/installer.md, "Linux"): an AppImage with its update feed and a tarball, built on the oldest
+  # glibc the release supports (Ubuntu 22.04: 2.35). It runs beside the Windows job and attaches to the same release;
+  # the Windows files are not touched. Linux ships from the first release after 0.2.0 (owner, 2026-11-18): a v0.2.0
+  # tag (and its release candidates) builds the Windows files only. Linux support is EXPERIMENTAL: the program
+  # (first-start page, Help > About), the README and installer.md "Linux" say so; the release has no per-file text.
+  linux:
+    if: ${{ !startsWith(github.ref_name, 'v0.2.0') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # attaches the files to the release
+      id-token: write # the attestation's signing identity
+      attestations: write
+    env:
+      QT_QPA_PLATFORM: offscreen
+      VPK_VERSION: "1.2.161"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Qt needs a few system libraries on Linux
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libxcb-cursor0
+      - run: python -m pip install -e ".[gui,music,convert]" pyinstaller==6.22.3 velopack==1.2.161
+      - name: The tag is the package's version
+        run: |
+          version=$(python -c "import annotoolbox; print(annotoolbox.__version__)")
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME, package $version"; exit 1; }
+      - name: The installer's packer, at the version of the Python module
+        run: dotnet tool install vpk --version "$VPK_VERSION" --tool-path tools/vpk
+      - name: The program, its smoke start, the AppImage (started too), the tarball and the checksums
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # the earlier release's Linux packages are downloaded first, so the packer writes the delta (the first Linux release has none)
+        run: python scripts/build_app.py --edition public --smoke --pack --delta-from "https://github.com/$GITHUB_REPOSITORY"
+      - name: The files of this release
+        id: files
+        working-directory: out/installer/public
+        run: |
+          {
+            echo "paths<<EOF"
+            sed 's#^#out/installer/public/#' upload-list.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.files.outputs.paths }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer-linux
+          path: ${{ steps.files.outputs.paths }}
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # the Windows job may have made the release already, or be making it now: whoever is second only views it
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes || gh release view "$GITHUB_REF_NAME" >/dev/null
+          mapfile -t files < <(sed 's#^#out/installer/public/#' out/installer/public/upload-list.txt)
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+
   # Signing by SignPath Foundation's free open-source programme: off until the project is onboarded there (the
   # organisation id, the project and policy slugs and the secret come from that onboarding). To switch it on, remove
   # the comment marks, make the attestation and the release steps above run on the signed files (this job's output)

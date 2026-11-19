@@ -287,6 +287,10 @@ class TerrainNode:
         self.node: Node | None = None
         self.kind: tuple = ("grid", None, 0)
 
+    def fresh(self) -> bool:
+        """Whether its draw's resources are not made yet (``nativepass.prepared`` spreads the first prepares)."""
+        return not self.draw_call.keep
+
     def prepare(self, rp, signature, batch, cam: gs.Camera, light: dict, maps: dict | None = None,
                 draw: FxcDraw | None = None) -> None:  # fmt: skip
         """This frame's constants for the colour pass, or ``draw`` (the frame's pre-pass)."""

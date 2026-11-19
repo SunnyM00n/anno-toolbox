@@ -19,7 +19,7 @@ from ..models import cfgdoc, cfgparts, fileresolve
 from ..models.cfgdoc import Doc
 from ..render import rhiview
 from ..sources import gametree
-from ..suite import gameopen, gamesync, links, project, widgets
+from ..suite import appfolders, gameopen, gamesync, links, project, widgets
 from ..suite.background import Background
 from ..viewer.browser import FileBrowser
 from ..viewer.modelfiles import ModelFiles
@@ -175,7 +175,7 @@ class ObjectWindow(QMainWindow):
                 )
                 return
             self.close_object()
-            self.set_tree(tree)
+            self.set_tree(appfolders.laid(tree, project.current(self.settings), projectpart.EDITS))
             self.settings.apps.setdefault(APP, {})["game"] = key
             if then:
                 self.open_path(then)
@@ -220,7 +220,9 @@ class ObjectWindow(QMainWindow):
             return False
         if not self.confirm_discard():
             return False
-        saved = projectpart.EDITS.saved_files(project.current(self.settings), self.tree.game)
+        saved = appfolders.edited(
+            project.current(self.settings), projectpart.EDITS, self.tree.game
+        )  # not the imported base
         try:
             obj = ObjectDoc.open(
                 self.tree, path, self.tree.game, self.shared_action.isChecked(),

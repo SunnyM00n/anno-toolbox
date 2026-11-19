@@ -121,6 +121,7 @@ def test_the_views_default_to_direct3d_12_where_the_machine_has_it(monkeypatch):
     monkeypatch.delenv(rhiview.ENV, raising=False)
     monkeypatch.setattr(rhiview, "_has_d3d12", lambda: True)
     assert rhiview.chosen("") == "d3d12" and rhiview.chosen("gl") == "gl" and rhiview.chosen("nonsense") == "d3d12"
+    monkeypatch.setattr(rhiview.vulkanprobe, "probe", lambda: rhiview.vulkanprobe.Probe(True, 1))
     monkeypatch.setenv(rhiview.ENV, "vulkan")
     assert rhiview.chosen("gl") == "vulkan"
     monkeypatch.delenv(rhiview.ENV)

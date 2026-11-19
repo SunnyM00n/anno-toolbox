@@ -12,6 +12,7 @@ import pytest
 
 from annotoolbox.formats import phoenix, phoenixedit, phoenixread, phoenixwrite
 from annotoolbox.sources import gametree
+from annotoolbox.suite import buildout
 from annotoolbox.suite.project import Project
 from annotoolbox.uiedit import (
     animations,
@@ -311,7 +312,7 @@ def test_the_project_keeps_and_builds_the_files(ui_tree, tmp_path):
     path = f"{GEN}{WIDGET}"
     projectpart.save_file(project, "anno117", path, widget_file())
     assert projectpart.PART.has_work(project)
-    assert projectpart.PART.render(project, None, lambda _m: None) == {path: widget_file()}
+    assert buildout.read_all(projectpart.PART.render(project, None, lambda _m: None)) == {path: widget_file()}
     missing = projectpart.check(project, "anno117", lambda _p: False)
     assert any(IMAGE in m for m in missing)  # the picture is neither in the project nor in the game
     assert projectpart.check(project, "anno117", ui_tree.exists) == []

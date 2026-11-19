@@ -66,6 +66,24 @@ void CommandList::copy_texture(Texture& dst, Texture& src) {
     list_->copyTexture(dst.get(), nvrhi::TextureSlice(), src.get(), nvrhi::TextureSlice());
 }
 
+void CommandList::copy_region(Texture& dst, uint32_t dst_layer, uint32_t dst_mip, uint32_t x, uint32_t y,
+                              Texture& src, uint32_t src_layer, uint32_t src_mip, uint32_t width, uint32_t height) {
+    nvrhi::TextureSlice to;
+    to.setArraySlice(dst_layer).setMipLevel(dst_mip).setOrigin(x, y, 0).setSize(width, height, 1);
+    nvrhi::TextureSlice from;
+    from.setArraySlice(src_layer).setMipLevel(src_mip).setOrigin(0, 0, 0).setSize(width, height, 1);
+    list_->copyTexture(dst.get(), to, src.get(), from);
+}
+
+void CommandList::transitions(const std::vector<std::tuple<uintptr_t, int, int>>& items) {
+    if (!open_) throw Error("transitions on a closed command list");
+    auto* native = static_cast<ID3D12GraphicsCommandList*>(
+        list_->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList).pointer);
+    if (!native) throw Error("the command list has no Direct3D 12 list");
+    list_->commitBarriers();  // NVRHI's own first: ours go between its commands so far and the next
+    gpu::transitions(uintptr_t(native), items);
+}
+
 static nvrhi::ViewportState viewport_of(float x, float y, float w, float h) {
     nvrhi::ViewportState v;
     v.addViewportAndScissorRect(nvrhi::Viewport(x, x + w, y, y + h, 0.0f, 1.0f));

@@ -202,7 +202,7 @@ def material_map_textures(rhi, batch, ground: GroundSource) -> dict:
     return out
 
 
-class _Missing:
+class MissingMap:
     """A map a material lacks, as ``gamedraw.TextureTable`` reads a map: 4 x 4 of its kind's stand-in."""
 
     def __init__(self, kind: int) -> None:
@@ -217,7 +217,7 @@ def splat_table(splats: list[Splat]) -> tuple[gamedraw.TextureTable, np.ndarray]
     """The splats' maps as the bindless stand-in holds them (``cTrnBakeSplatTextures`` read through it: the maps
     stored as they are, BC blocks with their mips; the shader turns sRGB to linear itself) and the slot table that
     puts each at its index ``id * 3 + k``."""
-    maps = {f"{s.mat_id * 3 + k}": s.maps[k] if s.maps[k] is not None else _Missing(k)
+    maps = {f"{s.mat_id * 3 + k}": s.maps[k] if s.maps[k] is not None else MissingMap(k)
             for s in splats for k in range(3)}  # fmt: skip
     table = gamedraw.TextureTable(maps)
     words = np.zeros(gs.SLOTS, np.uint32)
@@ -252,7 +252,25 @@ class _Slot:
             t.release()
 
 
-class Bake(ComputeChain):
+class GroundPaint:
+    """What every way of baking does with a paint stroke (``Bake``, ``bakenative.NativeBake``): its material-map
+    words into ``ground``'s maps and onto the list (``_painted``) the next run writes to the device."""
+
+    ground: GroundSource
+    _painted: list
+
+    def paint(self, x0: int, z0: int, ids: np.ndarray | None, alphas: np.ndarray | None) -> None:
+        """New material-map words from (``x0``, ``z0``) on (alpha texels; the ids at that over the block), written
+        with the next run (the nodes over them bake again: the owner's)."""
+        b = self.ground.block
+        if ids is not None:
+            self.ground.ids[z0 // b : z0 // b + ids.shape[0], x0 // b : x0 // b + ids.shape[1]] = ids
+        if alphas is not None:
+            self.ground.alphas[z0 : z0 + alphas.shape[0], x0 : x0 + alphas.shape[1]] = alphas
+        self._painted.append((x0, z0, ids, alphas))
+
+
+class Bake(GroundPaint, ComputeChain):
     """The game's bake of the island's ground (module docstring). ``stages``: the compiled shaders by the keys of
     ``STAGES`` and ``"flip"``; ``ground``: a ``GroundSource``; ``max_texture``: the quality's largest side of a
     splat's maps (0: as stored), as 1800's bake takes it."""
@@ -298,15 +316,9 @@ class Bake(ComputeChain):
         g.splats = [replace(sp, maps=(None, None, None)) for sp in g.splats]
         self.keep += [*self.textures.values(), *self.bindless]
 
-    def paint(self, x0: int, z0: int, ids: np.ndarray | None, alphas: np.ndarray | None) -> None:
-        """New material-map words from (``x0``, ``z0``) on (alpha texels; the ids at that over the block), written
-        with the next run (the nodes over them bake again: the owner's)."""
-        b = self.ground.block
-        if ids is not None:
-            self.ground.ids[z0 // b : z0 // b + ids.shape[0], x0 // b : x0 // b + ids.shape[1]] = ids
-        if alphas is not None:
-            self.ground.alphas[z0 : z0 + alphas.shape[0], x0 : x0 + alphas.shape[1]] = alphas
-        self._painted.append((x0, z0, ids, alphas))
+    def model(self, mesh, values: dict, own: dict) -> terraindraw.TerrainModel:
+        """A node's draw into the bake (``bake_model``): its mesh, its ``bake_values``, its page's textures."""
+        return bake_model(self.rhi, self.program, mesh, values, own, self.common)
 
     def _write_paint(self, batch) -> None:
         b = self.ground.block

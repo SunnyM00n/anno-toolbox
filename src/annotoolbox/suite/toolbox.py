@@ -19,7 +19,7 @@ from ..infra.i18n import tr
 
 PROG = "anno-toolbox"  # the installed command's name (the public edition renames it)
 WINDOW_PROGRAM = (
-    "AnnoToolbox"  # the installed window program (scripts/installer_bundle.PROGRAM); the console one has another name
+    "AnnoToolbox"  # the installed program's name (scripts/installer_bundle.PROGRAM): AnnoToolbox.exe, AnnoToolbox.com
 )
 GUI_EXTRA = "gui"
 GROUPS = (
@@ -42,6 +42,12 @@ ERRORS_KEPT = 20  # the newest error reports (``write_error_log``) that stay
 _log_handler: logging.Handler | None = None
 
 
+def prog_name(frozen: bool | None = None) -> str:
+    """The name the help prints: the installed program's own (``AnnoToolbox``, what a terminal runs), else ``PROG``."""
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    return WINDOW_PROGRAM if frozen else PROG
+
+
 def gui_missing() -> str:
     """ "" when the window's libraries are installed, else the message that says what to install."""
     try:
@@ -54,6 +60,7 @@ def gui_missing() -> str:
 def group_parser() -> argparse.ArgumentParser:
     """The parser of the window-less commands (``GROUPS``): ``rdm <command>``, ``export``, ``rda <command>``,
     ``island <command>``, ``save <command>``, ``viewer-files``, ``unreferenced``, ``texture bc7`` and ``sound wem``."""
+    from ..assetedit import handovercommands
     from ..converterapp import commands as format_commands
     from ..editor import islandcommands
     from ..exporting import commands as export_commands
@@ -65,7 +72,7 @@ def group_parser() -> argparse.ArgumentParser:
     from . import importcommands
 
     p = argparse.ArgumentParser(
-        prog=PROG, description="The Toolbox: models, textures, sounds and files of the Anno games."
+        prog=prog_name(), description="The Toolbox: models, textures, sounds and files of the Anno games."
     )
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="command", required=True, metavar="{" + ",".join(GROUPS) + "}")
@@ -78,7 +85,7 @@ def group_parser() -> argparse.ArgumentParser:
     island = sub.add_parser("island", help="islands of 117 and 1800: port to another region or game, list regions")
     islandcommands.register(island.add_subparsers(dest="island_command", required=True))
     save_commands.register(sub)
-    importcommands.register(sub)
+    handovercommands.add_handover(importcommands.register(sub))
     filecommands.register(sub)
     ref_commands.register(sub)
     format_commands.register(sub)
@@ -96,7 +103,9 @@ def game_keys(text: str) -> tuple[str, ...]:
 
 
 def window_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog=PROG, description="The window: the island editor, or with --app the suite.")
+    ap = argparse.ArgumentParser(
+        prog=prog_name(), description="The window: the island editor, or with --app the suite."
+    )
     ap.add_argument("--version", action="version", version=__version__)
     ap.add_argument("island", nargs="?", help="an island file (a game path) to open at once")
     ap.add_argument("--mod", type=Path, help="the mod folder the island file is in")
@@ -294,9 +303,11 @@ def start_window(args: argparse.Namespace) -> int:
 
 def console_program(executable: str | None = None, frozen: bool | None = None) -> bool:
     """Whether this is the installed console program: started bare it prints its help, the window program (and a
-    source checkout's command) opens the window. Told apart by the program file's name."""
+    source checkout's command) opens the window. On Windows the installed program is two files of one name,
+    ``AnnoToolbox.exe`` (the window) and ``AnnoToolbox.com`` (the console build), told apart by the suffix; on Linux
+    there is one program, which opens the window."""
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
-    return frozen and Path(executable or sys.executable).stem.lower() != WINDOW_PROGRAM.lower()
+    return frozen and Path(executable or sys.executable).suffix.lower() == ".com"
 
 
 def main(argv: list[str] | None = None) -> int:

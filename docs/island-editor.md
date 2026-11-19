@@ -239,6 +239,7 @@ Place tool puts a building on its grid with the rules checked as the cursor move
 | Operation | Status | Where / what is open |
 |---|---|---|
 | Open 117, 1800 (`.a7m`), 2205 (`.a6m`), 2070, 1404 (`.isd`) and 1701 islands; an island file of a mod folder | exists | the Islands panel, `desktop ISLAND --mod` |
+| Open an island of an imported mod | built | File > Open island of the imported mod…: the project's `island-edits/anno117/<game path>` file is the base (`App.project_islands`, `open_project_island`), the edit file holds the change; docs/mod-import.md section 13 |
 | Open an island packed in a mod's archive | built | File > Open island from a mod…: `Files(archives=True)` indexes a mod's `.rda` files, `App.mod_islands` lists the islands, loose and packed |
 | Save the edits (the edit file) | exists | `editsession.save` |
 | Write the island in its own game's format (117 and 1800 as a mod, 2205 as an archive and index, 2070 into its patch archive, 1404 and 1701 into an archive) | exists | `editor/formats/a7m/edit117`, `editor/formats/a7m/edit1800`, `editor/formats/a7m/edit2205`, `editor/formats/isd/build`, `oldenginebuild` |
@@ -350,7 +351,7 @@ which obeys the palette). From top to bottom, then the docks:
 
   | Tab | Groups: buttons |
   |---|---|
-  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` |
+  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` · Layers: Objects, Markers, Effects, Grass, Forest, Water (what the view draws, each on or off; follows the view's state) |
   | Object | Place: Place, Object Groups (raises the library) · Transform: Move, Turn, Tilt, Scale · Edit: Delete, Duplicate · Object Spray: Plant forest, Clear forest, Spray model (O), Radius, Spacing · Visibility: Hide foliage, Show hidden |
   | Terrain | Height: Raise, Lower, Flatten, Smooth · Relief: Noise, Terrace, Ramp, Spike removal · Ground: Paint, Material Gallery (raises it) · Surf: Waves, Calm (U) · Brush: Radius, Strength |
   | Grid | Active map: Draw cells, Erase cells (G), Radius · Checks: Check rules (every island: `islandrules`), Check slots, Check falls |
@@ -359,7 +360,7 @@ which obeys the palette). From top to bottom, then the docks:
   The tool buttons are one exclusive set and follow the view's tool (also when the keys S H P L T A B change it).
   Radius and Strength are the one brush of the height, paint and forest tools, on whichever tab shows them. The
   ribbon is plain data (`desktopribbon.TABS`): a new tool is one item there and one handler in `workbench`.
-- **View tabs** under the ribbon: Viewport (the 3D view), Layers (what the view draws), Checks (the slot and
+- **View tabs** under the ribbon: Viewport (the 3D view), Checks (the slot and
   fall results; a click flies there), History (every change; a click goes back or forward to it), Log (the
   build and build jobs, and what an island's reader had to leave out; a job switches to it).
 - **Left dock Islands** (`desktopislands`): one tab per game, newest first - 117, 1800, 2205, 2070, 1404, 1701 ([Islands and modes](#islands-and-modes)).
@@ -383,9 +384,24 @@ like the application starting again. Undo and Redo go up to 200 steps (Ctrl+Z, C
 writes the edit file (`editsession`, the `islandedits` format below). Build & install builds the open island from its
 saved edits.
 
+**Opening an island.** The window's thread only builds panels and draws; everything that waits stays off it. The
+island's files and its edit session are read in a worker (`MainWindow._load`, `desktopeditor.open_session`: also the
+view's modules and the Slots list's asset files, which the window's thread would otherwise read when the panels are
+made), the ground materials and the model list in a second, the models and textures by the renderer's own threads
+(two for the models: they decode in Python, and more of them only take the window's thread's turns at the interpreter
+lock). The status bar says what happens (`desktopprogress`): reading the terrain and the objects, making the panels,
+then what still loads (the materials and model list, the number of models and textures left) with a busy bar beside
+it, until nothing does. A frame of the 3D view spends at most 30 ms on uploads of the scene (`FRAME_BUDGET`: the
+instances and meshes of the models) and at most 25 ms on parts new on the device (`nativepass.MAKE_BUDGET`: a part's
+resources, a decal's, the sea's; `desktopgameobjects.MAKE_BUDGET`: the game's part objects), a model appearing a frame
+later, the decals are laid in 25 ms slices (`DecalLayer.update`) and the sea's coast
+distance is made in a worker (`gamesea.coast_for`); what is left over follows in the next frames while the view keeps
+ticking. A stall report for this (the window's thread's stack whenever it stood still over 200 ms) is how it was
+found: known-issues "Island editor held the window while an island opened".
+
 **Closing the window.** A window closed while a build, an install, a port or a restore runs, or while an island is
 read, waits for that work first: the status line says what it waits for, the window takes no input meanwhile, and the
-island that was being read is not opened. Nothing is cut off mid-write (`desktopjobs.finish_work`). When a job runs,
+island that was being read is not opened. Nothing is cut off mid-write (`desktopjobs.finish_work`); the island's own background reads (materials, model list, minimap) are given half a second, then left to end with the program, so a window closed while a large island still loads closes at once. When a job runs,
 the window asks first: **Stop the build**, **Wait** (the default, Enter) or **Cancel** (Esc, the window stays). Stop
 ends the job at its next log line (`editorapp.Job.stop`, state "stopped"), as a failure of that step would: what the
 step was writing is swapped in whole or not at all. The steps that must run whole report through `Job.note` and are

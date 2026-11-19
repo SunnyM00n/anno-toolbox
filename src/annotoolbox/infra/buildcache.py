@@ -35,6 +35,7 @@ BLOBS_DIR = "blobs"
 GROUPS = {
     "bc7": ("bc7",),
     "steps": (STEPS_DIR, BLOBS_DIR),
+    "lists": ("lists",),  # infra/listcache.py: the lists the apps keep between starts
     "sources": ("files", "index", "index117"),
 }
 SOURCE_FOLDER = re.compile(r".+-[0-9a-f]{10}")

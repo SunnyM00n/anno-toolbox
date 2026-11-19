@@ -40,16 +40,21 @@ def encode_level(grey: np.ndarray) -> bytes:
     return out.tobytes()
 
 
-def dds_header(width: int, height: int, mips: int) -> bytes:
-    """A legacy DDS header with the ``BC4U`` four-character code, as vanilla's height maps carry."""
+DXGI_BC4_UNORM = 80
+
+
+def dds_header(width: int, height: int, mips: int, dx10: bool = False) -> bytes:
+    """A DDS header for BC4: the legacy ``BC4U`` four-character code, as vanilla's height maps carry, or with ``dx10``
+    the DX10 header and BC4_UNORM that texconv writes."""
     flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000 | (0x20000 if mips > 1 else 0)
     size = -(-width // 4) * -(-height // 4) * 8
     head = struct.pack("<4sIIIIIII", b"DDS ", 124, flags, height, width, size, 1, mips) + bytes(44)
-    head += struct.pack("<II4s5I", 32, 0x4, b"BC4U", 0, 0, 0, 0, 0)
-    return head + struct.pack("<5I", 0x1000 | (0x400008 if mips > 1 else 0), 0, 0, 0, 0)
+    head += struct.pack("<II4s5I", 32, 0x4, b"DX10" if dx10 else b"BC4U", 0, 0, 0, 0, 0)
+    head += struct.pack("<5I", 0x1000 | (0x400008 if mips > 1 else 0), 0, 0, 0, 0)
+    return head + (struct.pack("<5I", DXGI_BC4_UNORM, 3, 0, 1, 0) if dx10 else b"")
 
 
-def encode_dds(levels: list[np.ndarray]) -> bytes:
+def encode_dds(levels: list[np.ndarray], dx10: bool = False) -> bytes:
     """A BC4 DDS of the mip levels (level 0 first)."""
     h, w = levels[0].shape[:2]
-    return dds_header(w, h, len(levels)) + b"".join(encode_level(level) for level in levels)
+    return dds_header(w, h, len(levels), dx10) + b"".join(encode_level(level) for level in levels)

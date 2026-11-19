@@ -24,6 +24,7 @@ ASSETS, TEXTS, OBJECTS, UI, SOUND, PARTICLES, ISLANDS, MAPS = (
     "maps",
 )
 UI_FOLDER = "data/ui/studio/generated/"  # 117's Phoenix scenes (files without an extension)
+GAMEDATA = "/_gamedata/"  # an island's own folder: <island folder>/_gamedata/<island>/ (derived from the island's path)
 
 # a file's extension (lower case, with the dot; ``.cfg.xml`` style double endings first) -> (kind, owner)
 _BY_SUFFIX: dict[str, tuple[str, str]] = {
@@ -39,12 +40,12 @@ _BY_SUFFIX: dict[str, tuple[str, str]] = {
     ".png": ("texture", CARRIED),
     ".a7m": ("island", ISLANDS),
     ".a7minfo": ("island", ISLANDS),
-    ".a7me": ("terrain", CARRIED),
+    ".a7me": ("island", ISLANDS),
     ".ctt": ("terrain", CARRIED),
     ".tmc": ("terrain", CARRIED),
     ".a7t": ("map", MAPS),
     ".a7tinfo": ("map", MAPS),
-    ".a7te": ("map", CARRIED),
+    ".a7te": ("map", MAPS),
     ".fx": ("shader", CARRIED),
     ".ttf": ("font", CARRIED),
     ".otf": ("font", CARRIED),
@@ -98,6 +99,8 @@ def classify(game: str, rel: str) -> Class:
         return _xml(low, name)
     if game == "anno117" and low.startswith(UI_FOLDER) and "." not in name:
         return Class("ui scene", UI)
+    if GAMEDATA in low and not name.endswith(".xml"):
+        return Class("terrain", ISLANDS)  # the pages and files that move with an island (its _gamedata folder)
     for suffix, (kind, owner) in _BY_SUFFIX.items():
         if name.endswith(suffix):
             return Class(kind, owner)

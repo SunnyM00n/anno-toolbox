@@ -16,6 +16,7 @@ from ..infra.i18n import tr
 from ..suite.undo import Command, UndoStack
 from .assetindex import AssetIndex
 from .changeset import AssetChange, ChangeSet, NewAsset
+from .origins import GAME, PERSON
 from .schema import Schema
 from .values import BASE, OWN, Layer, Layers, apply_change, defaults_layer, template_values, values_of
 from .xmltree import find_path, parse, to_text
@@ -30,6 +31,7 @@ class AssetDocument:
         self.listeners: list = []  # called with the GUID an edit touched (None: the tree changed)
         self.game_texts = None  # language -> the game's texts by id (``Game.texts``), for the writers
         self.files = None  # the game's files (``gamefiles.GameFiles``), for the native text writer
+        self.layer = None  # the mod laid under the edits as their base (``origins.Layer``), None: the game itself
         self._parsed: dict[int, ET.Element] = {}
 
     def snapshot(self) -> AssetDocument:
@@ -37,7 +39,7 @@ class AssetDocument:
         goes on editing the original while the job reads this one. Shares the game's files and schema, which no
         edit touches; the change set and the parsed assets are the copy's own."""
         copy_ = AssetDocument(self.schema, self.index, copy.deepcopy(self.changes), self.path)
-        copy_.game_texts, copy_.files = self.game_texts, self.files
+        copy_.game_texts, copy_.files, copy_.layer = self.game_texts, self.files, self.layer
         copy_._parsed = dict(self._parsed)
         return copy_
 
@@ -84,6 +86,13 @@ class AssetDocument:
             el = standard.find(tag)
             (el if el is not None else ET.SubElement(standard, tag)).text = text
         return asset
+
+    def origin(self, guid: int) -> str:
+        """Where the asset comes from: ``origins.PERSON`` (added in this change set), ``MOD_NEW`` and ``MOD_CHANGED``
+        (the mod laid under the edits adds or changes it), else ``GAME``."""
+        if guid in self.changes.new:
+            return PERSON
+        return self.layer.origin(guid) if self.layer is not None else GAME
 
     def name(self, guid: int) -> str:
         if guid in self.changes.new:
