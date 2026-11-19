@@ -653,7 +653,7 @@ Note: this section is as of 2026-11-13 and 2026-11-14.
 
 ## The old interface
 
-For 2070, 1404 and 1701 **File > Open the old interface of** opens a read-only page: the dialogs, templates and
+For 2070, 1404 and 1701 the third tab, **Old interface**, is a read-only page (its game box picks 2070, 1404 or 1701 and follows the suite's game choice where that is one of them): the dialogs, templates and
 backgrounds of the game, a dialog drawn with its pictures and texts, and an inspector for the widget picked. What it
 draws and leaves out, and why the compiled pools cannot be written, are in `ui/old-gui.md`.
 

@@ -1,8 +1,9 @@
 """The UI app: one page for each kind of interface file, a switcher over them.
 
-``UiHost(settings, phoenix, flash)`` holds the editor of the Phoenix files (Anno 117, 1800, 1404, 1701; ``uiwindow``)
-and the editor of 2205's Flash movies (``flashui.uiwindow``) as two pages of one window, the way the island editor holds
-every game; a page is made (its modules imported) the first time it is shown. ``open_game`` is the entry other code
+``UiHost(settings, makers)`` holds the editor of the Phoenix files (Anno 117, 1800, 1404, 1701; ``uiwindow``), the
+editor of 2205's Flash movies (``flashui.uiwindow``) and the viewer of the old interface (2070, 1404, 1701;
+``oldpage``) as pages of one window, the way the island editor holds every game; a page is made (its modules imported)
+the first time it is shown, and a kind without a maker has no button. ``open_game`` is the entry other code
 calls: the game's own kind of page comes to the front. Both editors stay as they are; docs/ui-editor.md.
 """
 
@@ -26,17 +27,19 @@ from ..infra.i18n import N_, tr
 from ..suite import gamesync
 from .uiframe import APP, GAMES
 
-PHOENIX, FLASH = "phoenix", "flash"
+PHOENIX, FLASH, OLD = "phoenix", "flash", "old"
 FLASH_GAME = "anno2205"
+OLD_GAME = "anno2070"  # the old interface's own game; 1404 and 1701 also have Phoenix files, so they stay there
 KINDS = (  # (key, label, tooltip) of the switcher's buttons
     (PHOENIX, N_("ui.anno_117_1800_1404_1701"), N_("ui.interface_files_anno_117_1800")),
     (FLASH, N_("ui.anno_2205"), N_("ui.anno_2205s_flash_interface_movies")),
+    (OLD, N_("ui.old_interface_tab"), N_("ui.old_interface_tab_tip")),
 )  # fmt: skip
 
 
 def kind_of(game: str) -> str:
     """The kind of editor a game's interface files need."""
-    return FLASH if game == FLASH_GAME else PHOENIX
+    return FLASH if game == FLASH_GAME else OLD if game == OLD_GAME else PHOENIX
 
 
 class UiHost(QWidget):
@@ -54,7 +57,7 @@ class UiHost(QWidget):
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 4, 6, 4)
         bar.addWidget(QLabel(tr("ui.interface_files")))
-        for key, label, tip in KINDS:
+        for key, label, tip in (k for k in KINDS if k[0] in makers):
             button = QPushButton(tr(label), checkable=True, toolTip=tr(tip))
             button.clicked.connect(lambda _on=False, k=key: self.pick_kind(k))
             group.addButton(button)
@@ -82,6 +85,8 @@ class UiHost(QWidget):
         """The game of the page in front; "" while that page has none open."""
         if self.current == FLASH:
             return FLASH_GAME
+        if self.current == OLD:
+            return getattr(self.pages.get(OLD), "key", None) or ""
         open_game = getattr(self.pages.get(PHOENIX), "game", None)
         return open_game.key if open_game is not None else ""
 
@@ -89,7 +94,12 @@ class UiHost(QWidget):
         """A click on the switcher: the page comes to the front and the suite's other apps follow its game; a
         question cancelled in one of them leaves the page in front where it is."""
         open_game = getattr(self.pages.get(PHOENIX), "game", None)
-        game = FLASH_GAME if kind == FLASH else (open_game.key if open_game is not None else "")
+        if kind == FLASH:
+            game = FLASH_GAME
+        elif kind == OLD:
+            game = getattr(self.pages.get(OLD), "key", None) or ""
+        else:
+            game = open_game.key if open_game is not None else ""
         if game and not gamesync.may_switch(self, game):
             if self.current:
                 self.buttons[self.current].setChecked(True)
@@ -108,7 +118,7 @@ class UiHost(QWidget):
     def open_game(self, game: str, *opened) -> None:
         """Open an installed game in the editor of its kind (``opened``: what that editor takes after the game)."""
         page = self.show_kind(kind_of(game))
-        if kind_of(game) == PHOENIX and game in GAMES:
+        if kind_of(game) == PHOENIX and game in GAMES or kind_of(game) == OLD:
             page.open_game(game, *opened)
 
     def show_last(self) -> None:
@@ -116,6 +126,9 @@ class UiHost(QWidget):
         last = self.settings.apps.get(APP, {})
         if last.get("kind") == FLASH:
             self.show_kind(FLASH)
+            return
+        if last.get("kind") == OLD and OLD in self.makers:
+            self.show_kind(OLD).open_game(last.get("old") or OLD_GAME)
             return
         page = self.show_kind(PHOENIX)
         if last.get("game") in GAMES:

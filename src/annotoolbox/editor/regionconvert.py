@@ -10,6 +10,7 @@ island the tables do not touch as it was. Rules: island-regions "The mapping".
 from __future__ import annotations
 
 import struct
+from collections import Counter
 from collections.abc import Callable
 
 import numpy as np
@@ -18,6 +19,7 @@ from ..formats import a7mread, filedb
 from ..islands import sessionsettings, slotlist
 from ..islands.islandterrain import replace_dds_pixels, set_bytes
 from ..islands.regiontables import Tables, norm
+from . import portdrops
 from .assetmodels import ASSETS_117, ASSETS_1800
 from .formats.a7m.reader import DEFAULT_MATERIAL_SET
 from .groundedit import Gamedata, dds_u32
@@ -132,18 +134,35 @@ def set_material_set(rd: filedb.Tag, path: str) -> str:
     return old
 
 
-def apply_props(rd: filedb.Tag, table: dict[str, str | None]) -> dict:
-    """Prop files renamed by the table; the instances of a prop the table removes (None) taken off."""
+def apply_props(
+    rd: filedb.Tag, table: dict[str, str | None], ledger: portdrops.Ledger | None = None, exists=None
+) -> dict:
+    """Prop files renamed by the table; the instances of a prop the table removes (None) taken off. ``exists`` (the
+    target game's file test, set between games) also removes a prop file no table names that the target lacks.
+    Every prop swapped or removed is counted by file in ``ledger`` (its instances)."""
     names = rd.path("PropGrid/FileNames")
     inst = rd.path("PropGrid/Instances")
     report = {"prop files": 0, "props removed": 0}
-    if names is None or not table:
+    if names is None or not (table or exists):
         return report
+    used: Counter = Counter()
+    for p in inst.children if inst is not None else []:
+        if isinstance(p, filedb.Tag) and p.find("Index") is not None:
+            used[struct.unpack_from("<I", p.find("Index").data)[0]] += 1
+    short = lambda path: norm(path).split("data/", 1)[-1]  # noqa: E731
     gone = set()
     for k, attr in enumerate(names.children):
         key = norm(attr.data.decode("utf-16-le"))
+        if key not in table and exists is not None and not exists(key):
+            table = {**table, key: None}
+            why = " (the target game has no such file)"
+        else:
+            why = ""
         if key not in table:
             continue
+        if ledger is not None and used[k]:
+            ledger.add("prop", short(key) + why, portdrops.LEFT_OUT if table[key] is None else portdrops.MAPPED,
+                       used[k], "" if table[key] is None else short(table[key]))  # fmt: skip
         if table[key] is None:
             gone.add(k)
             continue
@@ -157,8 +176,9 @@ def apply_props(rd: filedb.Tag, table: dict[str, str | None]) -> dict:
     return report
 
 
-def apply_objects(isl, table: dict[int, int | None]) -> dict:
-    """Each object's asset as the table says; an object whose asset goes to None is removed. Returns the counts."""
+def apply_objects(isl, table: dict[int, int | None], ledger: portdrops.Ledger | None = None, names=None) -> dict:
+    """Each object's asset as the table says; an object whose asset goes to None is removed. Returns the counts;
+    ``ledger`` names each object removed or swapped (``names``: GUID -> (template, name))."""
     report = {"objects changed": 0, "objects removed": 0}
     if not table:
         return report
@@ -173,8 +193,13 @@ def apply_objects(isl, table: dict[int, int | None]) -> dict:
                 g = struct.unpack_from("<I", guid.data)[0] if guid is not None and len(guid.data) >= 4 else None
                 if g in table and table[g] is None:
                     report["objects removed"] += 1
+                    if ledger is not None:
+                        ledger.add("object", portdrops.asset_label(names, g), portdrops.LEFT_OUT)
                     continue
                 if g in table:
+                    if ledger is not None:
+                        ledger.add("object", portdrops.asset_label(names, g), portdrops.MAPPED, 1,
+                                   portdrops.asset_label(names, table[g]))  # fmt: skip
                     guid.data = struct.pack("<I", table[g]) + guid.data[4:]
                     report["objects changed"] += 1
                 keep.append(o)
@@ -213,8 +238,11 @@ def apply_slot_list(info: filedb.Tag, table: dict[int, int | None]) -> int:
     return done
 
 
-def apply(isl, gd: Gamedata, tables: Tables) -> tuple[dict[str, bytes], dict]:
-    """Turn the opened island into the target region's by ``tables``; returns the changed ``_gamedata`` files and what was done."""
+def apply(
+    isl, gd: Gamedata, tables: Tables, ledger: portdrops.Ledger | None = None, names=None
+) -> tuple[dict[str, bytes], dict]:
+    """Turn the opened island into the target region's by ``tables``; returns the changed ``_gamedata`` files and what
+    was done (``ledger`` and ``names``: what is removed or swapped, by name)."""
     out: dict[str, bytes] = {}
     report: dict = {}
     if tables.changes_ids():
@@ -223,7 +251,7 @@ def apply(isl, gd: Gamedata, tables: Tables) -> tuple[dict[str, bytes], dict]:
         report["material set"] = [set_material_set(isl.rd, tables.material_set), tables.material_set]
     if tables.session:
         report["session"] = sessionsettings.apply(isl.gm, tables.session, isl.size)
-    report |= apply_props(isl.rd, tables.props)
-    report |= apply_objects(isl, tables.objects)
+    report |= apply_props(isl.rd, tables.props, ledger)
+    report |= apply_objects(isl, tables.objects, ledger, names)
     report["slot list"] = apply_slot_list(isl.info, tables.objects)
     return out, report

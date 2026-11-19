@@ -152,6 +152,11 @@ def _candidates(fam: str, dst: list[Material]) -> list[Material]:
     return dst
 
 
+def family_candidates(fam: str, dst: list[Material]) -> list[Material]:
+    """The target's materials of a family, its fallback families when it has none (``FALLBACK``), any when none."""
+    return _candidates(fam, dst)
+
+
 def _distance(a, b) -> float:
     return sum((x - y) ** 2 for x, y in zip(a, b, strict=True)) if a is not None and b is not None else 1e9
 

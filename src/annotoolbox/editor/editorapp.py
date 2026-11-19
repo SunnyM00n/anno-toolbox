@@ -503,11 +503,14 @@ class App(IslandCatalogue):
             raise RuntimeError(tr("islands.not_found_set_folder_games", game=installs.GAMES[key].name))
         return GameSide(key, self.game_tree(key), self.cache_dir, root)
 
-    def convert_region(self, key: str, path: str, target: str, install: bool = False, fit: str = "") -> Job:
+    def convert_region(
+        self, key: str, path: str, target: str, install: bool = False, fit: str = "", reskin: bool = False
+    ) -> Job:
         """An island of ``key`` made into an island of the region ``target`` (``islandconvert``), written as a new island
         into the workspace's port mod of the target game; with ``install``, copied into that game's mods folder.
-        ``fit``: how the game places it (``islandconvert.Request.fit``)."""
-        from . import islandconvert
+        ``fit``: how the game places it (``islandconvert.Request.fit``); ``reskin``: keep the models only the source
+        has, drawn with the target's ground (``portreskin``)."""
+        from . import islandconvert, slotlinks
 
         game = target.split(":", 1)[0]
         mods = Path(self.settings.mods if game == "anno117" else self.settings.mods1800 or ".")
@@ -520,7 +523,8 @@ class App(IslandCatalogue):
             job.log(tr("islands.opening_game", game=key))
             src = self.port_side(key)
             dst = src if game == key else self.port_side(game)
-            request = islandconvert.Request(key, path, target, fit=fit)
+            links = slotlinks.load(slotlinks.path_for(self.workspace, key, game))
+            request = islandconvert.Request(key, path, target, fit=fit, reskin=reskin, slot_links=tuple(links.items()))
             done = islandconvert.convert(src, dst, request, log=job.log)
             job.log(islandconvert.summary(done))
             written = islandconvert.write_mod(out, PORT_MODS[game], PORT_MODS[game], game, [done], self.trash)

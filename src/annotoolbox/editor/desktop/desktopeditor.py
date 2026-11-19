@@ -285,6 +285,11 @@ class IslandDoc(QObject):
             out[key] = (ok and (o.underwater or key != "caustics"), getattr(o, key))
         return out
 
+    def offers_2070_looks(self) -> bool:
+        """Whether the view offers the 2070 looks at all (``LOOKS_2070``): only for an island of 2070;
+        ``look_state`` says whether they can be switched on."""
+        return game_of(self.session.island) == "anno2070"
+
     def window_title(self) -> str:
         dirty = " *" if self.session.undo.dirty and not self.session.readonly else ""
         return f"{self.title}{dirty} · {self.modes['game']}"

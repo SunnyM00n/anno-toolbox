@@ -50,14 +50,29 @@ def carry_out(
     launcher: Path | None,
     where: shortcuts.Places | None,
     remove: Callable[[str], str] = migrate.remove_product,
+    made: Callable[[], None] = installevents.mark_shortcuts_made,
 ) -> list[str]:
     """The work the page's answers ask for outside the settings: old installs removed first (their shortcuts go with
-    them), then the shortcuts made or removed. Returns what went wrong."""
+    them), then the shortcuts made or removed (``made`` records it). Returns what went wrong."""
     problems = [
         tr("common.older_installation_could_not_removed", code=c) for c in choices.remove_old if remove(c) != "removed"
     ]
     if launcher is not None and where is not None:
         problems += shortcuts.sync(choices.start_menu, choices.desktop, launcher, where)
+        made()
+    return problems
+
+
+def repair_shortcuts(
+    start_menu: bool, desktop: bool, launcher: Path | None, where: shortcuts.Places | None, folder: Path | None = None
+) -> list[str] | None:
+    """Make the chosen shortcuts once when the program never made any: 0.2.0 could not find its launcher (the packer
+    names it after the product), so its answered setup page made none. A shortcut removed after the program made it
+    is never brought back. Returns what went wrong, None when there was nothing to repair."""
+    if launcher is None or where is None or installevents.shortcuts_made(folder):
+        return None
+    problems = shortcuts.sync(start_menu, desktop, launcher, where) if start_menu or desktop else []
+    installevents.mark_shortcuts_made(folder)
     return problems
 
 
@@ -222,6 +237,14 @@ def first_start(window, settings_existed: bool, carried=None) -> bool:
     ``carried``: the shortcut choice read before anything was removed. Returns whether the page opened."""
     threading.Thread(target=migrate.remove_leftover, name="migration-cleanup", daemon=True).start()
     if not setupchoices.pending(window.settings, installevents.first_run_pending(), settings_existed):
+        if install.installed():
+            s = window.settings
+            threading.Thread(
+                target=repair_shortcuts,
+                args=(s.shortcut_start_menu, s.shortcut_desktop, install.launcher(), shortcuts.places()),
+                name="shortcut-repair",
+                daemon=True,
+            ).start()
         return False
     SetupRunner(window).show(carried)
     return True

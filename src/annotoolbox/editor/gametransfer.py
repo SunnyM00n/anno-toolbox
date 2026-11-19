@@ -14,6 +14,7 @@ import math
 import re
 import struct
 import zlib
+from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -26,7 +27,18 @@ from ..islands.gameterrain import coarse
 from ..islands.islandgrid import read_sparse, write_bits, write_sparse
 from ..islands.islandterrain import fill_empty_meshes, replace_dds_pixels, set_bytes
 from ..islands.materialorder import set_ranks
-from . import groundedit, islandplaces, largerdonor, objectclones, portpictures, regionconvert, templatedonors
+from . import (
+    groundedit,
+    islandplaces,
+    largerdonor,
+    objectclones,
+    portdrops,
+    portpictures,
+    portreskin,
+    regionconvert,
+    slotlinks,
+    templatedonors,
+)
 from .assetmodels import AssetModels
 from .formats.a7m import edit117 as a7m_edit117
 from .regionconvert import ASSET_GAMES, material_set_of
@@ -49,6 +61,20 @@ GRAFT_INFO = ("MapSize", "ActiveMapGrid", "ActiveMapRect", "ObjectMetaInfo/Start
 SHAPE_FILES = ("meshes/", "normalmaps/", "tintmaps/")  # the source's _gamedata folders the island takes
 WINDOW = 32  # tiles: the ground is carried over in squares of this side (memory)
 SLOT_GROUPS = ("GameObject",)
+# data other steps write (the areas' objects, the ground, the props, the slot list, the session's names): not "left out"
+UNTAKEN_GAMEDATA_HANDLED = frozenset(
+    {"AreaIDs", "AreaManagerData", "AreaManager", "SessionSettings/GlobalAmbientName",
+     "SessionSettings/VegetationPropSetName"}
+)  # fmt: skip
+UNTAKEN_TERRAIN_HANDLED = frozenset(
+    {
+        "Terrain/MaterialIDs2",
+        "Terrain/MaterialAlphas2",
+        "Terrain/UsedMaterialBits",
+        "Terrain/MaterialSetFileName",
+        "Terrain/TintMapLevels/BaseTextureData",
+    }  # the ground's maps and the far tint picture are drawn from the ground
+)
 
 
 @dataclass
@@ -59,11 +85,13 @@ class Carried:
     donor: str
     tables: regiontables.Tables
     report: dict = field(default_factory=dict)
+    files: dict[str, bytes] = field(default_factory=dict)  # files for the mod beside the island (reskinned models)
 
 
-def graft(src, dst) -> int:
+def graft(src, dst, lost: list | None = None, where: str = "") -> int:
     """Write the source node's values over the donor's, child by child by name (the n-th of a name to the n-th):
-    what only the donor has stays, what only the source has is left out. Returns the values written."""
+    what only the donor has stays, what only the source has is left out (appended to ``lost`` as (path, node) when
+    given). Returns the values written."""
     if isinstance(src, filedb.Attrib) and isinstance(dst, filedb.Attrib):
         dst.data = src.data
         return 1
@@ -79,15 +107,30 @@ def graft(src, dst) -> int:
         seen[c.name] = k + 1
         mine = pool.get(c.name, [])
         if k < len(mine):
-            done += graft(mine[k], c)
-    if len(dst.children) != len(src.children) and src.children and all(c.name == "#1" for c in src.children):
+            done += graft(mine[k], c, lost, f"{where}/{c.name}")
+    whole_list = len(dst.children) != len(src.children) and src.children and all(c.name == "#1" for c in src.children)
+    if lost is not None and not whole_list:
+        lost += [(f"{where}/{n}", c) for n, cs in pool.items() for c in cs[seen.get(n, 0) :] if not n.startswith("#")]
+    if whole_list:
         dst.children = copy.deepcopy(src.children)  # a list of entries (levels, blocks): the source's whole
     return done
 
 
-def graft_paths(src: filedb.Tag, dst: filedb.Tag, paths: tuple[str, ...]) -> list[str]:
-    """``graft`` at each path both trees have; returns the paths written."""
-    return [p for p in paths if (a := src.path(p)) is not None and (b := dst.path(p)) is not None and graft(a, b)]
+def graft_paths(
+    src: filedb.Tag, dst: filedb.Tag, paths: tuple[str, ...], ledger: portdrops.Ledger | None = None, root: str = ""
+) -> list[str]:
+    """``graft`` at each path both trees have; returns the paths written. What the source holds there that the donor
+    has no place for, and a path only the source has, go into ``ledger`` (``root``: the tree's name in its lines)."""
+    done, lost = [], []
+    for p in paths:
+        a, b = src.path(p), dst.path(p)
+        if a is not None and b is None:
+            lost.append((p, a))
+        elif a is not None and b is not None and graft(a, b, lost, p):
+            done.append(p)
+    for p, node in lost if ledger is not None else []:
+        ledger.add("island data", f"{root}{p}", portdrops.LEFT_OUT, portdrops.data_size(node))
+    return done
 
 
 def grid_size(info: filedb.Tag) -> int:
@@ -145,7 +188,28 @@ def area_values(gm: filedb.Tag, size: int) -> np.ndarray:
     return np.asarray(read_sparse(node, "H"), np.uint16)
 
 
-def set_area_values(gm: filedb.Tag, values: np.ndarray) -> None:
+def fit_areas(gm: filedb.Tag, values: np.ndarray, ledger: portdrops.Ledger | None = None) -> np.ndarray:
+    """``values`` (area ids per tile) with every id the island ``gm`` has no area for (``AreaManagerData``) put in the
+    island's first area, where its objects go (``carry_objects``): a tile naming an area the game has no record of
+    breaks the island (Cinis' third area 0x4001 in 1800; island-regions "The areas")."""
+    keys = area_keys(gm)
+    if not keys:
+        return values
+    values = values.copy()
+    for known in np.unique(values):
+        if known and int(known) not in keys:
+            mask = values == known
+            values[mask] = keys[0]
+            if ledger is not None:
+                ledger.add(
+                    "area", f"tiles of area {int(known):#x} put in area {keys[0]:#x}", portdrops.MOVED, int(mask.sum())
+                )
+    return values
+
+
+def set_area_values(gm: filedb.Tag, values: np.ndarray, ledger: portdrops.Ledger | None = None) -> None:
+    """Write the area ids per tile into the island's ``AreaIDs`` in its layout, the ids its areas lack fitted first."""
+    values = fit_areas(gm, values, ledger)
     node = gm.find("AreaIDs")
     if node.find("val") is not None:
         node.find("val").data = values.astype("<u2").tobytes()
@@ -267,9 +331,18 @@ def carry_ground(ground: Ground, donor, dgd: groundedit.Gamedata, out: dict[str,
     return report
 
 
-def carry_props(source_rd: filedb.Tag, donor_rd: filedb.Tag, table: dict[str, str | None], place=None) -> dict:
+def carry_props(
+    source_rd: filedb.Tag,
+    donor_rd: filedb.Tag,
+    table: dict[str, str | None],
+    place=None,
+    ledger: portdrops.Ledger | None = None,
+    exists=None,
+) -> dict:
     """The source's props in the donor's ``PropGrid``, each instance in the donor's layout (a value only the target's
-    instances have from the donor's first), their files by the prop table."""
+    instances have from the donor's first), their files by the prop table. ``exists`` (the target game's file test,
+    set between games): a prop file no table names that the target lacks is removed with the others; every prop
+    removed or renamed is counted by file name in ``ledger``."""
     src_pg, dst_pg = source_rd.path("PropGrid"), donor_rd.path("PropGrid")
     if src_pg is None or dst_pg is None:
         return {}
@@ -285,7 +358,7 @@ def carry_props(source_rd: filedb.Tag, donor_rd: filedb.Tag, table: dict[str, st
     dst_pg.find("Instances").children = instances
     if place is not None and place.padded:
         largerdonor.shift_props(donor_rd, place)
-    return regionconvert.apply_props(donor_rd, table)
+    return regionconvert.apply_props(donor_rd, table, ledger, exists)
 
 
 def _placed(o: filedb.Tag, place=None) -> dict:
@@ -299,12 +372,22 @@ def _placed(o: filedb.Tag, place=None) -> dict:
     }
 
 
-def carry_objects(src, dst, source, donor, table: dict[int, int | None], where: tuple[str, largerdonor.Place]) -> dict:
+def carry_objects(
+    src,
+    dst,
+    source,
+    donor,
+    table: dict[int, int | None],
+    where: tuple[str, largerdonor.Place],
+    ledger: portdrops.Ledger | None = None,
+) -> dict:
     """The source's objects in the donor: an asset both games know as it is (coast lines, rivers, lakes keep their
     curves), a mapped one as a copy of an object of the target asset (``objectclones``: the donor's own, else another
     island's), the rest left out. The donor's own objects are taken off first; ``where``: the donor's path and the
-    source's place in it, which moves them."""
+    source's place in it, which moves them; each object left out or swapped is named in ``ledger``."""
     donor_path, place = where
+    ledger = ledger if ledger is not None else portdrops.Ledger()
+    label = lambda guid, side=src: portdrops.asset_label(side.asset_names, guid)  # noqa: E731
     found = objectclones.samples(donor, a7mread.OBJECT_GROUPS)
     a7m_edit117.clear(donor)
     for _area, doc, _ids in donor._areas_data():
@@ -315,18 +398,27 @@ def carry_objects(src, dst, source, donor, table: dict[int, int | None], where: 
     for (_a, doc, _i), key in zip(donor._areas_data(), area_keys(donor.gm), strict=False):
         keys[key] = doc
     report = {"objects kept": 0, "objects copied": 0, "objects left out": 0}
-    added = []
+    added, pairs = [], []
     for (_a, doc, _i), key in zip(source._areas_data(), area_keys(source.gm), strict=False):
         home = keys.get(key) or next(iter(keys.values()))
+        if key not in keys:
+            n = sum(len(o.children) for g in a7mread.OBJECT_GROUPS if (o := a7mread.area_objects(doc, g)) is not None)
+            ledger.add("area", f"objects of area {key:#x} put in the donor's first area", portdrops.MOVED, n)
         for group in a7mread.OBJECT_GROUPS:
             objs = a7mread.area_objects(doc, group)
             target = a7mread.area_objects(home, group)
             for o in objs.children if objs is not None else []:
                 guid = o.find("guid") if isinstance(o, filedb.Tag) else None
                 if guid is None or o.find("Position") is None:
+                    if isinstance(o, filedb.Tag):
+                        ledger.add("object", f"{group} entry without asset or position", portdrops.LEFT_OUT)
                     continue
                 g = struct.unpack_from("<I", guid.data)[0]
-                if g not in table and target is not None:
+                if (
+                    g not in table
+                    and target is not None
+                    and portdrops.object_kept(src.asset_names, dst.asset_names, g, src.key == dst.key)
+                ):
                     kept = copy.deepcopy(o)
                     if place.padded:
                         largerdonor.shift_object(kept, place)
@@ -334,14 +426,26 @@ def carry_objects(src, dst, source, donor, table: dict[int, int | None], where: 
                     report["objects kept"] += 1
                 elif table.get(g) is not None:
                     added.append({"guid": table[g], "clone": True, **_placed(o, place)})
+                    pairs.append((g, table[g]))
                 else:
                     report["objects left out"] += 1
+                    why = " (the target game has no such asset)" if g not in table and target is not None else ""
+                    why = why or (" (the target island has no such object list)" if g not in table else "")
+                    ledger.add("object", label(g) + why, portdrops.LEFT_OUT)
     if added:
         models = AssetModels.read(dst.read, ASSET_GAMES[dst.key])
         donors = templatedonors.for_game(dst.key, dst.files, models, donor_path)
         _rest, copied, missing = objectclones.place_copies({"added_objects": added}, found, donors=donors)
         report["objects copied"] = copied
         report["objects left out"] += len(missing)
+    gone = Counter(int(m.split(":")[1]) for m in (missing if added else []))
+    for g, to in pairs:
+        if gone[to] > 0:  # a mapped asset the target has no object to copy: placed nowhere
+            gone[to] -= 1
+            ledger.add("object", label(g), portdrops.LEFT_OUT, 1, f"{label(to, dst)}: no object of it to copy")
+        else:
+            ledger.add("object", label(g), portdrops.MAPPED, 1, label(to, dst))
+    report["objects left out"] += portdrops.group_leftovers(source, ledger)
     return report
 
 
@@ -382,6 +486,23 @@ def fit_target(source, donor) -> list[str]:
     return done
 
 
+def link_slots(src, dst, source, tables, target, saved: dict) -> dict:
+    """The source's slots by the slot links (``slotlinks``: the rules' suggestions, the person's links over them) into
+    the object table; the slots left without a target are named in the report, not dropped unseen."""
+    src_assets, mine = src.slots()
+    used = Counter(
+        struct.unpack_from("<I", o.find("guid").data)[0]
+        for _g, o in a7mread.object_tags(source.gm, a7mread.OBJECT_GROUPS)
+        if o.find("guid") is not None
+    )
+    if not any(g in src_assets for g in used):
+        return {}
+    dst_assets, theirs = dst.slots()
+    links = slotlinks.resolve(slotlinks.suggest(src_assets, dst_assets, mine, theirs, target.island_region), saved)
+    linked = slotlinks.apply(tables.objects, links, used, src_assets)
+    return {"slots linked": linked, "slots unlinked": slotlinks.unlinked(used, links, src_assets)}
+
+
 def refresh_slots(donor) -> dict:
     """The donor's slot list after the objects changed: 117's by ``slotlist.refresh``, 1800's items rebuilt per group
     from the slot objects of the assets the group lists."""
@@ -418,17 +539,39 @@ def refresh_slots(donor) -> dict:
     return report
 
 
-def carry_shape(source, donor, dgd: groundedit.Gamedata, place: largerdonor.Place, out: dict[str, bytes]) -> dict:
+def audit_data(source, donor, ledger: portdrops.Ledger, padded: bool) -> None:
+    """What the source's three data files hold that no step of the port carries: each node with data the donor keeps
+    its own value of (``DONOR``) or does not have (``LEFT_OUT``), by name and bytes. Run before the donor is changed."""
+    gm = {"TerrainManager/HeightMap" if p == "TerrainManager" and padded else p for p in GRAFT_GAMEDATA}
+    portdrops.untaken(source.gm, donor.gm, gm | UNTAKEN_GAMEDATA_HANDLED, "", ledger)
+    handled = {f"Terrain/{p}" for p in GRAFT_TERRAIN} | UNTAKEN_TERRAIN_HANDLED
+    portdrops.untaken(source.rd, donor.rd, {*GRAFT_RD3D, "PropGrid"} | handled, "", ledger)
+    portdrops.untaken(source.info, donor.info, {*GRAFT_INFO, "ObjectMetaInfo"}, "", ledger)
+
+
+def carry_shape(
+    source,
+    donor,
+    dgd: groundedit.Gamedata,
+    place: largerdonor.Place,
+    out: dict[str, bytes],
+    ledger: portdrops.Ledger | None = None,
+) -> dict:
     """The source's shape written into the donor: its values grafted where the grids are one size, embedded in the
-    donor's middle (``largerdonor``) where the donor is larger. Returns what was written."""
+    donor's middle (``largerdonor``) where the donor is larger. Returns what was written; what is left out goes
+    into ``ledger``."""
     report: dict = {}
+    ledger = ledger if ledger is not None else portdrops.Ledger()
+    audit_data(source, donor, ledger, place.padded)
     if not place.padded:
-        report["grafted"] = graft_paths(source.gm, donor.gm, GRAFT_GAMEDATA)
-        report["grafted"] += graft_paths(source.rd.path("Terrain"), donor.rd.path("Terrain"), GRAFT_TERRAIN)
-        report["grafted"] += graft_paths(source.rd, donor.rd, GRAFT_RD3D)
-        report["grafted"] += graft_paths(source.info, donor.info, GRAFT_INFO)
+        report["grafted"] = graft_paths(source.gm, donor.gm, GRAFT_GAMEDATA, ledger)
+        report["grafted"] += graft_paths(
+            source.rd.path("Terrain"), donor.rd.path("Terrain"), GRAFT_TERRAIN, ledger, "Terrain/"
+        )
+        report["grafted"] += graft_paths(source.rd, donor.rd, GRAFT_RD3D, ledger)
+        report["grafted"] += graft_paths(source.info, donor.info, GRAFT_INFO, ledger)
         report["fitted"] = fit_target(source, donor)
-        set_area_values(donor.gm, area_values(source.gm, source.size))
+        set_area_values(donor.gm, area_values(source.gm, source.size), ledger)
         return report
     report["embedded"] = {"place": [place.x, place.z, place.size, place.grid]}
     report["embedded"]["heights"] = largerdonor.embed_heights(source, donor, dgd, place, out)
@@ -438,7 +581,7 @@ def carry_shape(source, donor, dgd: groundedit.Gamedata, place: largerdonor.Plac
     report["fitted"] = fit_target(source, donor)
     values = np.zeros((place.grid, place.grid), np.uint16)
     values[place.window()] = area_values(source.gm, source.size)
-    set_area_values(donor.gm, values)
+    set_area_values(donor.gm, values, ledger)
     graft_paths(source.info, donor.info, ("ObjectMetaInfo/StartCoastDirection",))
     largerdonor.shift_rect(donor.info, donor.gm, source.info, source.gm, place)
     return report
@@ -508,11 +651,15 @@ def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> 
     )
     materials = regiontables.with_unlisted(tables.materials, dst_set)
     report: dict = {"donor": donor_path}
+    ledger = portdrops.Ledger()
+    report |= link_slots(src, dst, source, tables, target, dict(request.slot_links))
     out: dict[str, bytes] = {}
     log(tr("islands.writing_shape_heights_land_rivers"))
-    report |= carry_shape(source, donor, dgd, place, out)
+    report |= carry_shape(source, donor, dgd, place, out, ledger)
     log(tr("islands.carrying_ground"))
     sids, salphas = regionconvert.material_maps(source, sgd)
+    portdrops.ground_entries(ledger, sids, source.size, (src_set, dst_set), materials)
+    portdrops.files_left(sgd, dgd, ledger)
     ground = Ground(
         sids,
         salphas,
@@ -525,10 +672,14 @@ def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> 
     )
     report["ground"] = carry_ground(ground, donor, dgd, out)
     log(tr("islands.carrying_objects_props"))
+    reskinned = portreskin.Reskinned()
+    if request.reskin:
+        reskinned = portreskin.for_port(src, dst, source.rd, tables, own, target, dst_set, ledger)
+        report["reskinned props"] = reskinned.count
     report |= carry_objects(
-        src, dst, source, donor, tables.objects, (donor_path, place)
+        src, dst, source, donor, tables.objects, (donor_path, place), ledger
     )  # clears the donor's props too
-    report |= carry_props(source.rd, donor.rd, tables.props, place)
+    report |= carry_props(source.rd, donor.rd, tables.props, place, ledger, dst.files.exists)
     report["slot list"] = refresh_slots(donor)
     gamedata = carry_shape_files(sgd, dgd, out, materials, place)
     if dst.key == "anno117":  # 1800 flags its top mesh level and stores nothing there; 117 draws it from afar
@@ -537,8 +688,10 @@ def transfer(src, dst, request, target, colour=None, log=lambda _line: None) -> 
         report["meshes"] = largerdonor.mark_meshes(gamedata, report["ground"]["used"])
     report["far"] = portpictures.far_tint(source.rd, donor.rd, place)
     report["tint pages fitted"] = fit_tints(gamedata, donor.rd, ranges)
+    ledger.add("ground", "tint pages", portdrops.CLAMPED, report["tint pages fitted"], "the target's tint range")
     if colour is not None:
         log(tr("islands.drawing_map_pictures"))
         final = groundedit.Gamedata(sorted(gamedata), gamedata.__getitem__)
         gamedata |= portpictures.redraw(donor, final, dst_set, lambda file: colour("dst", file))
-    return Carried(donor.write(), donor.write_info(), gamedata, donor_path, tables, report)
+    report["dropped"] = ledger.entries
+    return Carried(donor.write(), donor.write_info(), gamedata, donor_path, tables, report, reskinned.files)

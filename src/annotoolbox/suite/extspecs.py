@@ -157,6 +157,19 @@ class SaveEdit:
 
 
 @dataclass(frozen=True)
+class ModelOptions:
+    """An option of the model commands (``rdm relayout``, ``rdm from-granny``) an extension adds (``features.MODEL_OPTIONS``):
+    ``add_options(parser)`` adds the flags, ``start(args)`` opens what the models are measured against and
+    returns it (None: the option is off), ``configs(handle, name, data, target)`` gives the extra files of one model
+    written and the notes lines, ``model_cfg(raw_mesh, layout, mesh, look, levels)`` 117's config for a static mesh."""
+
+    add_options: Callable
+    start: Callable
+    configs: Callable
+    model_cfg: Callable
+
+
+@dataclass(frozen=True)
 class Conversion:
     """An entry of the Converter app (``features.CONVERSIONS`` for one an extension adds): a command of the command
     line (``command``) run on single files, assets or islands, its form made from the command's own options.

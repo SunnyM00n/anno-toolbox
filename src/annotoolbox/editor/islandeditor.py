@@ -30,7 +30,7 @@ from ..islands.islandview import Files, IslandView
 from ..models import configtree, fileresolve
 from ..sources.overlay import normalize
 from ..suite import features
-from . import assetmodels, cellbrush, footprints
+from . import assetmodels, cellbrush, footprints, slotkinds
 from .islandassets import IslandAssets, whole_file
 from .modelparts import library_group, model_parts
 
@@ -439,6 +439,16 @@ class IslandEditor(IslandAssets):
                     out[str(guid)] = {"name": asset.name, **values}
                     break
         return out
+
+    def slot_assets(self) -> dict[int, slotkinds.SlotAsset]:
+        """The slot assets of the island's game, the mod's own over the game's, read once (``slotkinds``)."""
+        found = getattr(self, "_slot_assets", None)
+        if found is None:
+            found = {}
+            for models in (self.asset_models(), assetmodels.AssetModels(self.mod_assets.encode("utf-8"))):
+                found |= slotkinds.read_assets(models) if models is not None else {}
+            self._slot_assets = found
+        return found
 
     def area_grid(self) -> dict:
         """The island's construction area tiles for the island JSON (``cellbrush.pack``), the tiles with another area id as the

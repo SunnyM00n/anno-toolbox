@@ -599,6 +599,19 @@ by asset: what the file lists, what stands after the edits, what the build will 
 the asset (`MapGeneratorSlotCount` of them, or all with `ActivateAll`; the island JSON's `slot_generator`, read from the
 mod's asset first, then the game's, base assets followed: `AssetModels.value_of`).
 
+**The Slots tab** (`desktopslotstab`, `slotkinds`; built 2026-11-18, not opened in the game's window yet; tests on a synthetic
+asset list and a fake window). The objects list has two tabs, objects and slots. Slots lists the island's standing slot
+objects (not deleted ones) with kind (the asset's `SlotType`, else its name), name, GUID and position; the search takes any
+part of kind, name, GUID or template, the kind list narrows to one kind, and a click selects the slot and flies there as a
+click in the objects list does. A slot is an object whose asset has the template `Slot`, `Slot_Marsh`, `WorkAreaSlot` or
+`WorkAreaRiverSlot` (`slotkinds.read_assets`, the mod's assets over the game's; `IslandEditor.slot_assets`, once per
+island). Games: Anno 117 and Anno 1800 islands have it. 2070, 1404 and 1701 islands (an `.isd` / `.isc` file) keep their
+slots as objects of resource templates the editor's baseline does not read, and a 2205 session map's slots
+(`CSlotManager`) are not read yet, so their tab says the editor lists no slots for that game. Beside the list sits the
+button Slot links, the slot linker of the port between 117 and 1800 (island-regions "Slots between the games"): a dialog
+with a row per slot asset of the open island, the target game's asset to choose (the rules' suggestion preselected, "left
+out" among them), and the choices kept with the project.
+
 **Herd areas** (`islands/herdareas`). `AnimalManager/HerdGrid` is a bit per tile where herds may walk, `HerdAreas` one entry
 per connected region of it (four-neighbour) carrying the region's tile count (`CellsCount`; the rest of an entry, `BBox` and
 `RandomPoint`, is run-time state and zero in the shipped islands). The edit file keeps `herd` (`"x,z"` -> 1 or 0, only what

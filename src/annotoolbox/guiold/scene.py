@@ -406,7 +406,9 @@ def _stack(box: Node) -> None:
     cx, cy, _cw, _ch = client(box)
     xs, ys = number(box.props.get("XSPACE"), 5), number(box.props.get("YSPACE"), 5)
     per = max(1, int(number(box.props.get("LINECOLUMNCOUNT"), 1)))
-    by_line = str(box.props.get("LINE_ORDER", "1")) != "0"
+    by_line = (
+        str(box.props.get("LINE_ORDER", "1")).strip() == "0"
+    )  # 0: lines of ``LINECOLUMNCOUNT``; 1: columns (a row)
     line_size, count, x, y = 0.0, 0, cx, cy
     for kid in (k for k in box.children if k.visible):
         w, h = kid.rect[2], kid.rect[3]

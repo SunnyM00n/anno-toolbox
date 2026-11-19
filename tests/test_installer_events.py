@@ -35,6 +35,31 @@ def test_the_install_root_is_the_folder_above_current(tmp_path):
     assert install.uninstall_argv(root) == [str(root / "Update.exe"), "uninstall"]
 
 
+def test_the_launcher_is_found_under_the_packers_name(tmp_path):
+    root = tmp_path / "AnnoToolbox"
+    (root / "current").mkdir(parents=True)
+    (root / "Update.exe").write_bytes(b"u")
+    (root / "Anno Toolbox.exe").write_bytes(b"launcher")  # the packer names it after the product
+    exe = str(root / "current" / "AnnoToolbox.exe")
+    assert install.launcher(exe) == root / "Anno Toolbox.exe"
+    (root / "Other.exe").write_bytes(b"?")
+    assert install.launcher(exe) is None  # two candidates: no guess
+
+
+def test_shortcuts_the_program_never_made_are_made_once(tmp_path, monkeypatch):
+    from annotoolbox.suite import setuppage
+
+    made = []
+    data = tmp_path / "data"
+    where = places(tmp_path)
+    monkeypatch.setattr(shortcuts, "sync", lambda s, d, target, w: made.append((s, d, target)) or [])
+    assert setuppage.repair_shortcuts(True, False, tmp_path / "a.exe", where, data) == []
+    assert made == [(True, False, tmp_path / "a.exe")] and installevents.shortcuts_made(data)
+    assert setuppage.repair_shortcuts(True, True, tmp_path / "a.exe", where, data) is None  # a removed one stays
+    assert setuppage.repair_shortcuts(True, True, None, where, tmp_path / "other") is None  # not installed
+    assert len(made) == 1
+
+
 def test_a_copied_program_folder_or_a_source_run_is_not_an_install(tmp_path):
     loose = tmp_path / "copy"
     loose.mkdir()
@@ -380,9 +405,13 @@ def test_the_first_runs_work_removes_old_installs_before_it_makes_the_shortcuts(
     order = []
     choices = setupchoices.Choices("en", True, True, True, {}, (CODE,))
     problems = setuppage.carry_out(
-        choices, tmp_path / "a.exe", places(tmp_path), remove=lambda code: order.append("remove") or "removed"
+        choices,
+        tmp_path / "a.exe",
+        places(tmp_path),
+        remove=lambda code: order.append("remove") or "removed",
+        made=lambda: order.append("made"),
     )
-    assert order == ["remove"] and problems == [] or sys.platform != "win32"
+    assert order == ["remove", "made"] and problems == [] or sys.platform != "win32"
     bad = setuppage.carry_out(setupchoices.Choices("en", True, False, False, {}, (CODE,)), None, None, lambda c: "busy")
     assert len(bad) == 1  # an old install that could not be removed is reported
 

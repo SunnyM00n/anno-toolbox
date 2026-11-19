@@ -23,8 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..infra.i18n import tr
+from ..infra.i18n import N_, tr
 from . import commandform
+
+STATE_APP = "converter"  # the settings' ``apps`` entry the window keeps its own state in
+# options the form shows under their own name and remembers between runs (dest -> its label and tooltip texts)
+REMEMBERED = {"reskin": (N_("convert.reskin"), N_("convert.reskin_tip"))}
 
 
 class OptionsForm(QObject):
@@ -52,13 +56,14 @@ class OptionsForm(QObject):
             widget = self._widget(f, change)
             self.widgets[f.dest] = (f, widget)
             # an option the entry narrowed to its own list: the command's help names choices the list does not offer
-            self.layout.addRow(_label(f), _with_help(widget, "" if f.forced else f.help))
+            tip = tr(REMEMBERED[f.dest][1]) if f.dest in REMEMBERED else "" if f.forced else f.help
+            self.layout.addRow(_label(f), _with_help(widget, tip))
 
     def _widget(self, f: commandform.Field, change) -> QWidget:
         if f.kind == "flag":
             box = QCheckBox()
-            box.setChecked(bool(f.default))
-            box.toggled.connect(lambda _on: self.changed.emit())
+            box.setChecked(self._remembered(f))
+            box.toggled.connect(lambda on, dest=f.dest: self._remember(dest, on))
             return box
         if f.kind == "choice":
             combo = QComboBox()
@@ -80,6 +85,17 @@ class OptionsForm(QObject):
             line.setValidator(QDoubleValidator(line))
         line.textChanged.connect(lambda _t: self.changed.emit())
         return _with_picker(line, f) if f.kind == "path" else line
+
+    def _kept(self) -> dict:
+        return self.settings.apps.setdefault(STATE_APP, {}).setdefault("options", {})
+
+    def _remembered(self, f: commandform.Field) -> bool:
+        return bool(self._kept().get(f.dest, f.default)) if f.dest in REMEMBERED else bool(f.default)
+
+    def _remember(self, dest: str, on: bool) -> None:
+        if dest in REMEMBERED:
+            self._kept()[dest] = bool(on)
+        self.changed.emit()
 
     def values(self) -> dict:
         """The form's values by option name: a bool for a switch, else the text (a choice's own word)."""
@@ -106,6 +122,8 @@ class OptionsForm(QObject):
 
 
 def _label(f: commandform.Field) -> QLabel:
+    if f.dest in REMEMBERED:
+        return QLabel(tr(REMEMBERED[f.dest][0]))
     name = f.flag or f.dest
     return QLabel(f"{name} *" if f.required else name)
 

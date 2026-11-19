@@ -33,10 +33,18 @@ def installed(exe: str | None = None) -> bool:
 
 
 def launcher(exe: str | None = None) -> Path | None:
-    """The stable launcher (the root's copy of the program's name), or None when this is not an installed program."""
+    """The stable launcher (the root's program beside the updater), or None when this is not an installed program.
+    The packer names the root's launcher after the product (``Anno Toolbox.exe``), not after the program in
+    ``current`` (``AnnoToolbox.exe``): a file of the program's name is taken first, else the root's one other
+    ``.exe``."""
     where = root(exe)
-    name = Path(exe or sys.executable).name
-    return where / name if where is not None and (where / name).is_file() else None
+    if where is None:
+        return None
+    same = where / Path(exe or sys.executable).name
+    if same.is_file():
+        return same
+    others = [p for p in sorted(where.glob("*.exe")) if p.name.lower() != UPDATER.lower()]
+    return others[0] if len(others) == 1 else None
 
 
 def uninstall_argv(where: Path) -> list[str]:

@@ -200,7 +200,9 @@ class SoundWindow(QMainWindow):
                 self.old.open_game(tree)
                 return
             self._fill_banks()
-            self.statusBar().showMessage(tr("sound.name_count_banks", name=GAMES.get(key, key), count=len(self.banks)))
+            self.statusBar().showMessage(
+                tr("sound.name_count_banks", name=GAMES.get(key, key), count=self.banks.count())
+            )
             if then:
                 self.open_bank(then)
 

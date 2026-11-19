@@ -698,7 +698,9 @@ def test_opening_an_island_loads_it_into_the_one_window(tmp_path, monkeypatch):
     s._redraw(0, 0, s.size, s.size)
 
     # the underwater look is the 2070 look seen from below; caustics need it; the game's light excludes it
+    assert not doc.offers_2070_looks()  # the 2070 looks are offered for a 2070 island only
     s.island["mode"] = "2070"
+    assert doc.offers_2070_looks()
     assert doc.look_state()["underwater"][0] and not doc.look_state()["caustics"][0]
     doc.set_look("underwater", True)
     o = view.opts

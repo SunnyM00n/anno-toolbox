@@ -70,6 +70,13 @@ class A7mViewer(othermaterials.OtherMaterials, IslandEditor):
             A7mViewer._game_assets = (weakref.ref(self.tree), found)
         return found
 
+    def asset_models(self) -> AssetModels | None:
+        """``game_assets``, None without the asset file (as ``IslandEditor.asset_models``)."""
+        try:
+            return self.game_assets()
+        except (OSError, KeyError):
+            return None
+
     def _models(self, placed: list[dict]) -> list[str]:
         """Per placed object its model config, or "" (a marker)."""
         try:

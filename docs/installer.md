@@ -55,7 +55,12 @@ no extra library). The choice is kept in the settings (`shortcut_start_menu`, `s
 again from Help > *Setup...*, changes it.
 
 - A shortcut points at the **launcher in the install root**, never at the versioned `current\` folder, so it survives
-  every update. It has no arguments (the installed program opens the suite's window by default).
+  every update. It has no arguments (the installed program opens the suite's window by default). The packer names
+  that launcher after the product (`Anno Toolbox.exe`), not after the program (`AnnoToolbox.exe`), so the program
+  looks for its own name first and then for the root's one other `.exe` (`install.launcher`).
+- 0.2.0 looked for its own name only, found no launcher and made no shortcut (its page did not offer them). The next
+  start of a fixed version makes the chosen ones **once**, when the program never made any (the `shortcuts-made` mark
+  in the data folder records that it did); a shortcut removed after that is never brought back.
 - The files are `Anno Toolbox.lnk` in the user's Start menu folder (*Programs*) and on the user's desktop; the folders
   come from Windows' known-folder call, so a moved desktop or a OneDrive-redirected one is found.
 - The uninstall removes the shortcuts **the program made**: a `Anno Toolbox.lnk` in those two folders whose target is

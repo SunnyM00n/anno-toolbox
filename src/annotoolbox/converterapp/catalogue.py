@@ -152,8 +152,8 @@ def baseline() -> list[Conversion]:
     return [
         _rdm_entry("rdm_gltf", "export", (".rdm",)),
         _rdm_entry("gltf_rdm", "import", (".glb", ".gltf"), games=()),
-        _rdm_entry("rdm_relayout", "relayout", (".rdm",)),
-        _rdm_entry("granny_rdm", "from-granny", (".gr2",), games=GRANNY_GAMES),
+        _rdm_entry("rdm_relayout", "relayout", (".rdm",), folders={"anno117": "anno117"}),
+        _rdm_entry("granny_rdm", "from-granny", (".gr2",), games=GRANNY_GAMES, folders={"anno117": "anno117"}),
         exported("granny_gltf", "models", "model", ("glb", "gltf"), games=GRANNY_GAMES),
         _rdm_entry("gltf_granny", "granny", (".glb", ".gltf"), games=(), inputs="input", output_file=".gr2"),
         exported("texture_png", "textures", "texture", ("png", "png16", "exr", "hdr"), keep={"all_mips", "hdr_form"}),

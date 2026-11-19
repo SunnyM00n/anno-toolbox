@@ -71,6 +71,7 @@ class JobRunner:
 
     def convert_region(self, key: str, path: str) -> None:
         """Ask what the island becomes (``islandconvert.targets``) and whether to install it, then convert it."""
+        from ...islands.regions import GENERATION
         from ..islandconvert import targets
 
         offered = targets(key, path)
@@ -89,9 +90,14 @@ class JobRunner:
         if not ok:
             return
         fit = "" if ways.index(way) == 0 else "map"
+        yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
+        reskin = (  # off unless the person says yes (No is the default button)
+            key in GENERATION
+            and QMessageBox.question(self, self.title, tr("islands.reskin_question"), yes | no, no) == yes
+        )
         answer = QMessageBox.question(self, self.title, tr("islands.install_ported_island_mods_folder"))
         install = answer == QMessageBox.StandardButton.Yes
-        self._start(lambda: self.app.convert_region(key, path, target, install, fit))
+        self._start(lambda: self.app.convert_region(key, path, target, install, fit, reskin))
 
     def convert_new(self, size: int) -> None:
         self._start(lambda: self.app.build(f"new{size}", install=False), open_after=f"new{size}")

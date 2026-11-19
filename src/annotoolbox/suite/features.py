@@ -25,6 +25,7 @@ APPS = "suite_apps"  # an app of the suite's window beyond the built-in ones (``
 ISLAND_CONVERSIONS = "island_ports"  # targets of "Port to region / game" beyond the generation
 SAVE_EDITS = "save_edits"  # more values of a save the Saves app's Edit tab offers (``extspecs.SaveEdit``)
 CONVERSIONS = "conversions"  # more entries of the Converter app beyond its own (``extspecs.Conversion``)
+MODEL_OPTIONS = "model_options"  # the --reskin option of the model commands (``extspecs.ModelOptions``)
 CONVERTER_PAGES = "converter_pages"  # a page of the Converter app beside its entries (``extspecs.ConverterPage``)
 
 UI_COMPARE = (

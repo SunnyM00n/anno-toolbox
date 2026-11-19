@@ -18,7 +18,7 @@ DIALOG = """<FRAME><PATHID>TEST</PATHID><BACKGROUND>data/config/gui/backgrounds/
 <BUTTON><PATHID>OK</PATHID><TEMPLATE_REF_ID>BTN</TEMPLATE_REF_ID><EXTENT><LEFT>2</LEFT><TOP>3</TOP></EXTENT>
 <TEXTSETTING><TEXTGUID>5</TEXTGUID></TEXTSETTING></BUTTON>
 <PANEL><PATHID>HIDDEN</PATHID><VISIBLE>0</VISIBLE><EXTENT><WIDTH>9</WIDTH><HEIGHT>9</HEIGHT></EXTENT></PANEL>
-<BOXLAYOUT><PATHID>BOX</PATHID><XSPACE>4</XSPACE><YSPACE>6</YSPACE><LINECOLUMNCOUNT>2</LINECOLUMNCOUNT>
+<BOXLAYOUT><PATHID>BOX</PATHID><XSPACE>4</XSPACE><YSPACE>6</YSPACE><LINE_ORDER>0</LINE_ORDER><LINECOLUMNCOUNT>2</LINECOLUMNCOUNT>
 <EXTENT><LEFT>0</LEFT><TOP>100</TOP><WIDTH>200</WIDTH><HEIGHT>100</HEIGHT></EXTENT>
 <PANEL><PATHID>A</PATHID><EXTENT><WIDTH>30</WIDTH><HEIGHT>10</HEIGHT></EXTENT></PANEL>
 <PANEL><PATHID>B</PATHID><EXTENT><WIDTH>20</WIDTH><HEIGHT>12</HEIGHT></EXTENT></PANEL>
@@ -144,6 +144,23 @@ def test_the_page_draws_a_dialog_and_inspects_the_widget_picked(tree):
     page.show()
     qt.processEvents()
     assert not page.stage.grab().isNull()
+    page.close()
+
+
+def test_the_file_list_gives_the_name_the_width_and_the_kind_only_what_it_needs(tree):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QHeaderView
+
+    from annotoolbox.guiold.view import OldGuiPage
+
+    QApplication.instance() or QApplication([])
+    page = OldGuiPage(tree)
+    page.resize(1200, 700)
+    page.show()
+    head = page.list.header()
+    assert head.sectionResizeMode(0) == QHeaderView.ResizeMode.Stretch
+    assert head.sectionResizeMode(1) == QHeaderView.ResizeMode.ResizeToContents
+    assert page.list.columnWidth(0) > 2 * page.list.columnWidth(1)
     page.close()
 
 
@@ -349,6 +366,27 @@ def test_a_label_resizes_its_parent_to_its_text(tmp_path):
     assert w > 0 and h == 14.0 * 1.25 and scene.estimate("one two three four", None, 30.0)[1] > h
 
 
+def test_a_box_with_the_default_order_is_a_row_and_one_with_line_order_0_stacks_lines(tmp_path):
+    """Read from 2070's data: the tab bars (order 1, count 1, 0 apart) are rows; the options page's two-column boxes
+    (order 0, count 2) fill a line of two and then the next; a category list (order 0, count 1) is a column."""
+
+    def box(name: str, order: str, count: int) -> str:
+        kids = "".join(f"<PANEL><PATHID>{name}{i}</PATHID><EXTENT><WIDTH>40</WIDTH><HEIGHT>20</HEIGHT></EXTENT></PANEL>"
+                       for i in range(4))  # fmt: skip
+        return (f"<BOXLAYOUT><PATHID>{name}</PATHID><XSPACE>3</XSPACE><YSPACE>5</YSPACE>{order}"
+                f"<LINECOLUMNCOUNT>{count}</LINECOLUMNCOUNT><EXTENT><LEFT>10</LEFT><TOP>10</TOP><WIDTH>300</WIDTH>"
+                f"<HEIGHT>200</HEIGHT></EXTENT>{kids}</BOXLAYOUT>")  # fmt: skip
+
+    for name, order, count, want in (
+        ("T", "", 1, [(10, 10), (53, 10), (96, 10), (139, 10)]),
+        ("G", "<LINE_ORDER>0</LINE_ORDER>", 2, [(10, 10), (53, 10), (10, 35), (53, 35)]),
+        ("L", "<LINE_ORDER>0</LINE_ORDER>", 1, [(10, 10), (10, 35), (10, 60), (10, 85)]),
+    ):
+        nodes = _placed(tmp_path, f"<FRAME><PATHID>F</PATHID><EXTENT><WIDTH>400</WIDTH><HEIGHT>300</HEIGHT></EXTENT>"
+                                  f"{box(name, order, count)}</FRAME>")  # fmt: skip
+        assert [nodes[f"{name}{i}"].rect[:2] for i in range(4)] == [(float(x), float(y)) for x, y in want]
+
+
 def test_a_box_layout_stacks_a_child_at_the_size_its_autosize_gives(tmp_path):
     grows = ("<PANEL><PATHID>GROWS</PATHID><AUTOSIZE>1</AUTOSIZE><AUTOSIZEORIENTATION>1</AUTOSIZEORIENTATION>"
              "<EXTENT><WIDTH>50</WIDTH><HEIGHT>10</HEIGHT></EXTENT>"
@@ -356,7 +394,7 @@ def test_a_box_layout_stacks_a_child_at_the_size_its_autosize_gives(tmp_path):
     nodes = _placed(
         tmp_path,
         f"""<FRAME><PATHID>F</PATHID><EXTENT><WIDTH>400</WIDTH><HEIGHT>300</HEIGHT></EXTENT>
-<BOXLAYOUT><PATHID>BOX</PATHID><YSPACE>6</YSPACE><LINE_ORDER>0</LINE_ORDER><LINECOLUMNCOUNT>9</LINECOLUMNCOUNT>
+<BOXLAYOUT><PATHID>BOX</PATHID><YSPACE>6</YSPACE><LINE_ORDER>0</LINE_ORDER><LINECOLUMNCOUNT>1</LINECOLUMNCOUNT>
 <EXTENT><TOP>100</TOP><WIDTH>200</WIDTH><HEIGHT>200</HEIGHT></EXTENT>{grows}
 <PANEL><PATHID>NEXT</PATHID><EXTENT><WIDTH>20</WIDTH><HEIGHT>8</HEIGHT></EXTENT></PANEL></BOXLAYOUT></FRAME>""",
     )
@@ -427,7 +465,7 @@ def test_a_resizing_label_is_measured_in_its_class_and_stacked_at_its_measured_s
         return ((style.size if style is not None else 10.0) * len(text), 18.0)
 
     nodes = _placed(tmp_path, """<FRAME><PATHID>F</PATHID><EXTENT><WIDTH>400</WIDTH><HEIGHT>300</HEIGHT></EXTENT>
-<BOXLAYOUT><PATHID>BOX</PATHID><XSPACE>4</XSPACE><LINECOLUMNCOUNT>9</LINECOLUMNCOUNT>
+<BOXLAYOUT><PATHID>BOX</PATHID><XSPACE>4</XSPACE>
 <EXTENT><WIDTH>400</WIDTH><HEIGHT>50</HEIGHT></EXTENT>
 <LABEL><PATHID>NAME</PATHID><TEXT>abcd</TEXT><TEXTSETTING><RESIZEPARENTWINDOW>1</RESIZEPARENTWINDOW>
 <STYLESELECTOR>big</STYLESELECTOR></TEXTSETTING><EXTENT><WIDTH>20</WIDTH><HEIGHT>20</HEIGHT></EXTENT></LABEL>
@@ -760,3 +798,29 @@ def test_a_game_without_the_font_table_file_reads_its_fonts_from_the_localisatio
     font = old.fonts["Default"]
     assert (font.family, font.size, font.weight, font.file) == ("Times New Roman", 18.0, 700, "")
     assert old.font_file(font) is None  # a Windows family: the install ships no file for it
+
+
+def test_the_old_interface_is_a_tab_of_the_ui_app_that_opens_a_dialog(tree, tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.suite.settings import Settings
+    from annotoolbox.uiedit import uihost
+    from annotoolbox.uiedit.oldpage import OldWindow
+
+    qt = QApplication.instance() or QApplication([])
+    settings = Settings()
+    host = uihost.UiHost(settings, {uihost.OLD: lambda: OldWindow(settings)})
+    assert list(host.buttons) == [uihost.OLD] and uihost.kind_of("anno2070") == uihost.OLD
+    assert uihost.kind_of("anno1404") == uihost.PHOENIX  # its Phoenix files; its old interface is picked in the tab
+    page = host.show_kind(uihost.OLD)
+    assert [page.game_box.itemData(i) for i in range(page.game_box.count())] == ["anno2070", "anno1404", "anno1701"]
+    page._opened("anno2070", tree)  # what the background open hands over
+    qt.processEvents()
+    assert host.game() == "anno2070" and settings.apps["ui"]["old"] == "anno2070"
+    page.page.sync_open = True
+    page.page.open(GUI + "menudefinitions/test.dlg")
+    assert page.page.root is not None and page.page.root.name == "TEST"
+    page._opened("anno1404", tree)  # another game replaces the page
+    assert host.game() == "anno1404" and page.stack.count() == 1
+    host.close()

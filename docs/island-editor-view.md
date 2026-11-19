@@ -155,7 +155,7 @@ Note: the rest frame rate was measured on 2026-10-15, the culling was added on 2
 
 The editor is meant to draw an island in the same way the game does, by the rules read from the game's shaders
 (`docs/rendering/`). The Rendering menu's switches do this, and each one is listed below with what it still leaves
-out. 117's rules are for 117 and built islands, and the 2070 look is for islands edited for 2070. The game's look
+out. 117's rules are for 117 and built islands, and the 2070 look is for islands edited for 2070: its three switches (2070 look, Underwater look, Caustics) are shown only while a 2070 island is open (the owner, 2026-11-18). The game's look
 and the 2070 look exclude one another.
 
 - **Game terrain**: the ground as the game draws it near the camera, rebuilt from the island's height pages exactly

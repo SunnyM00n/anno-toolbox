@@ -25,8 +25,8 @@ def _islands(shell: SuiteWindow):
     from ..editor import editorapp
     from ..editor.desktop.workbench import MainWindow
 
-    window = MainWindow(app=editorapp.App(shell.settings_path, settings=shell.settings))
-    window.show_game(shell.settings.game)  # the Islands panel on the suite's game
+    window = MainWindow(app=editorapp.App(shell.settings_path, settings=shell.settings), lists_wait=False)
+    window.show_game(shell.settings.game)  # the Islands panel on the suite's game, once its lists are read
     return window
 
 
@@ -70,7 +70,7 @@ def _islands_open(page, game: str, island: str) -> bool:
     found = app.find_island(game, island) if app is not None else None
     if found is None:
         return False
-    page.open(*found)
+    page.open(*found, wait=False)
     return True
 
 
@@ -137,6 +137,7 @@ def _ui(shell: SuiteWindow):
     when first shown; the Flash editor's edit file is the open project's."""
     from ..flashui.uiwindow import EditorWindow
     from ..uiedit import uihost
+    from ..uiedit.oldpage import OldWindow
     from ..uiedit.uiwindow import UiWindow
 
     def flash():
@@ -146,7 +147,11 @@ def _ui(shell: SuiteWindow):
 
     host = uihost.UiHost(
         shell.settings,
-        {uihost.PHOENIX: lambda: UiWindow(shell.settings, shell.settings_path), uihost.FLASH: flash},
+        {
+            uihost.PHOENIX: lambda: UiWindow(shell.settings, shell.settings_path),
+            uihost.FLASH: flash,
+            uihost.OLD: lambda: OldWindow(shell.settings),
+        },
     )
     host.show_last()
     return host
@@ -273,7 +278,7 @@ def _app_games(app: str):
     elif app == "ui":
         from ..uiedit import uiframe, uihost
 
-        games = (*uiframe.GAMES, uihost.FLASH_GAME)
+        games = (*uiframe.GAMES, uihost.FLASH_GAME, uihost.OLD_GAME)
     elif app == "mods":
         from ..modmgr.manager import GAMES as games
     elif app == "sound":
@@ -301,12 +306,13 @@ def _box_open(page, key: str) -> None:
 
 
 def _ui_open(host, key: str) -> None:
-    """The UI app's page for ``key`` to the front; the Phoenix page opens the game unless it is on it already."""
-    from ..uiedit import uihost
+    """The UI app's page for ``key`` to the front; the Phoenix or old-interface page opens the game unless it is on it
+    already (the old-interface tab keeps 1404 and 1701 while it is in front)."""
+    from ..uiedit import oldpage, uihost
 
-    kind = uihost.kind_of(key)
+    kind = uihost.OLD if key in oldpage.OLD_GAMES and host.current == uihost.OLD else uihost.kind_of(key)
     page = host.show_kind(kind)
-    if kind == uihost.PHOENIX and (page.game is None or page.game.key != key):
+    if kind in (uihost.PHOENIX, uihost.OLD) and (page.game is None or page.game.key != key):
         page.open_game(key)
 
 
@@ -326,6 +332,8 @@ def _ui_remember(state: dict, game: str) -> None:
     state["kind"] = uihost.kind_of(game)
     if state["kind"] == uihost.PHOENIX:
         state["game"] = game
+    elif state["kind"] == uihost.OLD:
+        state["old"] = game
 
 
 def _app_game(app: str, current, open_game=lambda page, key: page.open_game(key), **more) -> AppGame:

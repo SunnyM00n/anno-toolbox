@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,6 +37,7 @@ from . import (
     livelink,
     migrate,
     setuppage,
+    shaderbar,
     shadercleanup,
     splash,
     theme,
@@ -142,6 +143,7 @@ class SuiteWindow(QMainWindow):
 
     def _attach_game_link(self) -> None:
         """The status indicator of the live link and the game to editor routing (``livelink``, ``linkroute``)."""
+        self.shader_bar = shaderbar.attach(self)  # the game look's shader compiles, left of the link
         self.link_label = QPushButton(flat=True)  # the status; a click opens the game link panel
         self.link_label.clicked.connect(lambda _c=False: self.open_link_panel())
         self.statusBar().addPermanentWidget(self.link_label)
@@ -345,38 +347,10 @@ def run(
         window.updates.check_at_start()
     setuppage.first_start(window, settings_existed, carried)
     if later is not None:  # the model variants, in the background (render.shaderstart.Later)
-        window.shader_prewarm = ShaderPrewarm(window, later)
+        later.start()  # its progress is the shader bar's (``shaderbar``)
         qt.aboutToQuit.connect(later.stop)
     window.shader_cleanup = shadercleanup.attach(window, settings.anno117)  # compiles a native phase left unused
     return qt.exec()
-
-
-class ShaderPrewarm(QObject):
-    """The start-up stage's background part with its progress in the status bar ("Preparing game shaders: n of m"),
-    the label gone when it ends."""
-
-    step = Signal(int, int)  # from the stage's thread
-    ended = Signal()
-
-    def __init__(self, window: QMainWindow, later) -> None:
-        super().__init__(window)
-        self.label = QLabel()
-        self.label.hide()
-        window.statusBar().addWidget(self.label)
-        self.step.connect(self._show)
-        self.ended.connect(self.label.hide)
-        later.start(lambda done, total: self._emit(self.step, done, total), lambda _result: self._emit(self.ended))
-
-    @staticmethod
-    def _emit(signal, *args) -> None:
-        try:
-            signal.emit(*args)
-        except RuntimeError:  # the window closed meanwhile
-            pass
-
-    def _show(self, done: int, total: int) -> None:
-        self.label.setText(tr("common.preparing_game_shaders_status", done=done, total=total))
-        self.label.show()
 
 
 def smoke_test(qt: QApplication, window: SuiteWindow) -> int:

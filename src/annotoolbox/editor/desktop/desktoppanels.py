@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -32,6 +33,7 @@ from ..editlists import library_items, object_groups
 from ..editsession import game_of, group_key, is_foliage, label_of
 from .desktopcolor import ColorButton
 from .desktopgizmo import euler_of, quat_of
+from .desktopslotstab import SlotsPanel
 
 if TYPE_CHECKING:
     from .desktopeditor import IslandDoc
@@ -248,7 +250,11 @@ class ObjectsPanel(QWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.itemClicked.connect(self._click)
-        layout.addWidget(self.tree, 1)
+        self.slots = SlotsPanel(doc)
+        tabs = QTabWidget()
+        tabs.addTab(self.tree, tr("islands.objects"))
+        tabs.addTab(self.slots, tr("islands.slots"))
+        layout.addWidget(tabs, 1)
         self._open: set[str] = set()
         self._asked = 0  # the number of the latest fill: an older one still grouping is dropped
         self._timer = QTimer(self, singleShot=True, interval=300, timeout=self.fill)
@@ -260,6 +266,7 @@ class ObjectsPanel(QWidget):
         """The list again: the entries grouped off the window's thread (a continental island's 130,000 took a
         second), the tree made when they are; a newer fill wins over one still grouping."""
         entries = list(self.doc.session.entries)
+        self.slots.fill()
         self._asked += 1
         asked = self._asked
         background = getattr(self.doc, "background", None)

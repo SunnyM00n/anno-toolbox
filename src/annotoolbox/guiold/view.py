@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QHeaderView,
     QLineEdit,
     QSplitter,
     QTreeWidget,
@@ -440,6 +441,10 @@ class OldGuiPage(QWidget):
         self.find = QLineEdit(placeholderText=tr("ui.find_dialog_template_background"))
         self.list = QTreeWidget()
         self.list.setHeaderLabels([tr("common.file"), tr("ui.kind")])
+        head = self.list.header()  # the file name takes the width: at the default 100 px every name read "mai..."
+        head.setStretchLastSection(False)
+        head.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        head.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.stage = Stage(self.atlases)
         self.stage.files = self.files
         self.inspector = QTreeWidget()

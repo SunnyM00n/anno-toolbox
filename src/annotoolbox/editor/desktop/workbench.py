@@ -44,7 +44,7 @@ from ...suite import features, gamesync, icons, theme, widgets
 from ...suite.background import Background, long_lived, release_long_lived
 from .. import archivedelivery, editorapp
 from . import flycamera
-from .desktopeditor import LOOKS, IslandDoc, game_tools, open_session
+from .desktopeditor import LOOKS, LOOKS_2070, IslandDoc, game_tools, open_session
 from .desktopforms import edit_menu as forms_menu
 from .desktopgroup import edit_menu
 from .desktopislands import GameTab, SettingsDialog, tab_title
@@ -136,8 +136,12 @@ class Holder(QWidget):
 
 
 class MainWindow(JobRunner, QMainWindow):
-    def __init__(self, app: editorapp.App | None = None, games: tuple[str, ...] | None = None) -> None:
-        """``games``: the keys of the only games the window deals with, None for all."""
+    def __init__(
+        self, app: editorapp.App | None = None, games: tuple[str, ...] | None = None, lists_wait: bool = True
+    ) -> None:
+        """``games``: the keys of the only games the window deals with, None for all. ``lists_wait`` False (the
+        programs): the Islands panel fills when the games' lists are read, off the window's thread, instead of the
+        window waiting for them (known-issues "Island editor held the window")."""
         super().__init__()
         self.app = app or editorapp.App(games=games)
         names = " / ".join(k.removeprefix("anno") for k in self.app.games or ())
@@ -179,7 +183,8 @@ class MainWindow(JobRunner, QMainWindow):
         self._log_next, self._job_state, self._open_after = 0, None, None
         self.timer = QTimer(self, interval=700, timeout=self.poll)
         self.timer.start()
-        self.reload()
+        self._game_after = ""  # a game tab asked for before the lists were read (``show_game``)
+        self.reload(lists_wait)
         self.sync()
 
     def system_scheme_changed(self, _scheme) -> None:
@@ -493,8 +498,10 @@ class MainWindow(JobRunner, QMainWindow):
                 action.setChecked(doc is not None and id == gizmo_action(v.gizmo))
         self.actions["foliage"].setChecked(bool(doc) and v.hidden.foliage)
         looks = doc.look_state() if doc else {}
+        offers_2070 = bool(doc) and doc.offers_2070_looks()
         for key, action in self.look_actions.items():
             enabled, on = looks.get(key, (False, False))
+            action.setVisible(key not in LOOKS_2070 or offers_2070)
             action.setEnabled(enabled)
             action.setChecked(on)
         q = doc.view.opts.quality if doc else None
@@ -549,6 +556,9 @@ class MainWindow(JobRunner, QMainWindow):
             self._fill_game_tabs(current, got)
         finally:
             self.tabs.blockSignals(False)
+        if self._game_after:
+            key, self._game_after = self._game_after, ""
+            self.show_game(key)
 
     def _game_tab_shown(self, index: int) -> None:
         """A game's tab of the Islands panel was turned to: the suite's other apps follow that game. The
@@ -558,11 +568,13 @@ class MainWindow(JobRunner, QMainWindow):
             gamesync.may_switch(self, key)
 
     def show_game(self, key: str) -> bool:
-        """Turn the Islands panel to the game ``key``; False when it lists no such game."""
+        """Turn the Islands panel to the game ``key``; False when it lists no such game (yet: while the lists are
+        read it is turned to when they are in)."""
         for k in range(self.tabs.count()):
             if getattr(self.tabs.widget(k), "key", "") == key:
                 self.tabs.setCurrentIndex(k)
                 return True
+        self._game_after = key
         return False
 
     def shown_game(self) -> str:
@@ -639,9 +651,10 @@ class MainWindow(JobRunner, QMainWindow):
         if ok:
             self.open_file(island, Path(folder))
 
-    def open_file(self, island: str, mod: Path | None = None, edits: Path | None = None) -> None:
-        """Load an island file of a mod folder or the game (the ``desktop ISLAND`` command line)."""
-        self._load(("file", island, mod, edits), lambda: self.app.open_path(island, mod, edits))
+    def open_file(self, island: str, mod: Path | None = None, edits: Path | None = None, wait: bool = True) -> None:
+        """Load an island file of a mod folder or the game (the ``desktop ISLAND`` command line); ``wait`` as in
+        ``open``."""
+        self._load(("file", island, mod, edits), lambda: self.app.open_path(island, mod, edits), wait)
 
     def _load(self, request: tuple, opener, wait: bool = True) -> None:
         """Open what ``opener`` opens: the island's files read and its edit session made (off the window's thread
@@ -747,7 +760,7 @@ class MainWindow(JobRunner, QMainWindow):
         if dialog.exec():
             self.app.set_settings(dialog.values())
             self.apply_theme()
-            self.reload()
+            self.reload(wait=False)
 
 
 def smoke_report(window: MainWindow, started: float) -> dict | None:
@@ -783,12 +796,12 @@ def run(
     qt = QApplication.instance() or QApplication([sys.argv[0]])
     qt.setApplicationName(TITLE)
     qt.setStyle("Fusion")  # the native style ignores parts of the dark palette
-    window = MainWindow(games=games)
+    window = MainWindow(games=games, lists_wait=False)
     window.show()
     if island and games:
-        QTimer.singleShot(0, lambda: window.open(games[0], island))
+        QTimer.singleShot(0, lambda: window.open(games[0], island, wait=False))
     elif island:
-        QTimer.singleShot(0, lambda: window.open_file(island, mod, edits))
+        QTimer.singleShot(0, lambda: window.open_file(island, mod, edits, wait=False))
     if smoke is not None:
         started = time.monotonic()
         timer = QTimer(window, interval=500)

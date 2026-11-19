@@ -147,7 +147,9 @@ src/annotoolbox/editor/desktop/desktopsea.py
 src/annotoolbox/editor/desktop/desktopsea1404.py
 src/annotoolbox/editor/desktop/desktopsea1701.py
 src/annotoolbox/editor/desktop/desktopsea2070.py
+src/annotoolbox/editor/desktop/desktopslotlinks.py
 src/annotoolbox/editor/desktop/desktopslots.py
+src/annotoolbox/editor/desktop/desktopslotstab.py
 src/annotoolbox/editor/desktop/desktopview.py
 src/annotoolbox/editor/desktop/flycamera.py
 src/annotoolbox/editor/desktop/minimappanel.py
@@ -205,12 +207,16 @@ src/annotoolbox/editor/oldenginebuild.py
 src/annotoolbox/editor/othermaterials.py
 src/annotoolbox/editor/placeables.py
 src/annotoolbox/editor/placedrules.py
+src/annotoolbox/editor/portdrops.py
 src/annotoolbox/editor/portpictures.py
+src/annotoolbox/editor/portreskin.py
 src/annotoolbox/editor/projectpart.py
 src/annotoolbox/editor/regionconvert.py
 src/annotoolbox/editor/selection.py
 src/annotoolbox/editor/sessionpath.py
 src/annotoolbox/editor/sessionterrain.py
+src/annotoolbox/editor/slotkinds.py
+src/annotoolbox/editor/slotlinks.py
 src/annotoolbox/editor/snapping.py
 src/annotoolbox/editor/templatedonors.py
 src/annotoolbox/editor/terraintools.py
@@ -320,6 +326,7 @@ src/annotoolbox/infra/i18n.py
 src/annotoolbox/infra/lang/de.json
 src/annotoolbox/infra/lang/en.json
 src/annotoolbox/infra/piecejson.py
+src/annotoolbox/infra/shadertrack.py
 src/annotoolbox/infra/tools.py
 src/annotoolbox/islands/__init__.py
 src/annotoolbox/islands/donor117.py
@@ -735,6 +742,7 @@ src/annotoolbox/suite/qtlang.py
 src/annotoolbox/suite/settings.py
 src/annotoolbox/suite/setupchoices.py
 src/annotoolbox/suite/setuppage.py
+src/annotoolbox/suite/shaderbar.py
 src/annotoolbox/suite/shadercleanup.py
 src/annotoolbox/suite/shell.py
 src/annotoolbox/suite/shortcuts.py
@@ -794,6 +802,7 @@ src/annotoolbox/uiedit/loaders.py
 src/annotoolbox/uiedit/matrices.py
 src/annotoolbox/uiedit/memo.py
 src/annotoolbox/uiedit/mirror.py
+src/annotoolbox/uiedit/oldpage.py
 src/annotoolbox/uiedit/operators.py
 src/annotoolbox/uiedit/panels.py
 src/annotoolbox/uiedit/pickers.py
@@ -1062,6 +1071,7 @@ tests/test_piecejson.py
 tests/test_placebuildings.py
 tests/test_placedobjects.py
 tests/test_placeholder_icons.py
+tests/test_portdrops.py
 tests/test_postforward.py
 tests/test_project.py
 tests/test_projectarchives.py
@@ -1090,9 +1100,11 @@ tests/test_session2205ground.py
 tests/test_session2205pages.py
 tests/test_sessionsettings.py
 tests/test_settings.py
+tests/test_shaderbar.py
 tests/test_shaderclean.py
 tests/test_shadernative.py
 tests/test_shadersource.py
+tests/test_slotlinks.py
 tests/test_slotlist.py
 tests/test_snapping.py
 tests/test_soundcurves.py

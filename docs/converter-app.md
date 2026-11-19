@@ -80,6 +80,12 @@ sources and the target have boxes of their own, and options the entry fixes (`--
 the command's default is left out of the line, as a person would leave it out. An entry may narrow a free option to a
 list (`--format` of an export), and may fill options from the settings (a game's folder) or from the source game.
 
+**Reskin to match the target game** (`--reskin`, on the island port, `rdm relayout`, `rdm from-granny` and, in the full
+source, `convert` and `buildings`): wherever a model or an object goes from one game to another, the form shows this
+check box under that name with a tooltip (it keeps models only the source game has and draws them with the target's
+ground textures; off: they are left out), off at first and remembered between runs in the settings. One rule
+stands behind every entry (`editor/portreskin`, the island port's document, "Reskinning").
+
 ## Running
 
 `runner.run` runs the command lines in this process, on a background thread. An entry that takes one source at a

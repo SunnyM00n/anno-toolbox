@@ -173,7 +173,7 @@ def test_the_island_editor_answers_open_island_and_follows_the_selection_without
     app = type(
         "App", (), {"find_island": lambda self, game, island: ("anno117", island) if game == "anno117" else None}
     )()
-    page = type("Page", (), {"app": app, "open": lambda self, kind, name: opened.append((kind, name))})()
+    page = type("Page", (), {"app": app, "open": lambda self, kind, name, wait=True: opened.append((kind, name))})()
     assert apps._islands_open(page, "anno117", "data/x/i.a7m") and opened == [("anno117", "data/x/i.a7m")]
     assert not apps._islands_open(page, "anno1800", "x") and not apps._islands_open(object(), "anno117", "x")
 

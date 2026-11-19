@@ -46,6 +46,7 @@ class Slot:
     pad: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)  # PaddingUtility: left, top, right, bottom
     align: int = INHERITED  # AlignmentUtility
     background: bool = False
+    holds: bool | None = None  # counted by its container, hidden or not: a stack gives it room (None: ``flows``)
 
 
 def components(node: dict) -> dict[str, int]:
@@ -118,7 +119,7 @@ def arrange(rule: Rule, slots: list[Slot]) -> None:
     then stretch the background round them. The first child is the background of a background layout."""
     slots_in_flow = [s for s in slots if s.flows and not s.background]
     if rule.flow:
-        _stack(rule, slots_in_flow)
+        _stack(rule, [s for s in slots if (s.flows if s.holds is None else s.holds) and not s.background])
     if rule.background is not None:
         _stretch(rule.background, slots, slots_in_flow)
 

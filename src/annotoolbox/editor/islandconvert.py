@@ -26,7 +26,17 @@ from ..mod.modxml import modinfo
 from ..modloader import modswap
 from ..sources import gametree
 from ..suite import features
-from . import gametransfer, groundedit, islandplaces, portpictures, regionconvert
+from . import (
+    gametransfer,
+    groundedit,
+    islandplaces,
+    portdrops,
+    portpictures,
+    portreskin,
+    regionconvert,
+    slotkinds,
+    slotlinks,
+)
 from .assetmodels import AssetModels
 from .formats.a7m import edit117 as a7m_edit117
 from .formats.a7m.reader import GameFiles, IslandFile1800
@@ -37,6 +47,7 @@ SIDE_FILES = (".a7me",)  # copied beside the ported island (the .a7minfo is writ
 FIT_MAP = "map"  # Request.fit: no pool asset; the island takes its donor's fixed places on the game's maps
 FITS = (FIT_MAP,)
 GAME_NAMES = {"anno117": "Anno 117", "anno1800": "Anno 1800"}
+PORT_REPORT = "port-report.txt"  # in the mod: what each island's port left out or swapped, by name
 
 
 @dataclass(frozen=True)
@@ -52,6 +63,8 @@ class Request:
     name: str = ""
     pool_region: str = ""
     fit: str = ""
+    slot_links: tuple[tuple[int, int | None], ...] = ()  # the person's slot links between the games (``slotlinks``)
+    reskin: bool = False  # models only the source has are kept, drawn with the target's ground (``portreskin``)
 
 
 @dataclass
@@ -99,6 +112,7 @@ class GameSide:
         self.cache = cache
         self._models: AssetModels | None = None
         self._pool: list[str] | None = None
+        self._slots: tuple | None = None
         self._inventories: dict[str, regiontables.Inventory] = {}
 
     def read(self, path: str) -> bytes:
@@ -116,6 +130,14 @@ class GameSide:
             self._models = AssetModels.read(self.read, ASSET_GAMES[self.key])
         info = self._models.asset(guid)
         return (info.template, info.name) if info is not None else None
+
+    def slots(self) -> tuple[dict[int, slotkinds.SlotAsset], slotlinks.Resources]:
+        """The game's slot assets and what its slot buildings say of them (``slotlinks``), read once."""
+        if self._slots is None:
+            if self._models is None:
+                self._models = AssetModels.read(self.read, ASSET_GAMES[self.key])
+            self._slots = (slotkinds.read_assets(self._models), slotlinks.Resources.read(self._models))
+        return self._slots
 
     def pool(self) -> list[str]:
         """The game's ``RandomIsland`` assets."""
@@ -221,17 +243,32 @@ def convert(
         *sides, colour_reader(src, src) if colours and not regions.same_look(own, target) else None
     )
     path = target_path(target, new_name(request, target))
+    reskinned = portreskin.Reskinned()
     if regions.same_look(own, target):  # the region itself, or Cape Trelawney and the Old World
         a7m, info, changed, report = src.read(request.source), src.read(request.source[:-4] + ".a7minfo"), {}, {}
     else:
         log(tr("islands.changing_ground_props_objects"))
-        changed, report = regionconvert.apply(isl, gd, tables)
+        ledger = portdrops.Ledger()
+        ids = regionconvert.material_maps(isl, gd)[0]  # before the apply turns the IDs
+        portdrops.ground_entries(
+            ledger,
+            ids,
+            isl.size,
+            (set_text, sides[1].set_text),
+            regiontables.with_unlisted(tables.materials, sides[1].set_text),
+        )
+        if request.reskin:
+            reskinned = portreskin.for_port(src, dst, isl.rd, tables, own, target, sides[1].set_text, ledger)
+        changed, report = regionconvert.apply(isl, gd, tables, ledger, src.asset_names)
+        report["reskinned props"] = reskinned.count
+        report["dropped"] = ledger.entries
         a7m, info = isl.write(), isl.write_info()
         if colours:
             log(tr("islands.drawing_map_pictures"))
             changed |= _redrawn(src, isl, gd, changed, sides[1].set_text)
     done = Ported(request, path, a7m, info, {rel: changed.get(rel) or gd.read(rel) for rel in gd.names}, report=report)
     _side_files(done, src, request.source)
+    done.side.update(reskinned.files)
     if request.fit == FIT_MAP:  # a region's maps place their own islands: the Maps app puts this one
         done.report["maps"] = []
     else:
@@ -289,6 +326,7 @@ def _transferred(src: GameSide, dst: GameSide, request: Request, target: Region,
     carried = gametransfer.transfer(src, dst, request, target, colour, log)
     path = target_path(target, new_name(request, target))
     done = Ported(request, path, carried.a7m, carried.info, carried.gamedata, report=carried.report)
+    done.side.update(carried.files)
     _side_files(done, dst, carried.donor)
     if request.fit == FIT_MAP:
         places = islandplaces.take_place(dst, carried.donor, path, Path(path).stem)
@@ -385,31 +423,42 @@ def _write_ported(out: Path, mod_id: str, mod_name: str, game: str, done: list[P
         assets.parent.mkdir(parents=True, exist_ok=True)
         built = assets.read_text(encoding="utf-8").rsplit("</ModOps>", 1)[0] if assets.is_file() else "<ModOps>\n"
         assets.write_text(built + "\n".join(ops) + "\n</ModOps>\n", encoding="utf-8", newline="\n")
-    (out / "modinfo.json").write_text(_modinfo(out, mod_id, mod_name), encoding="utf-8", newline="\n")
+    (out / "modinfo.json").write_text(_modinfo(out, mod_id, mod_name, game), encoding="utf-8", newline="\n")
+    if any(item.report.get("dropped") for item in done):
+        (out / PORT_REPORT).write_text(port_report(done), encoding="utf-8", newline="\n")
 
 
-def _modinfo(out: Path, mod_id: str, mod_name: str) -> str:
+def _modinfo(out: Path, mod_id: str, mod_name: str, game: str = "anno117") -> str:
     """The port mod's ``modinfo.json``; a build's folder copied in keeps its scripts and its game setup (a 2070 island
-    build's random-map module, a new game needed)."""
+    build's random-map module, a new game needed). 1800's loader knows none of 117's game fields (``Anno``,
+    ``Difficulty``, ``GameSetup``), so an 1800 mod's file has only what it reads (engine-modloader "Anno 1800's loader")."""
     built = json.loads((out / "modinfo.json").read_text(encoding="utf-8")) if (out / "modinfo.json").is_file() else {}
     setup = built.get("GameSetup", {})
     description = "Islands ported to another region or game in the island editor (local use only)."
-    return modinfo(
+    text = modinfo(
         mod_id,
         "Map",
         mod_name,
         description,
-        version="0.1",
+        version="0.1.0",
         safe_to_remove=setup.get("SafeToRemove", True),
         requires_new_game=setup.get("RequiresNewGame", False),
         scripts=built.get("Scripts"),
     )
+    if game != "anno1800":
+        return text
+    info = json.loads(text)
+    for key in ("Anno", "Difficulty", "GameSetup", "Scripts"):
+        info.pop(key, None)
+    return json.dumps(info, indent=2, ensure_ascii=False) + chr(10)
 
 
 def summary(done: Ported) -> str:
-    """One line on what a port did."""
+    """What a port did: one line, then what it did not carry as it was, by name (``portdrops``; the log shows the
+    first of each kind, ``port-report.txt`` of the mod all)."""
     r = done.report
     parts = [f"{done.request.source} -> {done.target}"]
+    fates = portdrops.totals(r.get("dropped", []))
     if r.get("donor"):
         parts.append(f"donor {r['donor']}")
     for key in ("objects changed", "objects removed", "objects kept", "objects copied", "objects left out"):
@@ -418,8 +467,22 @@ def summary(done: Ported) -> str:
     for key in ("prop files", "props removed"):
         if r.get(key):
             parts.append(f"{key} {r[key]}")
+    if r.get("slots unlinked"):
+        left = ", ".join(f"{s['name'] or s['guid']} x{s['count']}" for s in r["slots unlinked"])
+        parts.append(tr("islands.slots_without_link", slots=left))
     if r.get("ground"):
         parts.append(f"ground maps {r['ground'].get('maps', 0)}")
     if "maps" in r:
         parts.append(tr("islands.placed_on_maps", n=len(r["maps"])) if r["maps"] else tr("islands.no_map_places"))
-    return ", ".join(parts)
+    if fates:
+        parts.append(", ".join(f"{what} {n}" for what, n in fates.items()))
+    return "\n  ".join([", ".join(parts), *portdrops.lines(r.get("dropped", []))])
+
+
+def port_report(done: list[Ported]) -> str:
+    """Every island's whole drop list as text (the mod's ``port-report.txt``)."""
+    out = []
+    for item in done:
+        out += [f"{item.request.source} -> {item.target}"]
+        out += [f"  {x}" for x in portdrops.lines(item.report.get("dropped", []), None)] + [""]
+    return "\n".join(out)

@@ -736,9 +736,11 @@ class Placer:
             return None
         return (float(bound[0]) / base[0], float(bound[1]) / base[1]), tuple(base)
 
-    def _child(self, el: elements.Element, scope: Scope, matrix: Matrix, parent_size, sized: bool = True) -> Child:
+    def _child(self, el: elements.Element, scope: Scope, matrix: Matrix, parent_size, sized: bool = True,
+               stacked: bool = False) -> Child:  # fmt: skip
         """One child of a group or template, placed by its own values (the group's rule comes after); ``sized``
-        False: a hidden child's size is not worked out (nothing it holds is drawn or counted)."""
+        False: a hidden child's size is not worked out (nothing it holds is drawn or counted), unless ``stacked``
+        (it is in a stack, which gives a hidden child that counts its room: layout.md "Layout components")."""
         overrides = self.own(el, scope)
         if self.ctx.design:  # a scale or size the game feeds at run time (its UI scale) stays as stored
             closed = all if _is_mask(el.node) else any  # a mask's size of 0 on one axis is its state (a closed mask)
@@ -752,7 +754,9 @@ class Placer:
             visible = visible and (self.ctx.editor_hidden or not fields.get(el.node, "IsHidden"))
         visible = bool(visible)
         inputs = inputs_of(overrides, el.node)
-        if not visible and not sized:
+        counts = overrides.get((0x80000080,))
+        counts = bool(fields.get(el.node, "ConsiderSize", True) if counts is None else counts)
+        if not visible and not sized and not (stacked and counts):
             return self._hidden(el, overrides, inputs, parent_size)
         origin = (0.0, 0.0)
         if el.kind == "label" and not is_size(overrides.get((SIZE,))):  # its box may start at its text
@@ -779,11 +783,9 @@ class Placer:
         ancestors = own_scale(matrix)
         start = origin if el.kind == "container" else (0.0, 0.0)
         local = self.local(el, overrides, size, parent_size, fraction, ancestors, stretch and stretch[0], start)
-        counts = overrides.get((0x80000080,))
-        counts = bool(fields.get(el.node, "ConsiderSize", True) if counts is None else counts)
         pad, align = arrange.read_child(comps, overrides)
         rect = bounds(mul(local, translate(*origin)), *size)
-        slot = arrange.Slot(el.guid, local, size, rect, visible and counts, pad, align)
+        slot = arrange.Slot(el.guid, local, size, rect, visible and counts, pad, align, holds=counts)
         return Child(el, overrides, visible, counts, inputs, slot, origin)
 
     def _hidden(self, el: elements.Element, overrides: dict, inputs: dict, parent_size) -> Child:
@@ -797,7 +799,8 @@ class Placer:
     def _children(self, parent, scope, matrix, parent_size, owner, measure_only, paint: Paint,
                   rule: arrange.Rule | None = None) -> None:  # fmt: skip
         sized = owner is None and not measure_only  # the open file's boxes, the selection's outline among them
-        in_file = [self._child(el, scope, matrix, parent_size, sized) for el in parent.children]
+        stacked = rule is not None and rule.flow
+        in_file = [self._child(el, scope, matrix, parent_size, sized, stacked) for el in parent.children]
         if (
             rule is not None
         ):  # the game's child array is the file's order, not the ZIndex's (layout.md "Layout components")

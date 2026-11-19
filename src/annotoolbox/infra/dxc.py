@@ -16,6 +16,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from . import shadertrack
 from .com import HRESULT, POINTER, Guid, blob_bytes, c_void_p, file_version, method, release
 from .i18n import N_, english, tr
 from .tools import candidates
@@ -266,8 +267,10 @@ class Dxc:
 
     def compile(self, source: str, args: list[str], name: str = "shader.hlsl") -> Compiled:
         """Compile ``source`` with DXC's command-line ``args`` (``-E``, ``-T``, options; no include handler: the
-        source must be whole, as the game passes it)."""
-        status, result = self._run(source, [name, *args])
+        source must be whole, as the game passes it). Shown while it runs (``shadertrack``)."""
+        entry = args[args.index("-E") + 1] if "-E" in args[:-1] else ""
+        with shadertrack.compiling(f"{name} {entry}".strip()):
+            status, result = self._run(source, [name, *args])
         try:
             messages = self._output(result, OUT_ERRORS).decode("utf-8", "replace").rstrip("\0")
             obj = self._output(result, OUT_OBJECT) if status == 0 else b""

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from ..infra import buildcache
+from ..infra import buildcache, shadertrack
 from ..models import shadercache, shadernative, shaderview
 from . import loader
 from .loader import VIEW_WORKERS
@@ -203,7 +203,8 @@ class Stopped(Exception):
 
 @dataclass
 class Gate:
-    """When a job may start: never after ``stop``, and not while ``hold()`` says an island loads; ``low``: the
+    """When a job may start: never after ``stop``, and not while ``hold()`` says an island loads or the person paused
+    the preparation (``shadertrack.pause``: a view's own compile is not held, it makes what it needs); ``low``: the
     workers run below the normal thread priority."""
 
     hold: Callable[[], bool] | None = None
@@ -211,7 +212,7 @@ class Gate:
     low: bool = False
 
     def wait(self) -> None:
-        while self.hold is not None and not self.stop.is_set() and self.hold():
+        while not self.stop.is_set() and (shadertrack.paused() or (self.hold is not None and self.hold())):
             self.stop.wait(HOLD_POLL)
         if self.stop.is_set():
             raise Stopped
@@ -233,24 +234,29 @@ def run(p: Plan, source, progress: Callable[[int, int, str], None] | None = None
     compiles on demand later; the part is marked when none failed and none was stopped."""
     gate = gate or Gate()
     result, start, total = Result(), time.perf_counter(), len(p.jobs)
+    shadertrack.batch(0, total)
 
     def go(job: Job):
         gate.wait()
         with source.passing():
             return job.run()
 
-    with ThreadPoolExecutor(workers, "shader-start", _lower_priority if gate.low else None) as pool:
-        futures = {pool.submit(go, j): j for j in p.jobs}
-        for f in as_completed(futures):
-            job, exc = futures[f], f.exception()
-            if isinstance(exc, Stopped):
-                result.stopped = True
-                continue
-            if exc is not None:
-                result.failed.append(f"{job.label}: {type(exc).__name__}: {exc}"[:300])
-            result.done += 1
-            if progress is not None:
-                progress(result.done, total, job.label)
+    try:
+        with ThreadPoolExecutor(workers, "shader-start", _lower_priority if gate.low else None) as pool:
+            futures = {pool.submit(go, j): j for j in p.jobs}
+            for f in as_completed(futures):
+                job, exc = futures[f], f.exception()
+                if isinstance(exc, Stopped):
+                    result.stopped = True
+                    continue
+                if exc is not None:
+                    result.failed.append(f"{job.label}: {type(exc).__name__}: {exc}"[:300])
+                result.done += 1
+                shadertrack.batch(result.done, total)
+                if progress is not None:
+                    progress(result.done, total, job.label)
+    finally:
+        shadertrack.batch(0, 0)
     result.seconds = time.perf_counter() - start
     if not result.failed and not result.stopped:
         buildcache.put(NAMESPACE, mark_key(p, source), str(int(time.time())).encode())
@@ -259,10 +265,13 @@ def run(p: Plan, source, progress: Callable[[int, int, str], None] | None = None
 
 class Later:
     """The second part (``MODELS``) once the window is up: its plan made and its jobs run on worker threads of low
-    priority, none started while a view's loader has work (an island being opened: ``loader.loading``)."""
+    priority, none started while a view's loader has work (an island being opened: ``loader.loading``).
+    ``opener()`` gives (tree, compiler) on the part's own thread when the start did not open them (reading the
+    install's archive index takes seconds: the window must not wait for it)."""
 
-    def __init__(self, tree, compiler, quick: str, hold: Callable[[], bool] | None = loader.loading) -> None:
-        self.tree, self.compiler, self.quick = tree, compiler, quick
+    def __init__(self, tree, compiler, quick: str, hold: Callable[[], bool] | None = loader.loading,
+                 opener: Callable[[], tuple] | None = None) -> None:  # fmt: skip
+        self.tree, self.compiler, self.quick, self.opener = tree, compiler, quick, opener
         self.gate = Gate(hold, low=True)
         self.thread: threading.Thread | None = None
         self.result: Result | None = None
@@ -277,6 +286,8 @@ class Later:
 
     def _work(self, progress, finished) -> None:
         try:
+            if self.opener is not None:
+                self.tree, self.compiler = self.opener()
             p, source = plan(self.tree, self.compiler, MODELS)
             if self.gate.stop.is_set():
                 self.result = Result(stopped=True)
@@ -319,9 +330,14 @@ def on_start(install: str, renderer: str, hardware: bool, status: Callable[[str]
     first, second = quick_key(Path(install), SPLASH), quick_key(Path(install), MODELS)
     if buildcache.get(NAMESPACE, first) is not None and buildcache.get(NAMESPACE, second) is not None:
         return None  # a later start of the same build: nothing opened, nothing read
+
+    def opened() -> tuple:
+        return open_game("anno117", Path(install)), dxc.Dxc.find(anno117=install)
+
     try:
-        tree = open_game("anno117", Path(install))
-        compiler = dxc.Dxc.find(anno117=install)
+        if buildcache.get(NAMESPACE, first) is not None:  # only the second part is left: opened in the background
+            return Later(None, None, second, opener=opened)
+        tree, compiler = opened()
         if buildcache.get(NAMESPACE, first) is None:
             p, source = plan(tree, compiler, SPLASH)
             result = None

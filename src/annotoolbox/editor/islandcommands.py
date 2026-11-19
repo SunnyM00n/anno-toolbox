@@ -36,6 +36,11 @@ def register(sub: argparse._SubParsersAction) -> None:
         default="",
         help="map: no pool asset, the island takes its donor's fixed places on the game's maps (a size the pool lacks)",
     )
+    c.add_argument(
+        "--reskin",
+        action="store_true",
+        help="keep rocks and other ground models only the source has, drawn with the target region's ground textures",
+    )
     c.add_argument("--src", type=Path, help="the source game's install (default ANNO117_DIR, ANNO1800_DIR, ...)")
     c.add_argument("--dst", type=Path, help="the target game's install, for a port to the other game")
     c.add_argument("--cache", type=Path, help="where the install index and the regions' inventories are kept")
@@ -80,7 +85,13 @@ def cmd_convert(args) -> int:
     dst = src if target.game == args.game else open_game(target.game, args.dst, args.cache)
     requests = [
         islandconvert.Request(
-            args.game, path.replace("\\", "/").lower(), args.to, args.name, args.pool_region, args.fit
+            args.game,
+            path.replace("\\", "/").lower(),
+            args.to,
+            args.name,
+            args.pool_region,
+            args.fit,
+            reskin=args.reskin,
         )
         for path in dict.fromkeys(args.islands)
     ]

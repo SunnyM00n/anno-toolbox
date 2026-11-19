@@ -30,6 +30,7 @@ FIRST_RUN = "first-run"  # in the data folder: the installer's first start has n
 UNINSTALL_REQUEST = "uninstall-request.json"  # in the data folder: "delete my settings and caches", left by the dialog
 REQUEST_LIFETIME = 600.0  # seconds a request is honoured: a cancelled uninstall must not delete data months later
 OLD_DOWNLOADS = "updates"  # the old updater's download folder, in the data folder
+SHORTCUTS_MADE = "shortcuts-made"  # in the data folder: the program has made its shortcuts once (0.2.0 never could)
 
 
 def first_run_pending(folder: Path | None = None) -> bool:
@@ -44,6 +45,16 @@ def mark_first_run(folder: Path | None = None) -> None:
 
 def clear_first_run(folder: Path | None = None) -> None:
     ((folder or local_data_dir()) / FIRST_RUN).unlink(missing_ok=True)
+
+
+def shortcuts_made(folder: Path | None = None) -> bool:
+    return ((folder or local_data_dir()) / SHORTCUTS_MADE).is_file()
+
+
+def mark_shortcuts_made(folder: Path | None = None) -> None:
+    folder = folder or local_data_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / SHORTCUTS_MADE).write_text("1", encoding="utf-8", newline="\n")
 
 
 def tidy_old_downloads(folder: Path | None = None) -> None:

@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
 )
 
-from ..guiold.view import OldGuiPage
 from ..infra.i18n import N_, tr, trn
 from ..sources import gametree
 from ..suite import gameopen, gamesync, linkannounce, linkscenes, livelink, project, widgets
@@ -49,7 +48,7 @@ from . import (
     worldmenu,
 )
 from .pictures import Pictures
-from .uiframe import APP, GAMES, OLD_GAMES, ROLE
+from .uiframe import APP, GAMES, ROLE
 
 TITLE = N_("ui.ui_editor")
 
@@ -79,7 +78,6 @@ class UiWindow(QMainWindow):
         self.ctx: layout.Context | None = None
         self.frame: layout.Frame | None = None
         self.background = Background(self)
-        self.old_page = None  # the old interface's page (guiold.view) once one is open
         self._placing, self._again = False, False  # a layout is running / was asked for while it ran
         self._queued: list = []  # (file or None, action) asked for while a layout runs: it reads the files, so they wait
         self._view: dict[str, object] = {}  # the preview's switches changed meanwhile, taken over by the next layout
@@ -117,27 +115,6 @@ class UiWindow(QMainWindow):
             prepare=prepare,
             wait=wait,
         )
-
-    def open_old(self, key: str, wait: bool = False) -> None:
-        """Open a game's old interface (dialogs, templates, backgrounds) read only, in the background."""
-        gameopen.open_installed(
-            self, self.settings, key, self.background, then=lambda tree: self._opened_old(key, tree), wait=wait
-        )
-
-    def _opened_old(self, key: str, tree) -> None:
-        if isinstance(tree, Exception):
-            self.statusBar().showMessage(tr("common.game_not_open_error", game=OLD_GAMES.get(key, key), error=tree))
-            return
-        if self.old_page is not None:
-            self.centre.removeWidget(self.old_page)
-            self.old_page.deleteLater()  # taken off the stack only, it would stay for the window's life
-        self.old_page = OldGuiPage(tree)
-        self.centre.addWidget(self.old_page)
-        self.centre.setCurrentWidget(self.old_page)
-        for dock in self.docks.values():
-            dock.hide()
-        self.setWindowTitle(f"{OLD_GAMES.get(key, key)} - {tr(TITLE)}")
-        self.statusBar().showMessage(tr("ui.old_interface_read_only", game=OLD_GAMES.get(key, key)))
 
     def _open_folder(self) -> None:
         if not self.may_leave():

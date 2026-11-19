@@ -489,6 +489,16 @@ def bank_window(window, monkeypatch, version: int = 172, project_folder=None):
     return window
 
 
+def test_opening_a_game_lists_its_banks_and_counts_them(sound_window, monkeypatch):
+    from annotoolbox.soundedit import soundwindow
+
+    files = {BANK_PATH: bank_bytes(172)}
+    tree = gametree.GameTree("t", lambda p: files[p], files, lambda p: "t")
+    monkeypatch.setattr(soundwindow.gameopen, "open_installed", lambda *a, then, **k: then(tree))
+    sound_window.open_game("anno117")
+    assert sound_window.banks.count() == 1 and "1" in sound_window.statusBar().currentMessage()
+
+
 def test_the_window_lists_a_bank_and_edits_through_the_forms(sound_window, monkeypatch):
     window = bank_window(sound_window, monkeypatch, 172)
     window.outline.expandAll()

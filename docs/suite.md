@@ -9,7 +9,7 @@ Each app is also a separate program. The window puts them side by side and lets 
 | Islands | the islands of every Anno game, in 3D, as the game draws them | [`island-editor.md`](island-editor.md) |
 | Assets | a game's assets (buildings, goods, needs, quests...) in forms made from the game's own schema | [`asset-editor.md`](asset-editor.md) |
 | Viewer | any game's files as the game reads them: models in 3D with their parts and animations, textures, effects, sounds | [`viewer.md`](viewer.md) |
-| UI | the interface files of Anno 117, 1800, 1404 and 1701 (scenes and widgets previewed with sample values, bindings as a node graph) and Anno 2205's Flash interface movies, pictures and icons, on two pages of one app | [`ui-editor.md`](ui-editor.md), [`ui/2205/flash-ui-editor.md`](ui/2205/flash-ui-editor.md) |
+| UI | the interface files of Anno 117, 1800, 1404 and 1701 (scenes and widgets previewed with sample values, bindings as a node graph) and Anno 2205's Flash interface movies, pictures and icons, and the old interface of 2070, 1404 and 1701 (read only), on three tabs of one app (Phoenix, Flash and the old interface) | [`ui-editor.md`](ui-editor.md), [`ui/2205/flash-ui-editor.md`](ui/2205/flash-ui-editor.md) |
 | Mods | the installed mods of 117 and 1800: profiles, the loader's order, problems before the start, the last start's log, install and remove | [`mod-manager.md`](mod-manager.md) |
 | Objects | a model config of any game: its parts, materials, effects, lights, sequences and the info file's boxes, with the 3D view following; saved as a new file, a replacement or a patch | [`object-builder.md`](object-builder.md) |
 | Sound | the Wwise banks of 117, 1800 and 2205 (events, containers, sounds, music, clips replaced) and the older games' sound database | [`sound-editor.md`](sound-editor.md) |
@@ -222,6 +222,16 @@ Note: none of this has been tried in a game yet.
 [`live-link.md`](live-link.md) says what each kind of file needs and how the link works: section 8 for the part built
 into the suite and section 9 for the transport. The debug-command palette (`suite/debugcommands`, `suite/linkpalette`)
 is described in `debug-palette.md`.
+
+## The shader progress bar
+
+While the game look's shaders are prepared (once per game build, at the start and in the background after it), a
+small progress bar sits beside the game link in the status bar: "Shaders: n of m" for the stage's jobs, a bar that only
+moves for the compiles of an island opened meanwhile; its tooltip names the compile running now, and it is gone when
+nothing compiles. The *Pause* button beside it holds back the jobs that have not started (the running one ends);
+*Resume* goes on where it stopped. A view that needs a shader while the preparation is paused still compiles that one
+itself, so nothing waits for the button. The compiles run on worker threads and report through a signal, never on
+the window's thread (`infra/shadertrack.py`, `suite/shaderbar.py`; tool-suite.md "The start-up stage").
 
 ## Updates
 

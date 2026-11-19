@@ -418,25 +418,13 @@ def test_a_file_that_cannot_be_kept_is_said_and_keeps_the_window_open(window, mo
     assert len(shown) == 3 and window.doc.key == WIDGET
 
 
-def test_closing_drops_a_scene_still_being_drawn_and_a_replaced_old_page_is_deleted(window, monkeypatch):
-    from PySide6.QtCore import QCoreApplication, QEvent
-    from PySide6.QtWidgets import QWidget
-
-    from annotoolbox.uiedit import uiwindow
-
+def test_closing_drops_a_scene_still_being_drawn(window, monkeypatch):
     class Still:
         cancelled = False
 
         def cancel(self) -> None:
             self.cancelled = True
 
-    gone: list[str] = []
-    monkeypatch.setattr(uiwindow, "OldGuiPage", lambda _tree: QWidget())
-    window._opened_old("anno1404", object())
-    window.old_page.destroyed.connect(lambda: gone.append("first"))
-    window._opened_old("anno1404", object())
-    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    assert gone == ["first"]
     still = window.world_menu.still = Still()
     window.close()
     assert still.cancelled and window.world_menu.still is None

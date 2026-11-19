@@ -29,11 +29,6 @@ from .timeline import SequenceEditor
 
 APP = "ui"  # the key of its remembered state in the settings
 GAMES = {"anno117": "Anno 117", "anno1800": "Anno 1800", "anno1404": "Anno 1404", "anno1701": "Anno 1701"}
-OLD_GAMES = {
-    "anno2070": "Anno 2070",
-    "anno1404": "Anno 1404",
-    "anno1701": "Anno 1701",
-}  # the games of the old interface
 ROLE = Qt.ItemDataRole.UserRole
 
 
@@ -179,9 +174,6 @@ def menus(window) -> None:
     games = file.addMenu(tr("common.menu.open_game"))
     for key, name in GAMES.items():
         games.addAction(name, lambda k=key: window.open_game(k))
-    old = file.addMenu(tr("ui.menu.open_old_interface"))
-    for key, name in OLD_GAMES.items():
-        old.addAction(name, lambda k=key: window.open_old(k))
     file.addAction(tr("common.open_folder_loose_files"), window._open_folder)
     file.addAction(tr("ui.new_widget_file"), window.new_widget_file, QKeySequence("Ctrl+N"))
     file.addSeparator()

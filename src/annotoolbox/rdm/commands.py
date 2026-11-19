@@ -73,7 +73,19 @@ def _from_granny(sub) -> None:
     )
     sp.add_argument("--source", choices=("anno1404", "anno1701"), default=None, help="default: read off the file")
     sp.add_argument("--scale", type=float, default=0.0, help="divide every length by this (default: the tiles' ratio)")
+    for hook in _model_options():
+        hook.add_options(sp)
     sp.set_defaults(func=cmd_from_granny)
+
+
+def _model_options() -> list:
+    """What an extension adds to the model commands (the ``--reskin`` option; none in the public edition)."""
+    from ..suite import features
+
+    try:
+        return list(features.extensions(features.MODEL_OPTIONS).values())
+    except ImportError:  # the light install (no numpy) loads no extension: the commands run without the option
+        return []
 
 
 def _paths(sp: argparse.ArgumentParser, what: str) -> None:
@@ -191,6 +203,8 @@ def _relayout(sub) -> None:
     sp = sub.add_parser("relayout", help="rewrite .rdm files into the layouts 117 uses (a 2070 model for 117, say)")
     _paths(sp, ".rdm")
     _common_out(sp)
+    for hook in _model_options():
+        hook.add_options(sp)
     sp.set_defaults(func=cmd_relayout)
 
 
@@ -334,6 +348,9 @@ def cmd_relayout(args: argparse.Namespace) -> int:
     from ..models import rdmnative
     from . import batch, conventions
 
+    hook = next(iter(_model_options()), None)
+    palette = hook.start(args) if hook else None
+
     def work(job: batch.Job):
         rdm = _read(job.source)
         kind = conventions.classify(rdm)
@@ -345,7 +362,16 @@ def cmd_relayout(args: argparse.Namespace) -> int:
         else:
             raise ValueError(f"a {kind} file: relayout takes static, skinned and animation files")
         lines = [f"filled: {x}" for x in notes.filled] + [f"approximated: {x}" for x in notes.approximated]
-        return {job.target: data}, lines + [f"DROPPED: {x}" for x in notes.dropped]
+        files = {job.target: data}
+        if palette is not None:
+            more, said = (
+                hook.configs(palette, job.source.name, data, job.target)
+                if kind == "static"
+                else ({}, ["not reskinned: a skinned model or an animation is not a ground model"])
+            )
+            files |= more
+            lines += said
+        return files, lines + [f"DROPPED: {x}" for x in notes.dropped]
 
     out = args.out
     if out is None:
@@ -412,6 +438,8 @@ def cmd_from_granny(args: argparse.Namespace) -> int:
     opts = grannyrdm.Options(args.to, args.source or "", args.scale, args.axes)
     folder = sorted(args.anims.rglob("*.gr2")) if args.anims else []
     read: dict[Path, bytes] = {}
+    hook = next(iter(_model_options()), None)
+    palette = hook.start(args) if hook and args.to == "anno117" else None
 
     def work(job: batch.Job):
         data = job.source.read_bytes()
@@ -420,7 +448,13 @@ def cmd_from_granny(args: argparse.Namespace) -> int:
             grannyrdm.bone_names(data),
         )
         made = grannyrdm.convert(data, job.target.stem, opts, extra)
-        return {job.target.parent / name: body for name, body in made.files.items()}, made.notes
+        files = {job.target.parent / name: body for name, body in made.files.items()}
+        notes = list(made.notes)
+        if palette is not None and job.target.name in made.files:
+            more, said = hook.configs(palette, job.source.name, made.files[job.target.name], job.target)
+            files |= more
+            notes += said
+        return files, notes
 
     return _run(batch.jobs(args.inputs, args.out, (".gr2",), ".rdm"), work, args.force)
 

@@ -51,6 +51,20 @@ def test_a_hidden_child_takes_no_room_in_a_stack():
     assert (button.rect[0], right.rect[0]) == (0.0, 268.0)
 
 
+def test_a_hidden_child_that_counts_keeps_its_room_in_a_stack():
+    """ "DividerStackingGroup" (trade route scene): its last child "ColumnDivider_01" is hidden but counts (2 wide), and
+    the first padded divider starts at 2 + 58 = 60; 16 of 22 such shown stacks fit without it, 23 of 23 with it."""
+    rule = _rule()
+    group = _slot(0, 0, 2, 140, pad=(58.0, 0.0, 0.0, 0.0))
+    hidden = arrange.Slot(None, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (2.0, 140.0), (0.0, 0.0, 2.0, 140.0), False, holds=True)
+    arrange.arrange(rule, [group, hidden])
+    assert (hidden.rect[0], group.rect[0]) == (0.0, 60.0)
+    plain = arrange.Slot(None, (1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (2.0, 140.0), (0.0, 0.0, 2.0, 140.0), False, holds=False)
+    group = _slot(0, 0, 2, 140, pad=(58.0, 0.0, 0.0, 0.0))
+    arrange.arrange(rule, [group, plain])  # counts nothing (ConsiderSize off): no room
+    assert group.rect[0] == 58.0
+
+
 def test_a_stack_aligns_across_with_the_paddings_inside_the_widest_child():
     """ "Header_Button" (omresidence scene): Middle, children 28 high with a top padding of 6 in a box 52 high sit at
     15, as (52 - 34) / 2 + 6; the margin moves no child."""
