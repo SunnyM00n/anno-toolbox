@@ -34,8 +34,8 @@ def status_text(row: dict) -> str:
     return tr("common.build_lists_n", n=row["now"])
 
 
-class SlotListDialog(QDialog):
-    """The rows of ``EditSession.slot_rows`` in a table."""
+class CSlotListDialog(QDialog):
+    """The rows of ``CEditSession.slot_rows`` in a table."""
 
     COLUMNS = (
         N_("common.slot_asset"),
@@ -50,15 +50,15 @@ class SlotListDialog(QDialog):
         self.setWindowTitle(tr("common.title.slot_list"))
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("common.map_generator_offers_islands_slots")))
-        self.table = QTableWidget(len(rows), len(self.COLUMNS))
-        self.table.setHorizontalHeaderLabels([tr(c) for c in self.COLUMNS])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        for r, row in enumerate(rows):
+        self.m_table = QTableWidget(len(rows), len(self.COLUMNS))
+        self.m_table.setHorizontalHeaderLabels([tr(column) for column in self.COLUMNS])
+        self.m_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        for row_index, row in enumerate(rows):
             texts = (row["name"] or str(row["guid"]), row["listed"], row["now"], generator_text(row), status_text(row))
-            for c, text in enumerate(texts):
-                self.table.setItem(r, c, QTableWidgetItem(str(text)))
-        self.table.resizeColumnsToContents()
-        layout.addWidget(self.table)
+            for column, text in enumerate(texts):
+                self.m_table.setItem(row_index, column, QTableWidgetItem(str(text)))
+        self.m_table.resizeColumnsToContents()
+        layout.addWidget(self.m_table)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("common.close"))
         buttons.rejected.connect(self.reject)
@@ -68,9 +68,9 @@ class SlotListDialog(QDialog):
 
 def show(main) -> None:
     """Open the dialog for the open island, or say that it has no slot list."""
-    doc = main.doc
-    rows = doc.session.slot_rows() if doc is not None else []
+    doc = main.m_doc
+    rows = doc.m_session.slot_rows() if doc is not None else []
     if not rows:
         main.say(tr("common.island_lists_no_slots"))
         return
-    SlotListDialog(main, rows).exec()
+    CSlotListDialog(main, rows).exec()

@@ -2,9 +2,9 @@
 records, bone matrices and culled shadow words in one buffer each for all draws, a draw naming only where its words
 start (``cbModel``); the island view's objects (docs/rendering/island-117-view.md "Phase 5", "Speed" part 5).
 
-``FrameInstances(rhi)`` gathers a frame's instances (``place``, ``place_casters``) and uploads them once; a
-``PartPass`` is one part through one program (shaders of ``gameshader.adapt(frame=True)``), an ``InstanceRun`` one
-of its draws. ``Common`` holds the terrain nodes' buffers without node values.
+``CFrameInstances(rhi)`` gathers a frame's instances (``place``, ``place_casters``) and uploads them once; a
+``CPartPass`` is one part through one program (shaders of ``gameshader.adapt(is_frame=True)``), an ``CInstanceRun`` one
+of its draws. ``CCommon`` holds the terrain nodes' buffers without node values.
 """
 
 from __future__ import annotations
@@ -41,18 +41,20 @@ def bone_rows(worlds: np.ndarray, joints: int = 0) -> np.ndarray:
     return np.repeat(rows, max(1, joints), axis=0)
 
 
-def instance_records(worlds: np.ndarray, colour: int = 0xFFF, deform: bool = False, adapt: bool = True) -> np.ndarray:
+def instance_records(
+    worlds: np.ndarray, colour: int = 0xFFF, deform: bool = False, is_terrain_adapted: bool = True
+) -> np.ndarray:
     """Each instance's ``ModelInstanceData`` ([n, 12] words, 48 bytes): its place, its object colour (12 bits; 0 is
     black), ``deform`` (bent to the terrain), its height as the terrain adaptation reads it (7.8 fixed point from -4,
-    clamped as the engine packs it; ``adapt`` False: no adaptation, no terrain to read), no last frame's
+    clamped as the engine packs it; ``is_terrain_adapted`` False: no adaptation, no terrain to read), no last frame's
     orientation."""
-    rec = np.zeros((len(worlds), 12), np.uint32)
+    records = np.zeros((len(worlds), 12), np.uint32)
     places = np.asarray(worlds, np.float32)[:, :3, 3]
-    rec[:, 0:3] = np.ascontiguousarray(places).view(np.uint32)
+    records[:, 0:3] = np.ascontiguousarray(places).view(np.uint32)
     height = np.clip(np.rint((places[:, 1].astype(np.float64) + 4.0) * 256), 0, 0x7FFF).astype(np.uint32)
-    rec[:, 4], rec[:, 7] = (colour << 4) | (DEFORM if deform else 0), LAST_NONE
-    rec[:, 5] = (height << 17) | (0 if adapt else NO_TERRAIN_ADAPT)
-    return rec
+    records[:, 4], records[:, 7] = (colour << 4) | (DEFORM if deform else 0), LAST_NONE
+    records[:, 5] = (height << 17) | (0 if is_terrain_adapted else NO_TERRAIN_ADAPT)
+    return records
 
 
 @functools.lru_cache(maxsize=512)
@@ -76,378 +78,431 @@ def culled_rows(casts: list) -> np.ndarray:
     "Speed", part 12)."""
     if not casts:
         return np.zeros((0, 4), np.uint32)
-    sizes = [len(c[0]) for c in casts]
+    sizes = [len(cast[0]) for cast in casts]
     starts = np.cumsum([0, *sizes[:-1]])
     local = (np.arange(sum(sizes)) - np.repeat(starts, sizes)).astype(np.uint32)
-    record = np.repeat(np.array([c[2] for c in casts], np.uint32), sizes) + local
-    stride = np.repeat(np.array([max(1, c[1]) for c in casts], np.uint32), sizes)
-    bone = np.repeat(np.array([c[3] for c in casts], np.uint32), sizes) + local * stride
-    i, k = (a.astype(np.uint32) for a in np.nonzero(np.concatenate([c[0] for c in casts])))
-    words = np.zeros((len(i), 4), np.uint32)
-    words[:, 0] = (k << 30) | ALPHA | record[i]
-    words[:, 2] = bone[i]
+    record = np.repeat(np.array([cast[2] for cast in casts], np.uint32), sizes) + local
+    stride = np.repeat(np.array([max(1, cast[1]) for cast in casts], np.uint32), sizes)
+    bone = np.repeat(np.array([cast[3] for cast in casts], np.uint32), sizes) + local * stride
+    instance_index, cascade_index = (
+        indices.astype(np.uint32) for indices in np.nonzero(np.concatenate([cast[0] for cast in casts]))
+    )
+    words = np.zeros((len(instance_index), 4), np.uint32)
+    words[:, 0] = (cascade_index << 30) | ALPHA | record[instance_index]
+    words[:, 2] = bone[instance_index]
     return words
 
 
-class Culled:
-    """A shadow draw's culled words before the frame writes them (``FrameInstances.upload``): how many (its
+class CCulled:
+    """A shadow draw's culled words before the frame writes them (``CFrameInstances.upload``): how many (its
     instances, one a caster and cascade)."""
 
-    __slots__ = ("count",)
+    __slots__ = ("m_instance_count",)
 
-    def __init__(self, count: int) -> None:
-        self.count = count
+    def __init__(self, instance_count: int) -> None:
+        self.m_instance_count = instance_count
 
     def __len__(self) -> int:
-        return self.count
+        return self.m_instance_count
 
 
-def stamp_of(camera: gs.Camera, fill, attr: str = "key") -> tuple | None:
+def stamp_of(camera: gs.SCamera, fill, attribute_name: str = "key") -> tuple | None:
     """What a draw's buffers hold besides its instances: the camera (its values, worked out once per camera) and the
     pass's own fill (its ``key``, or ``common_key`` for what it writes into the buffers without instance data; a fill
     without one: None, the buffers are filled every time)."""
     key = camera.__dict__.get("_stamp")
     if key is None:
-        key = camera.__dict__["_stamp"] = (np.asarray(camera.view).tobytes(), np.asarray(camera.proj).tobytes(),
+        key = camera.__dict__["_stamp"] = (np.asarray(camera.view).tobytes(), np.asarray(camera.projection).tobytes(),
                                            np.asarray(camera.eye).tobytes(), camera.near, camera.far,
-                                           tuple(camera.size), camera.shadow_far)  # fmt: skip
+                                           tuple(camera.size_px), camera.shadow_far)  # fmt: skip
     if fill is None:
         return key, None
-    own = getattr(fill, attr, None) if attr == "key" else getattr(fill, attr, getattr(fill, "key", None))
+    own = (
+        getattr(fill, attribute_name, None)
+        if attribute_name == "key"
+        else getattr(fill, attribute_name, getattr(fill, "key", None))
+    )
     return (key, own) if own is not None else None
 
 
-class Common:
+class CCommon:
     """The buffers of every terrain node through one program that hold no node value (``terraindraw``): one set,
     each compared with what any node last sent (``sent``) and filled once for a camera and pass (``stamps``); a node
     made while the camera moves makes only its own."""
 
     def __init__(self, rhi, alike=()) -> None:
-        self.rhi = rhi
-        self.alike = frozenset(alike)  # value names every user writes alike (the island's place)
-        self.buffers: dict[str, object] = {}
-        self.sizes: dict[str, int] = {}
-        self.sent: dict[str, bytes] = {}
-        self.stamps: dict[str, tuple] = {}  # what a buffer was last filled for (``stamp_of``): the next node skips it
-        self._retired: list = []  # buffers a name held at another size: still bound until the release
-        self._made: dict[str, object] = {}  # what every node binds alike (``once``: a white map, an empty buffer)
+        self.m_rhi = rhi
+        self.m_alike = frozenset(alike)  # value names every user writes alike (the island's place)
+        self.m_buffers: dict[str, object] = {}
+        self.m_sizes: dict[str, int] = {}
+        self.m_sent: dict[str, bytes] = {}
+        self.m_stamps: dict[str, tuple] = {}  # what a buffer was last filled for (``stamp_of``): the next node skips it
+        self._m_retired: list = []  # buffers a name held at another size: still bound until the release
+        self._m_made: dict[str, object] = {}  # what every node binds alike (``once``: a white map, an empty buffer)
 
     def once(self, name: str, make):
         """The resource ``name`` every node binds alike, made by ``make()`` the first time (each one a driver
         allocation: a turning camera makes nodes every frame)."""
-        if name not in self._made:
-            self._made[name] = make()
-        return self._made[name]
+        if name not in self._m_made:
+            self._m_made[name] = make()
+        return self._m_made[name]
 
-    def buffer(self, name: str, size: int):
-        got = self.buffers.get(name)
-        if got is None or self.sizes[name] != size:
+    def buffer(self, name: str, size_bytes: int):
+        got = self.m_buffers.get(name)
+        if got is None or self.m_sizes[name] != size_bytes:
             if got is not None:
-                self._retired.append(got)
-            got = self.buffers[name] = gamedraw.uniform_buffer(self.rhi, size)
-            self.sizes[name] = size
-            self.sent.pop(name, None)
-            self.stamps.pop(name, None)
+                self._m_retired.append(got)
+            got = self.m_buffers[name] = gamedraw.uniform_buffer(self.m_rhi, size_bytes)
+            self.m_sizes[name] = size_bytes
+            self.m_sent.pop(name, None)
+            self.m_stamps.pop(name, None)
         return got
 
     def release(self) -> None:
-        for buf in (*self.buffers.values(), *self._retired, *self._made.values()):
-            buf.destroy()
-        self.buffers, self.sizes, self.sent, self.stamps, self._retired, self._made = {}, {}, {}, {}, [], {}
+        for buffer in (*self.m_buffers.values(), *self._m_retired, *self._m_made.values()):
+            buffer.destroy()
+        self.m_buffers, self.m_sizes, self.m_sent, self.m_stamps, self._m_retired, self._m_made = {}, {}, {}, {}, [], {}
 
 
-class FrameInstances:
+class CFrameInstances:
     """A frame's instance data of every draw in one buffer each (module docstring): ``begin`` a new frame, ``place``
     a draw's instances and ``place_casters`` a shadow draw's while the frame's draws are made, ``upload`` once before
     the passes (a still camera's frame keeps the last frame's); ``bindings`` are the buffers by the shaders' names,
     ``offsets`` the draws' slots. A buffer that grows is made anew and ``generation`` counts up: a binding set of an
-    older one is made again (``PartPass``)."""
+    older one is made again (``CPartPass``)."""
 
     def __init__(self, rhi) -> None:
-        self.rhi = rhi
-        self.buffers: dict[str, QRhiBuffer] = {}
-        self.offsets: QRhiBuffer | None = None
-        self.generation = 0
-        self.adapt = False  # the frame hands the session's terrain: the models adapt to it (else none does)
+        self.m_rhi = rhi
+        self.m_buffers: dict[str, QRhiBuffer] = {}
+        self.m_offsets: QRhiBuffer | None = None
+        self.m_generation = 0
+        self.m_is_terrain_adapted = (
+            False  # the frame hands the session's terrain: the models adapt to it (else none does)
+        )
         self.begin()
 
     def begin(self) -> None:
-        self._parts: dict[str, list] = {kind: [] for kind in KINDS}
-        self._counts = dict.fromkeys(KINDS, 0)
-        self._slots: list[int] = []
+        self._m_parts: dict[str, list] = {kind: [] for kind in KINDS}
+        self._m_counts = dict.fromkeys(KINDS, 0)
+        self._m_slots: list[int] = []
         # (id of the worlds, joints, deform) -> (record, bone, the worlds kept); its slot (a prepass and its draw); its
         # shadow slot and words (each mesh's)
-        self._records: dict[tuple, tuple] = {}
-        self._drawn: dict[tuple, int] = {}
-        self._cast: dict[tuple, tuple] = {}
+        self._m_records: dict[tuple, tuple] = {}
+        self._m_drawn: dict[tuple, int] = {}
+        self._m_cast: dict[tuple, tuple] = {}
         # per kind of words ("words", "culled") the draws' (mask, joints, record, bone): made at the upload
-        self._later: dict[str, list] = {"words": [], "culled": []}
-        self._sent = False
+        self._m_later: dict[str, list] = {"words": [], "culled": []}
+        self._m_sent = False
+        self._m_gathered: dict | None = None
+        self.m_serial = getattr(self, "m_serial", -1) + 1  # which frame's instances these are (the native copy's key)
 
     def _append(self, kind: str, rows: np.ndarray) -> int:
-        at = self._counts[kind]
-        self._parts[kind].append(rows)
-        self._counts[kind] += len(rows)
-        return at
+        start = self._m_counts[kind]
+        self._m_parts[kind].append(rows)
+        self._m_counts[kind] += len(rows)
+        return start
 
     def _defer(self, kind: str, mask: np.ndarray, joints: int, record: int, bone: int) -> tuple[int, int]:
         """Words of ``kind`` made with the upload (``culled_rows``): where they start and how many."""
-        at, n = self._counts[kind], int(np.count_nonzero(mask))
-        self._counts[kind] += n
-        self._later[kind].append((mask, joints, record, bone))
-        return at, n
+        start, count = self._m_counts[kind], int(np.count_nonzero(mask))
+        self._m_counts[kind] += count
+        self._m_later[kind].append((mask, joints, record, bone))
+        return start, count
 
     def _slot(self, offset: int) -> int:
-        self._slots.append(offset)
-        return (len(self._slots) - 1) * SLOT
+        self._m_slots.append(offset)
+        return (len(self._m_slots) - 1) * SLOT
 
     def _placed(self, worlds: np.ndarray, joints: int, deform: bool = False) -> tuple[int, int]:
         """Where the records and bones of ``worlds`` start (written once a frame: every pass's draws name them)."""
-        key = (id(worlds), joints, deform)
-        got = self._records.get(key)
+        key = (id(worlds), joints, deform)  # the worlds are kept in ``_records``, which a frame empties with the rest
+        got = self._m_records.get(key)
         if got is None:
-            record = self._append("records", instance_records(worlds, deform=deform, adapt=self.adapt))
+            record = self._append(
+                "records", instance_records(worlds, deform=deform, is_terrain_adapted=self.m_is_terrain_adapted)
+            )
             bone = self._append("bones", bone_rows(worlds, joints))
-            got = self._records[key] = (record, bone, worlds)  # the worlds kept: their id stays theirs this frame
+            got = self._m_records[key] = (record, bone, worlds)  # the worlds kept: their id stays theirs this frame
         return got[0], got[1]
 
     def place(self, worlds: np.ndarray, joints: int = 0, deform: bool = False) -> int:
         """A draw of ``worlds`` ([n, 4, 4], column vectors; ``joints``: a skin's bones, 0 rigid; ``deform``: bent to
         the terrain): their words, each naming its record and first bone; the byte offset of its slot."""
         key = (id(worlds), joints, deform)
-        if key not in self._drawn:
+        if key not in self._m_drawn:
             record, bone = self._placed(worlds, joints, deform)
-            at, _n = self._defer("words", np.ones((len(worlds), 1), bool), joints, record, bone)  # cascade 0
-            self._drawn[key] = self._slot(at)
-        return self._drawn[key]
+            start, _count = self._defer("words", np.ones((len(worlds), 1), bool), joints, record, bone)  # cascade 0
+            self._m_drawn[key] = self._slot(start)
+        return self._m_drawn[key]
 
     def place_casters(
         self, worlds: np.ndarray, joints: int, mask: np.ndarray, deform: bool = False
-    ) -> tuple[int, Culled]:
+    ) -> tuple[int, CCulled]:
         """A shadow draw of ``worlds``, each instance into the cascades ``mask`` ([n, cascades]) marks: its slot's
-        byte offset and its culled words (``Culled``: one an instance and cascade, the draw's instance count; written
+        byte offset and its culled words (``CCulled``: one an instance and cascade, the draw's instance count; written
         with the frame's upload, ``culled_rows``); the meshes of a part's level share them."""
         mask = np.asarray(mask, bool)
         key = (id(worlds), joints, deform, mask.tobytes())  # a cut-out's draws take one cascade each
-        if key not in self._cast:
+        if key not in self._m_cast:
             record, bone = self._placed(worlds, joints, deform)
-            at, n = self._defer("culled", mask, joints, record, bone)
-            self._cast[key] = (self._slot(at), Culled(n))
-        return self._cast[key]
+            start, count = self._defer("culled", mask, joints, record, bone)
+            self._m_cast[key] = (self._slot(start), CCulled(count))
+        return self._m_cast[key]
+
+    def place_each_cascade(self, worlds: np.ndarray, joints: int, mask: np.ndarray, deform: bool = False):
+        """(cascade, slot, culled words) of a shadow draw of ``worlds`` for each cascade ``mask`` marks for any of
+        them, into that cascade alone (a cut-out volume: its shadow shaders place it by the draw's cascade, not by an
+        instance's word as the models' do)."""
+        mask = np.asarray(mask, bool)
+        for k in range(mask.shape[1]):
+            only = np.zeros_like(mask)
+            only[:, k] = mask[:, k]
+            if only.any():
+                yield (k, *self.place_casters(worlds, joints, only, deform))
 
     def bindings(self) -> dict:
         """The frame's buffers by the names the shaders read them by (made at their first size when missing)."""
         for kind in KINDS:
             self._fit(kind, 0)
         self._fit_offsets(1)
-        return {name: self.buffers[kind] for kind, (_size, names) in KINDS.items() for name in names}
+        return {name: self.m_buffers[kind] for kind, (_size_bytes, names) in KINDS.items() for name in names}
 
-    def _fit(self, kind: str, size: int) -> None:
-        buf = self.buffers.get(kind)
-        if buf is not None and buf.size() >= size:
+    def _fit(self, kind: str, size_bytes: int) -> None:
+        buffer = self.m_buffers.get(kind)
+        if buffer is not None and buffer.size() >= size_bytes:
             return
-        if buf is not None:  # grown with room: each growth makes every part's binding set again
-            buf.destroy()
-            self.generation += 1
-            size *= GROWTH
-        buf = self.rhi.newBuffer(QRhiBuffer.Type.Static, QRhiBuffer.UsageFlag.StorageBuffer, _grown(size))
-        buf.create()
-        self.buffers[kind] = buf
+        if buffer is not None:  # grown with room: each growth makes every part's binding set again
+            buffer.destroy()
+            self.m_generation += 1
+            size_bytes *= GROWTH
+        buffer = self.m_rhi.newBuffer(QRhiBuffer.Type.Static, QRhiBuffer.UsageFlag.StorageBuffer, _grown(size_bytes))
+        buffer.create()
+        self.m_buffers[kind] = buffer
 
     def _fit_offsets(self, slots: int) -> None:
-        if self.offsets is not None and self.offsets.size() >= slots * SLOT:
+        if self.m_offsets is not None and self.m_offsets.size() >= slots * SLOT:
             return
-        if self.offsets is not None:
-            self.offsets.destroy()
-            self.generation += 1
+        if self.m_offsets is not None:
+            self.m_offsets.destroy()
+            self.m_generation += 1
             slots *= GROWTH
-        self.offsets = gamedraw.uniform_buffer(self.rhi, _grown(slots * SLOT))
+        self.m_offsets = gamedraw.uniform_buffer(self.m_rhi, _grown(slots * SLOT))
+
+    def gathered(self) -> dict[str, bytes]:
+        """The frame's words, records, bones and culled words by kind, and ``"slots"`` (each draw's ``cbModel``, one
+        ``SLOT`` each), as bytes: made once a frame, for the QRhi buffers (``upload``) and the native backend's."""
+        if self._m_gathered is None:
+            for kind, later in self._m_later.items():  # the draws' and the casters' words, each kind at once
+                if later:
+                    self._m_parts[kind], self._m_later[kind] = [culled_rows(later)], []
+            out = {kind: np.concatenate(parts).tobytes() if parts else b"" for kind, parts in self._m_parts.items()}
+            slots = np.zeros((len(self._m_slots), SLOT // 4), np.uint32)
+            slots[:, 0] = self._m_slots
+            out["slots"] = slots.tobytes()
+            self._m_gathered = out
+        return self._m_gathered
 
     def upload(self, batch) -> None:
         """The frame's words, records, bones and slots into their buffers (once a frame; grown first where needed)."""
-        if self._sent:
+        if self._m_sent:
             return
-        self._sent = True
-        for kind, later in self._later.items():  # the draws' and the casters' words, each kind at once
-            if later:
-                self._parts[kind], self._later[kind] = [culled_rows(later)], []
+        self._m_sent = True
+        got = self.gathered()
         for kind in KINDS:
-            parts = self._parts[kind]
-            data = np.concatenate(parts).tobytes() if parts else b""
+            data = got[kind]
             self._fit(kind, len(data))
             if data:
-                batch.uploadStaticBuffer(self.buffers[kind], 0, len(data), data)
-        slots = np.zeros((len(self._slots), SLOT // 4), np.uint32)
-        slots[:, 0] = self._slots
-        self._fit_offsets(len(self._slots))
-        if len(self._slots):
-            batch.updateDynamicBuffer(self.offsets, 0, slots.tobytes())
+                batch.uploadStaticBuffer(self.m_buffers[kind], 0, len(data), data)
+        self._fit_offsets(len(self._m_slots))
+        if len(self._m_slots):
+            batch.updateDynamicBuffer(self.m_offsets, 0, got["slots"])
 
     def release(self) -> None:
-        for buf in (*self.buffers.values(), self.offsets):
-            if buf is not None:
-                buf.destroy()
-        self.buffers, self.offsets = {}, None
+        for buffer in (*self.m_buffers.values(), self.m_offsets):
+            if buffer is not None:
+                buffer.destroy()
+        self.m_buffers, self.m_offsets = {}, None
         self.begin()
 
 
-def _grown(size: int) -> int:
+def _grown(size_bytes: int) -> int:
     """A buffer's size for ``size`` bytes: the next power of two, ``SMALLEST`` at least."""
-    return max(SMALLEST, 1 << max(0, int(size) - 1).bit_length())
+    return max(SMALLEST, 1 << max(0, int(size_bytes) - 1).bit_length())
 
 
-class PartInputs(NamedTuple):
+class SPartInputs(NamedTuple):
     """What the passes of one part (a material) share, the owner's: the material, the frame's instance buffers, the
     textures the owner hands by name, the material's arrays (``maps``: made by the first pass that draws) and their
     table, and ``meshes(mesh, batch)``: the vertex and index buffers of a mesh (one copy for every pass)."""
 
-    material: gamedraw.Material
-    frame: FrameInstances
+    material: gamedraw.SMaterial
+    frame: CFrameInstances
     textures: dict
     maps: list
-    table: gamedraw.TextureTable
+    table: gamedraw.CTextureTable
     meshes: Callable | None = None
 
 
-class PartPass(gamedraw.GameModel):
-    """One part (``PartInputs``) through one program of a pass: one binding set with the frame's instance buffers and
+class CPartPass(gamedraw.CGameModel):
+    """One part (``SPartInputs``) through one program of a pass: one binding set with the frame's instance buffers and
     ``cbModel`` at a draw's slot, its constant buffers written once a frame (``prepare``), per mesh its per-vertex
     inputs and a pipeline of the program's (``mesh_inputs``)."""
 
-    def __init__(self, rhi, program, state, part: PartInputs) -> None:
+    def __init__(self, rhi, program, state, part: SPartInputs) -> None:
         super().__init__(rhi, program, None, part.material, None, state, part.table)
-        self.frame, self.textures, self.maps, self.meshes = part.frame, part.textures, part.maps, part.meshes
-        self.srb = None
-        self.slot_binding: int | None = None  # ``cbModel``'s binding: the draw's slot is its dynamic offset
-        self.inputs: dict[int, tuple] = {}  # id of a mesh -> (vertex buffers, index buffer, pipeline, its key, mesh)
-        self._stamp: tuple | None = None  # the camera and pass inputs its constants hold (``stamp_of``)
-        self._shared: dict = {}  # what the pass and the owner hand by name (bound again when the frame's grow)
-        self._generation = -1
-        self._own: dict[tuple, object] = {}  # its samplers, stand-ins and scratch buffers: made once for every set
-        self._shared_key: tuple = ()  # the frame's resources it was bound with (``_key_of``)
+        self.m_frame, self.m_textures, self.m_maps, self.m_meshes = part.frame, part.textures, part.maps, part.meshes
+        self.m_srb = None
+        self.m_slot_binding: int | None = None  # ``cbModel``'s binding: the draw's slot is its dynamic offset
+        self.m_inputs: dict[int, tuple] = {}  # id of a mesh -> (vertex buffers, index buffer, pipeline, its key, mesh)
+        self._m_stamp: tuple | None = None  # the camera and pass inputs its constants hold (``stamp_of``)
+        self._m_shared: dict = {}  # what the pass and the owner hand by name (bound again when the frame's grow)
+        self._m_generation = -1
+        self._m_own: dict[tuple, object] = {}  # its samplers, stand-ins and scratch buffers: made once for every set
+        self._m_shared_key: tuple = ()  # the frame's resources it was bound with (``_key_of``)
 
     def _cbuffer(self, name: str, number: int, stages):
         if name != SLOT_BUFFER:
             return super()._cbuffer(name, number, stages)
-        if self.program.cbuffers[name].size > SLOT:  # the engine's is a root constant: a draw's slot must hold it
+        if self.m_program.m_cbuffers[name].size > SLOT:  # the engine's is a root constant: a draw's slot must hold it
             raise RuntimeError(f"{name} is larger than a draw's slot ({SLOT} bytes)")
-        self.slot_binding = number
-        return gamedraw.B.uniformBufferWithDynamicOffset(number, stages, self.frame.offsets, SLOT)
+        self.m_slot_binding = number
+        return gamedraw.Binding.uniformBufferWithDynamicOffset(number, stages, self.m_frame.m_offsets, SLOT)
 
     def _once(self, kind: str, name: str, make):
         key = (kind, name)
-        if key not in self._own:
-            self._own[key] = make()
-        return self._own[key]
+        if key not in self._m_own:
+            self._m_own[key] = make()
+        return self._m_own[key]
 
     def _sampler(self, name: str):
-        return self._once("sampler", name, lambda: super(PartPass, self)._sampler(name))
+        return self._once("sampler", name, lambda: super(CPartPass, self)._sampler(name))
 
     def _scratch(self, name: str):
-        return self._once("scratch", name, lambda: super(PartPass, self)._scratch(name))
+        return self._once("scratch", name, lambda: super(CPartPass, self)._scratch(name))
 
     def _texture(self, name: str, shared: dict, white):
         if name in shared:
             return shared[name]
-        return self._once("texture", name, lambda: super(PartPass, self)._texture(name, shared, white))
+        return self._once("texture", name, lambda: super(CPartPass, self)._texture(name, shared, white))
 
     def _make(self, batch, shared: dict) -> None:
-        if not self.maps:
-            self.maps.extend(self.table.create(self.rhi, batch))
-            self.table.drop_pixels()  # on the device now: every pass binds the same arrays
-            self.material.maps.clear()
-        self.arrays = self.maps
-        self.constants, self.buffers, self._sent, self._own = {}, {}, {}, {}
-        self.white = self._white(batch)
+        if not self.m_maps:
+            self.m_maps.extend(self.m_table.create(self.m_rhi, batch))
+            self.m_table.drop_pixels()  # on the device now: every pass binds the same arrays
+            self.m_material.maps.clear()
+        self.m_arrays = self.m_maps
+        self.m_constants, self.m_buffers, self._m_sent, self._m_own = {}, {}, {}, {}
+        self.m_white = self._white(batch)
         self._bind(shared)
 
     def _bind(self, shared: dict) -> None:
         """The binding set, made again when the frame's buffers or the resources the pass hands were made anew
         (the pipelines stay: alike)."""
-        if self.srb is not None:
-            self.keep.remove(self.srb)
-            self.srb.destroy()
-        self._shared = {**self.textures, **shared}
-        self.srb = self._bindings({**self._shared, **self.frame.bindings()}, self.white)
-        self._generation, self._shared_key = self.frame.generation, _key_of(shared)
+        if self.m_srb is not None:
+            self.m_keep.remove(self.m_srb)
+            self.m_srb.destroy()
+        self._m_shared = {**self.m_textures, **shared}
+        self.m_srb = self._bindings({**self._m_shared, **self.m_frame.bindings()}, self.m_white)
+        self._m_generation, self._m_shared_key = self.m_frame.m_generation, _key_of(shared)
 
-    def prepare(self, rp, signature, batch, camera: gs.Camera, fill=None, shared: dict | None = None) -> None:
+    def prepare(self, render_pass, signature, batch, camera: gs.SCamera, fill=None, shared: dict | None = None) -> None:
         """Made when new; its constants written once for a camera and the pass's inputs (the fill's ``common_key``
         or ``key``; a fill without one: every time), a buffer sent only when it changed."""
-        if not self.keep:
+        if not self.m_keep:
             self._make(batch, shared or {})
-        elif self._generation != self.frame.generation or self._shared_key != _key_of(shared or {}):
+        elif self._m_generation != self.m_frame.m_generation or self._m_shared_key != _key_of(shared or {}):
             self._bind(shared or {})
         stamp = stamp_of(camera, fill, "common_key")
-        if stamp is not None and stamp == self._stamp:
+        if stamp is not None and stamp == self._m_stamp:
             return
-        for name, c in self.constants.items():
-            gs.fill_frame(c, camera)
+        for name, constants_block in self.m_constants.items():
+            gs.fill_frame(constants_block, camera)
             if fill is not None:
-                fill(c)
-            for path, value in self.values.items():  # the owner's (a cut-out's cascade)
-                c.set(path, value)
-            self._send(batch, name, bytes(c.data))
-        self._stamp = stamp
+                fill(constants_block)
+            for path, value in self.m_values.items():  # the owner's (a cut-out's cascade)
+                constants_block.set(path, value)
+            self._send(batch, name, bytes(constants_block.m_data))
+        self._m_stamp = stamp
 
-    def mesh_inputs(self, mesh: gamedraw.Mesh, rp, signature, batch) -> tuple:
+    def mesh_inputs(self, mesh: gamedraw.CMesh, render_pass, signature, batch) -> tuple:
         """A mesh's vertex buffers (the owner's, and the inputs it lacks), index buffer and pipeline, made once."""
-        got = self.inputs.get(id(mesh))
+        got = self.m_inputs.get(id(mesh))  # pattern: ok (the entry holds the mesh: its id stays its own)
         if got is None:
-            vertices, indices = self.meshes(mesh, batch)
-            fill, attrs = gamedraw.vertex_input(mesh, self.program.vs.inputs)
-            fill_buf = self._buffer(batch, QRhiBuffer.UsageFlag.VertexBuffer, fill)
-            pipeline, key = self._shared_pipeline(rp, signature, attrs, mesh.stride, len(fill) // max(1, mesh.count))
-            got = self.inputs[id(mesh)] = ([vertices, fill_buf], indices, pipeline, key, mesh)
+            vertices, indices = self.m_meshes(mesh, batch)
+            fill, attributes = gamedraw.vertex_input(mesh, self.m_program.m_vertex_stage.inputs)
+            fill_buffer = self._buffer(batch, QRhiBuffer.UsageFlag.VertexBuffer, fill)
+            pipeline, key = self._shared_pipeline(
+                render_pass, signature, attributes, mesh.m_stride, len(fill) // max(1, mesh.m_count)
+            )
+            got = self.m_inputs[id(mesh)] = (  # pattern: ok (as above)
+                [vertices, fill_buffer],
+                indices,
+                pipeline,
+                key,
+                mesh,
+            )
         return got
 
     def release(self) -> None:
-        for _vbufs, _ibuf, _pipeline, key, _mesh in self.inputs.values():
+        for _vbufs, _ibuf, _pipeline, key, _mesh in self.m_inputs.values():
             self._give_back(key)
         super().release()
-        self.inputs, self.srb, self._stamp, self._generation, self._own = {}, None, None, -1, {}
+        self.m_inputs, self.m_srb, self._m_stamp, self._m_generation, self._m_own = {}, None, None, -1, {}
 
 
 def _key_of(shared: dict) -> tuple:
     """Which resources ``shared`` hands by name (a shadow map, a light buffer, the water's copies: made anew when
     they grow or come in, the old ones destroyed)."""
+    # the bound set keeps the values (``_shared``): an id compared against it is never a reused one
     return tuple((name, id(value)) for name, value in shared.items())
 
 
-class InstanceRun:
-    """One draw of a ``PartPass``: a mesh, the instances it draws (``worlds``: the transparent pass orders by their
+class CInstanceRun:
+    """One draw of a ``CPartPass``: a mesh, the instances it draws (``worlds``: the transparent pass orders by their
     box), its slot (the byte offset of its words' start), and for a shadow draw its culled ``words``."""
 
-    world = np.identity(4)
+    m_world = np.identity(4)
 
-    def __init__(self, setup: PartPass, mesh: gamedraw.Mesh, slot: int, worlds: np.ndarray, words=None,
+    def __init__(self, setup: CPartPass, mesh: gamedraw.CMesh, slot: int, worlds: np.ndarray, words=None,
                  viewport: tuple | None = None) -> None:  # fmt: skip
-        self.setup, self.mesh, self.slot, self.worlds, self.words = setup, mesh, slot, worlds, words
-        self.viewport = viewport  # a share of the target (``share_rect``): one cascade's part of the shadow map
-        self._inputs: tuple | None = None
+        self.m_setup, self.m_mesh, self.m_slot, self.m_worlds, self.m_words = setup, mesh, slot, worlds, words
+        self.m_viewport = viewport  # a share of the target (``share_rect``): one cascade's part of the shadow map
+        self._m_inputs: tuple | None = None
 
     @property
-    def instances(self) -> int:
-        return len(self.worlds)
+    def m_instances(self) -> int:
+        return len(self.m_worlds)
 
     def fresh(self) -> bool:
         """Whether its first prepare is still to come: the part's resources or this mesh's inputs are not made."""
-        return not self.setup.keep or id(self.mesh) not in self.setup.inputs
+        return (
+            not self.m_setup.m_keep
+            or id(self.m_mesh) not in self.m_setup.m_inputs  # pattern: ok (this run holds the mesh)
+        )
 
-    def prepare(self, rp, signature, batch, camera: gs.Camera, fill=None, shared: dict | None = None) -> None:
-        self.setup.prepare(rp, signature, batch, camera, fill, shared)
-        self._inputs = self.setup.mesh_inputs(self.mesh, rp, signature, batch)
-        if self._inputs[2] is None:
-            raise RuntimeError(self.setup.error or "no pipeline")
+    def prepare(self, render_pass, signature, batch, camera: gs.SCamera, fill=None, shared: dict | None = None) -> None:
+        self.m_setup.prepare(render_pass, signature, batch, camera, fill, shared)
+        self._m_inputs = self.m_setup.mesh_inputs(self.m_mesh, render_pass, signature, batch)
+        if self._m_inputs[2] is None:
+            raise RuntimeError(self.m_setup.m_error or "no pipeline")
 
-    def draw(self, cb, size: tuple[int, int], instances: int | None = None) -> None:
-        vbufs, ibuf, pipeline, _key, mesh = self._inputs
-        count = self.instances if instances is None else instances
-        offset = (self.setup.slot_binding, self.slot) if self.setup.slot_binding is not None else None
-        area = size if self.viewport is None else gamedraw.share_rect(size, self.viewport)
-        mesh.draw(cb, pipeline, self.setup.srb, area, (vbufs, ibuf), count, offset, self.setup.state)
+    def draw(self, command_buffer, size_px: tuple[int, int], instances: int | None = None) -> None:
+        vertex_buffers, index_buffer, pipeline, _key, mesh = self._m_inputs
+        count = self.m_instances if instances is None else instances
+        dynamic_offset = (self.m_setup.m_slot_binding, self.m_slot) if self.m_setup.m_slot_binding is not None else None
+        area = size_px if self.m_viewport is None else gamedraw.share_rect(size_px, self.m_viewport)
+        mesh.draw(
+            command_buffer,
+            pipeline,
+            self.m_setup.m_srb,
+            area,
+            (vertex_buffers, index_buffer),
+            count,
+            dynamic_offset,
+            self.m_setup.m_state,
+        )
 
     def box(self) -> tuple[np.ndarray, np.ndarray]:
         """The box of the instances' places: the transparent pass sorts by it."""
-        places = np.asarray(self.worlds, float)[:, :3, 3]
+        places = np.asarray(self.m_worlds, float)[:, :3, 3]
         return places.min(axis=0), places.max(axis=0)

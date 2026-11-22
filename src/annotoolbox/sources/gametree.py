@@ -3,7 +3,7 @@ loose files over them, and for each path the archive (or folder) it is read from
 
 ``open_game(key, folder, cache)`` is the entry (117 by its archive map, 2070 by its overlay, the others by their
 archive order: ``othergames.installs``); ``game_stamp`` says what changes with the game without opening it;
-``GameTree.over(folder)`` lays a mod folder on top, ``loose_tree`` reads a plain folder (``local_of`` then gives a
+``CGameTree.over(folder)`` lays a mod folder on top, ``loose_tree`` reads a plain folder (``local_of`` then gives a
 path's real file). ``origins`` names every archive that carries a path (the winner first), ``deleted`` the paths 117's
 archive map takes away. Paths are keys: lower case, forward slashes (``overlay.normalize``). docs/tool-suite.md 6.
 """
@@ -31,7 +31,7 @@ DOCUMENTS = {key: game.documents for key, game in installs.GAMES.items() if game
 EXES = {key: game.exes[0] for key, game in installs.GAMES.items()}  # relative to the install
 
 
-class GameTree:
+class CGameTree:
     """A game's files by key: ``paths`` (sorted), ``exists``, ``read``, ``origin`` (where a path is read from);
     ``holders(key)`` lists every archive carrying a path (read order), ``deleted`` what the game has taken away."""
 
@@ -46,84 +46,84 @@ class GameTree:
         deleted: Iterable[str] = (),
         stamp: str = "",
     ) -> None:
-        self.name, self.game, self.stamp = name, game, stamp  # stamp: what changes when the files do
-        self._read, self._origin, self._holders = read, origin, holders
-        self.local_of: Callable[[str], Path | None] | None = None  # a key's real file, where the files are loose
-        self.folder: Path | None = None  # the install it was opened from (its tools: the shader compiler)
-        self.paths = sorted({normalize(p) for p in paths})
-        self._known = set(self.paths)
-        self.deleted = sorted({normalize(p) for p in deleted} - self._known)
+        self.m_name, self.m_game, self.m_stamp = name, game, stamp  # stamp: what changes when the files do
+        self._m_read, self._m_origin, self._m_holders = read, origin, holders
+        self.m_local_of: Callable[[str], Path | None] | None = None  # a key's real file, where the files are loose
+        self.m_folder: Path | None = None  # the install it was opened from (its tools: the shader compiler)
+        self.m_paths = sorted({normalize(path) for path in paths})
+        self._m_known = set(self.m_paths)
+        self.m_deleted = sorted({normalize(path) for path in deleted} - self._m_known)
 
     def exists(self, path: str) -> bool:
-        return normalize(path) in self._known
+        return normalize(path) in self._m_known
 
     def read(self, path: str) -> bytes:
         if not self.exists(path):
             raise FileNotFoundError(path)
-        return self._read(normalize(path))
+        return self._m_read(normalize(path))
 
     def origin(self, path: str) -> str | None:
         """The archive file (``data3.rda``) or the folder a path is read from; None when the game has no such file."""
-        return self._origin(normalize(path)) if self.exists(path) else None
+        return self._m_origin(normalize(path)) if self.exists(path) else None
 
     def origins(self, path: str) -> list[str]:
         """Every archive (or folder) that carries ``path``: the one it is read from first, then the others it
         overrides, the latest first; a deleted path lists the archives that still carry it."""
         key = normalize(path)
-        held = self._holders(key) if self._holders is not None else []
+        held = self._m_holders(key) if self._m_holders is not None else []
         winner = self.origin(key)
-        rest = [h for h in reversed(held) if h != winner]
+        rest = [entry for entry in reversed(held) if entry != winner]
         return ([winner] if winner else []) + rest
 
     def local(self, path: str) -> Path | None:
         """The real file a path is read from when the tree is loose files (a folder, a mod folder), else None."""
-        return self.local_of(normalize(path)) if self.local_of is not None and self.exists(path) else None
+        return self.m_local_of(normalize(path)) if self.m_local_of is not None and self.exists(path) else None
 
     def under(self, prefix: str) -> list[str]:
         """The keys below a folder (``data/graphics/``), in order."""
         prefix = normalize(prefix)
-        return [p for p in self.paths if p.startswith(prefix)]
+        return [path for path in self.m_paths if path.startswith(prefix)]
 
-    def over(self, folder: Path, label: str = "") -> GameTree:
+    def over(self, folder: Path, label: str = "") -> CGameTree:
         """This tree with the loose files of ``folder`` (a mod folder: its files win) laid over it."""
         top = loose_tree(folder, label)
-        merged = GameTree(
-            f"{self.name} + {top.name}",
+        merged = CGameTree(
+            f"{self.m_name} + {top.m_name}",
             lambda key: top.read(key) if top.exists(key) else self.read(key),
-            [*self.paths, *top.paths],
+            [*self.m_paths, *top.m_paths],
             lambda key: top.origin(key) if top.exists(key) else self.origin(key),
-            self.game,
+            self.m_game,
             lambda key: [*self.origins(key)[::-1], *top.origins(key)],
-            self.deleted,
-            stamp_of([], f"{self.stamp}|{top.stamp}"),
+            self.m_deleted,
+            stamp_of([], f"{self.m_stamp}|{top.m_stamp}"),
         )
-        merged.local_of = lambda key: top.local(key) if top.exists(key) else None
+        merged.m_local_of = lambda key: top.local(key) if top.exists(key) else None
         return merged
 
 
-def loose_tree(folder: Path, label: str = "") -> GameTree:
+def loose_tree(folder: Path, label: str = "") -> CGameTree:
     """The files below ``folder`` by their path relative to it (a mod folder, an unpacked game, a test tree)."""
     root = Path(folder)
-    files = {normalize(p.relative_to(root).as_posix()): p for p in sorted(root.rglob("*")) if p.is_file()}
+    files = {normalize(file.relative_to(root).as_posix()): file for file in sorted(root.rglob("*")) if file.is_file()}
     name = label or root.name
-    tree = GameTree(name, lambda key: files[key].read_bytes(), files, lambda key: name, stamp=stamp_of(files.values()))
-    tree.local_of = files.get
+    tree = CGameTree(name, lambda key: files[key].read_bytes(), files, lambda key: name, stamp=stamp_of(files.values()))
+    tree.m_local_of = files.get
     return tree
 
 
 def stamp_of(files: Iterable[Path], extra: str = "") -> str:
     """What changes when any of ``files`` does (their names, sizes and times), for an index kept beside a game."""
     parts = [extra] if extra else []
-    for f in sorted(files):
+    for file in sorted(files):
         try:
-            st = f.stat()
+            stat_result = file.stat()
         except OSError:
             continue
-        parts.append(f"{f.name}:{st.st_size}:{st.st_mtime_ns}")
+        parts.append(f"{file.name}:{stat_result.st_size}:{stat_result.st_mtime_ns}")
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
-def _record(key: str) -> installs.Game:
+def _record(key: str) -> installs.SGame:
     if key not in GAMES:
         raise ValueError(f"unknown game {key!r}: one of {', '.join(GAMES)}")
     return installs.GAMES[key]
@@ -145,7 +145,7 @@ def game_stamp(key: str, folder: Path) -> str:
     folder = Path(folder)
     game = _record(key)
     archives = game.archives(folder) if game.present(folder) else []
-    return stamp_of(a for a in archives if a.is_file()) if archives else stamp_of(_some_files(folder))
+    return stamp_of(archive for archive in archives if archive.is_file()) if archives else stamp_of(_some_files(folder))
 
 
 LOOSE_OPEN_FILES = 200_000  # the most a folder that is no install may hold to be read as loose files
@@ -159,17 +159,17 @@ def _some_files(folder: Path, cap: int = LOOSE_STAMP_FILES) -> list[Path]:
     while queue and len(found) < cap:
         try:
             with os.scandir(queue.pop(0)) as entries:
-                for e in sorted(entries, key=lambda x: x.name):
-                    if e.is_dir(follow_symlinks=False):
-                        queue.append(Path(e.path))
-                    elif e.is_file() and len(found) < cap:
-                        found.append(Path(e.path))
+                for entry in sorted(entries, key=lambda x: x.name):
+                    if entry.is_dir(follow_symlinks=False):
+                        queue.append(Path(entry.path))
+                    elif entry.is_file() and len(found) < cap:
+                        found.append(Path(entry.path))
         except OSError:
             continue
     return found
 
 
-def open_game(key: str, folder: Path, cache: Path | None = None) -> GameTree:
+def open_game(key: str, folder: Path, cache: Path | None = None) -> CGameTree:
     """The installed game ``key`` (a key of ``GAMES``) at ``folder``; a folder without the game's archives is read as
     loose files. Opening indexes every archive (117: a few seconds)."""
     folder = Path(folder)
@@ -181,14 +181,14 @@ def open_game(key: str, folder: Path, cache: Path | None = None) -> GameTree:
     index = game.index(folder, cache)
     stamp = game_stamp(key, folder)
     if hasattr(index, "holders"):  # 117's archive map
-        found = GameTree(
+        found = CGameTree(
             GAMES[key], index.read, index.iter_paths(""), index.archive_of, key, index.holders, index.deleted(), stamp
         )
     else:  # an overlay of archives
-        found = GameTree(
+        found = CGameTree(
             GAMES[key], index.read_bytes, index.iter_paths(), _archive_file(index), key, _candidates(index), (), stamp
         )
-    found.folder = folder
+    found.m_folder = folder
     return found
 
 
@@ -209,6 +209,6 @@ def _candidates(tree) -> Callable[[str], list[str]]:
     return holders
 
 
-def _named(tree: GameTree, key: str) -> GameTree:
-    tree.game = key
+def _named(tree: CGameTree, key: str) -> CGameTree:
+    tree.m_game = key
     return tree

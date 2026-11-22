@@ -1,10 +1,17 @@
 # The object builder: a user's guide
 
-The suite's **Objects** app edits a model config in the same way the studio's own object builder did. It shows the
-config's parts as a tree, the selected part's fields, the model in 3D following every edit, the sequences on a
-timeline, and the object's boxes, footprint and feedback dummies drawn over the model. It only reads your own installs
-of Anno 117, 1800, 2205, 2070, 1404 and 1701, and never writes into a game. It saves into your project, from which the
-suite builds the mod. The design and what is still open are in `tool-suite.md` section 23.
+The suite's **Objects** app edits a model config in the same way the studio's own object builder did. It shows these
+things:
+
+- the config's parts as a tree;
+- the selected part's fields;
+- the model in 3D, following every edit;
+- the sequences on a timeline;
+- the object's boxes, footprint and feedback dummies, drawn over the model.
+
+It only reads your own installs of Anno 117, 1800, 2205, 2070, 1404 and 1701, and never writes into a game. It saves
+into your project, from which the suite builds the mod. The design and what is still open are in
+`tool-suite.md` section 23.
 
 ## Start it
 
@@ -13,17 +20,19 @@ anno-toolbox --app objects      # the suite's window on the object builder, besi
 ```
 
 The game folders are the suite's (File > Games and folders in the island editor). **File > Open game** picks a game.
-A double-click on a model config in **Files** (or File > Open a file by its path, Ctrl+O) opens its object: the `.cfg`
-(1701: `.mcf`, 1800 and 2205 props: `.prp`) with the `.ifo` and `.fc` of the same name beside it. Opening any of the
-three opens all of them.
+
+A double-click on a model config in **Files** (or File > Open a file by its path, Ctrl+O) opens its object. The object
+is the `.cfg` (1701: `.mcf`, 1800 and 2205 props: `.prp`) with the `.ifo` and `.fc` of the same name beside it. Opening
+any of the three opens all of them.
 
 Anno 1701 has an `.info` beside each `.mcf` and no feedback file. An object config (`.ocf`) opens its first `.mcf` with
-its `.info`. The info tree is shown and edited as text. Its grid cells are drawn over the 3D view as rectangles on the
-ground: the footprint and the other blocks, moved by the `.ocf`'s offset when the object was opened by it. The
-bounding box and the dummies' boxes are drawn with them. See [`formats/granny.md`](formats/granny.md), "1701's info
-files".
+its `.info`. The info tree is shown and edited as text.
 
-Note: as of 2026-11-13 the 1701 info drawing is done by the code but was not yet looked at in the window.
+Its grid cells are drawn over the 3D view as rectangles on the ground. They are the footprint and the other blocks,
+moved by the `.ocf`'s offset when the object was opened by it. The bounding box and the dummies' boxes are drawn with
+them. See [`formats/granny.md`](formats/granny.md), "1701's info files".
+
+Note: as of 2026-11-13, the code draws the 1701 info, but the drawing was not yet looked at in the window.
 
 ## The window
 
@@ -45,11 +54,12 @@ Three kinds of marks are drawn over the 3D view:
 The selected one is yellow. Each kind is a switch in View.
 
 **View > Simulate cloth** moves the flags, banners and sails by the game's own cloth rules while the clock runs (Play
-in Sequences). It works in every look, the games' own shaders included, and the cloth is finer near the camera, as the
-game makes it. **Torn cloth** shows the cloth of a damaged object where it may tear. **View > Walking figures** puts
-the people and vehicles of the feedback file into the view. They walk their loops for the state picked in **Figures'
-state** (Not working, Working). An actor whose unit is not found walks as an orange card.
-`engine-cloth.md` says what is the game's and what is chosen.
+in Sequences). It works in every look, the games' own shaders included. The cloth is finer near the camera, as the game
+makes it. **Torn cloth** shows the cloth of a damaged object where it may tear.
+
+**View > Walking figures** puts the people and vehicles of the feedback file into the view. They walk their loops for
+the state picked in **Figures' state** (Not working, Working). An actor whose unit is not found walks as an orange
+card. `engine-cloth.md` says what is the game's and what is chosen.
 
 In Anno 1701's mesh configs (`.mcf`) every part is named by its class type and what it points at: `Mesh  house.gr2`,
 `Effect  smoke.efc`, `Group  Dummies`, `Dummy  fire09`, `Level of detail  61-100`, `Offset`, `Rotation`, `Scale` and
@@ -72,34 +82,43 @@ so on. A file field lists the kind of file it names (a mesh field the `.gr2` fil
     selected, and the value line below the list takes a pick or what is typed. F2 types any value.
   - Every other field of the other games stays a number, because their files give no names for it (tool-suite
     section 23, "Choice lists for the other games").
-- **Handles** (Edit > Handles: Move W, Rotate E, Scale R, Off; the keys work in the view): over the selected part
-  (a model, a nested file, an effect, a light ... or one of its orientation transformers) the view shows three arrows
-  and a square on the ground (Move), three rings (Rotate) or a circle (Scale). Drag one, and the part follows the
-  mouse. The fields of its first orientation transformer (`Position`, `Rotation`, `Scale`) are written when you let
-  go, as one undo step. Shift snaps a turn to 5 degrees. A part with no orientation transformer gets one (and its
-  list). A press away from a handle turns the camera as before.
-- **The footprint and the other areas** of the info file: select an area (the build blocker ...) and a square marks
-  each point. Drag a point over the ground; it snaps to half units, the grid the game's own footprints lie on (hold
-  Alt to place it freely). Double-click a side to put a point there, and right-click a point to take it out (a polygon
-  keeps three). **Edit > Draw a footprint** replaces the selected area by clicks on the ground (Enter or a double-click
-  finishes, Esc cancels). With nothing selected it makes the `BuildBlocker` that a file lacks. An `.ifo` is saved
-  whole.
+- **Handles** (Edit > Handles: Move W, Rotate E, Scale R, Off; the keys work in the view): the view shows handles
+  over the selected part (a model, a nested file, an effect, a light ... or one of its orientation transformers).
+  - Move shows three arrows and a square on the ground, Rotate shows three rings, and Scale shows a circle.
+  - Drag one, and the part follows the mouse.
+  - The fields of its first orientation transformer (`Position`, `Rotation`, `Scale`) are written when you let go, as
+    one undo step.
+  - Shift snaps a turn to 5 degrees.
+  - A part with no orientation transformer gets one (and its list).
+  - A press away from a handle turns the camera as before.
+- **The footprint and the other areas** of the info file: select an area (the build blocker ...), and a square marks
+  each point.
+  - Drag a point over the ground. It snaps to half units, the grid the game's own footprints lie on (hold Alt to place
+    it freely).
+  - Double-click a side to put a point there, and right-click a point to take it out (a polygon keeps three).
+  - **Edit > Draw a footprint** replaces the selected area by clicks on the ground (Enter or a double-click finishes,
+    Esc cancels). With nothing selected, it makes the `BuildBlocker` that a file lacks.
+  - An `.ifo` is saved whole.
 - **Edit > Add a part** (Ins): on a list (or a part in one), this adds a new part of the kind the list takes. When the
-  list takes several kinds (a Transformers list), you choose. The new part is a copy of the first part of that kind in
-  the file, so it has every field the game expects (a 117 material has more than a hundred). Where the file has none,
-  it is a small part of the file's own form (a file, an orientation, a light, a sequence, a track and its element). On
-  a greyed "(empty)" list the list is made too.
+  list takes several kinds (a Transformers list), you choose.
+  - The new part is a copy of the first part of that kind in the file, so it has every field the game expects (a 117
+    material has more than a hundred).
+  - Where the file has none, the new part is a small part of the file's own form (a file, an orientation, a light, a
+    sequence, a track and its element).
+  - On a greyed "(empty)" list, the list is made too.
 - **Edit > Add a part from another file**: type a game path, then pick the part of the kind the list takes (a material
   of another building, say).
 - **Duplicate** (Ctrl+D), **Remove** (Del) and **Move up / down** (Alt+Up / Alt+Down) act on the selected part.
 - **Sequences**: drag a bar to move it in time, and drag its ends to change its start or end. A double-click selects
   the element, so its type, model, animation or effect can be changed in Properties. **Add track** and **Add element**
   add to the chosen sequence. Play shows the animations the sequence plays.
-- **Feedback loops**: drag a bar's right end to change its length (a play's time, a wait's two times, a walk's
-  speed; a walk at its sequence's own speed and the instant elements have none of their own). Drag the bar or use
-  **Earlier** / **Later** to move it in the loop. **Add** puts an element of the chosen kind after the chosen bar (a
-  copy of the file's first of that kind), and **Remove** takes the chosen one out. A double-click shows its values in
-  Properties. The walking figures follow the edited file.
+- **Feedback loops**: drag a bar's right end to change its length. The length is a play's time, a wait's two times or
+  a walk's speed. A walk at its sequence's own speed and the instant elements have none of their own.
+  - Drag the bar or use **Earlier** / **Later** to move it in the loop.
+  - **Add** puts an element of the chosen kind after the chosen bar (a copy of the file's first of that kind), and
+    **Remove** takes the chosen one out.
+  - A double-click shows its values in Properties.
+  - The walking figures follow the edited file.
 - **Undo and redo** (Ctrl+Z, Ctrl+Y) take back every edit, in every file of the object. The title shows `*` while
   there are edits not yet saved.
 
@@ -124,30 +143,34 @@ The files go into the open project, under `object-edits/<game>/`, and the projec
 their game paths. When a game is linked to the suite, it is told which files changed. The status line says what to do
 to see them (for a model config: restart the game).
 
-A file is written whole or not at all (a half-written `.part` file is never part of the mod), and a path that leaves
-the game's folders (`..`, a drive letter) is refused. A second save replaces what the project holds of the object, and
-the dialog lists it. A file that an earlier save made in the other way (`x.cfg` after a patch, `x.cfg.xml` after a
-replacement) is removed, so the mod never carries both.
+A file is written whole or not at all. A half-written `.part` file is never part of the mod. A path that leaves the
+game's folders (`..`, a drive letter) is refused.
+
+A second save replaces what the project holds of the object, and the dialog lists it. A file that an earlier save made
+in the other way (`x.cfg` after a patch, `x.cfg.xml` after a replacement) is removed, so the mod never carries both.
 
 When you open an object that the project already holds files of, they are laid over the game's. A whole file replaces
 the tree, and a patch is applied to the game's file by the mod loader's rules. The window therefore shows your earlier
-edits, and a second save keeps them. The status line says so, and also says what of a patch no longer fits the game's
+edits, and a second save keeps them. The status line says so. It also says what of a patch no longer fits the game's
 file.
 
 A typed value that would break the config (`<`, `>`, a bare `&`, `CDATA[`, `nan`, `inf`) is refused. The game opens in
-the background (the window stays usable while 117 is indexed).
+the background, so the window stays usable while 117 is indexed.
 
 **Anno 117's `shared/` copies.** About half of 117's model configs have a baked copy under `shared/`, which the game
-reads in place of the `data/` one. The builder opens that copy, as the game does (the title names it), and a
-replacement or a patch goes to the `shared/` path. With View > Read the baked shared/ copy switched off you edit the
-`data/` file. Replacing or patching it is then refused, because the game would never read it.
+reads in place of the `data/` one. The builder opens that copy, as the game does (the title names it). A replacement or
+a patch goes to the `shared/` path.
+
+With View > Read the baked shared/ copy switched off, you edit the `data/` file. Replacing or patching it is then
+refused, because the game would never read it.
 
 The baked copy's `.bfg` (baked data matched to the parts by their place in the lists) is still read on top of a
 replacement. When you add, remove or move parts of a `shared/` config, the save therefore also writes a `.bfg` that
-follows: the entries of the parts that stayed, none for new ones, and no far-view model (the notes of the dialog say
-so). A part you move counts as taken out and put in. The baked content itself (the voxels, the triangle groups, the
-average colours) comes from Ubisoft's build and cannot be made here. A new file has no `shared/` copy and is read as
-written.
+follows. It holds the entries of the parts that stayed, none for new ones, and no far-view model (the notes of the
+dialog say so). A part you move counts as taken out and put in.
+
+The baked content itself (the voxels, the triangle groups, the average colours) comes from Ubisoft's build and cannot
+be made here. A new file has no `shared/` copy and is read as written.
 
 Note: the `shared/` saving was never tried in the game.
 

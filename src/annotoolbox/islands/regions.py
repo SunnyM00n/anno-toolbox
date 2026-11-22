@@ -17,7 +17,7 @@ GENERATION = ("anno117", "anno1800")  # one engine generation: an island moves b
 
 
 @dataclass(frozen=True)
-class Region:
+class SRegion:
     game: str
     key: str
     label: str  # shown through tr()
@@ -37,38 +37,38 @@ class Region:
 
 
 _SETS_117 = "data/base/graphics/library/environment/material_sets/"
-REGIONS: tuple[Region, ...] = (
-    Region(
+REGIONS: tuple[SRegion, ...] = (
+    SRegion(
         "anno117", "roman", N_("islands.latium"), "Roman", "data/base/provinces/roman/islands/pool",
         _SETS_117 + "roman_materialset_02.xml", "amb_roman_01", "ls_heartlands_01", r"/provinces/roman/",
     ),
-    Region(
+    SRegion(
         "anno117", "celtic", N_("islands.albion"), "Celtic", "data/base/provinces/celtic/islands/pool",
         _SETS_117 + "celtic_materialset_02.xml", "amb_celtic_01", "ls_wetlands_01", r"/provinces/celtic/",
     ),
-    Region(
+    SRegion(
         "anno117", "egypt", N_("islands.the_nile"), "Roman", "data/dlc03/provinces/egypt/islands/pool",
         "data/dlc03/graphics/library/environment/material_sets/egypt_materialset_01.xml", "amb_egypt_01",
         "ls_egypt_01", r"/provinces/egypt/",
     ),
-    Region(
+    SRegion(
         "anno1800", "cape", N_("islands.cape_trelawney"), "Moderate", "data/dlc01/sessions/islands/pool", "", "Moderate_01",
         "Moderate", r"/moderate_dst_", "SecondaryRegion", "moderate_",
     ),
-    Region(
+    SRegion(
         "anno1800", "moderate", N_("islands.old_world"), "Moderate", "data/sessions/islands/pool/moderate", "", "Moderate_01",
         "Moderate", r"/moderate", "PrimaryRegion", "moderate_",
     ),
-    Region(
+    SRegion(
         "anno1800", "colony01", N_("islands.new_world"), "Colony01", "data/sessions/islands/pool/colony01",
         "data/config/engine/material_sets/south_america_01.xml", "south_america_caribic_01", "Colony", r"/colony01",
         prefix="colony01_",
     ),
-    Region(
+    SRegion(
         "anno1800", "colony02", N_("islands.enbesa"), "Africa", "data/dlc06/sessions/islands/pool",
         "data/config/engine/material_sets/colony02_01.xml", "Colony_02", "Colony02", r"/colony02", prefix="colony02_",
     ),
-    Region(
+    SRegion(
         "anno1800", "colony03", N_("islands.the_arctic"), "Arctic", "data/dlc03/sessions/islands/pool",
         "data/dlc03/config/engine/material_sets/arctic_01.xml", "DLC03_01", "Arctic", r"/colony03", prefix="colony03_",
     ),
@@ -82,28 +82,33 @@ REGION_WORDS = {
 }
 
 
-def regions(game: str) -> list[Region]:
-    return [r for r in REGIONS if r.game == game]
+def regions(game: str) -> list[SRegion]:
+    return [region for region in REGIONS if region.game == game]
 
 
-def region(region_id: str) -> Region:
+def region(region_id: str) -> SRegion:
     """The region ``<game>:<key>``; ``KeyError`` for an unknown one."""
-    found = next((r for r in REGIONS if r.id == region_id), None)
+    found = next((candidate for candidate in REGIONS if candidate.id == region_id), None)
     if found is None:
         raise KeyError(region_id)
     return found
 
 
-def region_of(game: str, path: str) -> Region | None:
+def region_of(game: str, path: str) -> SRegion | None:
     """The region of the island at the game path ``path``, None when its path names none (a scenario's island)."""
     low = path.replace("\\", "/").lower()
-    return next((r for r in regions(game) if re.search(r.pattern, low)), None)
+    return next((candidate for candidate in regions(game) if re.search(candidate.pattern, low)), None)
 
 
-def same_look(a: Region, b: Region) -> bool:
+def same_look(region_a: SRegion, region_b: SRegion) -> bool:
     """Whether two regions draw an island alike (one game, set, ambient and vegetation): Cape Trelawney and the Old
     World differ only in their pool, so the island itself does not change between them."""
-    return (a.game, a.material_set, a.ambient, a.vegetation) == (b.game, b.material_set, b.ambient, b.vegetation)
+    return (region_a.game, region_a.material_set, region_a.ambient, region_a.vegetation) == (
+        region_b.game,
+        region_b.material_set,
+        region_b.ambient,
+        region_b.vegetation,
+    )
 
 
 def plain_name(name: str, game: str) -> str:

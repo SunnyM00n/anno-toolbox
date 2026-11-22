@@ -10,30 +10,34 @@ from __future__ import annotations
 
 import math
 
-from .editsession import EditSession, Entry
+from .editsession import CEditSession, SEntry
 
 
 def _objects(selection: dict) -> list[dict]:
     listed = selection.get("objects")
-    return [o for o in (listed if isinstance(listed, list) else [selection]) if isinstance(o, dict)]
+    return [item for item in (listed if isinstance(listed, list) else [selection]) if isinstance(item, dict)]
 
 
-def _near(entry: Entry, position) -> float:
+def _near(entry: SEntry, position) -> float:
     return math.hypot(entry.position[0] - position[0], entry.position[2] - position[2])
 
 
-def entries_for(session: EditSession, selection: dict) -> list[Entry]:
+def entries_for(session: CEditSession, selection: dict) -> list[SEntry]:
     """The entries of the open island the game's selection names, one per selected object: the nearest of its asset to
     where the game says it stands, else the first. An object with no GUID, or of an asset the island lacks, is left out."""
-    found: list[Entry] = []
+    found: list[SEntry] = []
     for item in _objects(selection):
         guid = str(item.get("guid", "")).strip()
         if not guid.isdecimal():
             continue
-        same = [e for e in session.entries if e.kind == "object" and e.shown and str(e.base.get("guid")) == guid]
+        same = [
+            entry
+            for entry in session.m_entries
+            if entry.kind == "object" and entry.shown and str(entry.base.get("guid")) == guid
+        ]
         place = item.get("position")
         if same and isinstance(place, (list, tuple)) and len(place) >= 3:
-            same.sort(key=lambda e: _near(e, place))
-        if same and all(same[0] is not e for e in found):
+            same.sort(key=lambda entry: _near(entry, place))
+        if same and all(same[0] is not entry for entry in found):
             found.append(same[0])
     return found

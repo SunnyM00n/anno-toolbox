@@ -40,7 +40,7 @@ GROUPS = {
 }
 SOURCE_FOLDER = re.compile(r".+-[0-9a-f]{10}")
 
-_stats: Counter[str] = Counter()
+_g_stats: Counter[str] = Counter()
 _lock = threading.Lock()
 
 
@@ -62,16 +62,16 @@ def root() -> Path:
 
 def digest(*parts: bytes | str | int | float | None) -> str:
     """SHA-256 over the parts, each length-prefixed so that ("ab", "c") and ("a", "bc") differ."""
-    h = hashlib.sha256()
+    hasher = hashlib.sha256()
     for part in parts:
         raw = b"\0none" if part is None else part if isinstance(part, bytes) else str(part).encode("utf-8")
-        h.update(struct.pack("<Q", len(raw)))
-        h.update(raw)
-    return h.hexdigest()
+        hasher.update(struct.pack("<Q", len(raw)))
+        hasher.update(raw)
+    return hasher.hexdigest()
 
 
 @functools.lru_cache(maxsize=64)
-def _file_digest(path: str, size: int, mtime_ns: int) -> str:
+def _file_digest(path: str, size_bytes: int, mtime_ns: int) -> str:
     return file_sha(Path(path))
 
 
@@ -89,7 +89,7 @@ def _imports(source: str, module: str) -> set[str]:
     found: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
-            found.update(a.name.partition(".")[2] for a in node.names if a.name.startswith(PACKAGE + "."))
+            found.update(alias.name.partition(".")[2] for alias in node.names if alias.name.startswith(PACKAGE + "."))
             continue
         if not isinstance(node, ast.ImportFrom):
             continue
@@ -103,7 +103,7 @@ def _imports(source: str, module: str) -> set[str]:
             continue
         if base:
             found.add(".".join(base))
-        found.update(".".join([*base, a.name]) for a in node.names)
+        found.update(".".join([*base, alias.name]) for alias in node.names)
     return found
 
 
@@ -131,12 +131,12 @@ def code_version(*modules: str) -> str:
             if not path.is_file():
                 continue
         todo += _imports(path.read_text(encoding="utf-8"), name)
-    h = hashlib.sha256()
+    hasher = hashlib.sha256()
     for name in sorted(seen):
         path = folder / (name.replace(".", "/") + ".py")
         if path.is_file():
-            h.update(name.encode() + b"\0" + path.read_bytes().replace(b"\r\n", b"\n"))
-    return h.hexdigest()[:20]
+            hasher.update(name.encode() + b"\0" + path.read_bytes().replace(b"\r\n", b"\n"))
+    return hasher.hexdigest()[:20]
 
 
 def frozen_version(*modules: str) -> str:
@@ -150,9 +150,9 @@ def frozen_version(*modules: str) -> str:
 def fingerprint(paths: list[Path]) -> str:
     """Names, sizes and times of the files an input tree is made of (a game's archives): it changes with a patch."""
     parts: list[str | int] = []
-    for p in sorted(paths):
-        st = Path(p).stat()
-        parts += [Path(p).name, st.st_size, st.st_mtime_ns]
+    for path in sorted(paths):
+        st = Path(path).stat()
+        parts += [Path(path).name, st.st_size, st.st_mtime_ns]
     return digest(*parts)
 
 
@@ -183,11 +183,11 @@ def unpack(blob: bytes) -> dict[str, bytes]:
     (count,) = struct.unpack_from("<I", blob)
     at, out = 4, {}
     for _ in range(count):
-        n, size = struct.unpack_from("<II", blob, at)
+        name_length, size_bytes = struct.unpack_from("<II", blob, at)
         at += 8
-        name = blob[at : at + n].decode("utf-8")
-        out[name] = blob[at + n : at + n + size]
-        at += n + size
+        name = blob[at : at + name_length].decode("utf-8")
+        out[name] = blob[at + name_length : at + name_length + size_bytes]
+        at += name_length + size_bytes
     return out
 
 
@@ -195,11 +195,11 @@ def _entry(namespace: str, key: str) -> Path:
     return root() / namespace / key[:2] / key
 
 
-def _replace(src: str, dest: Path) -> None:
+def _replace(source: str, dest: Path) -> None:
     """``os.replace`` that waits out a reader (or a virus scanner) holding the target open on Windows."""
     for attempt in range(8):
         try:
-            os.replace(src, dest)
+            os.replace(source, dest)
             return
         except PermissionError:
             if attempt == 7:
@@ -224,17 +224,17 @@ def write_kept(path: Path, data: dict) -> None:
     write_atomic(Path(path), json.dumps(data).encode("utf-8"))
 
 
-def write_atomic(path: Path, data: bytes, sync: bool = True) -> None:
+def write_atomic(path: Path, data: bytes, is_synchronous: bool = True) -> None:
     """Whole or not at all, and a name of its own per process: two runs on one file never meet half a file.
     ``sync`` False skips the flush to disk, for files a later run makes again (extracted cache entries)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, part = tempfile.mkstemp(dir=path.parent, suffix=".part")
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            if sync:
-                f.flush()
-                os.fsync(f.fileno())  # a crash must not leave a renamed but empty file
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+            if is_synchronous:
+                file.flush()
+                os.fsync(file.fileno())  # a crash must not leave a renamed but empty file
         _replace(part, path)
     except BaseException:
         Path(part).unlink(missing_ok=True)
@@ -257,7 +257,7 @@ def copy_atomic(source: Path, dest: Path) -> None:
 
 def _count(namespace: str, what: str) -> None:
     with _lock:
-        _stats[f"{namespace}/{what}"] += 1
+        _g_stats[f"{namespace}/{what}"] += 1
 
 
 def get(namespace: str, key: str) -> bytes | None:
@@ -282,7 +282,13 @@ def put(namespace: str, key: str, data: bytes) -> None:
 
 def get_files(namespace: str, key: str) -> dict[str, bytes] | None:
     blob = get(namespace, key)
-    return None if blob is None else unpack(blob)
+    if blob is None:
+        return None
+    try:
+        return unpack(blob)
+    except (struct.error, UnicodeDecodeError):  # a damaged entry is a miss, like a lost one
+        _count(namespace, "stale")
+        return None
 
 
 def put_files(namespace: str, key: str, files: dict[str, bytes]) -> None:
@@ -313,9 +319,9 @@ def put_tree(namespace: str, key: str, files: dict[str, tuple[str, Path]]) -> No
     put(namespace, key, json.dumps(manifest, sort_keys=True).encode("utf-8"))
 
 
-def _blob_intact(blob: Path, size: int) -> bool:
+def _blob_intact(blob: Path, size_bytes: int) -> bool:
     try:
-        return blob.stat().st_size == size
+        return blob.stat().st_size == size_bytes
     except OSError:
         return False
 
@@ -325,20 +331,24 @@ def get_tree(namespace: str, key: str) -> dict[str, tuple[str, Path]] | None:
     raw = get(namespace, key)
     if raw is None:
         return None
-    manifest = json.loads(raw)
-    out = {rel: (sha, _blob(sha)) for rel, (sha, _size) in manifest.items()}
-    if not all(_blob_intact(blob, manifest[rel][1]) for rel, (_, blob) in out.items()):
+    try:
+        manifest = json.loads(raw)
+        out = {rel: (sha, _blob(sha)) for rel, (sha, _size_bytes) in manifest.items()}
+        intact = all(_blob_intact(blob, manifest[rel][1]) for rel, (_, blob) in out.items())
+    except (ValueError, TypeError, AttributeError):  # not a manifest (a damaged entry)
+        intact = False
+    if not intact:
         _count(namespace, "stale")
         return None
     return out
 
 
 def file_sha(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(1 << 20):
-            h.update(chunk)
-    return h.hexdigest()
+    hasher = hashlib.sha256()
+    with open(path, "rb") as file:
+        while chunk := file.read(1 << 20):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 # Numbers
@@ -346,20 +356,20 @@ def file_sha(path: Path) -> str:
 
 def stats() -> dict[str, int]:
     with _lock:
-        return dict(_stats)
+        return dict(_g_stats)
 
 
 def add_stats(other: dict[str, int]) -> None:
     with _lock:
-        _stats.update(other)
+        _g_stats.update(other)
 
 
 def summary() -> str:
     """ "dds2bc7 412 hits / 38 misses, ..." of this run, or "" when no cache was asked."""
-    spaces = sorted({k.rpartition("/")[0] for k in _stats})
+    spaces = sorted({k.rpartition("/")[0] for k in _g_stats})
     parts = []
     for ns in spaces:
-        hit, miss = _stats[f"{ns}/hit"], _stats[f"{ns}/miss"]
+        hit, miss = _g_stats[f"{ns}/hit"], _g_stats[f"{ns}/miss"]
         parts.append(f"{ns} {hit} hits / {miss} misses")
     return ", ".join(parts)
 
@@ -369,7 +379,9 @@ def group_folders(group: str) -> list[Path]:
     base = cache_base()
     folders = [base / sub for sub in GROUPS[group]]
     if group == "sources" and base.is_dir():
-        folders += sorted(p for p in base.iterdir() if p.is_dir() and SOURCE_FOLDER.fullmatch(p.name))
+        folders += sorted(
+            folder for folder in base.iterdir() if folder.is_dir() and SOURCE_FOLDER.fullmatch(folder.name)
+        )
     return folders
 
 
@@ -377,13 +389,13 @@ def folder_sizes() -> dict[str, tuple[int, int]]:
     """group -> (files, bytes) under the cache root."""
     out = {}
     for group in GROUPS:
-        files = size = 0
+        files = size_bytes = 0
         for folder in group_folders(group):
-            for p in folder.rglob("*") if folder.is_dir() else ():
-                if p.is_file():
+            for path in folder.rglob("*") if folder.is_dir() else ():
+                if path.is_file():
                     files += 1
-                    size += p.stat().st_size
-        out[group] = (files, size)
+                    size_bytes += path.stat().st_size
+        out[group] = (files, size_bytes)
     return out
 
 
@@ -392,7 +404,7 @@ def namespace_sizes() -> dict[str, tuple[int, int]]:
     out = {}
     for folder in sorted([*root().glob("*"), cache_base() / BLOBS_DIR]):
         if folder.is_dir():
-            sizes = [p.stat().st_size for p in folder.rglob("*") if p.is_file()]
+            sizes = [path.stat().st_size for path in folder.rglob("*") if path.is_file()]
             out[folder.name] = (len(sizes), sum(sizes))
     return out
 

@@ -50,13 +50,13 @@ def merged_order(own: list[tuple[int, str]], foreign: list[tuple[int, str, float
     """The material IDs in draw order (first drawn first): ``own`` - the island's set as (ID, name) in its
     list order - unchanged, each ``foreign`` (ID, name, its rank in its own game) before the first material
     whose family ranks higher: a brought-in grass never covers the island's rock."""
-    order = [mid for mid, _ in own]
-    fam = {mid: FAMILY_RANK[family(name)] for mid, name in own}
-    for mid, name, _ in sorted(foreign, key=lambda f: (FAMILY_RANK[family(f[1])], f[2])):
-        f = FAMILY_RANK[family(name)]
-        at = next((k for k, m in enumerate(order) if fam[m] > f), len(order))
-        order.insert(at, mid)
-        fam[mid] = f
+    order = [material_id for material_id, _ in own]
+    family_ranks = {material_id: FAMILY_RANK[family(name)] for material_id, name in own}
+    for material_id, name, _ in sorted(foreign, key=lambda entry: (FAMILY_RANK[family(entry[1])], entry[2])):
+        rank = FAMILY_RANK[family(name)]
+        position = next((k for k, material in enumerate(order) if family_ranks[material] > rank), len(order))
+        order.insert(position, material_id)
+        family_ranks[material_id] = rank
     return order
 
 
@@ -67,7 +67,7 @@ def ranks(order: list[int]) -> dict[int, int]:
 
 def set_ranks(set_text: str) -> dict[int, int]:
     """Material ID -> its place in a material set's list, the order 117 and 1800 draw the ground in."""
-    return ranks([int(m) for m in re.findall(r"<Material>\s*<ID>(\d+)</", set_text)])
+    return ranks([int(material_id) for material_id in re.findall(r"<Material>\s*<ID>(\d+)</", set_text)])
 
 
 def set_files(set_text: str) -> dict[int, str]:

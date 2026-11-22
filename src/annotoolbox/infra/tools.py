@@ -46,7 +46,7 @@ GB_PER_JOB = 5  # free memory one worker needs: 17 GB free ran 3 island workers,
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
-class ToolError(RuntimeError):
+class CToolError(RuntimeError):
     pass
 
 
@@ -55,13 +55,14 @@ def free_memory_gb() -> float | None:
     try:
         import ctypes
 
-        class Status(ctypes.Structure):
+        class SStatus(ctypes.Structure):
             _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
-                (n, ctypes.c_ulonglong) for n in ("total", "avail", "ptotal", "pavail", "vtotal", "vavail", "ext")
+                (field_name, ctypes.c_ulonglong)
+                for field_name in ("total", "avail", "ptotal", "pavail", "vtotal", "vavail", "ext")
             ]
 
-        status = Status()
-        status.length = ctypes.sizeof(Status)
+        status = SStatus()
+        status.length = ctypes.sizeof(SStatus)
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return min(status.avail, status.pavail) / 2**30  # the commit limit ends a worker too
     except (AttributeError, OSError):
@@ -79,19 +80,19 @@ def jobs() -> int:
     """How many jobs run at once: ``--jobs`` / ``ANNO2070_JOBS``, else the cores (at most 12) held back to what
     the free memory carries (``GB_PER_JOB`` each, at least 1)."""
     try:
-        n = int(os.environ.get(JOBS_ENV, ""))
+        job_count = int(os.environ.get(JOBS_ENV, ""))
     except ValueError:
-        n = 0
-    if n > 0:
-        return n
-    n = min(MAX_DEFAULT_JOBS, os.cpu_count() or 1)
+        job_count = 0
+    if job_count > 0:
+        return job_count
+    job_count = min(MAX_DEFAULT_JOBS, os.cpu_count() or 1)
     free = free_memory_gb()
-    return n if free is None else max(1, min(n, int(free // GB_PER_JOB)))
+    return job_count if free is None else max(1, min(job_count, int(free // GB_PER_JOB)))
 
 
-def set_jobs(n: int) -> None:
+def set_jobs(job_count: int) -> None:
     """For this process and the ones it starts."""
-    os.environ[JOBS_ENV] = str(max(1, n))
+    os.environ[JOBS_ENV] = str(max(1, job_count))
 
 
 def process_names() -> set[str]:
@@ -121,7 +122,7 @@ def tool_id(name: str) -> str:
 
 
 @dataclass
-class ToolResult:
+class SToolResult:
     returncode: int
     stdout: str
     stderr: str
@@ -150,9 +151,11 @@ def candidates(
     with ``explicit_files``; a folder gives ``folder/name``), the first name's files before the second's; then
     ``tools/`` below the checkout (``search_repo_tools``), then PATH (``on_path``). ``environ`` replaces the process's."""
     values = os.environ if environ is None else environ
-    listed = [Path(p) for p in values.get(env, "").split(os.pathsep) if p] if env else []
-    places = [(p, explicit_files) for p in listed]
-    places += [(Path(r) / sub, False) for r in roots for sub in subdirs] + [(Path(p), False) for p in extra]
+    listed = [Path(entry) for entry in values.get(env, "").split(os.pathsep) if entry] if env else []
+    places = [(listed_path, explicit_files) for listed_path in listed]
+    places += [(Path(root) / sub, False) for root in roots for sub in subdirs] + [
+        (Path(extra_path), False) for extra_path in extra
+    ]
     found: list[Path] = []
 
     def add(path: Path) -> None:
@@ -178,7 +181,7 @@ def candidates(
     return found
 
 
-_FOUND: dict[tuple, Path] = {}  # a search's places -> the tool found there
+_g_found: dict[tuple, Path] = {}  # a search's places -> the tool found there
 
 
 def find_tool(name: str) -> Path | None:
@@ -186,14 +189,14 @@ def find_tool(name: str) -> Path | None:
     and the file stands: a PATH search costs 40 ms, and every texture asks (build-cache "Where the time went")."""
     env_var, names = _TOOL_SPECS[name]
     if os.name != "nt":  # a Windows program in tools/ does not run here (the variable may still name any file)
-        names = tuple(n for n in names if not n.lower().endswith(".exe"))
+        names = tuple(candidate for candidate in names if not candidate.lower().endswith(".exe"))
     key = (name, os.environ.get(env_var, ""), os.environ.get("PATH", ""), str(REPO_TOOLS_DIR))
-    hit = _FOUND.get(key)
+    hit = _g_found.get(key)
     if hit is not None and hit.is_file():
         return hit
     found = next(iter(candidates(names, env=env_var, search_repo_tools=True, on_path=True, explicit_files=True)), None)
     if found is not None:
-        _FOUND[key] = found
+        _g_found[key] = found
     return found
 
 
@@ -201,7 +204,7 @@ def require_tool(name: str) -> Path:
     path = find_tool(name)
     if path is None:
         env_var, names = _TOOL_SPECS[name]
-        raise ToolError(
+        raise CToolError(
             f"{name} not found. Put {names[0]} into {REPO_TOOLS_DIR}, add it to PATH, or set {env_var}. "
             f"Where to get it: {WHERE_TO_GET[name]}"
         )
@@ -227,22 +230,22 @@ def missing_tools(needs: dict[str, bool]) -> list[str]:
     return lines
 
 
-def run_tool(exe: Path, args: list[str], cwd: Path | None = None, timeout: float | None = None) -> ToolResult:
-    """Run a tool; after ``timeout`` seconds it is killed and the result says so (``timed_out``)."""
+def run_tool(exe: Path, arguments: list[str], cwd: Path | None = None, timeout_s: float | None = None) -> SToolResult:
+    """Run a tool; after ``timeout_s`` seconds it is killed and the result says so (``timed_out``)."""
     try:
-        proc = subprocess.run(
-            [str(exe), *args],
+        completed = subprocess.run(
+            [str(exe), *arguments],
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
+            timeout=timeout_s,
             **NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
-        return ToolResult(-1, "", f"{exe.name} timed out after {timeout} s", timed_out=True)
-    return ToolResult(proc.returncode, proc.stdout, proc.stderr)
+        return SToolResult(-1, "", f"{exe.name} timed out after {timeout_s} s", timed_out=True)
+    return SToolResult(completed.returncode, completed.stdout, completed.stderr)
 
 
 def _last_line(text: str) -> str:
@@ -250,27 +253,29 @@ def _last_line(text: str) -> str:
 
 
 def ffmpeg_bytes(
-    data: bytes, args: list[str], *, in_suffix: str = "", out_suffix: str = ".wav", timeout: float = 600
+    data: bytes, arguments: list[str], *, in_suffix: str = "", out_suffix: str = ".wav", timeout_s: float = 600
 ) -> bytes:
     """``data`` through ffmpeg with the output options ``args``, as ``out_suffix`` data. With ``in_suffix`` the input
-    is a temporary ``in<suffix>`` file (ffmpeg tells a format by its name), without it a pipe. ``ToolError`` with
+    is a temporary ``in<suffix>`` file (ffmpeg tells a format by its name), without it a pipe. ``CToolError`` with
     ffmpeg's last line when it fails or is missing."""
     ffmpeg = require_tool("ffmpeg")
     if in_suffix:
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="ffmpeg-") as tmp:
-            source, target = Path(tmp) / f"in{in_suffix}", Path(tmp) / f"out{out_suffix}"
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="ffmpeg-") as temp_folder:
+            source, target = Path(temp_folder) / f"in{in_suffix}", Path(temp_folder) / f"out{out_suffix}"
             source.write_bytes(data)
-            result = run_tool(ffmpeg, ["-y", "-v", "error", "-i", str(source), *args, str(target)], timeout=timeout)
+            result = run_tool(
+                ffmpeg, ["-y", "-v", "error", "-i", str(source), *arguments, str(target)], timeout_s=timeout_s
+            )
             if not result.ok or not target.is_file():
-                raise ToolError(f"ffmpeg: {_last_line(result.stderr)}")
+                raise CToolError(f"ffmpeg: {_last_line(result.stderr)}")
             return target.read_bytes()
-    command = [str(ffmpeg), "-loglevel", "error", "-i", "pipe:0", *args, "-f", out_suffix.lstrip("."), "pipe:1"]
+    command = [str(ffmpeg), "-loglevel", "error", "-i", "pipe:0", *arguments, "-f", out_suffix.lstrip("."), "pipe:1"]
     try:
-        done = subprocess.run(command, input=data, capture_output=True, check=False, timeout=timeout, **NO_WINDOW)
+        done = subprocess.run(command, input=data, capture_output=True, check=False, timeout=timeout_s, **NO_WINDOW)
     except subprocess.TimeoutExpired:
-        raise ToolError(f"ffmpeg: timed out after {timeout} s") from None
+        raise CToolError(f"ffmpeg: timed out after {timeout_s} s") from None
     if done.returncode or not done.stdout:
-        raise ToolError(f"ffmpeg: {_last_line(done.stderr.decode('utf-8', 'replace'))}")
+        raise CToolError(f"ffmpeg: {_last_line(done.stderr.decode('utf-8', 'replace'))}")
     return done.stdout
 
 
@@ -284,4 +289,4 @@ def require_converters() -> None:
             __import__(module)
         except ImportError:
             name = "Pillow" if module == "PIL" else module
-            raise ToolError(f"{name} is not installed (pip install {package}, or pip install -e '.[dev]')") from None
+            raise CToolError(f"{name} is not installed (pip install {package}, or pip install -e '.[dev]')") from None

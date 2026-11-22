@@ -2,7 +2,7 @@
 its kind needs - a switch ticks, a closed list is a drop-down, a number or a name is typed, a value made with the rest
 of the file is shown greyed - with what it does as its tool tip.
 
-``FieldForm.show_rows(rows, read_only)`` fills it with ``outline.Row`` objects; ``edited(row, text)`` is a change the
+``CFieldForm.show_rows(rows, read_only)`` fills it with ``outline.SRow`` objects; ``edited(row, text)`` is a change the
 user made, ``open_file(name)`` a file name double-clicked. docs/particle-editor.md, "The app".
 """
 
@@ -19,13 +19,13 @@ ROW = Qt.ItemDataRole.UserRole + 1
 LINK = "#4f9fd9"
 
 
-class FieldForm(QTreeWidget):
+class CFieldForm(QTreeWidget):
     edited = Signal(object, str)
     open_file = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.read_only = False
+        self.m_read_only = False
         self.setColumnCount(2)
         self.setHeaderLabels([tr("common.field"), tr("common.value_lower")])
         self.setRootIsDecorated(False)
@@ -36,18 +36,18 @@ class FieldForm(QTreeWidget):
         self.itemDoubleClicked.connect(self._double)
 
     def show_rows(self, rows: list, read_only: bool = False) -> None:
-        self.read_only = read_only
+        self.m_read_only = read_only
         self.blockSignals(True)
         self.clear()
         for row in rows:
             item = self._item(row)
             self.addTopLevelItem(item)
-            if row.info.kind == CHOICE and row.info.choices:
+            if row.field_info.kind == CHOICE and row.field_info.choices:
                 self.setItemWidget(item, 1, self._combo(row))
         self.blockSignals(False)
 
     def _item(self, row) -> QTreeWidgetItem:
-        kind = row.info.kind
+        kind = row.field_info.kind
         item = QTreeWidgetItem([row.name, "" if kind == SWITCH else row.value])
         item.setData(0, ROW, row)
         flags = item.flags()
@@ -59,14 +59,14 @@ class FieldForm(QTreeWidget):
             flags |= Qt.ItemFlag.ItemIsEditable
         elif kind not in (FIXED, CHOICE):
             flags |= Qt.ItemFlag.ItemIsEditable
-        if self.read_only or kind == FIXED:
+        if self.m_read_only or kind == FIXED:
             flags &= ~(Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable)
         if kind == FIXED:
             item.setForeground(1, QColor("#888888"))
         if kind == FILE:
             item.setForeground(1, QColor(LINK))
         item.setFlags(flags)
-        tip = tr(row.info.meaning) if row.info.meaning else tr("particles.not_described")
+        tip = tr(row.field_info.meaning) if row.field_info.meaning else tr("particles.not_described")
         item.setToolTip(0, tip)
         item.setToolTip(1, tip if kind != FILE else tr("particles.double_click_name_open_viewer",
                                                        meaning=tip))  # fmt: skip
@@ -74,15 +74,17 @@ class FieldForm(QTreeWidget):
 
     def _combo(self, row) -> QComboBox:
         combo = QComboBox()
-        for value, label in row.info.choices:
+        for value, label in row.field_info.choices:
             combo.addItem(f"{value}  {tr(label)}", value)
-        at = combo.findData(row.value.strip())
-        if at < 0:
+        index = combo.findData(row.value.strip())
+        if index < 0:
             combo.addItem(tr("objects.value_not_list", value=row.value), row.value)
-            at = combo.count() - 1
-        combo.setCurrentIndex(at)
-        combo.setEnabled(not self.read_only)
-        combo.activated.connect(lambda k, c=combo, r=row: self._chosen(r, c.itemData(k)))
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+        combo.setEnabled(not self.m_read_only)
+        combo.activated.connect(
+            lambda k, combo_box=combo, chosen_row=row: self._chosen(chosen_row, combo_box.itemData(k))
+        )
         return combo
 
     def _chosen(self, row, value: str) -> None:
@@ -102,5 +104,5 @@ class FieldForm(QTreeWidget):
 
     def _double(self, item: QTreeWidgetItem, column: int) -> None:
         row = item.data(0, ROW)
-        if row is not None and column == 0 and row.info.kind == FILE and row.value.strip():
+        if row is not None and column == 0 and row.field_info.kind == FILE and row.value.strip():
             self.open_file.emit(row.value.strip())

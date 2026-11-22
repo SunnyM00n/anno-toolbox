@@ -1,8 +1,8 @@
 """The suite's settings: the game folders (detected from the Ubisoft and Steam installs and the drives), the
 workspace, the theme, the interface language, the window layouts, kept in one file in ``%LOCALAPPDATA%`` that every app reads.
 
-``Settings`` is the record (``load`` fills an unset game folder from ``detect``, once a day), ``appdata`` the folder; the island
-editor's ``editorapp.App`` and the asset editor take it from here. Plan: ``docs/tool-suite.md`` (C3).
+``CSettings`` is the record (``load`` fills an unset game folder from ``detect``, once a day), ``appdata`` the folder; the island
+editor's ``editorapp.CApp`` and the asset editor take it from here. Plan: ``docs/tool-suite.md`` (C3).
 """
 
 from __future__ import annotations
@@ -62,11 +62,11 @@ def registry_installs() -> list[Path]:
         roots = [steam]
         if library.is_file():
             roots += [
-                Path(p.replace("\\\\", "\\"))
-                for p in re.findall(r'"path"\s+"([^"]+)"', library.read_text("utf-8", "ignore"))
+                Path(library_path.replace("\\\\", "\\"))
+                for library_path in re.findall(r'"path"\s+"([^"]+)"', library.read_text("utf-8", "ignore"))
             ]
-        for r in roots:
-            found += anno_folders(r / "steamapps" / "common")
+        for library_root in roots:
+            found += anno_folders(library_root / "steamapps" / "common")
     except OSError:
         pass
     return found
@@ -76,7 +76,7 @@ def anno_folders(parent: Path) -> list[Path]:
     """The entries of ``parent`` named like an Anno game; none for a folder that is not there or cannot be listed
     (a drive without a disc, a folder of another user)."""
     try:
-        return [p for p in parent.iterdir() if p.name.lower().startswith("anno")]
+        return [child for child in parent.iterdir() if child.name.lower().startswith("anno")]
     except OSError:
         return []
 
@@ -122,10 +122,10 @@ def is_2070(folder: Path) -> bool:
     return installs.GAMES["anno2070"].is_install(folder)
 
 
-def installed(game: str, given: str = "") -> tuple[Settings, Path | None]:
+def installed(game: str, given: str = "") -> tuple[CSettings, Path | None]:
     """The suite's settings and ``game``'s install folder for a command: ``given`` (its ``--folder``), else the
     settings'; None for a folder that is not there."""
-    settings = Settings.load(settings_file())
+    settings = CSettings.load(settings_file())
     folder = given or getattr(settings, game, "")
     return settings, Path(folder) if folder and Path(folder).is_dir() else None
 
@@ -149,7 +149,7 @@ def _read(path: Path) -> dict:
 
 
 @dataclass
-class Settings:
+class CSettings:
     anno117: str = ""
     anno2070: str = ""
     mods: str = ""
@@ -166,6 +166,7 @@ class Settings:
     rendering: dict = field(default_factory=dict)  # per game: its look, backend and frame switches (render.nativelook)
     quality: dict = field(default_factory=dict)  # per game (render.quality.GAMES): its preset, or a Custom record
     hardware: bool = True  # hardware acceleration; off: a software adapter from the next start (render.nativelook)
+    native_shaders: bool = True  # 117's game look binds the game's shipped shaders; off: the earlier way (nativegpu)
     check_updates: bool = True  # look for a newer release at the start, once a day (``suite.updates``)
     last_update_check: str = ""  # the ISO date of the last check that got an answer
     helper_seen: str = ""  # SHA256 of the link helper the last checked release carried (``updates.helper_check``)
@@ -179,21 +180,27 @@ class Settings:
     known_projects: list = field(
         default_factory=list
     )  # the project folders opened or saved, to keep their GUID ranges apart
+    brush_falloff: str = "smooth"  # the island editor's start values for a new island (``editor.desktop.desktopgroup``)
+    snap_places: str = "off"  # ``snapping.MODES``
+    snap_turns: str = "off"  # ``snapping.TURNS``
+    snap_onto_ground: bool = False
     layout: dict = field(default_factory=dict)  # the window's geometry and dock state, base64 (workbench)
     apps: dict = field(default_factory=dict)  # per app of the suite: its own remembered state (``shell``)
 
     @classmethod
-    def load(cls, path: Path, today: date | None = None) -> Settings:
+    def load(cls, path: Path, today: date | None = None) -> CSettings:
         """The settings in ``path``; a file that does not read (cut short, not JSON) is set aside beside it and the
         defaults are used, so the apps still start. ``today``: a test's date for the daily look for the games."""
-        s = cls()
+        settings = cls()
         for key, value in _read(Path(path)).items():
             # a value of another kind (a file edited by hand: "apps": null) would stop an app much later
-            if key in cls.__dataclass_fields__ and type(value) is type(getattr(s, key)):
-                setattr(s, key, value)
-        s.find_games(today or date.today())
-        s.language = i18n.use(s.language)  # every app loads its settings first: that is where the language is chosen
-        return s
+            if key in cls.__dataclass_fields__ and type(value) is type(getattr(settings, key)):
+                setattr(settings, key, value)
+        settings.find_games(today or date.today())
+        settings.language = i18n.use(
+            settings.language
+        )  # every app loads its settings first: that is where the language is chosen
+        return settings
 
     def find_games(self, today: date | None = None) -> None:
         """Fill the unset game folders from ``detect``. Few people have every game, and the look over the registry
@@ -205,9 +212,9 @@ class Settings:
             return
         if today is None:
             linuxfinder.forget()  # asked for by the person: look again
-        for k, v in detect().items():
-            if not getattr(self, k) and v:
-                setattr(self, k, v)
+        for k, value in detect().items():
+            if not getattr(self, k) and value:
+                setattr(self, k, value)
         self.last_game_scan = (today or date.today()).isoformat()
 
     def index_dir(self, key: str) -> Path:
@@ -220,7 +227,9 @@ class Settings:
 
     def problems(self, games: tuple[str, ...] | None = None) -> list[str]:
         """What is missing for the games in use (``games``: their keys, None for 117 and 2070 with the others)."""
-        out = [m for key in (("anno117", "anno2070") if games is None else games) if (m := self.missing(key))]
+        out = [
+            message for key in (("anno117", "anno2070") if games is None else games) if (message := self.missing(key))
+        ]
         out += _not_absolute(N_("common.workspace"), self.workspace)
         return out + (self.mods_problems() if games is None else [])
 

@@ -30,7 +30,7 @@ KINDS = (
 
 
 @dataclass(frozen=True)
-class Format:
+class SFormat:
     """One form a file can be exported in: its key, its label for a menu, the suffix it writes ("" for as stored)."""
 
     key: str
@@ -39,20 +39,20 @@ class Format:
     default: bool = False
 
 
-RAW = Format("raw", N_("common.as_stored"), "", True)
-PNG = Format("png", N_("common.png_8_bit"), ".png")
-PNG16 = Format("png16", N_("common.png_16_bit"), ".png")
-EXR = Format("exr", N_("common.openexr_float"), ".exr")
-HDR = Format("hdr", N_("common.radiance_hdr"), ".hdr")
-GLB = Format("glb", N_("common.gltf_binary_glb"), ".glb")
-GLTF = Format("gltf", N_("common.gltf_bin"), ".gltf")
-RDM = Format("rdm", N_("common.gr2_to_rdm"), ".rdm")
-WAV = Format("wav", N_("common.wav"), ".wav")
-OGG = Format("ogg", N_("common.ogg_vorbis"), ".ogg")
-MP4 = Format("mp4", N_("common.mp4_needs_ffmpeg"), ".mp4")
-WEBM = Format("webm", N_("common.webm_needs_ffmpeg"), ".webm")
-JSON = Format("json", N_("common.json"), ".json")
-CSV = Format("csv", N_("common.csv"), ".csv")
+RAW = SFormat("raw", N_("common.as_stored"), "", True)
+PNG = SFormat("png", N_("common.png_8_bit"), ".png")
+PNG16 = SFormat("png16", N_("common.png_16_bit"), ".png")
+EXR = SFormat("exr", N_("common.openexr_float"), ".exr")
+HDR = SFormat("hdr", N_("common.radiance_hdr"), ".hdr")
+GLB = SFormat("glb", N_("common.gltf_binary_glb"), ".glb")
+GLTF = SFormat("gltf", N_("common.gltf_bin"), ".gltf")
+RDM = SFormat("rdm", N_("common.gr2_to_rdm"), ".rdm")
+WAV = SFormat("wav", N_("common.wav"), ".wav")
+OGG = SFormat("ogg", N_("common.ogg_vorbis"), ".ogg")
+MP4 = SFormat("mp4", N_("common.mp4_needs_ffmpeg"), ".mp4")
+WEBM = SFormat("webm", N_("common.webm_needs_ffmpeg"), ".webm")
+JSON = SFormat("json", N_("common.json"), ".json")
+CSV = SFormat("csv", N_("common.csv"), ".csv")
 
 SUFFIX_KIND = {
     **dict.fromkeys((".cfg", ".rdm", ".gr2", ".mcf", ".ocf"), "model"),
@@ -99,9 +99,9 @@ def kind_of(path: str) -> str:
 
 def suffixes(*wanted: str) -> tuple[str, ...]:
     """The file suffixes of the given kinds, in the table's order."""
-    return tuple(s for s, kind in SUFFIX_KIND.items() if kind in wanted)
+    return tuple(suffix for suffix, kind in SUFFIX_KIND.items() if kind in wanted)
 
 
-def formats_for(kind: str) -> tuple[Format, ...]:
+def formats_for(kind: str) -> tuple[SFormat, ...]:
     """The forms a kind exports in: "as stored" first, then the made ones."""
     return (RAW, *FORMATS.get(kind, ()))

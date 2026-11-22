@@ -20,7 +20,7 @@ SHADERS = "game-shaders"  # models.shaderview.NAMESPACE: the QRhi path's compile
 MANIFESTS = "game-shaders-manifest"  # <build>/<phase>.txt: one entry key a line
 MODELS, OTHER = "models", "other"  # a material's variants; a compile of no fixed phase (the view's own passes)
 _lock = threading.Lock()
-_written: set[tuple[str, str]] = set()  # (manifest file, key) recorded this session
+_g_written: set[tuple[str, str]] = set()  # (manifest file, key) recorded this session
 
 
 def phase_of(path: str, what: str) -> str:
@@ -34,14 +34,14 @@ def phase_of(path: str, what: str) -> str:
     return table.get((path, what), OTHER)
 
 
-_tables: dict = {}
+_g_tables: dict = {}
 
 
 def _table(phases) -> dict:
-    found = _tables.get("fixed")
+    found = _g_tables.get("fixed")
     if found is None:
-        found = _tables["fixed"] = {(spec[0], f"{spec[1]}/{spec[2]}"): p.name for p in phases()
-                                    for spec in p.stages.values()}  # fmt: skip
+        found = _g_tables["fixed"] = {(spec[0], f"{spec[1]}/{spec[2]}"): phase.name for phase in phases()
+                                    for spec in phase.stages.values()}  # fmt: skip
     return found
 
 
@@ -52,16 +52,16 @@ def record(build: str, phase: str, keys: list[str]) -> None:
         return
     path = buildcache.root() / MANIFESTS / build / f"{phase}.txt"
     with _lock:
-        new = [k for k in keys if (str(path), k) not in _written]
+        new = [k for k in keys if (str(path), k) not in _g_written]
         if not new:
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="ascii", newline="\n") as f:
-                f.write("".join(f"{k}\n" for k in new))
+            with path.open("a", encoding="ascii", newline="\n") as manifest_file:
+                manifest_file.write("".join(f"{k}\n" for k in new))
         except OSError:  # a full disk or a folder that cannot be written: the cleaner only knows less
             return
-        _written.update((str(path), k) for k in new)
+        _g_written.update((str(path), k) for k in new)
 
 
 def manifests() -> dict[str, dict[str, set[str]]]:
@@ -70,18 +70,18 @@ def manifests() -> dict[str, dict[str, set[str]]]:
     base = buildcache.root() / MANIFESTS
     for folder in sorted(base.iterdir()) if base.is_dir() else ():
         if folder.is_dir():
-            for f in folder.glob("*.txt"):
-                keys = {ln.strip() for ln in f.read_text(encoding="ascii", errors="ignore").splitlines()}
-                out.setdefault(folder.name, {})[f.stem] = {k for k in keys if _is_key(k)}
+            for manifest in folder.glob("*.txt"):
+                keys = {line.strip() for line in manifest.read_text(encoding="ascii", errors="ignore").splitlines()}
+                out.setdefault(folder.name, {})[manifest.stem] = {k for k in keys if _is_key(k)}
     return out
 
 
 def _is_key(text: str) -> bool:
-    return len(text) == 64 and all(c in "0123456789abcdef" for c in text)
+    return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
 
 
 @dataclass
-class Offer:
+class SOffer:
     """What could be removed: the phases of the current build drawn natively now, the earlier game builds, their
     entries (keys of ``SHADERS`` that exist) and bytes."""
 
@@ -96,14 +96,21 @@ class Offer:
         return bool(self.keys)
 
 
-def offer(build: str, native: frozenset[str] | set[str]) -> Offer:
+def offer(build: str, native: frozenset[str] | set[str]) -> SOffer:
     """The entries no longer needed: those of the ``native`` phases of ``build`` and every entry of another game
     build, but none that a needed phase of ``build`` lists too (two variants can share one compile)."""
     found = manifests()
     current = found.get(build, {})
     keep = set().union(*(keys for phase, keys in current.items() if phase not in native))
-    out = Offer(build, sorted(p for p in current if p in native), sorted(b for b in found if b != build))
-    candidates = set().union(*(current[p] for p in out.phases), *(k for b in out.builds for k in found[b].values()))
+    out = SOffer(
+        build,
+        sorted(phase_name for phase_name in current if phase_name in native),
+        sorted(build_name for build_name in found if build_name != build),
+    )
+    candidates = set().union(
+        *(current[phase_name] for phase_name in out.phases),
+        *(k for build_name in out.builds for k in found[build_name].values()),
+    )
     for key in sorted(candidates - keep):
         entry = buildcache._entry(SHADERS, key)
         if entry.is_file():
@@ -112,12 +119,12 @@ def offer(build: str, native: frozenset[str] | set[str]) -> Offer:
     return out
 
 
-def signature(what: Offer) -> str:
+def signature(what: SOffer) -> str:
     """What an offer is about (its build, phases and earlier builds): a new one is asked about again."""
     return buildcache.digest(what.build, *what.phases, "|", *what.builds)
 
 
-def should_ask(state: dict, what: Offer, version: str) -> bool:
+def should_ask(state: dict, what: SOffer, version: str) -> bool:
     """Whether the pop-up asks: something to remove, not "don't ask again" for it, and not asked for this program
     version and offer already ("not now" asks again after the next update, or when a game update adds to it)."""
     if not what or signature(what) in state.get("never", []):
@@ -125,7 +132,7 @@ def should_ask(state: dict, what: Offer, version: str) -> bool:
     return state.get("asked") != [version, signature(what)]
 
 
-def answered(state: dict, what: Offer, version: str, choice: str) -> dict:
+def answered(state: dict, what: SOffer, version: str, choice: str) -> dict:
     """The remembered state after a choice: "remove" or "later" (asked for this version and offer), "never" (this
     offer is never asked about again; the Help menu's entry still offers it)."""
     out = {**state, "asked": [version, signature(what)]}
@@ -135,17 +142,17 @@ def answered(state: dict, what: Offer, version: str, choice: str) -> dict:
 
 
 @dataclass
-class Removed:
+class SRemoved:
     entries: int = 0
     size: int = 0
     failed: list[str] = field(default_factory=list)
 
 
-def remove(what: Offer, progress: Callable[[int, int], None] | None = None) -> Removed:
+def remove(what: SOffer, progress: Callable[[int, int], None] | None = None) -> SRemoved:
     """Remove the offer's entries from ``SHADERS`` and the manifests it covered; a file that will not go is named in
     the result (the rest goes on)."""
-    out = Removed()
-    for n, key in enumerate(what.keys, 1):
+    out = SRemoved()
+    for position, key in enumerate(what.keys, 1):
         entry = buildcache._entry(SHADERS, key)
         try:
             size = entry.stat().st_size
@@ -158,7 +165,7 @@ def remove(what: Offer, progress: Callable[[int, int], None] | None = None) -> R
             out.entries += 1
             out.size += size
         if progress is not None:
-            progress(n, len(what.keys))
+            progress(position, len(what.keys))
     base = buildcache.root() / MANIFESTS
     for build in what.builds:
         if _is_key(build):  # a manifest folder of ours, by its build's name (a digest): nothing else
@@ -166,5 +173,5 @@ def remove(what: Offer, progress: Callable[[int, int], None] | None = None) -> R
     for phase in what.phases:
         (base / what.build / f"{phase}.txt").unlink(missing_ok=True)
     with _lock:
-        _written.clear()  # a compile asked for again is listed anew
+        _g_written.clear()  # a compile asked for again is listed anew
     return out

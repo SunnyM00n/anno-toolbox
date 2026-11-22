@@ -1,7 +1,7 @@
 """Anno 2070 editing of the island editor: an Anno 2070 island edited for Anno 2070 itself.
 
 The island is read from its ``.isd`` (``isd2070``) and shown with its models read from the game's files
-(``modelviewer.RdmModels``);
+(``modelviewer.CRdmModels``);
 the edits are written back into the ``.isd``, which ``formats.isd.build`` puts into ``maindata/patch9.rda`` - the one
 archive 2070 mounts last and without a checksum (engine-notes "Anno 2070 archives"). What it edits (objects, heights
 and the logic grid, ground paint, forest, rivers, lakes, coast lines, path blockers) and what keeps the vanilla
@@ -22,17 +22,18 @@ from pathlib import Path
 import numpy as np
 
 from ....formats import isd2070
-from ....formats.isd2070 import FIXED, RENDER_TRANSFORM, Node
+from ....formats.isd2070 import FIXED, RENDER_TRANSFORM, SNode
 from ....infra.i18n import tr
 from ....islands import islandedits, objectedits
 from ....islands.forestpick import forest_kinds, tile_pick
-from ....islands.islandview import Files
+from ....islands.islandview import CFiles
 from ....models import fileresolve
-from ...assetmodels import Reason
+from ....sources import streetcells2070, streetgrid2070
+from ...assetmodels import CReason
 from ...islandassets import finish_png, whole_file
-from ...islandeditor import ALBEDO_MAX, GROUND_MAX, GROUND_TEXELS, IslandEditor
+from ...islandeditor import ALBEDO_MAX, GROUND_MAX, GROUND_TEXELS, CIslandEditor
 from ...modelparts import library_group
-from ...modelviewer import RdmModels
+from ...modelviewer import CRdmModels
 from . import props as isd_props
 from . import water as isd_water
 
@@ -52,7 +53,7 @@ RENDER_HEAD = bytes(16) + bytes.fromhex("0008000000000100000064000000")
 RENDER_TINT = bytes.fromhex("9998983d9998983eeeecec3e0000803f")
 
 
-ISLAND_JSON = 6  # the cached island data's layout: a change makes the editor read the island again
+ISLAND_JSON = 7  # the cached island data's layout: a change makes the editor read the island again
 LAYERS_2070 = 24  # MAX_SPLATS_PER_CHUNK: the most layers 2070 paints in one chunk
 FOREST_LAND = 0.3  # no tree is planted below this height (the forest brush skips it too, editsession)
 
@@ -61,112 +62,120 @@ def edit_name(source: str) -> str:
     return f"{EDIT_PREFIX}{Path(source).stem.lower()}.json"
 
 
-def object_key(obj: Node) -> str:
-    return f"{KEY_PREFIX}{obj.int('m_ID')}"
+def object_key(object_node: SNode) -> str:
+    return f"{KEY_PREFIX}{object_node.int('m_ID')}"
 
 
-def _groups(root: Node):
+def _groups(root: SNode):
     """(group name, its Objects node) for every object group of the island."""
     groups = root.path("m_GOPManager/Objects")
-    for g in groups.children if groups is not None else []:
-        objs = g.find("Objects")
+    for group in groups.children if groups is not None else []:
+        objs = group.find("Objects")
         if objs is not None:
-            yield g.name, objs
+            yield group.name, objs
 
 
-def _position(obj: Node) -> tuple[float, float, float]:
-    x, z, y = struct.unpack("<qqq", isd2070.position_node(obj).data)
+def _position(object_node: SNode) -> tuple[float, float, float]:
+    x, z, y = struct.unpack("<qqq", isd2070.position_node(object_node).data)
     return x / FIXED, y / FIXED, z / FIXED
 
 
-def _quat(obj: Node) -> tuple[float, float, float, float]:
-    nat = obj.find("Nature")
+def _quat(object_node: SNode) -> tuple[float, float, float, float]:
+    nat = object_node.find("Nature")
     orient = nat.find("m_Orientation") if nat is not None else None
     if orient is not None and orient.data:
         return struct.unpack("<4f", orient.data)
-    rp = _render(obj)
-    if rp is not None:  # a prop's tilt is only in its render parameters
-        return RENDER_TRANSFORM.unpack_from(rp.data, len(RENDER_HEAD))[3:7]
-    yaw = math.radians(obj.int("m_Direction") / 4096)
+    render_node = _render(object_node)
+    if render_node is not None:  # a prop's tilt is only in its render parameters
+        return RENDER_TRANSFORM.unpack_from(render_node.data, len(RENDER_HEAD))[3:7]
+    yaw = math.radians(object_node.int("m_Direction") / 4096)
     return 0.0, -math.sin(yaw / 2), 0.0, math.cos(yaw / 2)
 
 
-def _render(obj: Node) -> Node | None:
-    rp = obj.path("PropertyMesh/m_RenderParameters")
-    return rp if rp is not None and rp.data and len(rp.data) >= len(RENDER_HEAD) + RENDER_TRANSFORM.size else None
+def _render(object_node: SNode) -> SNode | None:
+    render_node = object_node.path("PropertyMesh/m_RenderParameters")
+    return (
+        render_node
+        if render_node is not None
+        and render_node.data
+        and len(render_node.data) >= len(RENDER_HEAD) + RENDER_TRANSFORM.size
+        else None
+    )
 
 
-def _scale(obj: Node) -> float:
+def _scale(object_node: SNode) -> float:
     """A tree's or rock's own scale; a prop's sits in its render parameters."""
-    s = obj.path("Nature/m_Scale")
-    if s is not None and s.text:
-        return float(s.text)
-    rp = _render(obj)
-    return RENDER_TRANSFORM.unpack_from(rp.data, len(RENDER_HEAD))[-1] if rp is not None else 1.0
+    scale_node = object_node.path("Nature/m_Scale")
+    if scale_node is not None and scale_node.text:
+        return float(scale_node.text)
+    render_node = _render(object_node)
+    return RENDER_TRANSFORM.unpack_from(render_node.data, len(RENDER_HEAD))[-1] if render_node is not None else 1.0
 
 
-def _set(parent: Node, name: str, text: str | None = None, data: bytes | None = None) -> Node:
+def _set(parent: SNode, name: str, text: str | None = None, data: bytes | None = None) -> SNode:
     node = parent.find(name)
     if node is None:
-        node = Node(name)
+        node = SNode(name)
         parent.children.append(node)
     node.text, node.data = text, data
     return node
 
 
-def _legacy_turn(obj: Node) -> bool:
+def _legacy_turn(object_node: SNode) -> bool:
     """Older 1404 islands turn an object by an ``m_Orientation`` number of their own (unit not known): not edited."""
-    return obj.find("m_Direction") is None and obj.find("m_Orientation") is not None
+    return object_node.find("m_Direction") is None and object_node.find("m_Orientation") is not None
 
 
-def _set_object(obj: Node, change: dict) -> None:
+def _set_object(object_node: SNode, change: dict) -> None:
     if "position" in change:
         x, y, z = map(float, change["position"])
-        isd2070.position_node(obj).data = struct.pack("<qqq", round(x * FIXED), round(z * FIXED), round(y * FIXED))
-    q = tuple(map(float, change["rotation"])) if "rotation" in change else _quat(obj)
-    if "rotation" in change and not _legacy_turn(obj):
-        _set(obj, "m_Direction", str(round(math.degrees(islandedits._yaw(q)) * 4096)))
-        nat = obj.find("Nature")
+        isd2070.position_node(object_node).data = struct.pack(
+            "<qqq", round(x * FIXED), round(z * FIXED), round(y * FIXED)
+        )
+    quaternion = tuple(map(float, change["rotation"])) if "rotation" in change else _quat(object_node)
+    if "rotation" in change and not _legacy_turn(object_node):
+        _set(object_node, "m_Direction", str(round(math.degrees(islandedits._yaw(quaternion)) * 4096)))
+        nat = object_node.find("Nature")
         if nat is not None:
-            _set(nat, "m_Orientation", data=struct.pack("<4f", *q))
-    scale = _scale(obj)
+            _set(nat, "m_Orientation", data=struct.pack("<4f", *quaternion))
+    scale = _scale(object_node)
     if "scale" in change:
-        s = change["scale"]
-        scale = float(s[0] if isinstance(s, list) else s)
-    nat = obj.find("Nature")
+        scale_value = change["scale"]
+        scale = float(scale_value[0] if isinstance(scale_value, list) else scale_value)
+    nat = object_node.find("Nature")
     if nat is not None:
         _set(nat, "m_Scale", f"{scale:.6f}")
-    rp = _render(obj)
-    if rp is not None:  # the game draws props from here: it moves with the object
-        data = bytearray(rp.data)
-        RENDER_TRANSFORM.pack_into(data, len(RENDER_HEAD), *_position(obj), *q, scale)
-        rp.data = bytes(data)
+    render_node = _render(object_node)
+    if render_node is not None:  # the game draws props from here: it moves with the object
+        data = bytearray(render_node.data)
+        RENDER_TRANSFORM.pack_into(data, len(RENDER_HEAD), *_position(object_node), *quaternion, scale)
+        render_node.data = bytes(data)
 
 
-def _render_block() -> Node:
+def _render_block() -> SNode:
     """A prop's render parameters (header, transform, tint), the transform set by ``_set_object``."""
     render = RENDER_HEAD + bytes(RENDER_TRANSFORM.size) + RENDER_TINT
-    return Node("PropertyMesh", children=[Node("m_RenderParameters", data=render)])
+    return SNode("PropertyMesh", children=[SNode("m_RenderParameters", data=render)])
 
 
-class Island2070:
+class CIsland2070:
     """A 2070 island opened for writing: the parsed ``.isd`` and what edits change in it."""
 
     def __init__(self, data: bytes) -> None:
-        self.island = isd2070.Island(data)
-        self.root = self.island.root
-        self.size = self.island.width
-        self._next_id: int | None = None  # the first free m_ID, found when the first object is added
+        self.m_island = isd2070.CIsland(data)
+        self.m_root = self.m_island.m_root
+        self.m_size_tiles = self.m_island.m_width
+        self._m_next_id: int | None = None  # the first free m_ID, found when the first object is added
 
     def write(self) -> bytes:
-        return isd2070.serialize(self.root)
+        return isd2070.serialize(self.m_root)
 
     def objects(self):
         """(group name, Objects node, object) for every placed object."""
-        for name, objs in _groups(self.root):
-            for o in list(objs.children):
-                if o.name == "Object" and isd2070.position_node(o) is not None:
-                    yield name, objs, o
+        for name, objs in _groups(self.m_root):
+            for object_node in list(objs.children):
+                if object_node.name == "Object" and isd2070.position_node(object_node) is not None:
+                    yield name, objs, object_node
 
     def apply(self, edits: dict, types: dict) -> dict:
         """Apply an edit file; ``types``: 2070's assets (``objects2070.read_types``)."""
@@ -175,15 +184,18 @@ class Island2070:
         if edits.get("clear"):
             report["cleared"] = self.clear()
 
-        def remove(gone: list[tuple[Node, Node]]) -> None:
-            for objs, o in gone:
-                objs.children.remove(o)
+        def remove(gone: list[tuple[SNode, SNode]]) -> None:
+            for objs, object_node in gone:
+                objs.children.remove(object_node)
             if gone:
-                self._drop_groups({o.int("m_ID") for _, o in gone})
+                self._drop_groups({object_node.int("m_ID") for _, object_node in gone})
 
-        ops = objectedits.ObjectOps(lambda handle, change: _set_object(handle[1], change), remove)
+        ops = objectedits.SObjectOps(lambda handle, change: _set_object(handle[1], change), remove)
         objectedits.apply_changes(
-            ((object_key(o), (objs, o)) for _, objs, o in self.objects()), edits.get("objects", {}), ops, report
+            ((object_key(object_node), (objs, object_node)) for _, objs, object_node in self.objects()),
+            edits.get("objects", {}),
+            ops,
+            report,
         )
         objectedits.add_each(
             edits.get("added_objects", []),
@@ -194,22 +206,22 @@ class Island2070:
         report["heights"] = self.apply_heights(edits.get("heights", {}))
         report["paint"] = self.apply_paint(edits.get("paint", []))
         report["trees planted"] = self.apply_forest(edits.get("forest", {}), types)
-        water, stale = isd_water.apply(self.root, edits)
+        water, stale = isd_water.apply(self.m_root, edits)
         report |= water
         report["unmatched"] += stale
-        report["properties"] = isd_props.apply(self.root, edits.get("properties", {}))
+        report["properties"] = isd_props.apply(self.m_root, edits.get("properties", {}))
         return report
 
     def clear(self) -> dict:
         """A blank island (docs/island-editor.md, "New islands"): every object, river and lake taken off; the terrain,
         the coast lines and the logic grids stay. Returns what was removed."""
-        gone = [(objs, o) for _, objs, o in self.objects()]
-        for objs, o in gone:
-            objs.children.remove(o)
-        self._drop_groups({o.int("m_ID") for _, o in gone})
+        gone = [(objs, object_node) for _, objs, object_node in self.objects()]
+        for objs, object_node in gone:
+            objs.children.remove(object_node)
+        self._drop_groups({object_node.int("m_ID") for _, object_node in gone})
         out = {"objects": len(gone)}
         for name in ("Rivers", "Lakes"):
-            node = self.root.find(name)
+            node = self.m_root.find(name)
             if node is not None and node.children:
                 out[name.lower()] = len(node.children)
                 node.children = []
@@ -219,30 +231,36 @@ class Island2070:
         """Planted forest tiles (``"x,z"`` -> 1) as tree objects: one per tile without a tree, at its
         middle on the ground, of the kind and turn the editor drew it with (``tile_pick``). Clearing
         is deleting the tree objects (``objects``)."""
-        kinds = forest_kinds(self.island, types)
+        kinds = forest_kinds(self.m_island, types)
         if not kinds:
             return 0
         trees = {
-            (int(o.x), int(o.z))
-            for o in self.island.objects()
-            if (t := types.get(o.guid)) is not None and t.template == "Tree"
+            (int(object_node.x), int(object_node.z))
+            for object_node in self.m_island.objects()
+            if (asset_type := types.get(object_node.guid)) is not None and asset_type.template == "Tree"
         }
-        hm = None
+        heightmap = None
         planted = 0
-        for k, v in sorted(forest.items()):
+        for k, value in sorted(forest.items()):
             x, z = map(int, k.split(","))
-            if not v or (x, z) in trees or not (0 <= x < self.size and 0 <= z < self.size):
+            if not value or (x, z) in trees or not (0 <= x < self.m_size_tiles and 0 <= z < self.m_size_tiles):
                 continue
-            if hm is None:
-                hm = np.asarray(self.island.heightmap(), np.float32)
-            h = float(hm[z : z + 2, x : x + 2].mean())
-            if h < FOREST_LAND:
+            if heightmap is None:
+                heightmap = np.asarray(self.m_island.heightmap(), np.float32)
+            height = float(heightmap[z : z + 2, x : x + 2].mean())
+            if height < FOREST_LAND:
                 continue
             pick = tile_pick(x, z)
             guid, var = kinds[pick % len(kinds)]
             yaw = math.radians(pick % 360)
             turn = [0.0, -math.sin(yaw / 2), 0.0, math.cos(yaw / 2)]
-            add = {"asset": guid, "variation": var, "position": [x + 0.5, h, z + 0.5], "rotation": turn, "scale": 1.0}
+            add = {
+                "asset": guid,
+                "variation": var,
+                "position": [x + 0.5, height, z + 0.5],
+                "rotation": turn,
+                "scale": 1.0,
+            }
             if self.add_object(add, types):
                 trees.add((x, z))
                 planted += 1
@@ -250,11 +268,13 @@ class Island2070:
 
     def _drop_groups(self, ids: set[int]) -> None:
         """Object groups (pairs of IDs) that name a deleted object go with it."""
-        groups = self.root.path("m_GOPManager/ObjectGroups")
+        groups = self.m_root.path("m_GOPManager/ObjectGroups")
         if groups is None:
             return
         groups.children = [
-            g for g in groups.children if not (g.data and set(struct.unpack(f"<{len(g.data) // 4}I", g.data)) & ids)
+            group
+            for group in groups.children
+            if not (group.data and set(struct.unpack(f"<{len(group.data) // 4}I", group.data)) & ids)
         ]
 
     def add_object(self, add: dict, types: dict) -> bool:
@@ -264,154 +284,167 @@ class Island2070:
         guid, var = add.get("asset", add.get("guid")), add.get("variation", 0)
         if guid is None and add.get("source"):  # a model several assets share: the placeable one
             guid, var = next(
-                ((t.guid, k) for t in types.values() if t.template in NATURE | SIMPLE
-                 for k, v in enumerate(t.variations) if v == add["source"]),
+                ((asset_type.guid, k) for asset_type in types.values() if asset_type.template in NATURE | SIMPLE
+                 for k, variation in enumerate(asset_type.variations) if variation == add["source"]),
                 (None, 0),
             )  # fmt: skip
-        t = types.get(int(guid)) if guid is not None else None
-        if t is None:
+        asset_type = types.get(int(guid)) if guid is not None else None
+        if asset_type is None:
             return False
-        group = "Nature" if t.template in NATURE else "Simple" if t.template in SIMPLE else None
-        objs = dict(_groups(self.root)).get(group) if group else None
+        group = "Nature" if asset_type.template in NATURE else "Simple" if asset_type.template in SIMPLE else None
+        objs = dict(_groups(self.m_root)).get(group) if group else None
         if group and objs is None:
             return False
-        obj = self._new_landscape(t.guid, var, group) if group else self._new_copy(t, var, types)
-        if obj is None:
+        object_node = (
+            self._new_landscape(asset_type.guid, var, group) if group else self._new_copy(asset_type, var, types)
+        )
+        if object_node is None:
             return False
-        objs, obj = obj if isinstance(obj, tuple) else (objs, obj)
+        objs, object_node = object_node if isinstance(object_node, tuple) else (objs, object_node)
         place = {"position": add["position"], "rotation": add.get("rotation", [0, 0, 0, 1])}
-        _set_object(obj, {**place, "scale": add.get("scale", 1)})
-        objs.children.append(obj)
+        _set_object(object_node, {**place, "scale": add.get("scale", 1)})
+        objs.children.append(object_node)
         return True
 
     def _new_id(self) -> int:
-        if self._next_id is None:
-            self._next_id = max((o.int("m_ID") for _, _, o in self.objects()), default=0) + 1
-        self._next_id += 1
-        return self._next_id - 1
+        if self._m_next_id is None:
+            self._m_next_id = max((object_node.int("m_ID") for _, _, object_node in self.objects()), default=0) + 1
+        self._m_next_id += 1
+        return self._m_next_id - 1
 
-    def _new_landscape(self, guid: int, var: int, group: str) -> Node:
-        obj = Node("Object", children=[Node("m_ID", str(self._new_id())), Node("m_GUID", str(guid))])
+    def _new_landscape(self, guid: int, var: int, group: str) -> SNode:
+        object_node = SNode("Object", children=[SNode("m_ID", str(self._new_id())), SNode("m_GUID", str(guid))])
         if var:
-            obj.children.append(Node("m_Variation", str(var)))
-        obj.children += [
-            Node("m_Position", data=bytes(24)),
-            Node("m_PlayerID", str(PLAYER_NONE)),
-            Node("m_Direction", "0"),
+            object_node.children.append(SNode("m_Variation", str(var)))
+        object_node.children += [
+            SNode("m_Position", data=bytes(24)),
+            SNode("m_PlayerID", str(PLAYER_NONE)),
+            SNode("m_Direction", "0"),
         ]
         if group == "Nature":
-            obj.children.append(Node("Nature", children=[Node("m_Scale", "1.000000")]))
+            object_node.children.append(SNode("Nature", children=[SNode("m_Scale", "1.000000")]))
         else:
-            obj.children.append(_render_block())
-        return obj
+            object_node.children.append(_render_block())
+        return object_node
 
-    def _new_copy(self, asset, var: int, types: dict) -> tuple[Node, Node]:
+    def _new_copy(self, asset, var: int, types: dict) -> tuple[SNode, SNode]:
         """(the objects list, a copy of the island's first object of ``asset``, else of its template, else a plain
         handle object) with an ID of its own and the variation set."""
-        same = [(objs, o) for _, objs, o in self.objects() if o.int("m_GUID") == asset.guid]
-        kind = [(objs, o) for _, objs, o in self.objects()
-                if (t := types.get(o.int("m_GUID"))) is not None and t.template == asset.template]  # fmt: skip
+        same = [
+            (objs, object_node) for _, objs, object_node in self.objects() if object_node.int("m_GUID") == asset.guid
+        ]
+        kind = [(objs, object_node) for _, objs, object_node in self.objects()
+                if (asset_type := types.get(object_node.int("m_GUID"))) is not None and asset_type.template == asset.template]  # fmt: skip
         if same or kind:
             objs, sample = (same or kind)[0]
-            obj = copy.deepcopy(sample)
+            object_node = copy.deepcopy(sample)
         else:
             objs = self._handle_objects()
-            obj = Node("Object", children=[Node("m_ID", "0"), Node("m_GUID", "0"), Node("m_Position", data=bytes(24)),
-                                           Node("m_PlayerID", str(PLAYER_NONE)), Node("m_Direction", "0"),
+            object_node = SNode("Object", children=[SNode("m_ID", "0"), SNode("m_GUID", "0"), SNode("m_Position", data=bytes(24)),
+                                           SNode("m_PlayerID", str(PLAYER_NONE)), SNode("m_Direction", "0"),
                                            _render_block()])  # fmt: skip
-        obj.find("m_ID").text = str(self._new_id())
-        obj.find("m_GUID").text = str(asset.guid)
-        old = obj.find("m_Variation")
+        object_node.find("m_ID").text = str(self._new_id())
+        object_node.find("m_GUID").text = str(asset.guid)
+        old = object_node.find("m_Variation")
         if var:
             if old is None:
-                obj.children.insert(2, old := Node("m_Variation"))
+                object_node.children.insert(2, old := SNode("m_Variation"))
             old.text = str(var)
         elif old is not None:
-            obj.children.remove(old)
-        return objs, obj
+            object_node.children.remove(old)
+        return objs, object_node
 
-    def _handle_objects(self) -> Node:
+    def _handle_objects(self) -> SNode:
         """The ``Handle`` group's object list (the buildings'), made when the island has none."""
-        objs = dict(_groups(self.root)).get("Handle")
+        objs = dict(_groups(self.m_root)).get("Handle")
         if objs is None:
-            groups = self.root.path("m_GOPManager/Objects")
-            groups.children.append(Node("Handle", children=[Node("Objects")]))
-            objs = dict(_groups(self.root))["Handle"]
+            groups = self.m_root.path("m_GOPManager/Objects")
+            groups.children.append(SNode("Handle", children=[SNode("Objects")]))
+            objs = dict(_groups(self.m_root))["Handle"]
         return objs
 
     # the ground
     def _chunks(self):
         """(chunk x, chunk z, tiles per chunk, element) for every terrain chunk."""
-        t = self.root.path("Terrain")
-        cm = t.path("ChunkMap")
-        cw = cm.int("Width")
-        per = t.int("TileCountX") // cw
-        for k, el in enumerate(cm.findall("Element")):
-            yield k % cw, k // cw, per, el
+        terrain = self.m_root.path("Terrain")
+        chunk_map = terrain.path("ChunkMap")
+        chunk_width = chunk_map.int("Width")
+        per = terrain.int("TileCountX") // chunk_width
+        for k, element_node in enumerate(chunk_map.findall("Element")):
+            yield k % chunk_width, k // chunk_width, per, element_node
 
     @staticmethod
-    def _sample_index(cx: int, cz: int, per: int, w: int):
+    def _sample_index(chunk_x: int, chunk_z: int, per: int, sample_count: int):
         """The island corners (z, x index arrays) nearest to a chunk's w x w samples."""
-        idx = np.floor(np.arange(w) * per / (w - 1) + 0.5).astype(int)
-        return cz * per + idx, cx * per + idx
+        indices = np.floor(np.arange(sample_count) * per / (sample_count - 1) + 0.5).astype(int)
+        return chunk_z * per + indices, chunk_x * per + indices
 
     @staticmethod
-    def _at_samples(grid, cx: int, cz: int, per: int, w: int):
+    def _at_samples(grid, chunk_x: int, chunk_z: int, per: int, sample_count: int):
         """A corner grid at a chunk's w x w samples, between corners interpolated (fine chunks)."""
         from ....islands.islandterrain import bilinear
 
-        pos = np.arange(w) * per / (w - 1)
-        return bilinear(grid, cx * per + pos, cz * per + pos)
+        offsets = np.arange(sample_count) * per / (sample_count - 1)
+        return bilinear(grid, chunk_x * per + offsets, chunk_z * per + offsets)
 
     def apply_heights(self, heights: dict) -> int:
         """Raise or lower tile corners (``"z,x"`` -> world units): in every chunk's heightmap that
         holds the corner, and in the logic grid of the tiles around it. A chunk without heights
         (open sea) is switched on first, at the heights the editor showed it at."""
-        n = self.size + 1
-        delta = islandedits.height_grid(heights, n, n).astype(np.float32)
+        corner_count = self.m_size_tiles + 1
+        delta = islandedits.height_grid(heights, corner_count, corner_count).astype(np.float32)
         if not delta.any():
             return 0
         shown = None
-        for cx, cz, per, el in self._chunks():
-            data = el.path("HeightMap/Data")
+        for chunk_x, chunk_z, per, element_node in self._chunks():
+            data = element_node.path("HeightMap/Data")
             if data is None or data.data is None:
-                zs, xs = self._sample_index(cx, cz, per, per + 1)
-                if not delta[np.ix_(zs, xs)].any():
+                sample_z, sample_x = self._sample_index(chunk_x, chunk_z, per, per + 1)
+                if not delta[np.ix_(sample_z, sample_x)].any():
                     continue
                 if shown is None:
-                    shown = np.asarray(self.island.heightmap(), np.float32)
-                data = self._switch_on(el, cx, cz, shown[np.ix_(zs, xs)])
-            w = el.path("HeightMap").int("Width")
-            d = self._at_samples(delta, cx, cz, per, w)
-            if d.any():
-                vals = np.frombuffer(data.data, "<f4").reshape(w, w) + d
+                    shown = np.asarray(self.m_island.heightmap(), np.float32)
+                data = self._switch_on(element_node, chunk_x, chunk_z, shown[np.ix_(sample_z, sample_x)])
+            sample_count = element_node.path("HeightMap").int("Width")
+            delta_samples = self._at_samples(delta, chunk_x, chunk_z, per, sample_count)
+            if delta_samples.any():
+                vals = np.frombuffer(data.data, "<f4").reshape(sample_count, sample_count) + delta_samples
                 data.data = vals.astype("<f4").tobytes()
-        manager = self.root.path("m_GOPManager/m_GRIDManager")
+        manager = self.m_root.path("m_GOPManager/m_GRIDManager")
         grids = (manager.find("m_HeightMap_v2"), manager.find("m_HeightMap")) if manager is not None else ()
-        v2 = next((n for n in grids if n is not None and n.data), None)
-        if v2 is not None and len(v2.data) == self.size * self.size * 2:
-            grid = np.frombuffer(v2.data, "<i2").reshape(self.size, self.size).astype(np.int32)
+        first_grid = next((grid_node for grid_node in grids if grid_node is not None and grid_node.data), None)
+        if first_grid is not None and len(first_grid.data) == self.m_size_tiles * self.m_size_tiles * 2:
+            grid = np.frombuffer(first_grid.data, "<i2").reshape(self.m_size_tiles, self.m_size_tiles).astype(np.int32)
             mean = (delta[:-1, :-1] + delta[1:, :-1] + delta[:-1, 1:] + delta[1:, 1:]) / 4
             grid = np.clip(grid + np.round(mean * V2_UNITS).astype(np.int32), -32768, 32767)
-            v2.data = grid.astype("<i2").tobytes()
+            first_grid.data = grid.astype("<i2").tobytes()
         return int(np.count_nonzero(delta))
 
-    def _switch_on(self, el: Node, cx: int, cz: int, heights) -> Node:
+    def _switch_on(self, element_node: SNode, chunk_x: int, chunk_z: int, heights) -> SNode:
         """Give an open-sea chunk heights and the sea bed's layer; returns its heightmap data."""
-        w = len(heights)
+        sample_count = len(heights)
         for name, value in CHUNK_ON.items():
-            _set(el, name, value)
-        hm = Node("HeightMap", children=[Node("Width", str(w)), Node("Data", data=heights.astype("<f4").tobytes())])
-        el.children.insert(1, hm)  # after VertexResolution, as in a vanilla chunk
-        layer = Node("AlphaMap", children=[Node("Width", str(w)), Node("Data", data=bytes([255]) * w * w)])
-        el.children.append(Node("TexIndexData", children=[Node("TextureIndex", "0"), layer]))
-        used = self.root.path("UsedChunks")
+            _set(element_node, name, value)
+        height_map_node = SNode(
+            "HeightMap",
+            children=[SNode("Width", str(sample_count)), SNode("Data", data=heights.astype("<f4").tobytes())],
+        )
+        element_node.children.insert(1, height_map_node)  # after VertexResolution, as in a vanilla chunk
+        layer = SNode(
+            "AlphaMap",
+            children=[
+                SNode("Width", str(sample_count)),
+                SNode("Data", data=bytes([255]) * sample_count * sample_count),
+            ],
+        )
+        element_node.children.append(SNode("TexIndexData", children=[SNode("TextureIndex", "0"), layer]))
+        used = self.m_root.path("UsedChunks")
         if used is not None:
             grid = bytearray(used.path("m_BitGrid").data)
             stride = used.int("m_IntXSize") * 4  # bytes per row
-            grid[cz * stride + cx // 8] |= 1 << (cx % 8)
+            grid[chunk_z * stride + chunk_x // 8] |= 1 << (chunk_x % 8)
             used.path("m_BitGrid").data = bytes(grid)
-        return hm.find("Data")
+        return height_map_node.find("Data")
 
     def apply_paint(self, strokes: list[dict]) -> int:
         """Lay painted strokes (``material``: a ground texture GUID) into the chunks' texture
@@ -420,50 +453,56 @@ class Island2070:
         from ....islands.islandground import stroke_cover, stroke_material
 
         done = 0
-        for st in strokes:
-            guid = stroke_material(st)
+        for stroke in strokes:
+            guid = stroke_material(stroke)
             # the brush samples texel centres; corners sit half a tile earlier
-            shifted = {**st, "points": [[p[0] + 0.5, p[1] + 0.5] for p in st.get("points", [])]}
-            cover = stroke_cover(shifted, self.size + 1, 1)
+            shifted = {**stroke, "points": [[point[0] + 0.5, point[1] + 0.5] for point in stroke.get("points", [])]}
+            cover = stroke_cover(shifted, self.m_size_tiles + 1, 1)
             if guid < 0 or not cover.any():
                 continue
-            for cx, cz, per, el in self._chunks():
-                layers = el.findall("TexIndexData")
+            for chunk_x, chunk_z, per, element_node in self._chunks():
+                layers = element_node.findall("TexIndexData")
                 if not layers:
                     continue
-                w = layers[0].path("AlphaMap").int("Width")
-                zs, xs = self._sample_index(cx, cz, per, w)
-                c = cover[np.ix_(zs, xs)]
-                if not c.any():
+                sample_count = layers[0].path("AlphaMap").int("Width")
+                sample_z, sample_x = self._sample_index(chunk_x, chunk_z, per, sample_count)
+                coverage = cover[np.ix_(sample_z, sample_x)]
+                if not coverage.any():
                     continue
-                mine = next((t for t in layers if t.int("TextureIndex") == guid), None)
+                mine = next((layer for layer in layers if layer.int("TextureIndex") == guid), None)
                 if mine is None:
-                    mine = Node(
+                    mine = SNode(
                         "TexIndexData",
                         children=[
-                            Node("TextureIndex", str(guid)),
-                            Node("AlphaMap", children=[Node("Width", str(w)), Node("Data", data=bytes(w * w))]),
+                            SNode("TextureIndex", str(guid)),
+                            SNode(
+                                "AlphaMap",
+                                children=[
+                                    SNode("Width", str(sample_count)),
+                                    SNode("Data", data=bytes(sample_count * sample_count)),
+                                ],
+                            ),
                         ],
                     )
-                    el.children.insert(el.children.index(layers[-1]) + 1, mine)
+                    element_node.children.insert(element_node.children.index(layers[-1]) + 1, mine)
                     layers.append(mine)
                 above = False
-                for t in layers:
-                    data = t.path("AlphaMap/Data")
-                    a = np.frombuffer(data.data, np.uint8).reshape(w, w) / 255.0
-                    if t is mine:
-                        a = a + (1 - a) * c
+                for layer in layers:
+                    data = layer.path("AlphaMap/Data")
+                    alpha = np.frombuffer(data.data, np.uint8).reshape(sample_count, sample_count) / 255.0
+                    if layer is mine:
+                        alpha = alpha + (1 - alpha) * coverage
                         above = True
                     elif above:
-                        a = a * (1 - c)
+                        alpha = alpha * (1 - coverage)
                     else:
                         continue
-                    data.data = np.clip(np.round(a * 255), 0, 255).astype(np.uint8).tobytes()
+                    data.data = np.clip(np.round(alpha * 255), 0, 255).astype(np.uint8).tobytes()
             done += 1
         return done
 
 
-class Island2070Editor(RdmModels, IslandEditor):
+class CIsland2070Editor(CRdmModels, CIslandEditor):
     """The editor's island for Anno 2070 editing: the ``.isd`` itself, its objects drawn with the models their
     assets name, read from the game's files. The same shape as a 117 island."""
 
@@ -471,17 +510,17 @@ class Island2070Editor(RdmModels, IslandEditor):
         from ....islands.objects2070 import read_types
         from ....islands.terrain2070 import splat_ids
 
-        self.source = source
+        self.m_source = source
         data = tree2070.read_bytes(source)
-        self.isl = isd2070.Island(data)
-        self.isl.order = splat_ids(tree2070)
-        self.size = self.isl.width
-        self.files = Files(_NoGame())
-        self.types = read_types(tree2070)
+        self.m_isl = isd2070.CIsland(data)
+        self.m_isl.m_order = splat_ids(tree2070)
+        self.m_size_tiles = self.m_isl.m_width
+        self.m_files = CFiles(_CNoGame())
+        self.m_types = read_types(tree2070)
         self._setup(cache, hashlib.sha1(data).hexdigest()[:16], edits, {"source": source}, tree2070)
-        self._editor = ([], {})  # no 117 editor-only assets on a 2070 island
-        self._ground: dict | None = None  # 2070's ground textures by GUID
-        self._rgb: dict = {}  # their pixels, for the baked ground image
+        self._m_editor = ([], {})  # no 117 editor-only assets on a 2070 island
+        self._m_ground: dict | None = None  # 2070's ground textures by GUID
+        self._m_rgb: dict = {}  # their pixels, for the baked ground image
 
     def _view_cfg(self, source: str) -> str:
         """The config the view draws for a 2070 model: the model itself, "" for a marker (``model_cfg``)."""
@@ -489,27 +528,27 @@ class Island2070Editor(RdmModels, IslandEditor):
 
     def objects(self) -> list[dict]:
         out = []
-        for group, _, o in self._objects():
-            t = self.types.get(o.int("m_GUID"))
-            var = o.find("m_Variation")
+        for group, _, object_node in self._objects():
+            asset_type = self.m_types.get(object_node.int("m_GUID"))
+            var = object_node.find("m_Variation")
             k = int(var.text) if var is not None and var.text else 0
-            variations = t.variations if t else []
+            variations = asset_type.variations if asset_type else []
             source = variations[k if 0 <= k < len(variations) else 0] if variations else None
-            cfg = self._view_cfg(source) if source and self.tree2070.exists(source) else ""
+            cfg = self._view_cfg(source) if source and self.m_tree2070.exists(source) else ""
             out.append(
                 {
-                    "key": object_key(o),
-                    "guid": o.int("m_GUID"),
+                    "key": object_key(object_node),
+                    "guid": object_node.int("m_GUID"),
                     "cfg": cfg,
-                    "marker": None if cfg else (t.template if t else group),
-                    "label": t.name if t else f"guid {o.int('m_GUID')}",
-                    "template": t.template if t else group,
-                    "clone": True,  # placed again as a copy of an object of its asset (``Island2070.add_object``)
+                    "marker": None if cfg else (asset_type.template if asset_type else group),
+                    "label": asset_type.name if asset_type else f"guid {object_node.int('m_GUID')}",
+                    "template": asset_type.template if asset_type else group,
+                    "clone": True,  # placed again as a copy of an object of its asset (``CIsland2070.add_object``)
                     "variation": k,
-                    "position": list(_position(o)),
-                    "rotation": list(_quat(o)),
-                    "scale": _scale(o),
-                    **({} if cfg else {"unresolved": self._why_no_model(t, source)}),
+                    "position": list(_position(object_node)),
+                    "rotation": list(_quat(object_node)),
+                    "scale": _scale(object_node),
+                    **({} if cfg else {"unresolved": self._why_no_model(asset_type, source)}),
                 }
             )
         return out
@@ -518,62 +557,75 @@ class Island2070Editor(RdmModels, IslandEditor):
         """Why an object is a marker: no such asset, an asset without a model, a model file that is not there, or what
         ``model_cfg`` found wrong with the config."""
         if asset is None:
-            return Reason.NO_ASSET
+            return CReason.NO_ASSET
         if not source:
-            return Reason.NO_MODEL
-        if not self.tree2070.exists(source):
-            return f"{Reason.UNREADABLE}: " + tr("islands.source_not_game", source=source)
-        return self._model_state()[0].get(source) or Reason.EMPTY
+            return CReason.NO_MODEL
+        if not self.m_tree2070.exists(source):
+            return f"{CReason.UNREADABLE}: " + tr("islands.source_not_game", source=source)
+        return self._model_state()[0].get(source) or CReason.EMPTY
 
     def _objects(self):
-        for name, objs in _groups(self.isl.root):
-            for o in objs.children:
-                if o.name == "Object" and isd2070.position_node(o) is not None:
-                    yield name, objs, o
+        for name, objs in _groups(self.m_isl.m_root):
+            for object_node in objs.children:
+                if object_node.name == "Object" and isd2070.position_node(object_node) is not None:
+                    yield name, objs, object_node
 
     def splines(self) -> list[dict]:
         """2070's rivers (float points) and lakes (outlines at their water height), for the view's water."""
-        net = isd_water.network(self.isl.root)
-        rivers = [{"kind": "River", **r} for r in net["rivers"]]
+        net = isd_water.network(self.m_isl.m_root)
+        rivers = [{"kind": "River", **river} for river in net["rivers"]]
         lakes = [
             {"kind": "Lake", "points": [[x, k["level"], z] for x, z in k["points"]], "widths": []} for k in net["lakes"]
         ]
         return rivers + lakes
 
+    def streets(self) -> dict:
+        """The island's stored streets for the view: the tiles [x, z, street GUID], the bridge cells [x, z] and the
+        sheet of each street type (``sources.streetcells2070``); empty for an island that stores none."""
+        grid = streetgrid2070.read(self.m_isl)
+        if grid is None or not (grid.tiles or grid.bridges):
+            return {}
+        return {
+            "tiles": [[x, z, guid] for (x, z), guid in sorted(grid.tiles.items())],
+            "bridges": [list(tile) for tile in sorted(grid.bridges)],
+            "sheets": {str(guid): key for guid, key in streetcells2070.sheets(self.m_tree2070).items()},
+        }
+
     def island(self) -> dict:
-        hm = np.asarray(self.isl.heightmap(), "<f4")
+        heightmap = np.asarray(self.m_isl.heightmap(), "<f4")
         objects = self.objects()
         return {
             "mode": "2070",
-            "width": int(hm.shape[0]),
+            "width": int(heightmap.shape[0]),
             "samples_per_tile": 1,
-            "heights": base64.b64encode(hm.tobytes()).decode("ascii"),
+            "heights": base64.b64encode(heightmap.tobytes()).decode("ascii"),
             "splines": self.splines(),
-            "water": isd_water.network(self.isl.root),
-            "blockers": isd_water.blockers_json(self.isl.root),
+            "water": isd_water.network(self.m_isl.m_root),
+            "blockers": isd_water.blockers_json(self.m_isl.m_root),
             "objects": objects,
             "footprints": self.footprints(objects),
             "props": [],
+            "streets": self.streets(),
             # trees are objects here; the forest brush plants these kinds (forest_kinds)
             "forest": {
                 "tiles": [],
                 "models": [
                     cfg
-                    for g, v in forest_kinds(self.isl, self.types)
-                    if (cfg := self._view_cfg(self.types[g].variations[v]))
+                    for guid, forest_kind in forest_kinds(self.m_isl, self.m_types)
+                    if (cfg := self._view_cfg(self.m_types[guid].variations[forest_kind]))
                 ],
             },
         }
 
     def _island_cache(self) -> Path:
-        return self._cached(f"island2070|{ISLAND_JSON}|{self._fingerprint}", ".json")
+        return self._cached(f"island2070|{ISLAND_JSON}|{self._m_fingerprint}", ".json")
 
     def _island_doc(self) -> dict:
         return {**self.island(), "model_notes": self.model_notes()}
 
     def island_json(self) -> bytes:
         data = super().island_json()
-        if not getattr(self, "_notes_read", False):
+        if not getattr(self, "_m_notes_read", False):
             self._say_notes(json.loads(data))
         return data
 
@@ -584,33 +636,35 @@ class Island2070Editor(RdmModels, IslandEditor):
 
     def _say_notes(self, data: dict) -> None:
         """The notes travel inside the island's data: a cached island still says them, once."""
-        if not getattr(self, "_notes_read", False):
-            self._notes_read = True
-            self.notes.extend(data.get("model_notes", []))
+        if not getattr(self, "_m_notes_read", False):
+            self._m_notes_read = True
+            self.m_notes.extend(data.get("model_notes", []))
 
     def ground_textures(self) -> dict:
         from ....islands.terrain2070 import read_ground_textures
 
-        if self._ground is None:
-            self._ground = {t.guid: t for t in read_ground_textures(self.tree2070)}
-        return self._ground
+        if self._m_ground is None:
+            self._m_ground = {texture.guid: texture for texture in read_ground_textures(self.m_tree2070)}
+        return self._m_ground
 
     def materials(self) -> list[dict]:
         """2070's ground textures (painted by GUID), the island's own first."""
         from ....islands.terrain2070 import texture_scale
 
-        repetition = texture_scale(self.tree2070)
-        used = {idx for _, _, _, layers in self.isl.texture_chunks() for idx, _ in layers}
-        textures = sorted(self.ground_textures().values(), key=lambda t: (t.guid not in used, t.name.lower()))
+        repetition = texture_scale(self.m_tree2070)
+        used = {texture_index for _, _, _, layers in self.m_isl.texture_chunks() for texture_index, _ in layers}
+        textures = sorted(
+            self.ground_textures().values(), key=lambda texture: (texture.guid not in used, texture.name.lower())
+        )
         return [
             {
-                "id": t.guid,
-                "name": t.name,
-                "diffuse": t.diffuse,
-                "normal": t.normal,
+                "id": texture.guid,
+                "name": texture.name,
+                "diffuse": texture.diffuse,
+                "normal": texture.normal,
                 "repetition": repetition,
             }
-            for t in textures
+            for texture in textures
         ]
 
     def vanilla_materials(self) -> list[dict]:
@@ -621,26 +675,26 @@ class Island2070Editor(RdmModels, IslandEditor):
         its own order, so a layer keeps its alpha times what the layers above it leave."""
         from ....islands.islandterrain import bilinear
 
-        texels = texels or max(1, min(GROUND_TEXELS, GROUND_MAX // max(1, self.size)))
-        n = self.size * texels
-        seen = dict.fromkeys(i for _, _, _, ls in self.isl.texture_chunks() for i, _ in ls)
+        texels = texels or max(1, min(GROUND_TEXELS, GROUND_MAX // max(1, self.m_size_tiles)))
+        texel_count = self.m_size_tiles * texels
+        seen = dict.fromkeys(i for _, _, _, chunk_layers in self.m_isl.texture_chunks() for i, _ in chunk_layers)
         ids = [i for i in seen if i in self.ground_textures()]  # not the grass and bush placement layers
         index = {i: k for k, i in enumerate(ids)}
-        weights = np.zeros((len(ids), n, n), np.float32)
-        tile = (np.arange(n) + 0.5) / texels
-        for cx, cz, per, layers in self.isl.texture_chunks():
-            x0, z0 = cx * per * texels, cz * per * texels
-            xs, zs = slice(x0, x0 + per * texels), slice(z0, z0 + per * texels)
-            w = len(layers[0][1])
-            gx = (tile[xs] - cx * per) * (w - 1) / per
-            gz = (tile[zs] - cz * per) * (w - 1) / per
-            left = np.ones((len(tile[zs]), len(tile[xs])), np.float32)
-            for idx, grid in reversed(layers):  # the top layer takes its share first
-                if idx not in index:
+        weights = np.zeros((len(ids), texel_count, texel_count), np.float32)
+        tile = (np.arange(texel_count) + 0.5) / texels
+        for chunk_x, chunk_z, per, layers in self.m_isl.texture_chunks():
+            texel_x, texel_z = chunk_x * per * texels, chunk_z * per * texels
+            x_slice, z_slice = slice(texel_x, texel_x + per * texels), slice(texel_z, texel_z + per * texels)
+            sample_count = len(layers[0][1])
+            sample_x = (tile[x_slice] - chunk_x * per) * (sample_count - 1) / per
+            sample_z = (tile[z_slice] - chunk_z * per) * (sample_count - 1) / per
+            left = np.ones((len(tile[z_slice]), len(tile[x_slice])), np.float32)
+            for texture_index, grid in reversed(layers):  # the top layer takes its share first
+                if texture_index not in index:
                     continue
-                a = bilinear(np.asarray(grid, np.float32) / 255, gx, gz) * left
-                weights[index[idx], zs, xs] += a
-                left -= a
+                coverage = bilinear(np.asarray(grid, np.float32) / 255, sample_x, sample_z) * left
+                weights[index[texture_index], z_slice, x_slice] += coverage
+                left -= coverage
         return ids, weights
 
     def ground2070(self) -> tuple[dict, bytes]:
@@ -648,67 +702,69 @@ class Island2070Editor(RdmModels, IslandEditor):
         own paint order, as indices into ``ground()``'s materials (255: none), and their alpha maps,
         17 samples a chunk side over the tiles' corners. Returns (info, alphas: [layer rank]
         [chunk row * 17 + sample][chunk column * 17 + sample], uint8)."""
-        index = {m["id"]: k for k, m in enumerate(self.ground()["materials"])}
-        chunks = list(self.isl.texture_chunks())
-        side = max((max(cx, cz) for cx, cz, _, _ in chunks), default=0) + 1
+        index = {material["id"]: k for k, material in enumerate(self.ground()["materials"])}
+        chunks = list(self.m_isl.texture_chunks())
+        side = max((max(chunk_x, chunk_z) for chunk_x, chunk_z, _, _ in chunks), default=0) + 1
         per = chunks[0][2] if chunks else 16
         slots = np.full((side, side, LAYERS_2070), 255, np.uint8)
         alpha = np.zeros((LAYERS_2070, side * 17, side * 17), np.uint8)
-        for cx, cz, _, layers in chunks:
+        for chunk_x, chunk_z, _, layers in chunks:
             rank = 0
-            for idx, grid in layers:
-                if idx not in index or rank >= LAYERS_2070:
+            for texture_index, grid in layers:
+                if texture_index not in index or rank >= LAYERS_2070:
                     continue  # the grass and bush placement layers paint no ground
-                g = np.asarray(grid, np.uint8)
-                g = g[:: (len(g) - 1) // 16, :: (len(g) - 1) // 16]  # a finer chunk's every other sample
-                slots[cz, cx, rank] = index[idx]
-                alpha[rank, cz * 17 : cz * 17 + 17, cx * 17 : cx * 17 + 17] = g
+                grid_array = np.asarray(grid, np.uint8)
+                grid_array = grid_array[
+                    :: (len(grid_array) - 1) // 16, :: (len(grid_array) - 1) // 16
+                ]  # a finer chunk's every other sample
+                slots[chunk_z, chunk_x, rank] = index[texture_index]
+                alpha[rank, chunk_z * 17 : chunk_z * 17 + 17, chunk_x * 17 : chunk_x * 17 + 17] = grid_array
                 rank += 1
-        info = {"side": side, "per": per, "layers": LAYERS_2070, "slots": slots.ravel().tolist()}
-        return info, alpha.tobytes()
+        summary = {"side": side, "per": per, "layers": LAYERS_2070, "slots": slots.ravel().tolist()}
+        return summary, alpha.tobytes()
 
-    def _texture_rgb(self, guid: int, size: int = 128):
+    def _texture_rgb(self, guid: int, size_px: int = 128):
         """A ground texture's pixels for the baked image; a missing or unreadable one is its mean colour."""
-        if guid not in self._rgb:
+        if guid not in self._m_rgb:
             from PIL import Image
 
-            t = self.ground_textures().get(guid)
+            texture = self.ground_textures().get(guid)
             try:
-                img = Image.open(io.BytesIO(self.tree2070.read_bytes(t.diffuse))).convert("RGB")
-                self._rgb[guid] = np.asarray(img.resize((size, size)), np.float32) / 255
+                image = Image.open(io.BytesIO(self.m_tree2070.read_bytes(texture.diffuse))).convert("RGB")
+                self._m_rgb[guid] = np.asarray(image.resize((size_px, size_px)), np.float32) / 255
             except (AttributeError, OSError, KeyError, ValueError) as exc:
-                self.notes.append(
+                self.m_notes.append(
                     tr(
                         "islands.ground_texture_drawn_mean_colour",
                         guid=guid,
                         error=f"{type(exc).__name__}: {exc}",
                     )
                 )
-                rgb = np.array(t.mean_color if t else (128, 128, 128), np.float32) / 255
-                self._rgb[guid] = np.broadcast_to(rgb, (size, size, 3))
-        return self._rgb[guid]
+                rgb = np.array(texture.mean_color if texture else (128, 128, 128), np.float32) / 255
+                self._m_rgb[guid] = np.broadcast_to(rgb, (size_px, size_px, 3))
+        return self._m_rgb[guid]
 
     def albedo(self, texels: int) -> np.ndarray:
         """The ground from above, the textures tiled and weighted by ``ground_layers``."""
         from ....islands.terrain2070 import texture_scale
 
-        rep = texture_scale(self.tree2070)
+        rep = texture_scale(self.m_tree2070)
         ids, weights = self.ground_layers(texels)
-        n = weights.shape[1]
-        tile = (np.arange(n) + 0.5) / texels
-        out = np.zeros((n, n, 3), np.float32)
-        for k, idx in enumerate(ids):
-            tex = self._texture_rgb(idx)
-            u = ((tile / rep) % 1 * tex.shape[1]).astype(int)
-            v = ((tile / rep) % 1 * tex.shape[0]).astype(int)
-            out += tex[np.ix_(v, u)] * weights[k][..., None]
+        layer_count = weights.shape[1]
+        tile = (np.arange(layer_count) + 0.5) / texels
+        out = np.zeros((layer_count, layer_count, 3), np.float32)
+        for k, texture_index in enumerate(ids):
+            texture_pixels = self._texture_rgb(texture_index)
+            texture_u = ((tile / rep) % 1 * texture_pixels.shape[1]).astype(int)
+            texture_v = ((tile / rep) % 1 * texture_pixels.shape[0]).astype(int)
+            out += texture_pixels[np.ix_(texture_v, texture_u)] * weights[k][..., None]
         return out
 
     def albedo_png(self) -> bytes:
         from PIL import Image
 
-        texels = max(1, min(8, ALBEDO_MAX // max(1, self.size)))
-        out = self._cached(f"albedo2070|{self._fingerprint}|{texels}", ".png")
+        texels = max(1, min(8, ALBEDO_MAX // max(1, self.m_size_tiles)))
+        out = self._cached(f"albedo2070|{self._m_fingerprint}|{texels}", ".png")
         with self._lock(out):
             if not out.is_file():
                 with whole_file(out) as scratch:
@@ -716,7 +772,7 @@ class Island2070Editor(RdmModels, IslandEditor):
         return out.read_bytes()
 
     def read_game(self, path: str) -> bytes:
-        return self.tree2070.read_bytes(path)
+        return self.m_tree2070.read_bytes(path)
 
     def placeable_sources(self) -> tuple[list[bytes], str]:
         """The asset files the asset editor reads for this game (``gamefiles.LAYOUTS``), in its order."""
@@ -724,10 +780,15 @@ class Island2070Editor(RdmModels, IslandEditor):
 
         from ....assetedit.gamefiles import LAYOUTS
 
-        layout = LAYOUTS[self.game.key if getattr(self, "game", None) else "anno2070"]
-        paths = sorted(p for p in self.tree2070.iter_paths("", suffix=".xml") if "config/" in p)
-        files = [self.tree2070.read_bytes(p) for pattern in layout.assets for p in paths if fnmatch.fnmatch(p, pattern)]
-        templates = self.tree2070.read_text(layout.templates) if self.tree2070.exists(layout.templates) else ""
+        layout = LAYOUTS[self.m_game.key if getattr(self, "m_game", None) else "anno2070"]
+        paths = sorted(path for path in self.m_tree2070.iter_paths("", suffix=".xml") if "config/" in path)
+        files = [
+            self.m_tree2070.read_bytes(path)
+            for pattern in layout.assets
+            for path in paths
+            if fnmatch.fnmatch(path, pattern)
+        ]
+        templates = self.m_tree2070.read_text(layout.templates) if self.m_tree2070.exists(layout.templates) else ""
         return files, templates
 
     def drawable(self, cfg: str) -> str:
@@ -737,19 +798,19 @@ class Island2070Editor(RdmModels, IslandEditor):
     def library(self) -> dict:
         """2070's landscape assets an island can carry (``NATURE`` and ``SIMPLE`` templates)."""
         a2070 = []
-        for t in sorted(self.types.values(), key=lambda t: t.name.lower()):
-            if t.template in NATURE or t.template in SIMPLE:
-                for k, v in enumerate(t.variations):
-                    if self.tree2070.exists(v):
-                        name = t.name if len(t.variations) == 1 else f"{t.name} #{k + 1}"
+        for asset_type in sorted(self.m_types.values(), key=lambda asset_type: asset_type.name.lower()):
+            if asset_type.template in NATURE or asset_type.template in SIMPLE:
+                for k, variation in enumerate(asset_type.variations):
+                    if self.m_tree2070.exists(variation):
+                        name = asset_type.name if len(asset_type.variations) == 1 else f"{asset_type.name} #{k + 1}"
                         a2070.append(
                             {
                                 "name": name,
-                                "template": t.template,
-                                "source": v,
-                                "asset": t.guid,
+                                "template": asset_type.template,
+                                "source": variation,
+                                "asset": asset_type.guid,
                                 "variation": k,
-                                "group": library_group(v),
+                                "group": library_group(variation),
                             }
                         )
         return {"117": [], "2070": a2070, "editor": []}
@@ -762,25 +823,27 @@ class Island2070Editor(RdmModels, IslandEditor):
             )
         return source
 
-    def texture_png(self, psd: str, normal: bool = False, opaque: bool = False, alpha: bool = False) -> bytes:
+    def texture_png(self, psd: str, is_normal: bool = False, is_opaque: bool = False, use_alpha: bool = False) -> bytes:
         if psd.lower().startswith("data/anno2070/"):  # a made-drawable model's
-            return super().texture_png(psd, normal, opaque, alpha)
+            return super().texture_png(psd, is_normal, is_opaque, use_alpha)
         from PIL import Image
 
-        out = self._cached(f"2070|{psd}|{normal}|{opaque}|{alpha}", ".png")
+        out = self._cached(f"2070|{psd}|{is_normal}|{is_opaque}|{use_alpha}", ".png")
         with self._lock(out):
             if not out.is_file():
                 try:  # decoded in process, every format the old games ship (fileresolve.decode)
                     with whole_file(out) as scratch:
-                        Image.fromarray(fileresolve.decode(self.tree2070.read_bytes(psd)), "RGBA").save(scratch, "PNG")
-                        finish_png(scratch, normal, opaque, alpha)
+                        Image.fromarray(fileresolve.decode(self.m_tree2070.read_bytes(psd)), "RGBA").save(
+                            scratch, "PNG"
+                        )
+                        finish_png(scratch, is_normal, is_opaque, use_alpha)
                 except (OSError, KeyError, ValueError) as exc:  # listed in the Checks tab, drawn as missing
                     self.texture_failure(psd, exc)
                     raise
         return out.read_bytes()
 
 
-class _NoGame:
+class _CNoGame:
     """The view's files come from its own folder only."""
 
     def read(self, path: str) -> bytes:

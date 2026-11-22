@@ -22,7 +22,7 @@ BEGIN, MIDDLE, END, INHERITED = 1403909053, 1503000153, 1378142755, 1449164074  
 
 
 @dataclass
-class Rule:
+class SRule:
     """What a group's components ask for: a stack (``flow``), a background, or both."""
 
     flow: bool = False
@@ -35,7 +35,7 @@ class Rule:
 
 
 @dataclass
-class Slot:
+class SSlot:
     """One child of a group, placed by itself: ``local`` and ``size`` are what the rule may change."""
 
     guid: str | None
@@ -52,9 +52,9 @@ class Slot:
 def components(node: dict) -> dict[str, int]:
     """The instance's components: the first part of the template GUID -> the instance's component id."""
     out = {}
-    for c in phoenixedit.objects(node, "Components"):
-        tpl = fields.get(c, "ComponentTemplate") or ""
-        out[tpl[:8]] = int(fields.get(c, "UniqueId", 0) or 0)
+    for component in phoenixedit.objects(node, "Components"):
+        template = fields.get(component, "ComponentTemplate") or ""
+        out[template[:8]] = int(fields.get(component, "UniqueId", 0) or 0)
     return out
 
 
@@ -62,16 +62,16 @@ def vector(value, default: tuple) -> tuple:
     """``value`` as a vector of floats as long as ``default`` (a missing or unusable part from ``default``)."""
     parts = list(value) if isinstance(value, (tuple, list)) else []
     return tuple(
-        float(parts[i]) if i < len(parts) and isinstance(parts[i], (int, float)) else float(d)
-        for i, d in enumerate(default)
+        float(parts[i]) if i < len(parts) and isinstance(parts[i], (int, float)) else float(fallback)
+        for i, fallback in enumerate(default)
     )
 
 
-def read_rule(comps: dict[str, int], overrides: dict) -> Rule | None:
+def read_rule(comps: dict[str, int], overrides: dict) -> SRule | None:
     """The rule of a group instance from its components and its values of their properties."""
     if STACK not in comps and BACKGROUND not in comps:
         return None
-    rule = Rule()
+    rule = SRule()
     if STACK in comps:
         stack = comps[STACK]
         rule.flow = True
@@ -92,20 +92,20 @@ def read_child(comps: dict[str, int], overrides: dict) -> tuple[tuple[float, flo
     return pad, align
 
 
-def _shift(slot: Slot, dx: float, dy: float) -> None:
-    a, b, c, d, tx, ty = slot.local
-    slot.local = (a, b, c, d, tx + dx, ty + dy)
+def _shift(slot: SSlot, delta_x: float, delta_y: float) -> None:
+    matrix_a, matrix_b, matrix_c, matrix_d, translate_x, translate_y = slot.local
+    slot.local = (matrix_a, matrix_b, matrix_c, matrix_d, translate_x + delta_x, translate_y + delta_y)
     x0, y0, x1, y1 = slot.rect
-    slot.rect = (x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+    slot.rect = (x0 + delta_x, y0 + delta_y, x1 + delta_x, y1 + delta_y)
 
 
-def _across(rule: Rule, slot: Slot, extent: float) -> float:
+def _across(rule: SRule, slot: SSlot, extent: float) -> float:
     """Where the child's cross-axis edge goes, from the group's cross-axis start: its alignment inside ``extent``.
     The margin does not move the children (it grows the group's box); a middle centres the child with its paddings."""
-    v = rule.vertical
+    is_vertical = rule.vertical
     begin = 0.0
-    pad_begin, pad_end = (slot.pad[0], slot.pad[2]) if v else (slot.pad[1], slot.pad[3])
-    length = (slot.rect[2] - slot.rect[0]) if v else (slot.rect[3] - slot.rect[1])
+    pad_begin, pad_end = (slot.pad[0], slot.pad[2]) if is_vertical else (slot.pad[1], slot.pad[3])
+    length = (slot.rect[2] - slot.rect[0]) if is_vertical else (slot.rect[3] - slot.rect[1])
     align = rule.align if slot.align in (INHERITED, 0) else slot.align
     if align == MIDDLE:
         return begin + (extent - length - pad_begin - pad_end) / 2 + pad_begin
@@ -114,43 +114,45 @@ def _across(rule: Rule, slot: Slot, extent: float) -> float:
     return begin + pad_begin
 
 
-def arrange(rule: Rule, slots: list[Slot]) -> None:
+def arrange(rule: SRule, slots: list[SSlot]) -> None:
     """Put the stack's children one after another along its axis (``flows`` ones only) and each aligned across it;
     then stretch the background round them. The first child is the background of a background layout."""
-    slots_in_flow = [s for s in slots if s.flows and not s.background]
+    slots_in_flow = [slot for slot in slots if slot.flows and not slot.background]
     if rule.flow:
-        _stack(rule, [s for s in slots if (s.flows if s.holds is None else s.holds) and not s.background])
+        _stack(
+            rule, [slot for slot in slots if (slot.flows if slot.holds is None else slot.holds) and not slot.background]
+        )
     if rule.background is not None:
         _stretch(rule.background, slots, slots_in_flow)
 
 
-def _stack(rule: Rule, flow: list[Slot]) -> None:
-    v = rule.vertical
+def _stack(rule: SRule, flow: list[SSlot]) -> None:
+    is_vertical = rule.vertical
     extent = max(
-        ((s.rect[2] - s.rect[0] + s.pad[0] + s.pad[2]) if v else (s.rect[3] - s.rect[1] + s.pad[1] + s.pad[3]))
-        for s in flow
+        ((slot.rect[2] - slot.rect[0] + slot.pad[0] + slot.pad[2]) if is_vertical else (slot.rect[3] - slot.rect[1] + slot.pad[1] + slot.pad[3]))
+        for slot in flow
     ) if flow else 0.0  # fmt: skip
     cursor = 0.0
-    for s in flow if rule.inverted else reversed(flow):  # the game lays the last child of the file out first
-        x0, y0, x1, y1 = s.rect
-        cursor += s.pad[1] if v else s.pad[0]
-        across = _across(rule, s, extent)
-        if v:
-            _shift(s, across - x0, cursor - y0)
-            cursor += (y1 - y0) + rule.space + s.pad[3]
+    for slot in flow if rule.inverted else reversed(flow):  # the game lays the last child of the file out first
+        x0, y0, x1, y1 = slot.rect
+        cursor += slot.pad[1] if is_vertical else slot.pad[0]
+        across = _across(rule, slot, extent)
+        if is_vertical:
+            _shift(slot, across - x0, cursor - y0)
+            cursor += (y1 - y0) + rule.space + slot.pad[3]
         else:
-            _shift(s, cursor - x0, across - y0)
-            cursor += (x1 - x0) + rule.space + s.pad[2]
+            _shift(slot, cursor - x0, across - y0)
+            cursor += (x1 - x0) + rule.space + slot.pad[2]
 
 
-def _stretch(margin: tuple[float, float, float, float], slots: list[Slot], content: list[Slot]) -> None:
+def _stretch(margin_px: tuple[float, float, float, float], slots: list[SSlot], content: list[SSlot]) -> None:
     """The background child covers the others' union grown by the margin (left, top, right, bottom)."""
-    back = next((s for s in slots if s.background), None)
+    back = next((slot for slot in slots if slot.background), None)
     if back is None or not content:
         return
-    x0, y0 = min(s.rect[0] for s in content), min(s.rect[1] for s in content)
-    x1, y1 = max(s.rect[2] for s in content), max(s.rect[3] for s in content)
-    left, top, right, bottom = margin
+    x0, y0 = min(slot.rect[0] for slot in content), min(slot.rect[1] for slot in content)
+    x1, y1 = max(slot.rect[2] for slot in content), max(slot.rect[3] for slot in content)
+    left, top, right, bottom = margin_px
     back.size = (max(x1 - x0 + left + right, 0.0), max(y1 - y0 + top + bottom, 0.0))
     back.local = (1.0, 0.0, 0.0, 1.0, x0 - left, y0 - top)
     back.rect = (x0 - left, y0 - top, x0 - left + back.size[0], y0 - top + back.size[1])

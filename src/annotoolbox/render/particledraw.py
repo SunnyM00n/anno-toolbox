@@ -2,7 +2,7 @@
 model, for every instance of that model near the camera, drawn as quads with the effect's texture tile.
 
 ``collect`` is the CPU side (no GL): it asks each effect for its sprites at a time and writes one record per
-quad, grouped by texture and blending. ``ParticleDrawer`` draws the groups as instanced strips, additive ones
+quad, grouped by texture and blending. ``CParticleDrawer`` draws the groups as instanced strips, additive ones
 last, the others sorted far to near. The view's depth is tested, never written.
 """
 
@@ -15,7 +15,7 @@ import numpy as np
 
 from .camera import gl
 from .cull import boxes_in_view
-from .particlefx import CAMERA, FIXED, UPRIGHT, Effect, quad_axes
+from .particlefx import CAMERA, FIXED, UPRIGHT, SEffect, quad_axes
 
 MAX_QUADS = 40_000  # a frame's budget; the nearest instances are served first
 RANGE = 260.0  # world units from the camera beyond which a model's effects are not drawn
@@ -60,10 +60,11 @@ void main() {
 
 
 @dataclass(frozen=True)
-class Placed:
+class SPlaced:
     """An effect file placed in a model: ``matrix`` takes its space into the model's, ``tint`` and ``alpha`` are the
     config's colour and opacity, ``speed`` its pace (the config's time scale, inverted); ``sheet`` (columns, rows,
-    frames) says the texture is a flipbook: a particle shows the frame its age is at."""
+    frames) says the texture is a flipbook: a particle shows the frame its age is at; ``begun_s`` is the time it started
+    at (``collect``'s clock)."""
 
     file: str
     matrix: np.ndarray
@@ -72,6 +73,7 @@ class Placed:
     speed: float = 1.0
     started: bool = True
     sheet: tuple[int, int, int] | None = None
+    begun_s: float = 0.0
 
 
 def sheet_tiles(crop: tuple[float, float, float, float], sheet: tuple[int, int, int], life: np.ndarray) -> np.ndarray:
@@ -79,9 +81,9 @@ def sheet_tiles(crop: tuple[float, float, float, float], sheet: tuple[int, int, 
     by how far through its life it is."""
     columns, lines, frames = sheet
     frame = np.minimum((life * frames).astype(np.int64), min(frames, columns * lines) - 1)
-    u, v, w, h = crop
-    wide, high = np.full(len(life), w / columns), np.full(len(life), h / lines)
-    return np.stack([u + frame % columns * wide, v + frame // columns * high, wide, high], -1).astype("f4")
+    left, top, crop_width, crop_height = crop
+    wide, high = np.full(len(life), crop_width / columns), np.full(len(life), crop_height / lines)
+    return np.stack([left + frame % columns * wide, top + frame // columns * high, wide, high], -1).astype("f4")
 
 
 def lift(boost: int) -> float:
@@ -89,25 +91,25 @@ def lift(boost: int) -> float:
     return 1.0 + (boost * BOOST_SLOPE) ** BOOST_POWER if boost else 1.0
 
 
-def pick_instances(mats: np.ndarray, eye: np.ndarray, planes: np.ndarray | None) -> np.ndarray:
-    """Indices into ``mats`` ([n, 4, 4] model placements, scale 0 = hidden) of the instances whose effects can show:
+def pick_instances(matrices: np.ndarray, eye: np.ndarray, planes: np.ndarray | None) -> np.ndarray:
+    """Indices into ``matrices`` ([n, 4, 4] model placements, scale 0 = hidden) of the instances whose effects can show:
     in range, in view (``planes`` None: wherever), the nearest ``MAX_INSTANCES``, nearest first."""
-    if not len(mats):
+    if not len(matrices):
         return np.zeros(0, np.int64)
-    at = mats[:, :3, 3]
-    distance = np.linalg.norm(at - eye, axis=1)
-    keep = (distance < RANGE) & (np.linalg.norm(mats[:, :3, 0], axis=1) > 1e-6)
+    positions = matrices[:, :3, 3]
+    distances = np.linalg.norm(positions - eye, axis=1)
+    keep = (distances < RANGE) & (np.linalg.norm(matrices[:, :3, 0], axis=1) > 1e-6)
     if planes is not None:
-        keep &= boxes_in_view(planes, at - EFFECT_REACH, at + EFFECT_REACH)
+        keep &= boxes_in_view(planes, positions - EFFECT_REACH, positions + EFFECT_REACH)
     found = np.flatnonzero(keep)
-    return found[np.argsort(distance[found])][:MAX_INSTANCES]
+    return found[np.argsort(distances[found])][:MAX_INSTANCES]
 
 
-def records(effect: Effect, sprites, placed: Placed, mats: np.ndarray) -> list[tuple[str, bool, np.ndarray]]:
-    """Quad records ([n, FLOATS]) of ``sprites`` of ``effect`` for each placement in ``mats`` ([k, 4, 4], the
+def records(effect: SEffect, sprites, placed: SPlaced, matrices: np.ndarray) -> list[tuple[str, bool, np.ndarray]]:
+    """Quad records ([n, FLOATS]) of ``sprites`` of ``effect`` for each placement in ``matrices`` ([k, 4, 4], the
     placed model's matrices), as (texture, additive, rows) per material."""
     out = []
-    world = mats @ placed.matrix  # effect space to the view's
+    world = matrices @ placed.matrix  # effect space to the view's
     linear = world[:, :3, :3]
     scale = np.maximum(np.linalg.norm(linear[:, :, 0], axis=1), 1e-6)
     for index, material in enumerate(effect.materials):
@@ -115,20 +117,22 @@ def records(effect: Effect, sprites, placed: Placed, mats: np.ndarray) -> list[t
         mine &= sprites.color[:, 3] > 0.004
         if not mine.any():
             continue
-        pos, size, rot, color, life = (
-            a[mine] for a in (sprites.position, sprites.size, sprites.rotation, sprites.color, sprites.life)
+        positions, sizes, rotations, color, life = (
+            column[mine] for column in (sprites.position, sprites.size, sprites.rotation, sprites.color, sprites.life)
         )
-        k, n = len(mats), len(pos)
-        center = np.einsum("kij,nj->kni", linear, pos) + world[:, :3, 3][:, None, :]
+        placement_count, sprite_count = len(matrices), len(positions)
+        center = np.einsum("kij,nj->kni", linear, positions) + world[:, :3, 3][:, None, :]
         right, up = (
-            quad_axes(rot) if material.view_aligned == FIXED else (np.zeros((n, 3), "f4"), np.zeros((n, 3), "f4"))
+            quad_axes(rotations)
+            if material.view_aligned == FIXED
+            else (np.zeros((sprite_count, 3), "f4"), np.zeros((sprite_count, 3), "f4"))
         )
         axis_x = np.einsum("kij,nj->kni", linear, right) / scale[:, None, None]
         axis_y = np.einsum("kij,nj->kni", linear, up) / scale[:, None, None]
-        rows = np.empty((k, n, FLOATS), "f4")
+        rows = np.empty((placement_count, sprite_count, FLOATS), "f4")
         rows[..., 0:3], rows[..., 3:6], rows[..., 6:9] = center, axis_x, axis_y
-        rows[..., 9] = size[None, :, 0] * scale[:, None]
-        rows[..., 10] = size[None, :, 2] * scale[:, None]
+        rows[..., 9] = sizes[None, :, 0] * scale[:, None]
+        rows[..., 10] = sizes[None, :, 2] * scale[:, None]
         rgb = color[:, :3] * np.array(placed.tint, "f4") * lift(material.color_boost) * GAIN
         rows[..., 11:14] = rgb[None]
         rows[..., 14] = (color[:, 3] * placed.alpha)[None]
@@ -136,13 +140,13 @@ def records(effect: Effect, sprites, placed: Placed, mats: np.ndarray) -> list[t
             sheet_tiles(material.crop, placed.sheet, life) if placed.sheet else np.array(material.crop, "f4")
         )
         rows[..., 19] = material.view_aligned if material.view_aligned in (FIXED, CAMERA, UPRIGHT) else CAMERA
-        rows[..., 20] = -rot[None, :, 1]  # the file's turn about the quad's normal, as the game negates it
+        rows[..., 20] = -rotations[None, :, 1]  # the file's turn about the quad's normal, as the game negates it
         out.append((effect.texture_of(index), material.additive, rows.reshape(-1, FLOATS)))
     return out
 
 
 def collect(
-    items: Iterable[tuple[list[Effect], Placed, np.ndarray]], now: float, eye: np.ndarray, budget: int = MAX_QUADS
+    items: Iterable[tuple[list[SEffect], SPlaced, np.ndarray]], now: float, eye: np.ndarray, budget: int = MAX_QUADS
 ) -> dict[tuple[str, bool], np.ndarray]:
     """Every quad record of ``items`` (effects, where they are placed, the model's matrices of the instances that
     show them) at ``now`` seconds, by (texture, additive). Quads beyond ``budget`` are dropped from the farthest
@@ -155,7 +159,7 @@ def collect(
                 break
             if not effect.looped and not placed.started:
                 continue
-            sprites = effect.at(now, placed.speed)
+            sprites = effect.at(now - placed.begun_s, placed.speed)
             if not len(sprites):
                 continue
             fit = max(1, left // len(sprites))
@@ -171,122 +175,124 @@ def collect(
     return out
 
 
-class ParticleLayer:
+class CParticleLayer:
     """What the renderer asks of the effects each frame (``draw``), over the model library that loads the files.
     ``batches()`` gives the renderer's batches, ``texture(key, srgb)`` its GL textures."""
 
     SKIPPED_LAYERS = ("markers", "grass")  # pins and grass carry no effects
 
     def __init__(self, ctx, library, batches, texture) -> None:
-        self.library, self._ctx, self._batches, self._texture = library, ctx, batches, texture
-        self.drawer: ParticleDrawer | None = None
-        self.wanted = False  # the view has asked for effects at least once
-        self.clock = 0.0  # the live clock of the last frame: what "freeze" holds
-        self.quads = 0
+        self.m_library, self._m_ctx, self._m_batches, self._m_texture = library, ctx, batches, texture
+        self.m_drawer: CParticleDrawer | None = None
+        self.m_wanted = False  # the view has asked for effects at least once
+        self.m_clock = 0.0  # the live clock of the last frame: what "freeze" holds
+        self.m_quads = 0
 
     def pending(self) -> int:
         """Effect files and textures still loading (zero until the view asks for effects)."""
-        return self.library.effects_pending() if self.wanted and self.library is not None else 0
+        return self.m_library.effects_pending() if self.m_wanted and self.m_library is not None else 0
 
-    def draw(self, opts, camera, view_proj: np.ndarray, planes, now: float) -> bool:
-        """Draw the effects of the models ``opts`` shows, at ``opts.particle_time`` or the live clock ``now``;
+    def draw(self, options, camera, view_proj: np.ndarray, planes, now: float) -> bool:
+        """Draw the effects of the models ``options`` shows, at ``options.particle_time`` or the live clock ``now``;
         True while the picture keeps moving."""
-        if not opts.particles or self.library is None:
+        if not options.particles or self.m_library is None:
             return False
-        self.wanted, self.clock = True, now
+        self.m_wanted, self.m_clock = True, now
         eye = camera.eye()
         items = []
-        for b in self._batches():
-            layer, cfg = b.key
-            if not b.count or b.cells is None or not cfg or layer in self.SKIPPED_LAYERS:
+        for batch in self._m_batches():
+            layer, cfg = batch.m_key
+            if not batch.m_count or batch.m_cells is None or not cfg or layer in self.SKIPPED_LAYERS:
                 continue
-            if not opts.layers.get(layer, True):
+            if not options.layers.get(layer, True):
                 continue
-            self.library.request_effects(cfg)
-            placed = self.library.placed_effects(cfg)
-            mats = b.cells.matrices
-            near = pick_instances(mats, eye, planes) if placed else ()
-            for p in placed if len(near) else ():
-                effects = self.library.effect(p.file)
+            self.m_library.request_effects(cfg)
+            placed = self.m_library.placed_effects(cfg)
+            matrices = batch.m_cells.m_matrices
+            near = pick_instances(matrices, eye, planes) if placed else ()
+            for placed_effect in placed if len(near) else ():
+                effects = self.m_library.effect(placed_effect.file)
                 if effects:
-                    items.append((effects, self._flipbook(p, effects), mats[near]))
-        still = opts.particle_time is not None
-        quality = getattr(opts, "quality", None)  # its budget (``render.quality``), else ours
-        groups = collect(items, opts.particle_time if still else now, eye, quality.particles if quality else MAX_QUADS)
-        if self.drawer is None:
-            self.drawer = ParticleDrawer(self._ctx)
-        self.drawer.draw(groups, lambda name: self._texture("fx:" + name, False), camera.view(), view_proj, eye)
-        self.quads = self.drawer.quads
+                    items.append((effects, self._flipbook(placed_effect, effects), matrices[near]))
+        still = options.particle_time is not None
+        quality = getattr(options, "quality", None)  # its budget (``render.quality``), else ours
+        groups = collect(
+            items, options.particle_time if still else now, eye, quality.particles if quality else MAX_QUADS
+        )
+        if self.m_drawer is None:
+            self.m_drawer = CParticleDrawer(self._m_ctx)
+        self.m_drawer.draw(groups, lambda name: self._m_texture("fx:" + name, False), camera.view(), view_proj, eye)
+        self.m_quads = self.m_drawer.m_quads
         return bool(groups) and not still
 
-    def _flipbook(self, placed: Placed, effects: list[Effect]) -> Placed:
+    def _flipbook(self, placed: SPlaced, effects: list[SEffect]) -> SPlaced:
         """``placed``, with the frames of a movie texture laid side by side (wider than high) when its config gives none."""
         name = effects[0].texture_of(0) if effects[0].materials[0].movie_texture else ""
-        size = self.library.texture("fx:" + name) if name and placed.sheet is None else None
-        if not size or size[0] < 2 * size[1]:
+        texture_size_px = self.m_library.texture("fx:" + name) if name and placed.sheet is None else None
+        if not texture_size_px or texture_size_px[0] < 2 * texture_size_px[1]:
             return placed
-        frames = round(size[0] / size[1])
+        frames = round(texture_size_px[0] / texture_size_px[1])
         return replace(placed, sheet=(frames, 1, frames))
 
     def release(self) -> None:
-        if self.drawer is not None:
-            self.drawer.release()
-            self.drawer = None  # made anew by a later draw: its program is gone
+        if self.m_drawer is not None:
+            self.m_drawer.release()
+            self.m_drawer = None  # made anew by a later draw: its program is gone
 
 
-class ParticleDrawer:
+class CParticleDrawer:
     """The GL side: one program, a dynamic buffer per group, quads expanded in the vertex shader."""
 
     def __init__(self, ctx) -> None:
-        self.ctx = ctx
-        self.program = ctx.program(vertex_shader=VERTEX, fragment_shader=FRAGMENT)
-        self._buffers: list = []
-        self.quads = 0
+        self.m_ctx = ctx
+        self.m_program = ctx.program(vertex_shader=VERTEX, fragment_shader=FRAGMENT)
+        self._m_buffers: list = []
+        self.m_quads = 0
 
-    def _vao(self, k: int, rows: int):
-        while len(self._buffers) <= k:
-            self._buffers.append(None)
-        have = self._buffers[k]
+    def _vao(self, group_index: int, rows: int):
+        while len(self._m_buffers) <= group_index:
+            self._m_buffers.append(None)
+        have = self._m_buffers[group_index]
         if have is None or have[0].size < rows * FLOATS * 4:
             if have is not None:
                 have[0].release()
                 have[1].release()
-            buf = self.ctx.buffer(reserve=max(rows, 1024) * FLOATS * 4, dynamic=True)
-            fmt = "3f 3f 3f 2f 4f 4f 2f/i"
-            vao = self.ctx.vertex_array(
-                self.program,
-                [(buf, fmt, "center", "axisX", "axisY", "size", "color", "tile", "modeSpin")],
+            buffer = self.m_ctx.buffer(reserve=max(rows, 1024) * FLOATS * 4, dynamic=True)
+            buffer_format = "3f 3f 3f 2f 4f 4f 2f/i"
+            vao = self.m_ctx.vertex_array(
+                self.m_program,
+                [(buffer, buffer_format, "center", "axisX", "axisY", "size", "color", "tile", "modeSpin")],
                 skip_errors=True,
             )
-            self._buffers[k] = have = (buf, vao)
+            self._m_buffers[group_index] = have = (buffer, vao)
         return have
 
     def draw(self, groups: dict[tuple[str, bool], np.ndarray], texture, view: np.ndarray, view_proj: np.ndarray,
              eye: np.ndarray) -> None:  # fmt: skip
         """Draw ``groups``; ``texture(name)`` gives a moderngl texture or None (still loading: skipped)."""
-        ctx, prog = self.ctx, self.program
-        prog["viewProj"].write(gl(view_proj))
-        prog["camRight"].value = tuple(float(v) for v in view[0, :3])
-        prog["camUp"].value = tuple(float(v) for v in view[1, :3])
-        prog["eye"].value = tuple(float(v) for v in eye)
-        prog["atlas"].value = 0
+        ctx, program = self.m_ctx, self.m_program
+        program["viewProj"].write(gl(view_proj))
+        program["camRight"].value = tuple(float(component) for component in view[0, :3])
+        program["camUp"].value = tuple(float(component) for component in view[1, :3])
+        program["eye"].value = tuple(float(component) for component in eye)
+        program["atlas"].value = 0
         ctx.enable(ctx.BLEND)
-        self.quads = 0
-        for k, ((name, additive), rows) in enumerate(sorted(groups.items(), key=lambda g: g[0][1])):
-            tex = texture(name)
-            if tex is None or not len(rows):
+        self.m_quads = 0
+        for group_index, ((name, additive), rows) in enumerate(sorted(groups.items(), key=lambda group: group[0][1])):
+            atlas = texture(name)
+            if atlas is None or not len(rows):
                 continue
             ctx.blend_func = (ctx.SRC_ALPHA, ctx.ONE) if additive else (ctx.SRC_ALPHA, ctx.ONE_MINUS_SRC_ALPHA)
-            buf, vao = self._vao(k, len(rows))
-            buf.write(rows.tobytes())
-            tex.use(0)
+            buffer, vao = self._vao(group_index, len(rows))
+            buffer.write(rows.tobytes())
+            atlas.use(0)
             vao.render(ctx.TRIANGLE_STRIP, vertices=4, instances=len(rows))
-            self.quads += len(rows)
+            self.m_quads += len(rows)
 
     def release(self) -> None:
-        for have in self._buffers:
+        for have in self._m_buffers:
             if have is not None:
                 have[0].release()
                 have[1].release()
-        self._buffers = []
-        self.program.release()
+        self._m_buffers = []
+        self.m_program.release()

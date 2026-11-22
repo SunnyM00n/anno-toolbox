@@ -35,20 +35,27 @@ python -m annotoolbox                         # the island editor on its own
 ```
 
 **Without the need to separately install Python.** The Toolbox ships as a Windows installer
-(`AnnoToolbox-win-Setup.exe`), the one way to install it; the lines above run a developer's checkout. It installs per
-user, needs no administrator, starts the program with a short setup page (language, game folders, the Start menu entry
-and desktop shortcut, the update check) and adds `AnnoToolbox.com` (the console build, beside `AnnoToolbox.exe`) for the command line. It carries no game files on
-its own; the games are automatically searched for on your computer. [`installer.md`](installer.md) says what goes in,
-how updates and uninstall work (Help > *Setup...* and *Uninstall...*), the move from the older installer, why the
-installer is unsigned and how to verify a download.
+(`AnnoToolbox-win-Setup.exe`), the one way to install it. The lines above run a developer's checkout. The installer:
+
+- installs per user and needs no administrator;
+- starts the program with a short setup page (language, game folders, the Start menu entry and desktop shortcut, the
+  update check);
+- adds `AnnoToolbox.com` (the console build, beside `AnnoToolbox.exe`) for the command line.
+
+It carries no game files on its own. The games are automatically searched for on your computer.
+[`installer.md`](installer.md) says what goes in, how updates and uninstall work (Help > *Setup...* and
+*Uninstall...*), the move from the older installer, why the installer is unsigned and how to verify a download.
 
 **Names.** The suite is called "Anno Toolbox". The package is `annotoolbox`, and the command and the repository are
-`anno-toolbox`. The commands are `anno-toolbox rdm ...` and `anno-toolbox export ...` in a checkout, `AnnoToolbox rdm ...` and
-`AnnoToolbox export ...` in the installed program (on Windows `AnnoToolbox.com` runs in a terminal and `AnnoToolbox.exe` is
-the window, as with `devenv.com`; on Linux one program). Started without a command, the
-installed console program (`.com`) prints its help and the window program (`.exe`) opens the window; a checkout's
-`anno-toolbox` alone opens the window. The Toolbox ships as the installer only; it is not on PyPI. A checkout of the repository (its README) installs
-light (`pip install -e .`) or full (`pip install -e ".[gui]"`).
+`anno-toolbox`. The commands are `anno-toolbox rdm ...` and `anno-toolbox export ...` in a checkout, and
+`AnnoToolbox rdm ...` and `AnnoToolbox export ...` in the installed program. On Windows `AnnoToolbox.com` runs in a
+terminal and `AnnoToolbox.exe` is the window, as with `devenv.com`. On Linux there is one program.
+
+Started without a command, the installed console program (`.com`) prints its help, and the window program (`.exe`)
+opens the window. A checkout's `anno-toolbox` alone opens the window.
+
+The Toolbox ships as the installer only. It is not on PyPI. A checkout of the repository (its README) installs light
+(`pip install -e .`) or full (`pip install -e ".[gui]"`).
 
 **Two installs of a checkout, one program.** `pip install -e .` is the **light install**. It has no window and uses only
 the standard library. It gives you the command line:
@@ -70,35 +77,74 @@ selection or folder...**, **Export the files the filter shows...** and **Import 
 model** in the island editor and an asset field's **Export** button ask the viewer through the suite's links
 (`export_files`), and the viewer's dialog opens on those files.
 
-The window has the apps down its left side (each with a key, "Keys of the suite" below) and the **Project** button under them. An app's
-page is made the first time you open it, so the window opens as fast as its first app; until it shows, a start-up screen with the program's name and the step being loaded is up. When you close the window, every
-app that holds unsaved work asks first. The game folders are set once, in the island editor (File > Games and folders),
-and are the same for every app. The settings are kept under `%LOCALAPPDATA%/anno-toolbox`.
+The window has the apps down its left side (each with a key, "Keys of the suite" below) and the **Project** button
+under them. An app's page is made the first time you open it, so the window opens as fast as its first app. Until it
+shows, a start-up screen with the program's name and the step being loaded is up. When you close the window, every app
+that holds unsaved work or a running job asks first, all of them before any app lets go of its work: a Cancel in one
+keeps every app as it was. A running project import or build asks as well; closing then stops the import, which keeps
+its work and is offered again at the next start. The game folders are set once, in Settings > Games and folders, and are the same
+for every app. The settings are kept under `%LOCALAPPDATA%/anno-toolbox`.
 
 ## Keys of the suite
 
-(The owner's decisions of 2026-11-17.)
-
 - **Switching apps**: Ctrl+1 to Ctrl+9 for the first nine apps in the switcher's order, **Ctrl+0** for the tenth, then
-  **Ctrl+Shift+1** and **Ctrl+Shift+2** for the eleventh and twelfth (the scheme goes on to Ctrl+Shift+9). The key is in
-  each app's tool tip in the switcher.
-- **Menus** have an access key on every entry (Alt, then the underlined letter), the same letters in English and German; no
-  key is given twice in a menu. The island editor's ribbon has them on its tabs and buttons and takes Tab for keyboard
-  focus (a click leaves the keys with the view); a button whose menu entry is the same action shares its letter.
-- **Search**: Ctrl+F goes to the search or filter box of the window (the file lists, the asset tree, Texts, Sound, Maps,
-  Mod diff, the UI and Flash editors).
-- **Buttons and fields**: Play in Sound is Ctrl+Space; Texts' two voice buttons have access keys; in the target text Tab
-  goes on to the next control; Mod diff's Compare and the Saves app's Look again are F5, Open a file is Ctrl+O; the
-  Mods app's Remove the selected mod is Del; the road piece tool saves with Ctrl+S (S alone picks its select tool).
+  **Ctrl+Shift+1** and **Ctrl+Shift+2** for the eleventh and twelfth (the scheme goes on to Ctrl+Shift+9). The key is
+  in each app's tool tip in the switcher.
+- **Menus** have an access key on every entry (Alt, then the underlined letter). The letters are the same in English
+  and German, and no key is given twice in a menu. The island editor's ribbon has them on its tabs and buttons and
+  takes Tab for keyboard focus (a click leaves the keys with the view). A button whose menu entry is the same action
+  shares its letter.
+- **Search**: Ctrl+F goes to the search or filter box of the window (the file lists, the asset tree, Texts, Sound,
+  Maps, Mod diff, the UI and Flash editors).
+- **Buttons and fields**:
+  - Play in Sound is Ctrl+Space.
+  - Texts' two voice buttons have access keys.
+  - In the target text, Tab goes on to the next control.
+  - Mod diff's Compare and the Saves app's Look again are F5, and Open a file is Ctrl+O.
+  - The Mods app's Remove the selected mod is Del.
+  - The road piece tool saves with Ctrl+S (S alone picks its select tool).
 - **Closing or leaving** with unkept edits asks **Save / Discard / Cancel** in every app.
-- **A greyed control says why** in its tool tip or status text (an install while a job runs, a Write button without an
-  editable save, the Custom rendering quality, an island property that is only shown, an island build target without a route).
+- **A greyed control says why** in its tool tip or status text. The cases are:
+  - an install while a job runs;
+  - a Write button without an editable save;
+  - the Custom rendering quality;
+  - an island property that is only shown;
+  - an island build target without a route.
+
+Note: these keys are the decisions of 2026-11-17.
+
+## The menu bar
+
+The window has **one menu bar**, one place for the menus every app has. The apps' own bars are hidden while their page
+is in front.
+
+| Menu | What is in it |
+|---|---|
+| **File** | *Project...* (the Project window: new, open, build, install), *Open game* (every app follows, "One game for every app"), **Save** (the front app's save, greyed with the reason when it has no document), then the front app's own File entries, *Quit* (Ctrl+Q) |
+| the front app's menus | Edit, View, Rendering, Tools, Check, Add, Map, Profile, ... as the app has them, between File and Settings; they change with the app |
+| **Settings** | *Games and folders...* (folders, workspace, theme, language), *Game link...*, *Debug commands*, *Manage apps*, *Setup...*, *Uninstall...*, *Remove unused game shaders...* |
+| **Window** | *Full screen* (F11), *Apps* (the switcher's keys), then the app's own docks and panels (the Layout menu of the island editor is its Window menu here) |
+| **Help** | the app's own help (the island editor's *Controls...*), *Check for updates...*, *Check for updates at start*, *About the Toolbox...* |
+
+The apps' own windows (`desktop`, `viewer`, ... run alone) keep all their menus. These apps take part in the common
+entries:
+
+- the island editor (Save, Settings, Quit, its Layout as Window);
+- Assets (Save change set);
+- the UI editor (Save into the project; the Flash editor's Save edit file);
+- the viewer (game only);
+- the object builder, the sound editor, the text editor, the map editor and the particle editor (game and Save).
+
+The Mods app, Mod diff, the Saves app and the Converter have no document of their own, so their File has the central
+entries only. How it is built: `docs/tool-suite.md` section 33.
+
+Note: the single menu bar was requested on 2026-11-19.
 
 ## One game for every app
 
-The apps of the window work on **one game at a time** (the owner's decision, 2026-11-17). Picking a game in one app
-switches every other app to it: File > Open game in the Viewer, the game box of the Mods app, a link that takes an
-app to another game. You do not have to repeat the choice app by app.
+The apps of the window work on **one game at a time**. Picking a game in one app switches every other app to it. The
+ways to pick are File > Open game in the Viewer, the game box of the Mods app, and a link that takes an app to
+another game. You do not have to repeat the choice app by app.
 
 **What happens on a switch**
 
@@ -112,7 +158,7 @@ app to another game. You do not have to repeat the choice app by app.
 **Cancel cancels the whole switch.** Every app with unsaved work is asked first, the app you picked the game in
 before the others, and nothing is closed until all of them agreed. A Cancel in any of them leaves every app on the
 game and the file it had, the app you picked in included. Only what you saved with Save on the way stays saved.
-The other choice, the cancelling app stays behind and the rest switches, was rejected: it leaves the window on two
+The other choice was rejected: that the cancelling app stays behind and the rest switches. It leaves the window on two
 games without showing which app is on which, and it closes files in apps you are not looking at.
 
 **Apps that hold more than one game**
@@ -132,17 +178,19 @@ games without showing which app is on which, and it closes files in apps you are
 - The selection is `Settings.game` in the settings file. An app's own `apps[<app>].game` stays underneath as the
   game that app was last on: it is what the app starts on alone (its own command), and in the window when it
   cannot show the selected game. An app started alone does not change the selection.
-- The window announces a change with the signal `SuiteWindow.game_changed(game)`; `SuiteWindow.select_game(game)`
+- The window announces a change with the signal `CSuiteWindow.game_changed(game)`; `CSuiteWindow.select_game(game)`
   switches from code. `suite/gamesync.py` holds the rules above.
 - An app reports a pick with one call at the top of its `open_game`: `gamesync.may_switch(self, key, <its leave
   question>)`. Alone, that only asks the app's own question. As a page of the window it also asks the others and
   sends them to the game; False means cancelled, and the app opens nothing.
-- What the window needs to know of an app is its `AppGame` (`AppSpec.game`, the table `APP_GAMES` in
+- What the window needs to know of an app is its `SAppGame` (`SAppSpec.game`, the table `APP_GAMES` in
   `suite/apps.py`): the games it shows, the game it is on, its leave question and how it opens a game. An app
   without one, such as an app an extension adds, is left alone.
 
 Not handled: a game that fails to open in the app you picked it in (a broken install) leaves that app on the old
-game while the others have switched; pick again once the folder is right.
+game while the others have switched. Pick again once the folder is right.
+
+Note: one game for every app is the decision of 2026-11-17.
 
 ## A project
 
@@ -174,17 +222,27 @@ that no other mod you play with uses. **Choose...** offers three ways:
 
 A project whose islands are numbered cannot move its range away from those numbers.
 
-**Importing a whole mod** (Anno 117 and Anno 1800): **Import a mod as a project...** in the Project window (a mod
-folder or a `.zip`), **Mods > Import the selected mod as a project...** in the Mods app, or `anno-toolbox mod import
-<mod> <new folder>` on the command line. The mod is copied into a new project folder and never changed: files are
-hard-linked where the disk allows (one volume), copied otherwise, and the Toolbox always writes an edit as a new file,
-so the mod stays as it was. The mod's `modinfo` is kept as its author wrote it (a `.jsonc` too): the build changes only
-the fields you edit in the Project window. Files no app edits are carried unchanged; the report lists them by
-extension, with what each app is to take later, the nested mods (built back at their own paths), the dependencies
-(kept, never copied in) and the GUID range found from the assets the mod adds. **Stop** ends an import and removes the
-half-made project. With nothing edited, **Build mod** gives the same paths and the same bytes as the mod
-(`--verify` on the command line checks it). Only the game can tell that it loads the same; details and what is still
-planned: `docs/mod-import.md`.
+**Importing a whole mod** (Anno 117 and Anno 1800): there are three ways.
+
+- **Import a mod as a project...** in the Project window (a mod folder or a `.zip`).
+- **Mods > Import the selected mod as a project...** in the Mods app.
+- `anno-toolbox mod import <mod> <new folder>` on the command line.
+
+The mod is copied into a new project folder and never changed. Files are hard-linked where the disk allows (one
+volume) and copied otherwise. The Toolbox always writes an edit as a new file, so the mod stays as it was. The mod's
+`modinfo` is kept as its author wrote it (a `.jsonc` too). The build changes only the fields you edit in the Project
+window.
+
+Files no app edits are carried unchanged. The report lists them by extension, with what each app is to take later. It
+also lists:
+
+- the nested mods (built back at their own paths);
+- the dependencies (kept, never copied in);
+- the GUID range found from the assets the mod adds.
+
+**Stop** ends an import and removes the half-made project. With nothing edited, **Build mod** gives the same paths and
+the same bytes as the mod (`--verify` on the command line checks it). Only the game can tell that it loads the same.
+Details and what is still planned: `docs/mod-import.md`.
 
 **New islands** that are saved as new ones (not replacing the game's) take the next free number of the range, and keep
 it. `island-guids.json` remembers the number, so a savegame that holds the island still finds it after the next build.
@@ -228,19 +286,29 @@ is described in `debug-palette.md`.
 ## The shader progress bar
 
 While the game look's shaders are prepared (once per game build, at the start and in the background after it), a
-small progress bar sits beside the game link in the status bar: "Shaders: n of m" for the stage's jobs, a bar that only
-moves for the compiles of an island opened meanwhile; its tooltip names the compile running now, and it is gone when
-nothing compiles. The *Pause* button beside it holds back the jobs that have not started (the running one ends);
-*Resume* goes on where it stopped. A view that needs a shader while the preparation is paused still compiles that one
-itself, so nothing waits for the button. The compiles run on worker threads and report through a signal, never on
-the window's thread (`infra/shadertrack.py`, `suite/shaderbar.py`; tool-suite.md "The start-up stage").
+small progress bar sits beside the game link in the status bar. It shows "Shaders: n of m" for the stage's jobs. The
+bar only moves for the compiles of an island opened meanwhile. Its tooltip names the compile running now, and it is
+gone when nothing compiles.
+
+The *Pause* button beside it holds back the jobs that have not started (the running one ends). *Resume* goes on where
+it stopped. A view that needs a shader while the preparation is paused still compiles that one itself, so nothing
+waits for the button. The compiles run on worker threads and report through a signal, never on the window's thread
+(`infra/shadertrack.py`, `suite/shaderbar.py`; tool-suite.md "The start-up stage").
 
 ## Updates
 
-The installed program looks for a newer release once a day at the start and tells you in the status bar; Help >
-*Check for updates...* asks at once. Nothing is downloaded until you press *Download and install*; only the changed parts are fetched, and the
-program restarts into the new version. How it works and how
-to switch it off: [`installer.md`](installer.md), "Updates".
+The installed program looks for a newer release once a day at the start and tells you in the status bar. Help >
+*Check for updates...* asks at once. Nothing is downloaded until you press *Download and install*. Only the changed
+parts are fetched, and the program restarts into the new version. How it works and how to switch it off:
+[`installer.md`](installer.md), "Updates".
+
+## Apps of your own
+
+Under the app switcher, **Manage apps** lists the apps other people added: Python apps (an installed package's entry
+point, or a folder in the apps folder) and standalone programs (a manifest with a command line). The Toolbox lists them
+beside the built-in apps, isolates each so a broken one only shows its error, and refuses one written for another API
+version with the reason. Added apps run code with your rights: add only what you trust. How to write one:
+[`app-api.md`](app-api.md).
 
 ## What has been checked
 

@@ -2,8 +2,8 @@
 shaders", beyond the heights: the coarse displacement the bent models and the decals add, the grit and cliff
 coverage (rd3d ``GritMap2``) with the material set's grit and cliff textures and their constants.
 
-``GroundMaps(island)`` is the entry (one per ``desktopgame.GameIsland``): ``ground(coarse)`` is the frame's
-``gameframe.Ground`` once the maps are on the device. docs/rendering/island-117-view.md "Phase 5", "Grit and cliff".
+``CGroundMaps(island)`` is the entry (one per ``desktopgame.CGameIsland``): ``ground(coarse)`` is the frame's
+``gameframe.SGround`` once the maps are on the device. docs/rendering/island-117-view.md "Phase 5", "Grit and cliff".
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from PySide6.QtGui import QRhiTexture
 
 from ...render import gamedraw
 from ...render.gamecompute import carry
-from ...render.gameframe import Ground
+from ...render.gameframe import SGround
 
 JOB = "game-island-ground-maps"
 NEUTRAL_DISPLACEMENT = 128  # a coarse displacement byte of no displacement (terrain-geometry.md 4.2)
@@ -25,15 +25,15 @@ SET_FIELDS = {"GritTiling": "cGritTilingRec", "GritAlphaSharpness": "cGritAlphaS
               "CliffTiling": "cCliffTilingRec", "CliffAlphaSharpness": "cCliffAlphaSharpness",
               "CliffSlope": "cCliffSlope"}  # fmt: skip
 SET_TEXTURES = {"GritDiffuseTexture": "cGritDiffuseTex", "CliffDiffuseTexture": "cCliffDiffuseTex"}
-F = QRhiTexture.Format
+TextureFormat = QRhiTexture.Format
 
 
 def coarse_displacement(view) -> np.ndarray:
     """The island's coarse displacement (rd3d ``Terrain/CoarseDisplacementMap``: a byte a texel) as [z, x] bytes, x
     turned over into the view's mirrored axes."""
-    raw = view.rd.path("Terrain/CoarseDisplacementMap").find("map").data
-    n = round(len(raw) ** 0.5)
-    return np.ascontiguousarray(np.frombuffer(raw[: n * n], np.uint8).reshape(n, n)[:, ::-1])
+    raw = view.rd3d.path("Terrain/CoarseDisplacementMap").find("map").data
+    side = round(len(raw) ** 0.5)
+    return np.ascontiguousarray(np.frombuffer(raw[: side * side], np.uint8).reshape(side, side)[:, ::-1])
 
 
 def grit_map(view) -> tuple[bytes, int]:
@@ -41,25 +41,25 @@ def grit_map(view) -> tuple[bytes, int]:
     world unit) as stored, x turned over into the view's mirrored axes; with its side in texels."""
     from ...render.fxcdraw import mirrored_x
 
-    g = view.rd.path("Terrain/GritMap2")
-    side = int(np.frombuffer(g.find("width").data, "<u4")[0]) * 4
-    return mirrored_x(g.find("map").data, "ATI2", side, side), side
+    grit_path = view.rd3d.path("Terrain/GritMap2")
+    side = int(np.frombuffer(grit_path.find("width").data, "<u4")[0]) * 4
+    return mirrored_x(grit_path.find("map").data, "ATI2", side, side), side
 
 
 def set_grit(text: str) -> tuple[dict, dict]:
     """A material set's grit and cliff constants (the tilings as their reciprocals) and texture paths."""
 
     def field(name: str) -> str:
-        m = re.search(rf"<{name}>([^<]*)</", text)
-        return m.group(1).strip() if m else ""
+        match = re.search(rf"<{name}>([^<]*)</", text)
+        return match.group(1).strip() if match else ""
 
     values = {}
     for name, key in SET_FIELDS.items():
         try:
-            v = float(field(name))
+            value = float(field(name))
         except ValueError:
             continue
-        values[key] = 1.0 / v if name.endswith("Tiling") and v else v
+        values[key] = 1.0 / value if name.endswith("Tiling") and value else value
     return values, {key: field(name).replace("\\", "/") for name, key in SET_TEXTURES.items() if field(name)}
 
 
@@ -68,12 +68,12 @@ def read_ground(editor) -> dict:
     the island does not have is left out."""
     from .desktopgamebake import map_file
 
-    view = editor.view
+    view = editor.m_view
     out: dict = {}
     for name, read in (("displacement", coarse_displacement), ("grit", grit_map)):
         try:
             out[name] = read(view)
-        except (AttributeError, ValueError):  # an island without the map: none (``GroundMaps._make``)
+        except (AttributeError, ValueError):  # an island without the map: none (``CGroundMaps._make``)
             pass
     try:
         text = view.files.read(view.material_set).decode("utf-8", "replace")
@@ -85,60 +85,68 @@ def read_ground(editor) -> dict:
     return out
 
 
-class GroundMaps:
+class CGroundMaps:
     """The island's ground maps on the device (module docstring), made once they are read."""
 
     def __init__(self, island) -> None:
-        self.island, self.r = island, island.r
-        self.maps: dict = {}  # shader name -> texture
-        self.values: dict = {}
-        self._made: list = []
+        self.m_island, self.m_renderer = island, island.m_renderer
+        self.m_maps: dict = {}  # shader name -> texture
+        self.m_values: dict = {}
+        self._m_made: list = []
 
-    def ground(self, coarse) -> Ground | None:
+    def ground(self, coarse) -> SGround | None:
         """The frame's ground over the coarse heights ``coarse`` (None: none yet, no ground)."""
         if coarse is None:
             return None
-        if not self._made:
-            got = self.r.loader.get(JOB, lambda: read_ground(self.r.editor))
+        if not self._m_made:
+            got = self.m_renderer.m_loader.get(JOB, lambda: read_ground(self.m_renderer.m_editor))
             if got is None:
                 return None
             self._make(got if isinstance(got, dict) else {})
-        return Ground(float(self.r.session.size), {"cTerrainHeightTex": coarse, **self.maps}, self.values)
+        return SGround(
+            float(self.m_renderer.m_session.m_size_tiles), {"cTerrainHeightTex": coarse, **self.m_maps}, self.m_values
+        )
 
     def _make(self, got: dict) -> None:
-        rhi, uploads = self.r.ctx.rhi, []
+        rhi, uploads = self.m_renderer.m_ctx.m_rhi, []
         displacement = got.get("displacement")
         if displacement is None:
             displacement = np.full((1, 1), NEUTRAL_DISPLACEMENT, np.uint8)
         rows, columns = displacement.shape
-        tex = rhi.newTexture(F.R8, QSize(columns, rows))
-        tex.create()
+        texture = rhi.newTexture(TextureFormat.R8, QSize(columns, rows))
+        texture.create()
         pixels = np.ascontiguousarray(displacement, np.uint8).tobytes()
-        uploads.append(lambda b, t=tex, d=pixels: gamedraw.upload_level(b, t, d))
-        self.maps["cTerrainCoarseDisplTex"] = tex
-        self._made.append(tex)
+        uploads.append(
+            lambda upload_batch, target=texture, data=pixels: gamedraw.upload_level(upload_batch, target, data)
+        )
+        self.m_maps["cTerrainCoarseDisplTex"] = texture
+        self._m_made.append(texture)
         if "grit" in got:  # else the terrain's black stand-in: no grit
             raw, side = got["grit"]
-            tex = rhi.newTexture(F.BC5, QSize(side, side))
-            tex.create()
-            uploads.append(lambda b, t=tex, d=raw: gamedraw.upload_level(b, t, d))
-            self.maps["cTerrainGritTex"] = tex
-            self._made.append(tex)
+            texture = rhi.newTexture(TextureFormat.BC5, QSize(side, side))
+            texture.create()
+            uploads.append(
+                lambda upload_batch, target=texture, data=raw: gamedraw.upload_level(upload_batch, target, data)
+            )
+            self.m_maps["cTerrainGritTex"] = texture
+            self._m_made.append(texture)
         for name, dds in got.get("textures", {}).items():
-            tex, desc = gamedraw.dds_texture(rhi, dds)
-            uploads.append(lambda b, t=tex, d=desc: b.uploadTexture(t, d))
-            self.maps[name] = tex
-            self._made.append(tex)
-        self.values = dict(got.get("values", {}))
-        self.r.loader.forget(JOB)  # its pixels go once on the device
+            texture, description = gamedraw.dds_texture(rhi, dds)
+            uploads.append(
+                lambda upload_batch, target=texture, data=description: upload_batch.uploadTexture(target, data)
+            )
+            self.m_maps[name] = texture
+            self._m_made.append(texture)
+        self.m_values = dict(got.get("values", {}))
+        self.m_renderer.m_loader.forget(JOB)  # its pixels go once on the device
 
         def upload(batch) -> None:
             for step in uploads:
                 step(batch)
 
-        self.r.ctx.native_pass(lambda cb, batch: carry(cb, batch, upload))
+        self.m_renderer.m_ctx.native_pass(lambda command_buffer, batch: carry(command_buffer, batch, upload))
 
     def release(self) -> None:
-        for tex in self._made:
-            self.r.ctx.later(tex)
-        self.maps, self.values, self._made = {}, {}, []
+        for texture in self._m_made:
+            self.m_renderer.m_ctx.later(texture)
+        self.m_maps, self.m_values, self._m_made = {}, {}, []

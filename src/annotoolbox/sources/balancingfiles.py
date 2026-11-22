@@ -30,9 +30,9 @@ def read_texts(
             yield path, tree.read_text(path)
         except (FileNotFoundError, KeyError):
             if not path.startswith(OPTIONAL):
-                say(warn, f"balancing file {path} is not in the install: its values fall back to the defaults")
-        except (OSError, ValueError) as exc:
-            say(warn, f"balancing file {path} could not be read ({exc}): its values fall back to the defaults")
+                say(warn, f"balancing file {path} is not in the install: its values are not read")
+        except (OSError, ValueError) as error:
+            say(warn, f"balancing file {path} could not be read ({error}): its values are not read")
 
 
 def load[T](
@@ -42,5 +42,5 @@ def load[T](
     for path, text in read_texts(tree, files, warn):
         try:
             yield path, parse(text)
-        except (ValueError, ParseError) as exc:
-            say(warn, f"balancing file {path} could not be parsed ({exc}): its values fall back to the defaults")
+        except (ValueError, ParseError) as error:
+            say(warn, f"balancing file {path} could not be parsed ({error}): its values are not read")

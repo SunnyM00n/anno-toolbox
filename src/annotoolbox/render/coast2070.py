@@ -3,7 +3,7 @@ what the camera sees, stepped at most 30 times a second by ``waterwaves.fx``'s `
 equation, waves born along every coast and where objects cross the water) and ``ChoppyWaves`` pass (the sideways push
 and the foam), which the ocean reads with ``WATER_DYNAMIC_WAVES_ENABLED``.
 
-``CoastWaves(ctx, stages, dummies, coast, volume)`` is the entry: ``step(seconds, camera, maps, fill)`` moves its area
+``CCoastWaves(ctx, stages, dummies, coast, volume)`` is the entry: ``step(seconds, camera, maps, fill)`` moves its area
 as the engine does (``area``) and runs the passes when a step is due; ``ocean_maps`` and
 ``ocean_values`` are what the ocean binds. docs/rendering/shader-compile.md section 10, "The coast waves".
 """
@@ -16,8 +16,8 @@ import numpy as np
 from PySide6.QtGui import QRhiTexture
 
 from . import gameshader as gs
-from .fxcdraw import FxcDraw
-from .gamedraw import Program, screen_triangle
+from .fxcdraw import CFxcDraw
+from .gamedraw import CProgram, screen_triangle
 from .nativepass import draw_pass
 
 FX = "data/system/shaders/fx/waterwaves.fx"
@@ -41,7 +41,7 @@ def snap(value: float) -> float:
     return math.floor(value / TEXEL) * TEXEL
 
 
-def area(eye, ahead, view_proj: np.ndarray, size: float = MAP_SIZE * TEXEL) -> tuple[float, float]:
+def area(eye, ahead, view_proj: np.ndarray, size_m: float = MAP_SIZE * TEXEL) -> tuple[float, float]:
     """The corner (x, z) of the area the waves are simulated over, by the engine's rule: with the eye at most
     ``LOW_EYE`` high or the screen's top rays flatter than ``FLAT_VIEW``, a square ``AHEAD`` of its side ahead of the
     eye; else centred on where the four corner rays cross the band of ``BAND`` round the water. ``view_proj``: ours
@@ -49,67 +49,77 @@ def area(eye, ahead, view_proj: np.ndarray, size: float = MAP_SIZE * TEXEL) -> t
     eye, ahead = np.asarray(eye, float), np.asarray(ahead, float)
     inv = np.linalg.inv(np.asarray(view_proj, float))
     far = [np.array([x, y, 1.0, 1.0]) @ inv for x in (-1.0, 1.0) for y in (-1.0, 1.0)]
-    rays = [p[:3] / p[3] - eye for p in far]
-    top = max(r[1] / max(np.linalg.norm(r), 1e-9) for r in rays)
+    rays = [corner[:3] / corner[3] - eye for corner in far]
+    top = max(ray[1] / max(np.linalg.norm(ray), 1e-9) for ray in rays)
     if eye[1] <= LOW_EYE or top >= FLAT_VIEW:
-        return snap(eye[0] + ahead[0] * size * AHEAD - size / 2), snap(eye[2] + ahead[2] * size * AHEAD - size / 2)
-    hits = [eye + r * ((y - eye[1]) / r[1]) for r in rays if r[1] != 0.0 for y in (-BAND, BAND)]
-    xs, zs = [h[0] for h in hits], [h[2] for h in hits]
-    return snap((min(xs) + max(xs)) / 2 - size / 2), snap((min(zs) + max(zs)) / 2 - size / 2)
+        return snap(eye[0] + ahead[0] * size_m * AHEAD - size_m / 2), snap(
+            eye[2] + ahead[2] * size_m * AHEAD - size_m / 2
+        )
+    hits = [eye + ray * ((y - eye[1]) / ray[1]) for ray in rays if ray[1] != 0.0 for y in (-BAND, BAND)]
+    hits_x, hits_z = [hit[0] for hit in hits], [hit[2] for hit in hits]
+    return snap((min(hits_x) + max(hits_x)) / 2 - size_m / 2), snap((min(hits_z) + max(hits_z)) / 2 - size_m / 2)
 
 
 def recovery(strength: float, moved: float, frame_ms: float) -> float:
     """The waves' strength after a step (``cWaterDynamicWave2.x``): it drops while the camera moves (``moved`` units
     since the last step) and grows back with the frame's milliseconds."""
-    s = min(strength, max(1.0 - min(moved * (2 / 3), 1.0), 0.1))
-    return min(s + (frame_ms * 1e-4) ** (1.0 - s * 0.75), 1.0)
+    recovered = min(strength, max(1.0 - min(moved * (2 / 3), 1.0), 0.1))
+    return min(recovered + (frame_ms * 1e-4) ** (1.0 - recovered * 0.75), 1.0)
 
 
-class CoastWaves:
+class CCoastWaves:
     """The waves' maps and their two passes (module docstring). ``index`` is the map the ocean reads (the engine's
     ping-pong comes back to it each step); ``origin`` the area's corner, None before the first step."""
 
     def __init__(self, ctx, stages: dict, dummies, coast, volume) -> None:
-        self.ctx, self.coast, self.volume = ctx, coast, volume
-        tri = screen_triangle()
-        self.draws = {}
+        self.m_ctx, self.m_coast, self.m_volume = ctx, coast, volume
+        triangle = screen_triangle()
+        self.m_draws = {}
         for name in ("waves", "choppy"):
-            s = stages[name]
-            self.draws[name] = FxcDraw(ctx, Program(s.vs, s.ps), tri, s.state, dummies)
-            self.draws[name].fallbacks = {"cTexture2": NO_STRONG_WAVES}
-        self.maps: list = []
-        self.index = 0
-        self.origin: tuple[float, float] | None = None
-        self.size = MAP_SIZE * TEXEL
-        self.timer, self.strength = 0.0, 1.0
-        self.last: float | None = None  # the clock of the last step
-        self.eye: np.ndarray | None = None  # the camera's eye at the last step
+            stage = stages[name]
+            self.m_draws[name] = CFxcDraw(
+                ctx, CProgram(stage.vertex_stage, stage.pixel_stage), triangle, stage.state, dummies
+            )
+            self.m_draws[name].fallbacks = {"cTexture2": NO_STRONG_WAVES}
+        self.m_maps: list = []
+        self.m_index = 0
+        self.m_origin: tuple[float, float] | None = None
+        self.m_size_m = MAP_SIZE * TEXEL
+        self.m_timer, self.m_strength = 0.0, 1.0
+        self.m_last: float | None = None  # the clock of the last step
+        self.m_eye: np.ndarray | None = None  # the camera's eye at the last step
 
     def _targets(self) -> None:
-        if self.maps:
+        if self.m_maps:
             return
-        ctx, size, f = self.ctx, (MAP_SIZE, MAP_SIZE), QRhiTexture.Format.RGBA16F
-        waves = [ctx.native_texture(size, f) for _ in range(2)]
-        choppy = ctx.native_texture(size, f)
+        ctx, size, texture_format = self.m_ctx, (MAP_SIZE, MAP_SIZE), QRhiTexture.Format.RGBA16F
+        waves = [ctx.native_texture(size, texture_format) for _ in range(2)]
+        choppy = ctx.native_texture(size, texture_format)
         # a step's simulation writes the other map and the foam, its choppy pass the foam's map and this one back
         fbos = {("waves", k): ctx.framebuffer([waves[1 - k], choppy]) for k in (0, 1)}
         fbos |= {("choppy", k): ctx.framebuffer([choppy, waves[k]]) for k in (0, 1)}
-        self.maps = [waves, choppy, fbos]
+        self.m_maps = [waves, choppy, fbos]
         self._clear()
 
     def _clear(self) -> None:
         """The three maps flat (the two simulation passes' targets hold all three)."""
         for k in (0, 1):
-            draw_pass(self.ctx, self.maps[2][("waves", k)], lambda rp, sig, batch: None, lambda cb: None, targets=2)
+            draw_pass(
+                self.m_ctx,
+                self.m_maps[2][("waves", k)],
+                lambda render_pass, signature, batch: None,
+                lambda command_buffer: None,
+                targets=2,
+            )
 
     def due(self, seconds: float) -> bool:
-        return self.last is None or seconds - self.last > STEP
+        return self.m_last is None or seconds - self.m_last > STEP
 
     def restart(self) -> None:
         """Flat water again, as a world starts."""
-        self.last, self.origin, self.eye = None, None, None
-        self.timer, self.strength = 0.0, 1.0
-        if self.maps:
+        self.m_last, self.m_origin, self.m_eye = None, None, None
+        self.m_timer, self.m_strength = 0.0, 1.0
+        if self.m_maps:
             self._clear()
 
     def step(self, seconds: float, camera: tuple, maps: dict, fill) -> None:
@@ -119,53 +129,60 @@ class CoastWaves:
         camera's and the ocean's values)."""
         if not self.due(seconds):
             return
-        elapsed = STEP if self.last is None else seconds - self.last
-        self.last = seconds
+        elapsed = STEP if self.m_last is None else seconds - self.m_last
+        self.m_last = seconds
         self._targets()
-        waves, choppy, fbos = self.maps
+        waves, choppy, fbos = self.m_maps
         eye = np.asarray(camera[0], float)
-        corner = area(eye, camera[1], camera[2], self.size)
-        old = self.origin or corner
-        shift = ((corner[0] - old[0]) / self.size, (corner[1] - old[1]) / self.size)
-        moved = float(np.linalg.norm(eye - self.eye)) if self.eye is not None else 0.0
-        self.origin, self.eye = corner, eye
-        self.timer = (self.timer + min(elapsed, TIMER_STEP)) % TIMER_WRAP
-        self.strength = recovery(self.strength, moved, elapsed * 1000.0)
-        values = {"cWaterDynamicWave0": [*corner, self.size, self.size],
+        corner = area(eye, camera[1], camera[2], self.m_size_m)
+        old = self.m_origin or corner
+        shift = ((corner[0] - old[0]) / self.m_size_m, (corner[1] - old[1]) / self.m_size_m)
+        moved = float(np.linalg.norm(eye - self.m_eye)) if self.m_eye is not None else 0.0
+        self.m_origin, self.m_eye = corner, eye
+        self.m_timer = (self.m_timer + min(elapsed, TIMER_STEP)) % TIMER_WRAP
+        self.m_strength = recovery(self.m_strength, moved, elapsed * 1000.0)
+        values = {"cWaterDynamicWave0": [*corner, self.m_size_m, self.m_size_m],
                   "cWaterDynamicWave1": [*shift, 1 / MAP_SIZE, 1 / MAP_SIZE],
-                  "cWaterDynamicWave2": [self.strength, 1.0 if moved > FAR_MOVE else 0.0, self.timer, 0.0]}  # fmt: skip
+                  "cWaterDynamicWave2": [self.m_strength, 1.0 if moved > FAR_MOVE else 0.0, self.m_timer, 0.0]}  # fmt: skip
 
-        def fill_all(c: dict) -> None:
-            fill(c)
-            gs.set_values(c.values(), values)
+        def fill_all(constants: dict) -> None:
+            fill(constants)
+            gs.set_values(constants.values(), values)
 
-        k = self.index
-        shared = {"cTexture5": self.volume, "cTexture6": self.coast, **maps}
+        k = self.m_index
+        shared = {"cTexture5": self.m_volume, "cTexture6": self.m_coast, **maps}
         for name, source in (("waves", waves[k]), ("choppy", waves[1 - k])):
-            draw = self.draws[name]
+            draw = self.m_draws[name]
             textures = {**shared, "cTexture0": source.native}
-            draw_pass(self.ctx, fbos[(name, k)],
-                      lambda rp, sig, batch, d=draw, t=textures: d.prepare(rp, sig, batch, t, fill_all),
-                      lambda cb, d=draw: d.draw(cb, (MAP_SIZE, MAP_SIZE)), targets=2, clear=False)  # fmt: skip
+            draw_pass(
+                self.m_ctx,
+                fbos[(name, k)],
+                lambda render_pass, signature, batch, draw_call=draw, frame_textures=textures: draw_call.prepare(
+                    render_pass, signature, batch, frame_textures, fill_all
+                ),
+                lambda command_buffer, draw_call=draw: draw_call.draw(command_buffer, (MAP_SIZE, MAP_SIZE)),
+                targets=2,
+                clear=False,
+            )
 
     def ocean_maps(self) -> dict:
         """The maps the ocean reads: the height field with its push (``cTexture8``) and the normal and foam
         (``cTexture9``); none before the first step."""
-        if not self.maps:
+        if not self.m_maps:
             return {}
-        waves, choppy, _ = self.maps
-        return {"cTexture8": waves[self.index].native, "cTexture9": choppy.native}
+        waves, choppy, _ = self.m_maps
+        return {"cTexture8": waves[self.m_index].native, "cTexture9": choppy.native}
 
     def ocean_values(self) -> dict:
         """``cUserConstant0``: the area's corner and the inverse of its side."""
-        x, z = self.origin or (0.0, 0.0)
-        return {"cUserConstant0": [x, z, 1 / self.size, 1 / self.size]}
+        x, z = self.m_origin or (0.0, 0.0)
+        return {"cUserConstant0": [x, z, 1 / self.m_size_m, 1 / self.m_size_m]}
 
     def release(self) -> None:
-        for d in self.draws.values():
-            d.release()
-        if self.maps:
-            waves, choppy, fbos = self.maps
-            for t in (*fbos.values(), *waves, choppy):
-                t.release()
-        self.maps = []
+        for draw in self.m_draws.values():
+            draw.release()
+        if self.m_maps:
+            waves, choppy, fbos = self.m_maps
+            for target_texture in (*fbos.values(), *waves, choppy):
+                target_texture.release()
+        self.m_maps = []

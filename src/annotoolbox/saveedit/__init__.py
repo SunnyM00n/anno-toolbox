@@ -1,6 +1,6 @@
 """The Saves app: every game's savegames found, read as a summary, a tree and forms, the values whose layout is fully
 known changed and written as a new file next to the original, never over it. Start at ``container.open_file`` (a save
-in, its parts out) and ``summary.summarize``; the window is ``savewindow.SavesWindow``. The guide and the formats are
+in, its parts out) and ``summary.summarize``; the window is ``savewindow.CSavesWindow``. The guide and the formats are
 ``docs/save-editor.md``.
 
 Qt-free parts, each one job:

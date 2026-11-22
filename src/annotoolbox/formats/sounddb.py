@@ -1,7 +1,7 @@
 """The sound database of the old games (``sounddatabase.xml`` of 2070, 1404, 1701): every sound's file and mixing
 values, the lists the game draws from, the ambients.
 
-``read(data)`` gives a ``SoundDb``: ``sounds`` (id -> ``SoundDef``), ``groups`` (1404, 1701), ``lists`` (the
+``read(data)`` gives a ``SSoundDb``: ``sounds`` (id -> ``SSoundDef``), ``groups`` (1404, 1701), ``lists`` (the
 ``Object`` entries: weighted sounds, in 1404 and 1701 per event) and ``ambients``. The edits (``set_fields``,
 ``set_file``, ``add_sound``, ``set_weight``, ``add_member``, ``remove_member``) change the file's bytes in place and leave the rest as shipped.
 Layout and meaning of the values: ``docs/sounds.md`` ("What 2070 has", "The sound database of the old games").
@@ -30,12 +30,12 @@ TYPES = {
 NO_EVENT = -1  # the key of a list whose sounds hang directly below it (2070)
 
 
-class SoundDbError(ValueError):
+class CSoundDbError(ValueError):
     """An edit that cannot be made (no such sound, an unknown field): the file is left as it was."""
 
 
 @dataclass
-class SoundDef:
+class SSoundDef:
     id: int
     values: dict[str, str]  # tag -> text of every child, in file order (``ID`` included)
 
@@ -51,7 +51,7 @@ class SoundDef:
 
 
 @dataclass
-class SoundList:
+class SSoundList:
     """An ``Object``: ``events`` maps an event id (``NO_EVENT`` in 2070) to its (sound id, weight) members."""
 
     id: int
@@ -59,25 +59,25 @@ class SoundList:
 
 
 @dataclass
-class Channel:
+class SChannel:
     min_pause: int
     max_pause: int
     members: list[tuple[int, int]]
 
 
 @dataclass
-class Ambient:
+class SAmbient:
     id: int
     name: str
-    channels: list[Channel]
+    channels: list[SChannel]
 
 
 @dataclass
-class SoundDb:
-    sounds: dict[int, SoundDef] = field(default_factory=dict)
+class SSoundDb:
+    sounds: dict[int, SSoundDef] = field(default_factory=dict)
     groups: list[dict[str, str]] = field(default_factory=list)
-    lists: dict[int, SoundList] = field(default_factory=dict)
-    ambients: dict[int, Ambient] = field(default_factory=dict)
+    lists: dict[int, SSoundList] = field(default_factory=dict)
+    ambients: dict[int, SAmbient] = field(default_factory=dict)
 
 
 def number(node: ET.Element | None) -> int:
@@ -88,10 +88,10 @@ def number(node: ET.Element | None) -> int:
 
 
 def _members(node: ET.Element) -> list[tuple[int, int]]:
-    return [(number(m.find("ID")), number(m.find("Propability"))) for m in node.findall("SoundID")]
+    return [(number(member.find("ID")), number(member.find("Propability"))) for member in node.findall("SoundID")]
 
 
-def read(data: bytes) -> SoundDb:
+def read(data: bytes) -> SSoundDb:
     """The database of a ``sounddatabase.xml``; ValueError for a file that is not one."""
     try:
         root = ET.fromstring(data)
@@ -99,24 +99,29 @@ def read(data: bytes) -> SoundDb:
         raise ValueError(f"not a sound database: {exc}") from exc
     if root.tag != "SoundDataBase":
         raise ValueError(f"not a sound database: the root is <{root.tag}>")
-    db = SoundDb()
-    for el in root.iterfind("SoundIDs/SoundID"):
-        values = {c.tag: (c.text or "") for c in el}
-        db.sounds[int(values.get("ID", "0").strip() or 0)] = SoundDef(int(values.get("ID", "0").strip() or 0), values)
-    db.groups = [{c.tag: (c.text or "") for c in el} for el in root.iterfind("SoundGroupIDs/SoundGroupID")]
-    for el in root.iterfind("ObjectIDs/Object"):
-        entry = SoundList(number(el.find("ID")))
-        if el.find("Event") is None:
-            entry.events[NO_EVENT] = _members(el)
-        for event in el.findall("Event"):
+    db = SSoundDb()
+    for sound_element in root.iterfind("SoundIDs/SoundID"):
+        values = {child.tag: (child.text or "") for child in sound_element}
+        db.sounds[int(values.get("ID", "0").strip() or 0)] = SSoundDef(int(values.get("ID", "0").strip() or 0), values)
+    db.groups = [
+        {child.tag: (child.text or "") for child in sound_element}
+        for sound_element in root.iterfind("SoundGroupIDs/SoundGroupID")
+    ]
+    for sound_element in root.iterfind("ObjectIDs/Object"):
+        entry = SSoundList(number(sound_element.find("ID")))
+        if sound_element.find("Event") is None:
+            entry.events[NO_EVENT] = _members(sound_element)
+        for event in sound_element.findall("Event"):
             entry.events[number(event.find("ID"))] = _members(event)
         db.lists[entry.id] = entry
-    for el in root.iterfind("AmbientIDs/Ambient"):
+    for sound_element in root.iterfind("AmbientIDs/Ambient"):
         channels = [
-            Channel(number(c.find("m_MinPause")), number(c.find("m_MaxPause")), _members(c))
-            for c in el.findall("Channel")
+            SChannel(number(child.find("m_MinPause")), number(child.find("m_MaxPause")), _members(child))
+            for child in sound_element.findall("Channel")
         ]
-        db.ambients[number(el.find("ID"))] = Ambient(number(el.find("ID")), el.findtext("Name") or "", channels)
+        db.ambients[number(sound_element.find("ID"))] = SAmbient(
+            number(sound_element.find("ID")), sound_element.findtext("Name") or "", channels
+        )
     return db
 
 
@@ -132,7 +137,7 @@ def _section(data: bytes, tag: bytes) -> tuple[int, int]:
     start = data.find(b"<" + tag + b">")
     end = data.find(b"</" + tag + b">", start)
     if start < 0 or end < 0:
-        raise SoundDbError(f"the file has no <{tag.decode()}>")
+        raise CSoundDbError(f"the file has no <{tag.decode()}>")
     return start + len(tag) + 2, end
 
 
@@ -141,22 +146,22 @@ def _sound_block(data: bytes, sound: int) -> re.Match[bytes]:
     pattern = re.compile(rb"<SoundID><ID>\s*%d\s*</ID>.*?</SoundID>" % sound, re.S)
     found = pattern.search(data, lo, hi)
     if found is None:
-        raise SoundDbError(f"the database has no sound {sound}")
+        raise CSoundDbError(f"the database has no sound {sound}")
     return found
 
 
 def set_fields(data: bytes, sound: int, **values: object) -> bytes:
-    """The database with the given values (tag -> value) of sound ``sound`` replaced; SoundDbError for a tag the
+    """The database with the given values (tag -> value) of sound ``sound`` replaced; CSoundDbError for a tag the
     sound's entry does not have or a value with markup in it."""
     found = _sound_block(data, sound)
     block = found.group(0)
     for tag, value in values.items():
         text = str(value)
         if "<" in text or "&" in text:
-            raise SoundDbError(f"{tag}: markup is not allowed in a value")
+            raise CSoundDbError(f"{tag}: markup is not allowed in a value")
         hit = re.compile(rb"<%s>([^<]*)</%s>" % (tag.encode(), tag.encode())).search(block)
         if tag == "ID" or hit is None:
-            raise SoundDbError(f"sound {sound} has no editable {tag}")
+            raise CSoundDbError(f"sound {sound} has no editable {tag}")
         block = block[: hit.start(1)] + text.encode("utf-8") + block[hit.end(1) :]
     return data[: found.start()] + block + data[found.end() :]
 
@@ -172,12 +177,12 @@ def add_sound(data: bytes, path: str, like: int | None = None, **values: object)
     db = read(data)
     model = db.sounds.get(like if like is not None else next(iter(db.sounds), -1))
     if model is None:
-        raise SoundDbError("the database has no sound to copy the values from")
+        raise CSoundDbError("the database has no sound to copy the values from")
     unknown = [tag for tag in values if tag not in FIELDS]
     if unknown:
-        raise SoundDbError(f"a sound has no {', '.join(unknown)}")
+        raise CSoundDbError(f"a sound has no {', '.join(unknown)}")
     new = max(db.sounds, default=0) + 1  # sounds, lists and ambients each count their own ids (checked in all three)
-    fields = {**model.values, **{k: str(v) for k, v in values.items()}, "ID": str(new), "Filename": path}
+    fields = {**model.values, **{k: str(value) for k, value in values.items()}, "ID": str(new), "Filename": path}
     eol = _eol(data)
     block = (
         b"<SoundID>"
@@ -194,40 +199,40 @@ def add_sound(data: bytes, path: str, like: int | None = None, **values: object)
 
 def _list_span(data: bytes, list_id: int, event: int) -> tuple[int, int, bytes]:
     """(start, end, closing tag) in ``data`` of what holds a list's members: the ``Object``, or below ``event`` the
-    ``Event`` where the game keeps events; SoundDbError when the list or the event is not there."""
+    ``Event`` where the game keeps events; CSoundDbError when the list or the event is not there."""
     lo, hi = _section(data, b"ObjectIDs")
     head = re.compile(rb"<Object><ID>\s*%d\s*</ID>.*?</Object>" % list_id, re.S).search(data, lo, hi)
     if head is None:
-        raise SoundDbError(f"the database has no list {list_id}")
+        raise CSoundDbError(f"the database has no list {list_id}")
     if event == NO_EVENT:
         if b"<Event>" in head.group(0):
-            raise SoundDbError(f"list {list_id} keeps its sounds below events: name the event")
+            raise CSoundDbError(f"list {list_id} keeps its sounds below events: name the event")
         return head.start(), head.end(), b"</Object>"
     found = re.compile(rb"<Event><ID>\s*%d\s*</ID>.*?</Event>" % event, re.S).search(head.group(0))
     if found is None:
-        raise SoundDbError(f"list {list_id} has no event {event}")
+        raise CSoundDbError(f"list {list_id} has no event {event}")
     return head.start() + found.start(), head.start() + found.end(), b"</Event>"
 
 
 def set_weight(data: bytes, list_id: int, sound: int, weight: int, event: int = NO_EVENT) -> bytes:
     """The database with the weight of ``sound`` in list ``list_id`` (below ``event`` where the game keeps events)
-    set to ``weight``; SoundDbError when the list does not hold the sound."""
+    set to ``weight``; CSoundDbError when the list does not hold the sound."""
     start, end, _closing = _list_span(data, list_id, event)
     member = re.compile(rb"(<SoundID><ID>\s*%d\s*</ID>\s*<Propability>)[^<]*(</Propability>)" % sound)
     hit = member.search(data, start, end)
     if hit is None:
-        raise SoundDbError(f"list {list_id} does not hold sound {sound}")
+        raise CSoundDbError(f"list {list_id} does not hold sound {sound}")
     return data[: hit.start()] + hit.group(1) + str(int(weight)).encode() + hit.group(2) + data[hit.end() :]
 
 
 def add_member(data: bytes, list_id: int, sound: int, weight: int, event: int = NO_EVENT) -> bytes:
     """The database with ``sound`` drawn by list ``list_id`` (below ``event`` where the game keeps events) at
-    ``weight``, after the list's last member; SoundDbError for a sound the database lacks or one the list holds."""
+    ``weight``, after the list's last member; CSoundDbError for a sound the database lacks or one the list holds."""
     if sound not in read(data).sounds:
-        raise SoundDbError(f"the database has no sound {sound}")
+        raise CSoundDbError(f"the database has no sound {sound}")
     start, end, closing = _list_span(data, list_id, event)
     if re.compile(rb"<SoundID><ID>\s*%d\s*</ID>" % sound).search(data, start, end):
-        raise SoundDbError(f"list {list_id} already holds sound {sound}")
+        raise CSoundDbError(f"list {list_id} already holds sound {sound}")
     eol = _eol(data)
     member = b"<SoundID><ID>%d</ID>%s<Propability>%d</Propability>%s</SoundID>%s" % (sound, eol, int(weight), eol, eol)
     at = end - len(closing)
@@ -235,10 +240,10 @@ def add_member(data: bytes, list_id: int, sound: int, weight: int, event: int = 
 
 
 def remove_member(data: bytes, list_id: int, sound: int, event: int = NO_EVENT) -> bytes:
-    """The database without ``sound`` in list ``list_id``; SoundDbError when the list does not hold it."""
+    """The database without ``sound`` in list ``list_id``; CSoundDbError when the list does not hold it."""
     start, end, _closing = _list_span(data, list_id, event)
     member = re.compile(rb"<SoundID><ID>\s*%d\s*</ID>.*?</SoundID>(?:\r?\n)?" % sound, re.S)
     hit = member.search(data, start, end)
     if hit is None:
-        raise SoundDbError(f"list {list_id} does not hold sound {sound}")
+        raise CSoundDbError(f"list {list_id} does not hold sound {sound}")
     return data[: hit.start()] + data[hit.end() :]

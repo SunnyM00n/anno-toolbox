@@ -192,11 +192,11 @@ Note: read on 2026-10-27.
 
 ## Writing a map: what an edit touches (read from `session_earth_02` and written back, not run in the game)
 
-The island editor edits a session as a whole map (a sector: 1024 tiles, a fixed set of areas, no pool of islands to
+The island editor edits a session as a whole map (1024 tiles, a fixed set of areas, no pool of islands to
 pick from). Heights, ground paint, rivers and lakes are written by `editor/formats/a7m/sessionground.py`. The keys
 of the edit file are 1800's (`heights`, `paint`, `rivers`, `lakes`). Only what an edit reaches is rewritten: an
 unedited map comes back byte for byte, and an edit leaves every other attribute of both tree files as it was (tests:
-`tests/test_session2205ground.py`, on the installed `strategic_view_01` and on `session_earth_02`).
+`tests/editor/formats/a7m/test_session2205ground.py`, on the installed `strategic_view_01` and on `session_earth_02`).
 
 What a **height** edit (corner deltas in world units, one corner a tile) changes:
 
@@ -221,7 +221,7 @@ principal-axis range fit, 42.6 dB on a real page). The rest of a page keeps its 
 pages into our archive and points the index at them (the index has an entry for every page). The tint pages and the
 grit map are kept. Only the shading is rewritten: a page keeps the detail it had. How the game's shader uses the
 pages' channels was not read; the fit is from the data (`editor/formats/a7m/sessionpages.py`,
-`tests/test_session2205pages.py`).
+`tests/editor/formats/a7m/test_session2205pages.py`).
 
 **Paint** (`MaterialIDs2` per 4 x 4 texels, `MaterialAlphas2`): the strokes of the map's own material set are laid by
 `groundedit.paint_map` (the same encoder as 117's and 1800's, block 4). The painted materials' bits are set in
@@ -230,9 +230,9 @@ pages' channels was not read; the fit is from the data (`editor/formats/a7m/sess
 **Rivers and lakes**: the editor objects' Bezier paths are written as 1800's (`groundedit.apply_water`). An object's
 position is fixed point here, so a lake's level moves its `Position.y` and its path bounds.
 
-**A new map is not a new island.** A session is the whole of one sector: its map, its areas (`AreaDistribution`), the
+**A new map is not a new island.** A session is the whole of one map: its terrain, its areas (`AreaDistribution`), the
 Session asset that names it and the other sessions' references to it. "Blank island creation" therefore does not
-exist for 2205; the editor edits the map. A *blank sector* would be a donor map with its objects, props and ground
+exist for 2205; the editor edits the map. A *blank map* would be a donor map with its objects, props and ground
 cleared and its heights flattened (all of it the same functions), written under a new name. It would also need:
 
 - a Session asset in `sessions.xml` pointing at the new `MapFile` (the game has no mod folder: an entry in our

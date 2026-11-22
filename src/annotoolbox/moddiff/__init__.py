@@ -1,10 +1,10 @@
 """The Mod diff app: what a mod changes in the game, how two versions of a mod differ, where mods collide, what an
-archive mod replaces. Start at ``jobs.run_job`` (a question in, a ``model.Report`` out); the window is
-``window.ModDiffWindow`` (the suite's Mod diff app). The guide and the design are ``docs/mod-diff.md``.
+archive mod replaces. Start at ``jobs.run_job`` (a question in, a ``model.SReport`` out); the window is
+``window.CModDiffWindow`` (the suite's Mod diff app). The guide and the design are ``docs/mod-diff.md``.
 
 Qt-free parts, each one job:
 
-- ``model``: the records (``Target``, ``Change``, ``FileChange``, ``Conflict``, ``Report``)
+- ``model``: the records (``Target``, ``Change``, ``SFileChange``, ``Conflict``, ``Report``)
 - ``elementdata``: an XML element as data, the value changes between two (``sources.valuediff``)
 - ``base``: the opened game as the loader's session reads it
 - ``effect``: the loader's run, one mod at a time, every mod's step and the whole against the game

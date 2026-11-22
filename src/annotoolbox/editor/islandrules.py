@@ -1,6 +1,6 @@
 """The open island and its edits checked against the game's rules, each finding a sentence a mapper can act on.
 
-``check(session, game)`` returns ``Finding`` rows (error: the game drops or breaks it; warning: it loads but likely
+``check(session, game)`` returns ``SFinding`` rows (error: the game drops or breaks it; warning: it loads but likely
 not as meant; info: a readout such as the size class); ``check_files`` adds the model files that do not draw;
 ``report`` turns them into the rows of the Checks tab and a status line. ``readout`` is the island's numbers (grid,
 land tiles, size class, active cells). The rules and their sources: island-editor "Full spec"; the units:
@@ -18,9 +18,9 @@ import numpy as np
 from ..infra.i18n import N_, number, tr
 from ..islands import sessionsettings
 from ..islands.islandground import stroke_material
-from ..suite.extspecs import Check
+from ..suite.extspecs import SCheck
 from . import placedrules
-from .editsession import EditSession, Entry, game_of, label_of
+from .editsession import CEditSession, SEntry, game_of, label_of
 from .sessionterrain import MATERIAL_SLOTS
 
 NEW_ENGINE = ("117", "1800", "2205")
@@ -43,7 +43,7 @@ CELL = 8  # tiles per active-map cell
 
 
 @dataclass(frozen=True)
-class Finding:
+class SFinding:
     level: str  # error | warning | info
     message: str
     place: tuple[float, float, float] | None = None
@@ -63,18 +63,18 @@ def land_tiles(corners: np.ndarray) -> int:
 def active_cells(corners: np.ndarray) -> int:
     """The 8-tile cells that hold land: what the island's active map must cover at least."""
     mean = (corners[:-1, :-1] + corners[1:, :-1] + corners[:-1, 1:] + corners[1:, 1:]) / 4
-    n = mean.shape[0] // CELL * CELL
-    cells = (mean[:n, :n] > LAND).reshape(n // CELL, CELL, n // CELL, CELL).any(axis=(1, 3))
+    span = mean.shape[0] // CELL * CELL
+    cells = (mean[:span, :span] > LAND).reshape(span // CELL, CELL, span // CELL, CELL).any(axis=(1, 3))
     return int(cells.sum())
 
 
-def readout(session: EditSession) -> dict:
+def readout(session: CEditSession) -> dict:
     """The island's numbers: grid size, land tiles now and as opened, their size classes, active cells."""
     now = session.corner_heights()
-    base = session.base_heights[:: session.spt, :: session.spt]
+    base = session.m_base_heights[:: session.m_samples_per_tile, :: session.m_samples_per_tile]
     land, land0 = land_tiles(now), land_tiles(base)
     return {
-        "grid": session.size,
+        "grid": session.m_size_tiles,
         "land tiles": land,
         "size class": size_class(land),
         "land tiles as opened": land0,
@@ -83,99 +83,99 @@ def readout(session: EditSession) -> dict:
     }
 
 
-def _grid(session: EditSession, game: str, info: dict) -> list[Finding]:
+def _grid(session: CEditSession, game: str, numbers: dict) -> list[SFinding]:
     out = [
-        Finding(
+        SFinding(
             "info",
             tr(
                 "islands.grid_tiles_land_active_cells",
-                grid=info["grid"],
-                land=number(info["land tiles"]),
-                size_class=tr(info["size class"]),
-                cells=info["active cells"],
+                grid=numbers["grid"],
+                land=number(numbers["land tiles"]),
+                size_class=tr(numbers["size class"]),
+                cells=numbers["active cells"],
                 cell=CELL,
             ),
         )
     ]
-    if game in ("117", "1800") and session.size % GRID_STEP:
+    if game in ("117", "1800") and session.m_size_tiles % GRID_STEP:
         out.append(
-            Finding(
+            SFinding(
                 "error",
                 tr(
                     "islands.grid_tiles_not_multiple_game",
-                    size=session.size,
+                    size=session.m_size_tiles,
                     step=GRID_STEP,
                 ),
             )
         )
-    if info["size class"] != info["size class as opened"]:
+    if numbers["size class"] != numbers["size class as opened"]:
         out.append(
-            Finding(
+            SFinding(
                 "warning",
                 tr(
                     "islands.edits_change_size_class_land",
-                    old=tr(info["size class as opened"]),
-                    new=tr(info["size class"]),
-                    old_land=number(info["land tiles as opened"]),
-                    new_land=number(info["land tiles"]),
+                    old=tr(numbers["size class as opened"]),
+                    new=tr(numbers["size class"]),
+                    old_land=number(numbers["land tiles as opened"]),
+                    new_land=number(numbers["land tiles"]),
                 ),
             )
         )
     return out
 
 
-def _heights(session: EditSession, game: str) -> list[Finding]:
+def _heights(session: CEditSession, game: str) -> list[SFinding]:
     if game not in NEW_ENGINE:
         return []
-    h = session.corner_heights()
-    worst = float(np.abs(h).max()) if h.size else 0.0
+    heights = session.corner_heights()
+    worst = float(np.abs(heights).max()) if heights.size else 0.0
     if worst <= HEIGHT_LIMIT:
         return []
-    z, x = np.unravel_index(int(np.abs(h).argmax()), h.shape)
+    z, x = np.unravel_index(int(np.abs(heights).argmax()), heights.shape)
     return [
-        Finding(
+        SFinding(
             "error",
             tr(
                 "islands.height_past_units_islands_map",
                 height=f"{worst:.1f}",
                 limit=f"{HEIGHT_LIMIT:.0f}",
             ),
-            (float(x), float(h[z, x]), float(z)),
+            (float(x), float(heights[z, x]), float(z)),
         )
     ]
 
 
-def _place(e: Entry) -> tuple[float, float, float]:
-    return (float(e.position[0]), float(e.position[1]), float(e.position[2]))
+def _place(entry: SEntry) -> tuple[float, float, float]:
+    return (float(entry.position[0]), float(entry.position[1]), float(entry.position[2]))
 
 
-def _objects(session: EditSession) -> list[Finding]:
+def _objects(session: CEditSession) -> list[SFinding]:
     out = []
-    s = session.size
-    for e in session.entries:
-        if not (e.alive and e.visible) or e.kind == "tree":
+    grid_size = session.m_size_tiles
+    for entry in session.m_entries:
+        if not (entry.alive and entry.visible) or entry.kind == "tree":
             continue
-        x, y, z = _place(e)
-        name = label_of(e.base) or e.cfg or tr("islands.an_object")
-        if not (0 <= x <= s and 0 <= z <= s):
+        x, y, z = _place(entry)
+        name = label_of(entry.base) or entry.cfg or tr("islands.an_object")
+        if not (0 <= x <= grid_size and 0 <= z <= grid_size):
             out.append(
-                Finding(
+                SFinding(
                     "error",
-                    tr("islands.lies_off_islands_grid_0", name=name, size=s),
+                    tr("islands.lies_off_islands_grid_0", name=name, size=grid_size),
                     (x, y, z),
                 )
             )
             continue
-        if e.added is None:
+        if entry.added is None:
             continue  # the island's own objects stand where its makers put them
         ground = session.height_at(x, z)
         if y > ground + FLOAT:
             out.append(
-                Finding("warning", tr("islands.floats_over_ground", name=name, by=f"{y - ground:.1f}"), (x, y, z))
+                SFinding("warning", tr("islands.floats_over_ground", name=name, by=f"{y - ground:.1f}"), (x, y, z))
             )
         elif y < ground - FLOAT:
             out.append(
-                Finding(
+                SFinding(
                     "warning",
                     tr("islands.buried_under_ground", name=name, by=f"{ground - y:.1f}"),
                     (x, y, z),
@@ -184,58 +184,61 @@ def _objects(session: EditSession) -> list[Finding]:
     return out + _stacked(session)
 
 
-def _stacked(session: EditSession) -> list[Finding]:
+def _stacked(session: CEditSession) -> list[SFinding]:
     """Two copies of one model at one place: a paste or a copy made twice."""
-    seen: dict[tuple, list[Entry]] = defaultdict(list)
+    seen: dict[tuple, list[SEntry]] = defaultdict(list)
     out = []
-    for e in session.entries:
-        if not e.shown or e.kind == "tree":
+    for entry in session.m_entries:
+        if not entry.shown or entry.kind == "tree":
             continue
-        key = (e.batch, round(e.position[0] / STACKED), round(e.position[2] / STACKED))
-        for other in seen[key]:
-            if math.dist(other.position, e.position) < STACKED:
-                out.append(
-                    Finding(
-                        "warning",
-                        tr("islands.two_copies_stand_other", name=label_of(e.base) or e.cfg),
-                        _place(e),
-                    )
+        ix, iz = math.floor(entry.position[0] / STACKED), math.floor(entry.position[2] / STACKED)
+        near = (
+            other for dx in (-1, 0, 1) for dz in (-1, 0, 1) for other in seen.get((entry.batch, ix + dx, iz + dz), ())
+        )
+        if any(
+            math.dist(other.position, entry.position) < STACKED for other in near
+        ):  # a bin's edge splits close copies
+            out.append(
+                SFinding(
+                    "warning",
+                    tr("islands.two_copies_stand_other", name=label_of(entry.base) or entry.cfg),
+                    _place(entry),
                 )
-                break
-        seen[key].append(e)
+            )
+        seen[entry.batch, ix, iz].append(entry)
     return out
 
 
-def _water(session: EditSession) -> list[Finding]:
-    net = session.water_net or {}
+def _water(session: CEditSession) -> list[SFinding]:
+    net = session.m_water_net or {}
     out = []
     for k in range(len(net.get("rivers") or [])):
-        r = session.river(k)
-        pts, widths = r.get("points") or [], r.get("widths") or []
+        river = session.river(k)
+        pts, widths = river.get("points") or [], river.get("widths") or []
         if len(pts) < 2:
-            out.append(Finding("error", tr("islands.river_points_needs_two_least", k=k, n=len(pts))))
+            out.append(SFinding("error", tr("islands.river_points_needs_two_least", k=k, n=len(pts))))
             continue
-        if any(w <= 0 for w in widths):
+        if any(width <= 0 for width in widths):
             out.append(
-                Finding(
+                SFinding(
                     "error",
                     tr("islands.river_point_without_width_bed", k=k),
                     tuple(pts[0]),
                 )
             )
-        if any(not (0 <= p[0] <= session.size and 0 <= p[-1] <= session.size) for p in pts):
-            out.append(Finding("warning", tr("islands.river_runs_off_islands_grid", k=k), tuple(pts[0])))
+        if any(not (0 <= point[0] <= session.m_size_tiles and 0 <= point[-1] <= session.m_size_tiles) for point in pts):
+            out.append(SFinding("warning", tr("islands.river_runs_off_islands_grid", k=k), tuple(pts[0])))
     for k, _lake in enumerate(net.get("lakes") or []):
         if not math.isfinite(session.lake_level(k)):
-            out.append(Finding("error", tr("islands.lake_no_level", k=k)))
+            out.append(SFinding("error", tr("islands.lake_no_level", k=k)))
     return out
 
 
-def _slots(session: EditSession) -> list[Finding]:
+def _slots(session: CEditSession) -> list[SFinding]:
     """The slots the island lists against the ones standing: the build lists them as they stand (island-editor "The
     slot list"), so a difference is only a readout."""
     return [
-        Finding(
+        SFinding(
             "info",
             tr(
                 "islands.slots_stand_island_lists_build",
@@ -249,59 +252,59 @@ def _slots(session: EditSession) -> list[Finding]:
     ]
 
 
-def _session(session: EditSession) -> list[Finding]:
+def _session(session: CEditSession) -> list[SFinding]:
     """The session settings the edits changed, each as the game would take it."""
     return [
-        Finding("error", why)
-        for key, value in session.edits.get("session", {}).items()
-        if (why := sessionsettings.problem(key, value, session.size))
+        SFinding("error", why)
+        for key, value in session.m_edits.get("session", {}).items()
+        if (why := sessionsettings.problem(key, value, session.m_size_tiles))
     ]
 
 
-def _paint(session: EditSession) -> list[Finding]:
-    named = {stroke_material(st) for st in session.edits.get("paint", [])}  # -1: none, or no number
-    bad = sorted(m for m in named if not 0 <= m < MATERIAL_SLOTS)
+def _paint(session: CEditSession) -> list[SFinding]:
+    named = {stroke_material(st) for st in session.m_edits.get("paint", [])}  # -1: none, or no number
+    bad = sorted(material for material in named if not 0 <= material < MATERIAL_SLOTS)
     return [
-        Finding(
+        SFinding(
             "error",
             tr(
                 "islands.material_outside_map_store_5",
-                m=m,
+                m=material,
                 slots=MATERIAL_SLOTS,
             ),
         )
-        for m in bad
+        for material in bad
     ]
 
 
-def check(session: EditSession, game: str = "117") -> list[Finding]:
+def check(session: CEditSession, game: str = "117") -> list[SFinding]:
     """Every rule over the island as it now is (unsaved edits included), errors first."""
-    info = readout(session)
-    rows = _grid(session, game, info) + _heights(session, game) + _objects(session) + _water(session)
+    numbers = readout(session)
+    rows = _grid(session, game, numbers) + _heights(session, game) + _objects(session) + _water(session)
     rows += _paint(session) + _slots(session) + _session(session)
-    rows += [Finding(*row) for row in placedrules.check(session)]
+    rows += [SFinding(*row) for row in placedrules.check(session)]
     order = {"error": 0, "warning": 1, "info": 2}
-    return sorted(rows, key=lambda f: order[f.level])
+    return sorted(rows, key=lambda finding: order[finding.level])
 
 
 FILES_LISTED = 200  # missing model files named one by one in the Checks tab; the rest are counted
 
 
-def check_files(editor) -> list[Finding]:
+def check_files(editor) -> list[SFinding]:
     """The files the models drawn so far name that do not draw (``IslandEditor.file_problems``: not in the game's
     files, with the reason by its own index, or not decodable); the view draws a missing colour map as a checker."""
     rows = editor.file_problems() if hasattr(editor, "file_problems") else []
-    out = [Finding("warning", _file_message(name, why, owner)) for name, why, owner in rows[:FILES_LISTED]]
+    out = [SFinding("warning", _file_message(name, why, owner)) for name, why, owner in rows[:FILES_LISTED]]
     if len(rows) > FILES_LISTED:
-        out.append(Finding("warning", tr("islands.more_model_files_not_draw", n=len(rows) - FILES_LISTED)))
+        out.append(SFinding("warning", tr("islands.more_model_files_not_draw", n=len(rows) - FILES_LISTED)))
     return out
 
 
-def check_map(islands: int) -> list[Finding]:
+def check_map(islands: int) -> list[SFinding]:
     """A map's island count against the ids the game has."""
     if islands <= MAP_ISLANDS:
         return []
-    return [Finding("error", tr("islands.islands_one_map_game_ids", n=islands, limit=MAP_ISLANDS))]
+    return [SFinding("error", tr("islands.islands_one_map_game_ids", n=islands, limit=MAP_ISLANDS))]
 
 
 def _file_message(name: str, why: str, owner: str | None) -> str:
@@ -316,19 +319,22 @@ def _level_name(level: str) -> str:
     )
 
 
-def report(findings: list[Finding]) -> tuple[list[tuple[str, tuple | None]], str]:
+def report(findings: list[SFinding]) -> tuple[list[tuple[str, tuple | None]], str]:
     """The Checks tab's rows (text, place) and the status line."""
-    rows = [(tr("islands.level_message", level=_level_name(f.level), message=f.message), f.place) for f in findings]
-    errors = sum(f.level == "error" for f in findings)
-    warnings = sum(f.level == "warning" for f in findings)
+    rows = [
+        (tr("islands.level_message", level=_level_name(finding.level), message=finding.message), finding.place)
+        for finding in findings
+    ]
+    errors = sum(finding.level == "error" for finding in findings)
+    warnings = sum(finding.level == "warning" for finding in findings)
     if not errors and not warnings:
         return rows, tr("islands.island_follows_games_rules")
     return rows, tr("islands.errors_warnings", errors=errors, warnings=warnings)
 
 
 # the editor's own check in the Checks tab, beside those registered at ``features.CHECKS``
-RULES = Check(
-    lambda session, editor: check(session, game_of(session.island).removeprefix("anno")) + check_files(editor),
+RULES = SCheck(
+    lambda session, editor: check(session, game_of(session.m_island).removeprefix("anno")) + check_files(editor),
     report,
     N_("islands.checking_games_rules"),
 )

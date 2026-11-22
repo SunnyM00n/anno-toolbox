@@ -3,8 +3,8 @@ G-buffer by the game's own shaders (``Deferred``), the sun's shadow map by their
 game's deferred lighting over it (``DeferredShadingStandardShadow``, without casters ``...NoShadow``), the sky dome
 and the point and spot lights into the lit scene, and a composite into the view's target with the G-buffer's depth.
 
-``Frame2070(ctx, stages, dummies)`` is the entry: ``render(target, size, models, camera, sun, lamps)`` records the
-passes; ``Parts2070`` holds the parts beyond the lighting; ``Model2070`` is one mesh with its maps. The G-buffer and
+``CFrame2070(ctx, stages, dummies)`` is the entry: ``render(target, size_px, models, camera, sun, lamps)`` records the
+passes; ``SParts2070`` holds the parts beyond the lighting; ``CModel2070`` is one mesh with its maps. The G-buffer and
 the light: docs/rendering/frame-2070.md; the compile and the parts: docs/rendering/shader-compile.md section 10.
 """
 
@@ -16,18 +16,21 @@ from typing import NamedTuple
 import numpy as np
 from PySide6.QtGui import QRhiTexture
 
-from . import gameshader as gs
-from . import ocean2070, shadowforward
+from . import gameshader, ocean2070, shadowforward
 from .frameforward import DEPTH_COPY_FS, LIT_COPY_FS, NO_SHADOW, TEXTURE
-from .fxcdraw import Dummies, FxcDraw
-from .gamedraw import Program, screen_triangle
-from .nativepass import Composite, draw_models, draw_pass
-from .ocean2070 import Sea
+from .fxcdraw import CDummies, CFxcDraw
+from .gamedraw import CProgram, screen_triangle
+from .nativepass import CComposite, draw_models, draw_pass
+from .ocean2070 import SSea
 from .sky2070 import sky_values
 
-F = QRhiTexture.Format
-G_BUFFER = (F.RGBA8, F.RGBA8, F.RGBA8)  # albedo (gamma values) and coverage, normal, glow / specular / environment
-LIT = F.RGBA16F  # the lit scene, linear and halved (LOW_QUALITY_HDR_ENABLED): range 0 to 2
+TextureFormat = QRhiTexture.Format
+G_BUFFER = (
+    TextureFormat.RGBA8,
+    TextureFormat.RGBA8,
+    TextureFormat.RGBA8,
+)  # albedo (gamma values) and coverage, normal, glow / specular / environment
+LIT = TextureFormat.RGBA16F  # the lit scene, linear and halved (LOW_QUALITY_HDR_ENABLED): range 0 to 2
 SLOT_NAMES = {"diffuse": "cTexture0", "normal": "cTexture1", "environment": "cTexture2", "height": "cTexture3",
               "mask": "cTexture4", "ripples": "cTexture5"}  # fmt: skip
 # what a map the material lacks reads as: a flat normal without specular, no reflection, no pollution
@@ -79,7 +82,7 @@ void main() { color = vec4(0.0); }
 
 
 @dataclass(frozen=True)
-class Sun2070:
+class SSun2070:
     """The light of a frame as the engine's constants hold it: the colours in gamma values (``ambientmap.xml``,
     colour times power), the direction towards the sun in the view's space, the cloud shadow factor, the sky's
     clouds (and the seconds they turned by) and the post's mood colour and blur share."""
@@ -100,23 +103,26 @@ class Sun2070:
     seconds: float = 0.0  # the view's time: the clouds' turn (sky2070.cloud_turns)
 
 
-def sun_of(setting, direction, seconds: float, clouds: bool = True) -> Sun2070:
+def sun_of(setting, direction, seconds: float, has_clouds: bool = True) -> SSun2070:
     """The frame's light of an ambient set (``sources.ambient2070``'s setting), the sun towards ``direction`` (the
     pass's axes) at the view's time; without ``clouds`` their density is 0 (``sky.fx`` then draws none)."""
-    s, a = setting, setting.atmosphere
-    cloud = tuple(c * s.cloud_color_power for c in a.cloud_color[:3])
-    mood = (*s.mood, s.mood_color[3] if len(s.mood_color) > 3 else 0.0)
-    density = a.cloud_density if clouds else 0.0
-    return Sun2070(tuple(direction), s.sun, s.ambient, s.inv_cloud_shadow_fac, a.scatter_start, a.horizon_fall_off,
-                   a.distance_fall_off, s.zenith, s.horizon, cloud, density, mood, seconds=float(seconds))  # fmt: skip
+    atmosphere = setting.atmosphere
+    cloud = tuple(channel * setting.cloud_color_power for channel in atmosphere.cloud_color[:3])
+    mood = (*setting.mood, setting.mood_color[3] if len(setting.mood_color) > 3 else 0.0)
+    density = atmosphere.cloud_density if has_clouds else 0.0
+    return SSun2070(
+        tuple(direction), setting.sun, setting.ambient, setting.inv_cloud_shadow_fac, atmosphere.scatter_start,
+        atmosphere.horizon_fall_off, atmosphere.distance_fall_off, setting.zenith, setting.horizon, cloud, density,
+        mood, seconds=float(seconds),
+    )  # fmt: skip
 
 
 @dataclass
-class Parts2070:
+class SParts2070:
     """The frame's parts beyond the lighting, each None when it is off or did not compile: the shadowed lighting
-    draw, the sky (``sky2070.SkyDome``), the lights (``lights2070.LightVolumes``), the sea (``ocean2070.Ocean2070``)."""
+    draw, the sky (``sky2070.CSkyDome``), the lights (``lights2070.CLightVolumes``), the sea (``ocean2070.COcean2070``)."""
 
-    shadowed: FxcDraw | None = None
+    shadowed: CFxcDraw | None = None
     sky: object = None
     lights: object = None
     ocean: object = None
@@ -127,17 +133,17 @@ class Parts2070:
                 part.release()
 
 
-def fill_camera(c: dict, cam: gs.Camera, seconds: float = 0.0) -> None:
+def fill_camera(constants: dict, camera: gameshader.SCamera, seconds: float = 0.0) -> None:
     """The camera buffers by name (every buffer the shader reads of them; the rest is left alone); ``cTimer`` the
     view's time as the engine's timers (in-game, wind and real time alike; no delta: a still frame)."""
-    values = gs.camera_values(cam, gs.as_columns)
-    values.update({"cMtxViewProjInvOrigin": values["cMtxViewProjInv"], "cVecViewPort": [0, 0, *cam.size],
+    values = gameshader.camera_values(camera, gameshader.as_columns)
+    values.update({"cMtxViewProjInvOrigin": values["cMtxViewProjInv"], "cVecViewPort": [0, 0, *camera.size_px],
                    "cFOV": [0.75, 1 / 0.75, 0.38, 0], "cTimer": [seconds, 0.0, seconds, seconds],
-                   "cMtxViewProjTex": gs.as_columns(cam.view @ cam.proj @ TEXTURE)})  # fmt: skip
-    gs.set_values(c.values(), values)
+                   "cMtxViewProjTex": gameshader.as_columns(camera.view @ camera.projection @ TEXTURE)})  # fmt: skip
+    gameshader.set_values(constants.values(), values)
 
 
-def fill_light(c: dict, sun: Sun2070, cam: gs.Camera) -> None:
+def fill_light(constants: dict, sun: SSun2070, camera: gameshader.SCamera) -> None:
     """The light and scattering buffers: the sun and ambient colours, the haze from the set's atmosphere."""
     toward = np.asarray(sun.direction, float)
     values = {
@@ -146,9 +152,9 @@ def fill_light(c: dict, sun: Sun2070, cam: gs.Camera) -> None:
         "cHorizonColor": list(sun.horizon), "cZenithColor": list(sun.zenith), "cSunColor": [0.133, 0.5, 0.575],
         "cHorizonFallOff": [sun.horizon_fall_off] * 3, "cSunFallOff": [8.5] * 3, "cDistanceFallOff": [sun.distance_fall_off] * 3,
         "cAtmosphericData0": [-0.2, 1.25, 0.665, 1 / 0.335],
-        "cAtmosphericData1": [sun.scatter_start * cam.far, cam.far, 1 / (cam.far * (1 - sun.scatter_start)), 0.08],
+        "cAtmosphericData1": [sun.scatter_start * camera.far, camera.far, 1 / (camera.far * (1 - sun.scatter_start)), 0.08],
     }  # fmt: skip
-    gs.set_values(c.values(), values)
+    gameshader.set_values(constants.values(), values)
 
 
 def fitted(down, corners: np.ndarray, beyond=None, bias: float = SHADOW_BIAS) -> tuple:
@@ -162,7 +168,7 @@ def fitted(down, corners: np.ndarray, beyond=None, bias: float = SHADOW_BIAS) ->
     return found, bias
 
 
-def shadow_values(down, corners: np.ndarray, matrix=gs.as_columns, beyond=None) -> dict:
+def shadow_values(down, corners: np.ndarray, matrix=gameshader.as_columns, beyond=None) -> dict:
     """``cbShadow`` for shadow method 0 with one orthographic map fitted round ``corners`` (``shadowforward.fit``;
     ``beyond``: receivers its depth reaches too): the pass's matrix, the lighting's matrix into the map, the plane the
     distance to the light is measured on and the bias (the same distance however far the depth reaches); ``matrix``
@@ -173,21 +179,21 @@ def shadow_values(down, corners: np.ndarray, matrix=gs.as_columns, beyond=None) 
             "cVecShadowVPD": plane, "cShadowBias": [0.0, bias, 0.0, 0.0], "cShadowMethod": [0.0, 0.0, 0.0, 0.0]}  # fmt: skip
 
 
-def sun_shadow(ctx, shadow_map, casters: list, down, matrix=gs.as_columns, values_of=None, texture: str = "cShadowMap",
+def sun_shadow(ctx, shadow_map, casters: list, down, matrix=gameshader.as_columns, values_of=None, texture: str = "cShadowMap",
                beyond=None):  # fmt: skip
     """The casters' (models with a ``shadow`` draw, ``corners`` and ``fill_model``) shadow map drawn by their
     caster pass (the map made on first use), the colour pass's values and its map by name (``texture``); the old
     engine's frames (2070, 1404, 1701) share it. ``values_of(down, corners, beyond)`` gives the casters' and the
     colour pass's values (1701's); by default both are ``cbShadow``'s; ``beyond``: receivers that cast nothing (the
     sea)."""
-    corners = np.concatenate([m.corners() for m in casters])
+    corners = np.concatenate([model.corners() for model in casters])
     if values_of:
         cast, values = values_of(down, corners, beyond)
     else:
         cast = values = shadow_values(down, corners, matrix, beyond)
-    shadow_map = shadow_map or shadowforward.ShadowMap(ctx)
-    shadow_map.render(casters, cast, lambda m, c: m.fill_model(c))
-    return shadow_map, values, {texture: shadow_map.native}
+    shadow_map = shadow_map or shadowforward.CShadowMap(ctx)
+    shadow_map.render(casters, cast, lambda model, constants: model.fill_model(constants))
+    return shadow_map, values, {texture: shadow_map.m_native}
 
 
 def object_rows(world: np.ndarray, palette, bones: int = 0, color=(1.0, 1.0, 1.0)) -> tuple[list, int]:
@@ -195,11 +201,11 @@ def object_rows(world: np.ndarray, palette, bones: int = 0, color=(1.0, 1.0, 1.0
     where its mask's green says; model water's colour and depth), the damage, then four rows per matrix (the place
     for a rigid mesh, place times the joint's matrix for a skin; ``bones`` copies of the place for a skinned mesh
     that plays no animation), and how many float4s that is."""
-    w = np.asarray(world, float)
-    mats = [w] * max(1, bones) if palette is None else [w @ m for m in palette]
+    world_matrix = np.asarray(world, float)
+    matrices = [world_matrix] * max(1, bones) if palette is None else [world_matrix @ matrix for matrix in palette]
     rows = [[*color, 1.0][:4], [0.0, 0.0, 0.0, 0.0]]
-    for m in mats:
-        rows += [list(m[i]) for i in range(4)]
+    for matrix in matrices:
+        rows += [list(matrix[i]) for i in range(4)]
     return rows, len(rows)
 
 
@@ -207,19 +213,19 @@ def unshadowed(ctx, shadow_map) -> tuple:
     """(the map, (``cbShadow`` and the map by name)) that leave every point lit, for the passes of shadow method 0
     without casters or with the shadow switched off (the blended pass, the sea): their technique always reads the map,
     and the zero matrix of an unfilled buffer divides 0 by 0 there (shader-compile.md 10, "Blended pass")."""
-    shadow_map = shadow_map or shadowforward.ShadowMap(ctx)
-    shadow_map.render([], {}, lambda m, c: None)  # no casters: the map cleared to the far depth
-    values = {"cMtxShadowVP0": gs.as_columns(NO_SHADOW), "cMtxShadowVPP0": gs.as_columns(NO_SHADOW), "cVecShadowVPD": [0.0] * 4,
+    shadow_map = shadow_map or shadowforward.CShadowMap(ctx)
+    shadow_map.render([], {}, lambda model, constants: None)  # no casters: the map cleared to the far depth
+    values = {"cMtxShadowVP0": gameshader.as_columns(NO_SHADOW), "cMtxShadowVPP0": gameshader.as_columns(NO_SHADOW), "cVecShadowVPD": [0.0] * 4,
               "cShadowBias": [0.0] * 4, "cShadowMethod": [0.0] * 4}  # fmt: skip
-    return shadow_map, (values, {"cShadowMap": shadow_map.native})
+    return shadow_map, (values, {"cShadowMap": shadow_map.m_native})
 
 
-def ocean_waves(ocean, sea: Sea, seconds: float) -> dict:
+def ocean_waves(ocean, sea: SSea, seconds: float) -> dict:
     """The wave maps of ``ocean`` for this moment (``Ocean2070.waves`` with ``sea``'s fixed maps), by the ocean's names."""
     return ocean.waves(seconds, {name: sea.maps[path] for name, path in ocean2070.WAVES.items()})
 
 
-class SeaInputs(NamedTuple):
+class SSeaInputs(NamedTuple):
     """What the sea's pass reads of the frame: the lit scene's and the depth's copies it refracts (``cTexture5`` and
     ``cTexture6``), the sun's shadow (its values and maps) and the wave maps made already this frame (None: made
     by the pass)."""
@@ -229,318 +235,354 @@ class SeaInputs(NamedTuple):
     waves: dict | None = None
 
 
-def ocean_pass(ctx, fbo, size, cam: gs.Camera, sun: Sun2070, ocean, sea: Sea, inputs: SeaInputs) -> None:
-    """The sea by ``waterocean.fx`` (``ocean``: an ``ocean2070.Ocean2070``) into ``fbo``: the wave maps and the sky
+def ocean_pass(
+    ctx, framebuffer, size_px, camera: gameshader.SCamera, sun: SSun2070, ocean, sea: SSea, inputs: SSeaInputs
+) -> None:
+    """The sea by ``waterocean.fx`` (``ocean``: an ``ocean2070.COcean2070``) into ``framebuffer``: the wave maps and the sky
     cube made for this moment, then the chunks round ``sea``, refracting the frame's copies, lit by the sun with
-    its shadow (``inputs``), tested and written against ``fbo``'s depth (shader-compile.md 10, "The ocean's
+    its shadow (``inputs``), tested and written against ``framebuffer``'s depth (shader-compile.md 10, "The ocean's
     waves")."""
     copies = inputs.copies
     waves = inputs.waves or ocean_waves(ocean, sea, sun.seconds)
     values, shadow_maps = inputs.shadow
-    forward = np.asarray(cam.view, float)[:3, 2]
+    forward = np.asarray(camera.view, float)[:3, 2]
 
-    def sky(c: dict) -> None:
-        fill_camera(c, cam, sun.seconds)
-        fill_light(c, sun, cam)
-        gs.set_values(c.values(), sky_values(sun))
+    def sky(constants: dict) -> None:
+        fill_camera(constants, camera, sun.seconds)
+        fill_light(constants, sun, camera)
+        gameshader.set_values(constants.values(), sky_values(sun))
 
     maps = {**waves, "cTexture2": sea.maps[ocean2070.RIPPLES], "cTexture7": sea.maps[ocean2070.CAUSTICS],
             "tSkyEnv": ocean.sky_cube(sky), **copies, **shadow_maps}  # fmt: skip
-    if sea.info is not None:
-        maps["cTexture3"] = sea.info
+    if sea.info_map is not None:
+        maps["cTexture3"] = sea.info_map
     if sea.reflection is not None:
         maps["cTexture4"] = sea.reflection
-    sea_values = ocean2070.ocean_values(ocean.water, sun.seconds, sun.direction, forward / np.linalg.norm(forward),
+    sea_values = ocean2070.ocean_values(ocean.m_water, sun.seconds, sun.direction, forward / np.linalg.norm(forward),
                                         sea.texel)  # fmt: skip
-    extra = {**values, **water_values(cam, (1.0, 1.0, 1.0, 1.0)), **sea_values,
-             "cWaterViewProjTex": gs.as_columns(cam.view @ cam.proj @ TEXTURE)}  # fmt: skip
+    extra = {**values, **water_values(camera, (1.0, 1.0, 1.0, 1.0)), **sea_values,
+             "cWaterViewProjTex": gameshader.as_columns(camera.view @ camera.projection @ TEXTURE)}  # fmt: skip
     if sea.coast is not None:
         maps |= sea.coast.ocean_maps()
         extra |= sea.coast.ocean_values()
-    draws = ocean.draws(ocean2070.chunk_rings(sea.centre, sea.reach, cam.eye))
+    draws = ocean.draws(ocean2070.chunk_rings(sea.centre, sea.reach, camera.eye))
 
-    def fill(c: dict, own: dict) -> None:
-        fill_camera(c, cam, sun.seconds)
-        fill_light(c, sun, cam)
-        gs.set_values(c.values(), {**extra, **own}, ("cWaterChunkData",))
+    def fill(constants: dict, chunk_values: dict) -> None:
+        fill_camera(constants, camera, sun.seconds)
+        fill_light(constants, sun, camera)
+        gameshader.set_values(constants.values(), {**extra, **chunk_values}, ("cWaterChunkData",))
 
-    def prepare(rp, signature, batch) -> None:
-        for d, own in draws:
-            d.prepare(rp, signature, batch, maps, lambda c, own=own: fill(c, own))
+    def prepare(render_pass, signature, batch) -> None:
+        for chunk_draw, chunk_values in draws:
+            chunk_draw.prepare(
+                render_pass,
+                signature,
+                batch,
+                maps,
+                lambda constants, chunk_values=chunk_values: fill(constants, chunk_values),
+            )
 
-    def record(cb) -> None:
-        for d, _own in draws:
-            d.draw(cb, size)
+    def record(command_buffer) -> None:
+        for chunk_draw, _own in draws:
+            chunk_draw.draw(command_buffer, size_px)
 
-    draw_pass(ctx, fbo, prepare, record, clear=False)
+    draw_pass(ctx, framebuffer, prepare, record, clear=False)
 
 
-def water_values(cam: gs.Camera, diffuse) -> dict:
+def water_values(camera: gameshader.SCamera, diffuse) -> dict:
     """What model water reads beyond the camera: the view depth it measures the water by, in the engine's
     left-handed view space (ahead is +z: ours looks down -z, and the depth behind the sheet would come out
     negative), and ``cMatDiffuse`` (the material's diffuse colour: its alpha is the water's clearness)."""
-    lh = gs.left_handed(cam)
+    left_handed_camera = gameshader.left_handed(camera)
     return {
-        "cMtxView": gs.as_columns(lh.view),
-        "cMtxProjInv": gs.as_columns(np.linalg.inv(lh.proj)),
+        "cMtxView": gameshader.as_columns(left_handed_camera.view),
+        "cMtxProjInv": gameshader.as_columns(np.linalg.inv(left_handed_camera.projection)),
         "cMatDiffuse": list(diffuse),
     }
 
 
-class MeshModel:
-    """What the old engine's models (``Model2070``, ``frame1404.Model1404``) share: ``draw_call`` (the colour pass's
-    ``FxcDraw``), ``maps`` (the shader's texture name -> a QRhi texture or None while it loads), ``world``."""
+class CMeshModel:
+    """What the old engine's models (``CModel2070``, ``frame1404.CModel1404``) share: ``draw_call`` (the colour pass's
+    ``CFxcDraw``), ``maps`` (the shader's texture name -> a QRhi texture or None while it loads), ``world``."""
 
-    draw_call: FxcDraw
-    maps: dict
-    world: np.ndarray
+    m_draw_call: CFxcDraw
+    m_maps: dict
+    m_world: np.ndarray
 
     def textures(self) -> dict:
         """The maps that are in."""
-        return {k: v for k, v in self.maps.items() if v is not None}
+        return {name: texture for name, texture in self.m_maps.items() if texture is not None}
 
     def corners(self) -> np.ndarray:
         """The eight corners of the mesh's box where it stands (a shadow caster's, ``sun_shadow``)."""
-        return shadowforward.corners(self.draw_call.box(), self.world)
+        return shadowforward.corners(self.m_draw_call.box(), self.m_world)
 
 
-class Model2070(MeshModel):
-    """One mesh group of a model with its material's maps: ``draw`` (a ``FxcDraw``), ``maps`` (the shader's texture
+class CModel2070(CMeshModel):
+    """One mesh group of a model with its material's maps: ``draw`` (a ``CFxcDraw``), ``maps`` (the shader's texture
     name -> a QRhi texture or None while it loads), ``world`` (column vectors) and ``palette`` set per frame,
     ``shadow`` its ``Obj2Shadow`` draw (None: it casts none); ``water`` a model water sheet (drawn over the lit
     scene, not into the G-buffer) with its material's ``diffuse`` colour."""
 
-    def __init__(self, draw: FxcDraw, shadow: FxcDraw | None = None) -> None:
-        self.draw_call, self.maps, self.values, self.bones = draw, {}, {}, 0
-        self.color = (1.0, 1.0, 1.0)  # the object colour: the player's on a dye material, rgba on water
-        self.world, self.palette = np.identity(4), None
-        self.shadow = shadow
-        self.water, self.diffuse = False, (1.0, 1.0, 1.0, 1.0)
-        self.blended = False  # drawn by DefaultBlend in the blended pass, after the sky
+    def __init__(self, draw: CFxcDraw, shadow: CFxcDraw | None = None) -> None:
+        self.m_draw_call, self.m_maps, self.m_values, self.m_bones = draw, {}, {}, 0
+        self.m_color = (1.0, 1.0, 1.0)  # the object colour: the player's on a dye material, rgba on water
+        self.m_world, self.m_palette = np.identity(4), None
+        self.m_shadow = shadow
+        self.m_water, self.m_diffuse = False, (1.0, 1.0, 1.0, 1.0)
+        self.m_blended = False  # drawn by DefaultBlend in the blended pass, after the sky
         # drawn in the game's axes, the mirror in the camera's projection: the colour pass's faces swap, the sun's
         # own view keeps them (shader-compile.md 11 "The game's own axes")
-        for d, mirrored in ((draw, True), (shadow, False)):
-            if d is not None:
-                d.fallbacks, d.mirrored = dict(FALLBACKS), mirrored
+        for part, mirrored in ((draw, True), (shadow, False)):
+            if part is not None:
+                part.m_fallbacks, part.m_is_mirrored = dict(FALLBACKS), mirrored
 
-    def fill_model(self, c: dict) -> None:
+    def fill_model(self, constants: dict) -> None:
         """The object's own rows (``object_rows``) and how many float4s one object takes."""
-        rows, per_object = object_rows(self.world, self.palette, self.bones, self.color)
-        if "cbMeshConstants" in c:
-            c["cbMeshConstants"].set_rows("cMtxMeshWorld", rows[:256])
-        gs.set_values(c.values(), {"cUserConstant0": [per_object, 0, 0, 0]})
+        rows, per_object = object_rows(self.m_world, self.m_palette, self.m_bones, self.m_color)
+        if "cbMeshConstants" in constants:
+            constants["cbMeshConstants"].set_rows("cMtxMeshWorld", rows[:256])
+        gameshader.set_values(constants.values(), {"cUserConstant0": [per_object, 0, 0, 0]})
 
-    def prepare(self, rp, signature, batch, cam: gs.Camera, sun: Sun2070, frame_maps=None, frame_values=None) -> None:
+    def prepare(
+        self,
+        render_pass,
+        signature,
+        batch,
+        camera: gameshader.SCamera,
+        sun: SSun2070,
+        frame_maps=None,
+        frame_values=None,
+    ) -> None:
         """The draw's resources and constants; ``frame_maps`` / ``frame_values``: the frame's textures and constants
         it reads besides its own (the water's copies of the lit scene and the depth, the blended pass's shadow)."""
 
-        def fill(c: dict) -> None:
-            fill_camera(c, cam, sun.seconds)
-            fill_light(c, sun, cam)
-            self.fill_model(c)
-            if self.water:
-                gs.set_values(c.values(), water_values(cam, self.diffuse))
+        def fill(constants: dict) -> None:
+            fill_camera(constants, camera, sun.seconds)
+            fill_light(constants, sun, camera)
+            self.fill_model(constants)
+            if self.m_water:
+                gameshader.set_values(constants.values(), water_values(camera, self.m_diffuse))
             if frame_values:
-                gs.set_values(c.values(), frame_values)
+                gameshader.set_values(constants.values(), frame_values)
 
-        self.draw_call.prepare(rp, signature, batch, {**self.textures(), **(frame_maps or {})}, fill)
+        self.m_draw_call.prepare(render_pass, signature, batch, {**self.textures(), **(frame_maps or {})}, fill)
 
-    def draw(self, cb, size) -> None:
-        self.draw_call.draw(cb, size)
+    def draw(self, command_buffer, size_px) -> None:
+        self.m_draw_call.draw(command_buffer, size_px)
 
     def release(self) -> None:
-        self.draw_call.release()
-        if self.shadow is not None:
-            self.shadow.release()
+        self.m_draw_call.release()
+        if self.m_shadow is not None:
+            self.m_shadow.release()
 
 
-def shading_pass(ctx, stages, dummies: Dummies) -> FxcDraw:
-    """The deferred lighting as a full-screen draw of the game's compiled shaders (``stages``: its ``PassStages``)."""
-    program = Program(stages.vs, stages.ps)
-    return FxcDraw(ctx, program, screen_triangle(), replace(stages.state, cull="none"), dummies)
+def shading_pass(ctx, stages, dummies: CDummies) -> CFxcDraw:
+    """The deferred lighting as a full-screen draw of the game's compiled shaders (``stages``: its ``SPassStages``)."""
+    program = CProgram(stages.vertex_stage, stages.pixel_stage)
+    return CFxcDraw(ctx, program, screen_triangle(), replace(stages.state, cull="none"), dummies)
 
 
-class Frame2070:
+class CFrame2070:
     """The G-buffer of one view and the passes over it (module docstring)."""
 
-    def __init__(self, ctx, shading_stages, dummies: Dummies) -> None:
-        self.ctx = ctx
-        self.shading = shading_pass(ctx, shading_stages, dummies)
-        self.parts = Parts2070()
-        self.size: tuple[int, int] | None = None
-        self.targets: list = []
-        self.lit = self.depth = self.fbo = self.lit_fbo = self.lit_depth_fbo = self.read_depth = self.read_fbo = None
-        self.refraction = self.refraction_fbo = None
-        self.blend = self.blend_fbo = self.blend_depth_fbo = None
-        self.blend_copy = self.blend_clear = None  # the blended layer's composite and clear, made on first use
-        self.composite = Composite(ctx, COMPOSITE_FS)
-        self.depth_copy = Composite(ctx, DEPTH_COPY_FS)
-        self.lit_copy = Composite(ctx, LIT_COPY_FS)
-        self.shadow_map: shadowforward.ShadowMap | None = None
+    def __init__(self, ctx, shading_stages, dummies: CDummies) -> None:
+        self.m_ctx = ctx
+        self.m_shading = shading_pass(ctx, shading_stages, dummies)
+        self.m_parts = SParts2070()
+        self.m_size_px: tuple[int, int] | None = None
+        self.m_targets: list = []
+        self.m_lit = self.m_depth = self.m_fbo = self.m_lit_fbo = self.m_lit_depth_fbo = self.m_read_depth = (
+            self.m_read_fbo
+        ) = None
+        self.m_refraction = self.m_refraction_fbo = None
+        self.m_blend = self.m_blend_fbo = self.m_blend_depth_fbo = None
+        self.m_blend_copy = self.m_blend_clear = None  # the blended layer's composite and clear, made on first use
+        self.m_composite = CComposite(ctx, COMPOSITE_FS)
+        self.m_depth_copy = CComposite(ctx, DEPTH_COPY_FS)
+        self.m_lit_copy = CComposite(ctx, LIT_COPY_FS)
+        self.m_shadow_map: shadowforward.CShadowMap | None = None
 
-    def _targets(self, size: tuple[int, int]) -> None:
-        if self.size == size:
+    def _targets(self, size_px: tuple[int, int]) -> None:
+        if self.m_size_px == size_px:
             return
         self._drop()
-        ctx = self.ctx
-        self.targets = [ctx.native_texture(size, f) for f in G_BUFFER]
-        self.depth = ctx.depth_renderbuffer(size)
-        self.fbo = ctx.framebuffer(self.targets, self.depth)
-        self.lit = ctx.native_texture(size, LIT)
-        self.lit_fbo = ctx.framebuffer([self.lit])
-        self.lit_depth_fbo = ctx.framebuffer([self.lit], self.depth)  # the sky and the lights: tested, not written
-        self.read_depth = ctx.native_texture(size, F.R32F)  # the depth the lights read while it is attached
-        self.read_fbo = ctx.framebuffer([self.read_depth])
-        self.refraction = ctx.native_texture(size, LIT)  # the lit scene's copy the water refracts
-        self.refraction_fbo = ctx.framebuffer([self.refraction])
-        self.blend = ctx.native_texture(size, LIT)  # the blended pass's layer (BLEND_FS)
-        self.blend_fbo = ctx.framebuffer([self.blend])
-        self.blend_depth_fbo = ctx.framebuffer([self.blend], self.depth)
-        self.size = size
+        ctx = self.m_ctx
+        self.m_targets = [ctx.native_texture(size_px, texture_format) for texture_format in G_BUFFER]
+        self.m_depth = ctx.depth_renderbuffer(size_px)
+        self.m_fbo = ctx.framebuffer(self.m_targets, self.m_depth)
+        self.m_lit = ctx.native_texture(size_px, LIT)
+        self.m_lit_fbo = ctx.framebuffer([self.m_lit])
+        self.m_lit_depth_fbo = ctx.framebuffer(
+            [self.m_lit], self.m_depth
+        )  # the sky and the lights: tested, not written
+        self.m_read_depth = ctx.native_texture(
+            size_px, TextureFormat.R32F
+        )  # the depth the lights read while it is attached
+        self.m_read_fbo = ctx.framebuffer([self.m_read_depth])
+        self.m_refraction = ctx.native_texture(size_px, LIT)  # the lit scene's copy the water refracts
+        self.m_refraction_fbo = ctx.framebuffer([self.m_refraction])
+        self.m_blend = ctx.native_texture(size_px, LIT)  # the blended pass's layer (BLEND_FS)
+        self.m_blend_fbo = ctx.framebuffer([self.m_blend])
+        self.m_blend_depth_fbo = ctx.framebuffer([self.m_blend], self.m_depth)
+        self.m_size_px = size_px
 
-    def _shadow(self, models: list, sun: Sun2070, sea: Sea | None = None) -> tuple[dict, dict] | None:
+    def _shadow(self, models: list, sun: SSun2070, sea: SSea | None = None) -> tuple[dict, dict] | None:
         """The casters' shadow map and ``cbShadow`` (None without casters or a shadowed lighting); its depth reaches
         over the sea too, which casts none (``ocean2070.corners``)."""
-        casters = [m for m in models if m.shadow is not None]
-        if self.parts.shadowed is None or not casters:
+        casters = [model for model in models if model.m_shadow is not None]
+        if self.m_parts.shadowed is None or not casters:
             return None
         beyond = ocean2070.corners(sea) if sea is not None else None
-        self.shadow_map, values, maps = sun_shadow(
-            self.ctx, self.shadow_map, casters, -np.asarray(sun.direction), beyond=beyond
+        self.m_shadow_map, values, maps = sun_shadow(
+            self.m_ctx, self.m_shadow_map, casters, -np.asarray(sun.direction), beyond=beyond
         )
         return values, maps
 
-    def render(self, target, size: tuple[int, int], models: list, cam: gs.Camera, sun: Sun2070, lamps=(),
-               sea: Sea | None = None) -> None:  # fmt: skip
-        """The G-buffer pass with ``models`` (``Model2070``), the shadow map, the lighting, the sky and the lights
-        (``lamps``: ``lightsforward.Lamp`` in the view's axes), then the composite into ``target``. The sea (``sea``,
+    def render(self, target, size_px: tuple[int, int], models: list, camera: gameshader.SCamera, sun: SSun2070, lamps=(),
+               sea: SSea | None = None) -> None:  # fmt: skip
+        """The G-buffer pass with ``models`` (``CModel2070``), the shadow map, the lighting, the sky and the lights
+        (``lamps``: ``lightsforward.SLamp`` in the view's axes), then the composite into ``target``. The sea (``sea``,
         with ``parts.ocean``) and model water draw over the lit scene before the sky and the lights, as the engine's
         water step does."""
-        self._targets(size)
-        sea = sea if self.parts.ocean is not None else None
-        water = [m for m in models if m.water]
-        blended = [m for m in models if m.blended and not m.water]
-        models = [m for m in models if not m.water and not m.blended]
-        draw_models(self.ctx, self.fbo, models, lambda m, rp, sig, batch: m.prepare(rp, sig, batch, cam, sun),
-                    lambda m, cb: m.draw(cb, size), targets=len(G_BUFFER))  # fmt: skip
+        self._targets(size_px)
+        sea = sea if self.m_parts.ocean is not None else None
+        water = [model for model in models if model.m_water]
+        blended = [model for model in models if model.m_blended and not model.m_water]
+        models = [model for model in models if not model.m_water and not model.m_blended]
+        draw_models(self.m_ctx, self.m_fbo, models, lambda model, render_pass, signature, batch: model.prepare(render_pass, signature, batch, camera, sun),
+                    lambda model, command_buffer: model.draw(command_buffer, size_px), targets=len(G_BUFFER))  # fmt: skip
         shadow = self._shadow(models, sun, sea)
-        maps = {"cTexture0": self.targets[0].native, "cTexture1": self.targets[1].native,
-                "cTexture2": self.depth.native, "cTexture3": self.targets[2].native, **(shadow[1] if shadow else {})}  # fmt: skip
-        shading = self.parts.shadowed if shadow else self.shading
+        maps = {"cTexture0": self.m_targets[0].native, "cTexture1": self.m_targets[1].native,
+                "cTexture2": self.m_depth.native, "cTexture3": self.m_targets[2].native, **(shadow[1] if shadow else {})}  # fmt: skip
+        shading = self.m_parts.shadowed if shadow else self.m_shading
 
-        def fill(c: dict) -> None:
-            fill_camera(c, cam, sun.seconds)
-            fill_light(c, sun, cam)
+        def fill(constants: dict) -> None:
+            fill_camera(constants, camera, sun.seconds)
+            fill_light(constants, sun, camera)
             if shadow:
-                gs.set_values(c.values(), shadow[0])
+                gameshader.set_values(constants.values(), shadow[0])
 
-        draw_pass(self.ctx, self.lit_fbo, lambda rp, signature, batch: shading.prepare(rp, signature, batch, maps,
-                  fill), lambda cb: shading.draw(cb, size))  # fmt: skip
+        draw_pass(self.m_ctx, self.m_lit_fbo, lambda render_pass, signature, batch: shading.prepare(render_pass, signature, batch, maps,
+                  fill), lambda command_buffer: shading.draw(command_buffer, size_px))  # fmt: skip
         if water or sea is not None:
-            self._water(size, cam, sun, water, sea, (shadow or self._unshadowed()) if sea is not None else None)
-        self._forward(size, cam, sun, list(lamps), maps)
+            self._water(size_px, camera, sun, water, sea, (shadow or self._unshadowed()) if sea is not None else None)
+        self._forward(size_px, camera, sun, list(lamps), maps)
         if blended:
-            self._blended(size, cam, sun, blended, shadow or self._unshadowed())
-        uniforms = {"flip": bool(self.ctx.flip_offscreen), "sky": self.parts.sky is not None}
-        self.composite.draw(target, {"gLit": self.lit, "gDepth": self.depth}, uniforms,
-                            depth_func="<=" if self.parts.sky is not None else None)  # fmt: skip
+            self._blended(size_px, camera, sun, blended, shadow or self._unshadowed())
+        uniforms = {"flip": bool(self.m_ctx.m_flip_offscreen), "sky": self.m_parts.sky is not None}
+        self.m_composite.draw(target, {"gLit": self.m_lit, "gDepth": self.m_depth}, uniforms,
+                            depth_func="<=" if self.m_parts.sky is not None else None)  # fmt: skip
         if blended:
-            ctx = self.ctx
-            self.blend_copy.draw(target, {"gBlend": self.blend}, {"flip": bool(ctx.flip_offscreen)}, depth_test=False,
+            ctx = self.m_ctx
+            self.m_blend_copy.draw(target, {"gBlend": self.m_blend}, {"flip": bool(ctx.m_flip_offscreen)}, depth_test=False,
                                  blend=(ctx.ONE, ctx.ONE_MINUS_SRC_ALPHA))  # fmt: skip
 
     def _unshadowed(self) -> tuple[dict, dict]:
         """``unshadowed`` with this frame's map."""
-        self.shadow_map, shadow = unshadowed(self.ctx, self.shadow_map)
+        self.m_shadow_map, shadow = unshadowed(self.m_ctx, self.m_shadow_map)
         return shadow
 
-    def _blended(self, size, cam: gs.Camera, sun: Sun2070, models: list, shadow: tuple) -> None:
+    def _blended(self, size_px, camera: gameshader.SCamera, sun: SSun2070, models: list, shadow: tuple) -> None:
         """The blended pass (``DefaultBlend``) after the sky into a layer of its own: far to near, tested against the
         G-buffer's depth, not written; lit by the sun with its shadow (shader-compile.md 10, "Blended pass"). The
         layer goes over the composited view (``BLEND_FS``), so it covers the view's own ground as well."""
-        self.blend_clear = self.blend_clear or Composite(self.ctx, CLEAR_FS)
-        self.blend_copy = self.blend_copy or Composite(self.ctx, BLEND_FS)
-        self.blend_clear.draw(self.blend_fbo, {}, {}, depth_test=False)  # the colour only: the depth is the G-buffer's
-        eye = np.asarray(cam.eye, float)
-        order = sorted(models, key=lambda m: -float(np.linalg.norm(np.asarray(m.world, float)[:3, 3] - eye)))
+        self.m_blend_clear = self.m_blend_clear or CComposite(self.m_ctx, CLEAR_FS)
+        self.m_blend_copy = self.m_blend_copy or CComposite(self.m_ctx, BLEND_FS)
+        self.m_blend_clear.draw(
+            self.m_blend_fbo, {}, {}, depth_test=False
+        )  # the colour only: the depth is the G-buffer's
+        eye = np.asarray(camera.eye, float)
+        order = sorted(models, key=lambda model: -float(np.linalg.norm(np.asarray(model.m_world, float)[:3, 3] - eye)))
         values, maps = shadow
-        draw_models(self.ctx, self.blend_depth_fbo, order,
-                    lambda m, rp, sig, batch: m.prepare(rp, sig, batch, cam, sun, maps, values),
-                    lambda m, cb: m.draw(cb, size), clear=False)  # fmt: skip
+        draw_models(self.m_ctx, self.m_blend_depth_fbo, order,
+                    lambda model, render_pass, signature, batch: model.prepare(render_pass, signature, batch, camera, sun, maps, values),
+                    lambda model, command_buffer: model.draw(command_buffer, size_px), clear=False)  # fmt: skip
 
-    def _water(self, size, cam: gs.Camera, sun: Sun2070, water: list, sea: Sea | None, shadow: tuple | None) -> None:
+    def _water(
+        self, size_px, camera: gameshader.SCamera, sun: SSun2070, water: list, sea: SSea | None, shadow: tuple | None
+    ) -> None:
         """The water step over the lit scene: the scene and the depth copied once, which every water surface refracts
         and measures its depth against, then the sea (with ``shadow``: its values and maps) and model water
         (``model_water.fx``), drawn tested and written against the G-buffer's depth."""
-        self.depth_copy.draw(self.read_fbo, {"gDepth": self.depth}, {}, depth_test=False)
-        self.lit_copy.draw(self.refraction_fbo, {"gLit": self.lit}, {}, depth_test=False)
+        self.m_depth_copy.draw(self.m_read_fbo, {"gDepth": self.m_depth}, {}, depth_test=False)
+        self.m_lit_copy.draw(self.m_refraction_fbo, {"gLit": self.m_lit}, {}, depth_test=False)
         if sea is not None:
-            copies = {"cTexture5": self.refraction.native, "cTexture6": self.read_depth.native}
-            inputs = SeaInputs(copies, shadow)
-            ocean_pass(self.ctx, self.lit_depth_fbo, size, cam, sun, self.parts.ocean, sea, inputs)
-        maps = {"cRefractionColorBuffer": self.refraction.native, "cRefractionDepthBuffer": self.read_depth.native}
-        draw_models(self.ctx, self.lit_depth_fbo, water,
-                    lambda m, rp, sig, batch: m.prepare(rp, sig, batch, cam, sun, maps), lambda m, cb: m.draw(cb, size),
-                    clear=False)  # fmt: skip
+            copies = {"cTexture5": self.m_refraction.native, "cTexture6": self.m_read_depth.native}
+            inputs = SSeaInputs(copies, shadow)
+            ocean_pass(self.m_ctx, self.m_lit_depth_fbo, size_px, camera, sun, self.m_parts.ocean, sea, inputs)
+        maps = {"cRefractionColorBuffer": self.m_refraction.native, "cRefractionDepthBuffer": self.m_read_depth.native}
+        draw_models(
+            self.m_ctx,
+            self.m_lit_depth_fbo,
+            water,
+            lambda model, render_pass, signature, batch: model.prepare(
+                render_pass, signature, batch, camera, sun, maps
+            ),
+            lambda model, command_buffer: model.draw(command_buffer, size_px),
+            clear=False,
+        )
 
-    def _forward(self, size, cam: gs.Camera, sun: Sun2070, lamps: list, maps: dict) -> None:
+    def _forward(self, size_px, camera: gameshader.SCamera, sun: SSun2070, lamps: list, maps: dict) -> None:
         """The sky and the lights into the lit scene over the G-buffer's depth (tested, not written)."""
-        sky, lights = self.parts.sky, self.parts.lights
-        draws = lights.frame(lamps, cam.eye, cam.near) if lights is not None and lamps else []
+        sky, lights = self.m_parts.sky, self.m_parts.lights
+        draws = lights.frame(lamps, camera.eye, camera.near) if lights is not None and lamps else []
         if sky is None and not draws:
             return
-        for d in draws:  # the light volumes through the camera's mirrored projection: their faces swap
-            d.mirrored = cam.mirror
+        for light_draw in draws:  # the light volumes through the camera's mirrored projection: their faces swap
+            light_draw.m_is_mirrored = camera.mirror
         if draws:
-            self.depth_copy.draw(self.read_fbo, {"gDepth": self.depth}, {}, depth_test=False)
-        light_maps = {**maps, "cTexture2": self.read_depth.native}
-        sprites = lights.sprites if lights is not None else []
+            self.m_depth_copy.draw(self.m_read_fbo, {"gDepth": self.m_depth}, {}, depth_test=False)
+        light_maps = {**maps, "cTexture2": self.m_read_depth.native}
+        sprites = lights.m_sprites if lights is not None else []
 
-        def fill(c: dict) -> None:
-            fill_camera(c, cam, sun.seconds)
-            fill_light(c, sun, cam)
+        def fill(constants: dict) -> None:
+            fill_camera(constants, camera, sun.seconds)
+            fill_light(constants, sun, camera)
             if sky is not None:
-                gs.set_values(c.values(), sky_values(sun))
-            gs.set_values(c.values(), {"cSpriteConfig": [3.0, 0.0, 0.0, 0.0]})
+                gameshader.set_values(constants.values(), sky_values(sun))
+            gameshader.set_values(constants.values(), {"cSpriteConfig": [3.0, 0.0, 0.0, 0.0]})
             if sprites:
-                gs.set_values(c.values(), {"cSpriteData": sprites}, ("cSpriteData",))
+                gameshader.set_values(constants.values(), {"cSpriteData": sprites}, ("cSpriteData",))
 
-        def prepare(rp, signature, batch) -> None:
+        def prepare(render_pass, signature, batch) -> None:
             if sky is not None:
-                sky.draw_call.prepare(rp, signature, batch, sky.maps(), fill)
-            for d in draws:
-                d.prepare(rp, signature, batch, light_maps, fill)
+                sky.m_draw_call.prepare(render_pass, signature, batch, sky.maps(), fill)
+            for light_draw in draws:
+                light_draw.prepare(render_pass, signature, batch, light_maps, fill)
 
-        def record(cb) -> None:
+        def record(command_buffer) -> None:
             if sky is not None:
-                sky.draw_call.draw(cb, size)
-            for d in draws:
-                d.draw(cb, size)
+                sky.m_draw_call.draw(command_buffer, size_px)
+            for light_draw in draws:
+                light_draw.draw(command_buffer, size_px)
 
-        draw_pass(self.ctx, self.lit_depth_fbo, prepare, record, clear=False)
+        draw_pass(self.m_ctx, self.m_lit_depth_fbo, prepare, record, clear=False)
 
     def _drop(self) -> None:
         # a framebuffer releases only its render targets: every attachment is the owner's to release
-        for t in (*self.targets, self.lit, self.depth, self.fbo, self.lit_fbo, self.lit_depth_fbo, self.read_depth,
-                  self.read_fbo, self.refraction, self.refraction_fbo, self.blend, self.blend_fbo,
-                  self.blend_depth_fbo):  # fmt: skip
-            if t is not None:
-                t.release()
-        self.targets, self.size = [], None
-        self.lit = self.depth = self.fbo = self.lit_fbo = self.lit_depth_fbo = self.read_depth = self.read_fbo = None
-        self.refraction = self.refraction_fbo = self.blend = self.blend_fbo = self.blend_depth_fbo = None
+        for target in (*self.m_targets, self.m_lit, self.m_depth, self.m_fbo, self.m_lit_fbo, self.m_lit_depth_fbo, self.m_read_depth,
+                  self.m_read_fbo, self.m_refraction, self.m_refraction_fbo, self.m_blend, self.m_blend_fbo,
+                  self.m_blend_depth_fbo):  # fmt: skip
+            if target is not None:
+                target.release()
+        self.m_targets, self.m_size_px = [], None
+        self.m_lit = self.m_depth = self.m_fbo = self.m_lit_fbo = self.m_lit_depth_fbo = self.m_read_depth = (
+            self.m_read_fbo
+        ) = None
+        self.m_refraction = self.m_refraction_fbo = self.m_blend = self.m_blend_fbo = self.m_blend_depth_fbo = None
 
     def release(self) -> None:
         self._drop()
-        self.composite.release()
-        self.depth_copy.release()
-        self.lit_copy.release()
-        for part in (self.blend_copy, self.blend_clear):
+        self.m_composite.release()
+        self.m_depth_copy.release()
+        self.m_lit_copy.release()
+        for part in (self.m_blend_copy, self.m_blend_clear):
             if part is not None:
                 part.release()
-        self.blend_copy = self.blend_clear = None
-        self.shading.release()
-        self.parts.release()
-        if self.shadow_map is not None:
-            self.shadow_map.release()
-            self.shadow_map = None
+        self.m_blend_copy = self.m_blend_clear = None
+        self.m_shading.release()
+        self.m_parts.release()
+        if self.m_shadow_map is not None:
+            self.m_shadow_map.release()
+            self.m_shadow_map = None

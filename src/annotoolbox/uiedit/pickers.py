@@ -39,18 +39,18 @@ def read_mime(data: QMimeData) -> tuple[str, str] | None:
     return what, which
 
 
-def entries(files: uifiles.UiFiles, kinds: tuple[str, ...], text: str = "") -> list[tuple[str, str]]:
+def entries(files: uifiles.CUiFiles, kinds: tuple[str, ...], text: str = "") -> list[tuple[str, str]]:
     """(title, key) of the files of ``kinds`` that match ``text``, by title."""
     words = text.lower().split()
     out = []
     for entry in files.of_kind(*kinds):
         title = files.title(entry.key)
-        if all(w in f"{title} {entry.key} {entry.path}".lower() for w in words):
+        if all(word in f"{title} {entry.key} {entry.path}".lower() for word in words):
             out.append((title, entry.key))
-    return sorted(out, key=lambda t: t[0].lower())[:SHOWN]
+    return sorted(out, key=lambda row: row[0].lower())[:SHOWN]
 
 
-def pick(parent, files: uifiles.UiFiles, kinds: tuple[str, ...], title: str) -> str | None:
+def pick(parent, files: uifiles.CUiFiles, kinds: tuple[str, ...], title: str) -> str | None:
     """Ask for a file of ``kinds`` among the game's and the project's, by name; its key, or None when cancelled."""
 
     def rows(text: str) -> list[tuple[str, object]]:

@@ -2,7 +2,7 @@
 techniques and passes read out of an effect after the preprocessor, the legacy samplers' states, the blocks of
 ``data/system/stateblocks/default.stb`` (docs/rendering/shader-compile.md section 13).
 
-``split(preprocessed)`` is the entry (``fx11effect.Effect`` records: a pass's ``VertexShader = compile vs_1_1
+``split(preprocessed)`` is the entry (``fx11effect.SEffect`` records: a pass's ``VertexShader = compile vs_1_1
 VS_Object(0);``, ``PixelShader = NULL;``, ``Texture[0] = <pcTexDiffuseColor>;`` and its ``StateBlock``
 annotation); ``samplers`` reads ``sampler s = sampler_state { ... };``, ``state_blocks`` / ``block_states`` the
 state-block file. The reading is ours, not the game's effect compiler.
@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import fx11effect, fxeffect
-from .fxeffect import ShaderCall, split_args
+from .fxeffect import SShaderCall, split_arguments
 
 _PASS_RE = re.compile(r"\bpass\s+(\w+)\s*(<[^>]*>)?\s*\{")
 _SHADER_RE = re.compile(r"\b(Vertex|Pixel)Shader\s*=\s*(?:compile\s+(\w+)\s+(\w+)\s*\(([^;]*)\)|NULL)\s*;", re.I)
@@ -22,36 +22,40 @@ _TEXTURE_RE = re.compile(r"\bTexture\s*\[\s*(\d+)\s*\]\s*=\s*<\s*(\w+)\s*>", re.
 _ANNOTATION_RE = r'<[^>]*\bstring\s+{0}\s*=\s*"([^"]*)"'
 
 
-def _pass(name: str, annotation: str, body: str) -> fx11effect.Pass:
-    p = fx11effect.Pass(name)
+def _pass(name: str, annotation: str, body: str) -> fx11effect.SPass:
+    shader_pass = fx11effect.SPass(name)
     block = re.search(_ANNOTATION_RE.format("StateBlock"), annotation or "")
-    p.state_block = block.group(1) if block else ""
-    for stage, profile, function, args in _SHADER_RE.findall(body):
+    shader_pass.state_block = block.group(1) if block else ""
+    for stage, profile, function, arguments in _SHADER_RE.findall(body):
         if function:
             model = profile.split("_", 1)[1] if "_" in profile else profile
-            p.calls.append(ShaderCall(stage[0].lower() + "s", model, function, tuple(split_args(args))))
-    p.textures = {int(k): v for k, v in _TEXTURE_RE.findall(body)}
-    return p
+            shader_pass.calls.append(
+                SShaderCall(stage[0].lower() + "s", model, function, tuple(split_arguments(arguments)))
+            )
+    shader_pass.textures = {int(k): value for k, value in _TEXTURE_RE.findall(body)}
+    return shader_pass
 
 
-def _technique(name: str, body: str, _objects: dict) -> fx11effect.Technique:
+def _technique(name: str, body: str, _objects: dict) -> fx11effect.STechnique:
     """One ``technique Name <string VertexDecl = "...";> { pass p0 <string StateBlock = "...";> { ... } }``."""
-    t = fx11effect.Technique(name)
+    technique = fx11effect.STechnique(name)
     head = body[: body.index("{")]
     decl = re.search(_ANNOTATION_RE.format("VertexDecl"), head)
-    t.format = decl.group(1) if decl else ""
-    for m in _PASS_RE.finditer(body, len(head)):
-        t.passes.append(_pass(m.group(1), m.group(2), body[m.end() : fxeffect.block_end(body, m.end() - 1)]))
-    return t
+    technique.format = decl.group(1) if decl else ""
+    for match in _PASS_RE.finditer(body, len(head)):
+        technique.passes.append(
+            _pass(match.group(1), match.group(2), body[match.end() : fxeffect.block_end(body, match.end() - 1)])
+        )
+    return technique
 
 
-def split(preprocessed: str) -> fx11effect.Effect:
+def split(preprocessed: str) -> fx11effect.SEffect:
     """The techniques of a Direct3D 9 effect and the HLSL left (techniques blanked, line numbers kept)."""
     return fx11effect.split(preprocessed, _technique)
 
 
 @dataclass(frozen=True)
-class Sampler9:
+class SSampler9:
     """A legacy sampler's declaration: the texture its state names, the register the source gives it (None: the
     compiler's), its own states (upper-case key -> upper-case value)."""
 
@@ -67,14 +71,14 @@ _SAMPLER_RE = re.compile(
 _STATE_RE = re.compile(r"(\w+)\s*=\s*<?\s*(\w+)\s*>?\s*;")
 
 
-def samplers(hlsl: str) -> dict[str, Sampler9]:
+def samplers(hlsl: str) -> dict[str, SSampler9]:
     """Each ``sampler name [: register(sN)] = sampler_state { texture = <t>; minfilter = linear; };`` by name."""
     out = {}
-    for m in _SAMPLER_RE.finditer(hlsl):
-        states = {k.upper(): v.upper() for k, v in _STATE_RE.findall(m.group(3))}
-        texture = next((v for k, v in _STATE_RE.findall(m.group(3)) if k.lower() == "texture"), "")
+    for match in _SAMPLER_RE.finditer(hlsl):
+        states = {k.upper(): value.upper() for k, value in _STATE_RE.findall(match.group(3))}
+        texture = next((value for k, value in _STATE_RE.findall(match.group(3)) if k.lower() == "texture"), "")
         states.pop("TEXTURE", None)
-        out[m.group(1)] = Sampler9(texture, int(m.group(2)) if m.group(2) else None, states)
+        out[match.group(1)] = SSampler9(texture, int(match.group(2)) if match.group(2) else None, states)
     return out
 
 
@@ -90,15 +94,15 @@ def state_blocks(text: str) -> dict[str, list[tuple[str, str]]]:
     """A state-block file's blocks by name, each its lines in order: (key, value) upper-cased, an ``#include
     "Other"`` as ("#include", "Other")."""
     out: dict[str, list[tuple[str, str]]] = {}
-    for m in _BLOCK_RE.finditer(_COMMENT_RE.sub("", text)):
+    for match in _BLOCK_RE.finditer(_COMMENT_RE.sub("", text)):
         lines = []
-        for line in m.group(2).splitlines():
+        for line in match.group(2).splitlines():
             found = _LINE_RE.match(line)
             if found and found.group(1):
                 lines.append(("#include", found.group(1)))
             elif found:
                 lines.append((found.group(2).upper(), found.group(3).upper()))
-        out.setdefault(m.group(1), lines)
+        out.setdefault(match.group(1), lines)
     return out
 
 

@@ -1,7 +1,7 @@
 """The window side of the two ways an imported mod's patch files meet the Assets app (docs/mod-import.md, "Phase 2 as
 built" and "Phase 6 as built"): the report to confirm, the change and its undo, their results said in the Project
 window's log. ``HANDOVER`` (the net change set, ``handover.py``) and ``LAYERED`` (edits on top of the mod,
-``layered.py``) are the records the Assets part carries (``suite.handovers``); a ``Way`` is what the two differ in.
+``layered.py``) are the records the Assets part carries (``suite.handovers``); a ``SWay`` is what the two differ in.
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 
 from ..infra.i18n import N_, tr
 from ..suite import project as projects
-from ..suite.background import Background
-from ..suite.handovers import Handover
+from ..suite.background import CBackground
+from ..suite.handovers import SHandover
 from . import handover, layered
 from .assetgame import open_installed
 
@@ -23,7 +23,7 @@ Say = Callable[[str], None]
 
 
 @dataclass(frozen=True)
-class Way:
+class SWay:
     """One way of taking the patch files: ``can_take``, ``plan(project, game, say, search)``, ``take(project, plan)`` (the
     sentence to say), ``state(project)``, ``edited_since(project)`` (the words of what the apps changed, empty none),
     ``undo(project, discard)`` (the sentence), the exception a refusal raises and the ids of the sentences."""
@@ -63,9 +63,9 @@ def _layer_edited(project) -> list[str]:
     )
 
 
-HANDING = Way(
+HANDING = SWay(
     handover.can_take, handover.plan, _hand_take, handover.state, handover.edited_since, _hand_undo,
-    handover.HandoverRefused,
+    handover.CHandoverRefused,
     {
         "question": N_("common.handover_question"),
         "undo": N_("common.handover_undo_question"),
@@ -73,8 +73,8 @@ HANDING = Way(
         "failed": N_("common.handover_failed"),
     },
 )  # fmt: skip
-LAYERING = Way(
-    layered.can_take, layered.plan, _layer_take, layered.state, _layer_edited, _layer_undo, layered.LayerRefused,
+LAYERING = SWay(
+    layered.can_take, layered.plan, _layer_take, layered.state, _layer_edited, _layer_undo, layered.CLayerRefused,
     {
         "question": N_("common.layered_question"),
         "undo": N_("common.layered_undo_question"),
@@ -107,17 +107,17 @@ def _confirm_undo(parent: QWidget, what: str, question: str = "common.handover_u
 
 def start_take(
     parent: QWidget,
-    project: projects.Project,
+    project: projects.CProject,
     settings,
-    background: Background,
+    background: CBackground,
     say: Say,
     done: Callable[[], None],
-    wait: bool = False,
+    is_waiting: bool = False,
     confirm: Callable[[QWidget, list[str]], bool] | None = None,
-    way: Way = HANDING,
+    way: SWay = HANDING,
 ) -> None:
     """Read the patch files against the installed game off the window's thread, show what the change loses or does and
-    ask; only a yes changes anything. ``done`` is called when it ended either way (``wait``: in this thread, for a test)."""
+    ask; only a yes changes anything. ``done`` is called when it ended either way (``is_waiting``: in this thread, for a test)."""
     ask = confirm or partial(_confirm_take, question=way.ids["question"])
     if not way.can_take(project):
         say(tr(way.ids["not_offered"]))
@@ -139,19 +139,19 @@ def start_take(
                     say(way.take(project, result))
                 else:
                     say(tr("common.handover_declined"))
-        except way.refused as exc:
-            say(str(exc))
+        except way.refused as error:
+            say(str(error))
         done()
 
-    background.run(work, planned, wait)
+    background.run(work, planned, is_waiting)
 
 
 def undo(
     parent: QWidget,
-    project: projects.Project,
+    project: projects.CProject,
     say: Say,
     confirm: Callable[[QWidget, str], bool] | None = None,
-    way: Way = HANDING,
+    way: SWay = HANDING,
 ) -> bool:
     """Undo the change; when the apps changed the work since, say what and ask before it is dropped. Whether it was
     undone."""
@@ -162,13 +162,13 @@ def undo(
             say(tr("common.handover_declined"))
             return False
         say(way.undo(project, bool(changed)))
-    except way.refused as exc:
-        say(str(exc))
+    except way.refused as error:
+        say(str(error))
         return False
     return True
 
 
-LAYERED = Handover(
+LAYERED = SHandover(
     N_("common.layered_button"),
     N_("common.layered_undo_button"),
     layered.can_take,
@@ -176,7 +176,7 @@ LAYERED = Handover(
     partial(start_take, way=LAYERING),
     partial(undo, way=LAYERING),
 )
-HANDOVER = Handover(
+HANDOVER = SHandover(
     N_("common.handover_button"),
     N_("common.handover_undo_button"),
     handover.can_take,

@@ -14,16 +14,16 @@ _SRGB_TO_LINEAR = np.array(
 )
 
 
-def srgb_to_linear(px: np.ndarray) -> np.ndarray:
+def srgb_to_linear(stored: np.ndarray) -> np.ndarray:
     """8-bit stored values to linear light, float64 0..1."""
-    return _SRGB_TO_LINEAR[px]
+    return _SRGB_TO_LINEAR[stored]
 
 
-def linear_to_srgb8(lin: np.ndarray) -> np.ndarray:
+def linear_to_srgb8(linear: np.ndarray) -> np.ndarray:
     """Linear light 0..1 to the nearest stored 8-bit value."""
-    lin = np.clip(lin, 0.0, 1.0)
-    enc = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(lin, 1 / 2.4) - 0.055)
-    return np.round(enc * 255.0).astype(np.uint8)
+    linear = np.clip(linear, 0.0, 1.0)
+    encoded = np.where(linear <= 0.0031308, linear * 12.92, 1.055 * np.power(linear, 1 / 2.4) - 0.055)
+    return np.round(encoded * 255.0).astype(np.uint8)
 
 
 def exposed_srgb8(values: np.ndarray, stops: float = 0.0) -> np.ndarray:
@@ -36,25 +36,29 @@ def exposed_srgb8(values: np.ndarray, stops: float = 0.0) -> np.ndarray:
 FILTER_VERSION = 1  # part of the cache keys: bumped when the filter changes what comes out
 
 
-def level_count(width: int, height: int) -> int:
-    return max(width, height).bit_length()
+def level_count(width_px: int, height_px: int) -> int:
+    return max(width_px, height_px).bit_length()
 
 
 def _weights(old: int, new: int) -> np.ndarray:
     """``(new, old)`` area-coverage weights of the old texels in each new texel."""
     edges = np.arange(new + 1) * (old / new)
-    lo, hi = np.arange(old), np.arange(1, old + 1)
-    cover = np.minimum(edges[1:, None], hi[None, :]) - np.maximum(edges[:-1, None], lo[None, :])
+    low, high = np.arange(old), np.arange(1, old + 1)
+    cover = np.minimum(edges[1:, None], high[None, :]) - np.maximum(edges[:-1, None], low[None, :])
     return np.clip(cover, 0, None) / (old / new)
 
 
-def _halve(a: np.ndarray) -> np.ndarray:
+def _halve(level: np.ndarray) -> np.ndarray:
     """``(h, w, c)`` float64 to the next level (each side halved, at least 1)."""
-    h, w = a.shape[:2]
-    nh, nw = max(1, h // 2), max(1, w // 2)
-    if h == 2 * nh and w == 2 * nw:
-        return a.reshape(nh, 2, nw, 2, -1).mean(axis=(1, 3))
-    return np.einsum("yh,hwc->ywc", _weights(h, nh), np.einsum("xw,hwc->hxc", _weights(w, nw), a))
+    height_px, width_px = level.shape[:2]
+    halved_height_px, halved_width_px = max(1, height_px // 2), max(1, width_px // 2)
+    if height_px == 2 * halved_height_px and width_px == 2 * halved_width_px:
+        return level.reshape(halved_height_px, 2, halved_width_px, 2, -1).mean(axis=(1, 3))
+    return np.einsum(
+        "yh,hwc->ywc",
+        _weights(height_px, halved_height_px),
+        np.einsum("xw,hwc->hxc", _weights(width_px, halved_width_px), level),
+    )
 
 
 def mip_chain(rgba: np.ndarray, count: int = 0, gamma: bool = False, to_srgb: bool = False) -> list[np.ndarray]:
@@ -63,8 +67,8 @@ def mip_chain(rgba: np.ndarray, count: int = 0, gamma: bool = False, to_srgb: bo
     ``gamma``: the colour holds sRGB-stored values and is filtered in linear light. ``to_srgb``: the colour holds
     linear values that are stored sRGB-encoded (every level is encoded, level 0 too).
     """
-    h, w = rgba.shape[:2]
-    total = level_count(w, h)
+    height_px, width_px = rgba.shape[:2]
+    total = level_count(width_px, height_px)
     count = min(count, total) if count else total
     if gamma:
         colour = srgb_to_linear(rgba[..., :3])
@@ -72,9 +76,13 @@ def mip_chain(rgba: np.ndarray, count: int = 0, gamma: bool = False, to_srgb: bo
         colour = rgba[..., :3].astype(np.float64) / 255.0
     alpha = rgba[..., 3:].astype(np.float64)
 
-    def store(c: np.ndarray, a: np.ndarray) -> np.ndarray:
-        rgb = linear_to_srgb8(c) if (gamma or to_srgb) else np.round(np.clip(c, 0, 1) * 255.0).astype(np.uint8)
-        return np.concatenate([rgb, np.round(a).astype(np.uint8)], axis=-1)
+    def store(level_colour: np.ndarray, level_alpha: np.ndarray) -> np.ndarray:
+        rgb = (
+            linear_to_srgb8(level_colour)
+            if (gamma or to_srgb)
+            else np.round(np.clip(level_colour, 0, 1) * 255.0).astype(np.uint8)
+        )
+        return np.concatenate([rgb, np.round(level_alpha).astype(np.uint8)], axis=-1)
 
     levels = [store(colour, alpha) if to_srgb else np.ascontiguousarray(rgba)]
     for _ in range(count - 1):

@@ -2,7 +2,7 @@
 character (docs/text-editor.md, "The glyph check"). No Qt: the character table (``cmap``) of a TrueType or OpenType
 file, or of a collection, is read by hand.
 
-``covered(data)`` is the set of code points one file draws; ``FontCheck(files, game)`` knows which files a language of a
+``covered(data)`` is the set of code points one file draws; ``CFontCheck(files, game)`` knows which files a language of a
 game draws with (``plan``; for 117 the chain of every text style, ``fontchain``), ``unsupported(language, text, style)``
 says which characters of a text they lack and ``audit(language, texts, style)`` does the same over a whole language.
 """
@@ -16,10 +16,10 @@ from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..assetedit.gamefiles import GameFiles
+from ..assetedit.gamefiles import CGameFiles
 from ..infra.i18n import tr
-from .checks import HINT, WARNING, Problem
-from .fontchain import FontChain, StyleFaces
+from .checks import HINT, WARNING, SProblem
+from .fontchain import CFontChain, SStyleFaces
 
 _SILENT = {"Cc", "Cf", "Zs", "Zl", "Zp"}  # drawn as nothing in any font
 _NOT_TEXT = re.compile(r"\{[^{}]*\}|\[[^\[\]\r\n]*\]|<[^<>]*>")  # placeholders and markup draw nothing
@@ -28,18 +28,18 @@ CHAINED = ("anno117", "anno1800")  # the games whose text styles name a localize
 
 
 @dataclass(frozen=True)
-class Plan:
+class SPlan:
     """The files a language draws with. ``styles`` (117): the files each text style tries in order, a text in a style
     shows the default character for a character none of them has; ``others``: where the game's faces are not read, every
     font it has (a character is then only missing when none draws it)."""
 
-    styles: tuple[StyleFaces, ...] = ()
+    styles: tuple[SStyleFaces, ...] = ()
     others: tuple[str, ...] = ()
 
     @property
     def faces(self) -> tuple[str, ...]:
         """The files of every style's chain, each once, in the order of the styles."""
-        return tuple(dict.fromkeys(p for s in self.styles for p in s.faces))
+        return tuple(dict.fromkeys(path for style_faces in self.styles for path in style_faces.faces))
 
 
 LOOSE = {
@@ -50,21 +50,23 @@ LOOSE = {
 }  # the games whose per-language faces are not read: every font file they ship
 
 
-def _u16(data: bytes, at: int) -> int:
-    return struct.unpack_from(">H", data, at)[0]
+def _u16(data: bytes, offset: int) -> int:
+    return struct.unpack_from(">H", data, offset)[0]
 
 
-def _tables(data: bytes, at: int) -> dict[bytes, tuple[int, int]]:
-    count = _u16(data, at + 4)
+def _tables(data: bytes, table_offset: int) -> dict[bytes, tuple[int, int]]:
+    count = _u16(data, table_offset + 4)
     return {
-        data[at + 12 + 16 * i : at + 16 + 16 * i]: struct.unpack_from(">II", data, at + 20 + 16 * i)
+        data[table_offset + 12 + 16 * i : table_offset + 16 + 16 * i]: struct.unpack_from(
+            ">II", data, table_offset + 20 + 16 * i
+        )
         for i in range(count)
     }
 
 
-def _format4(data: bytes, at: int, out: set[int]) -> None:
-    segments = _u16(data, at + 6) // 2
-    ends, starts = at + 14, at + 16 + 2 * segments
+def _format4(data: bytes, table_offset: int, out: set[int]) -> None:
+    segments = _u16(data, table_offset + 6) // 2
+    ends, starts = table_offset + 14, table_offset + 16 + 2 * segments
     deltas, ranges = starts + 2 * segments, starts + 4 * segments
     for i in range(segments):
         end, start = _u16(data, ends + 2 * i), _u16(data, starts + 2 * i)
@@ -80,27 +82,29 @@ def _format4(data: bytes, at: int, out: set[int]) -> None:
                 out.add(code)
 
 
-def _format12(data: bytes, at: int, out: set[int]) -> None:
-    for i in range(struct.unpack_from(">I", data, at + 12)[0]):
-        start, end, glyph = struct.unpack_from(">III", data, at + 16 + 12 * i)
-        out.update(c for c in range(start, min(end, 0x10FFFF) + 1) if glyph + (c - start) > 0)
+def _format12(data: bytes, table_offset: int, out: set[int]) -> None:
+    for i in range(struct.unpack_from(">I", data, table_offset + 12)[0]):
+        start, end, glyph = struct.unpack_from(">III", data, table_offset + 16 + 12 * i)
+        out.update(
+            code_point for code_point in range(start, min(end, 0x10FFFF) + 1) if glyph + (code_point - start) > 0
+        )
 
 
-def _subtable(data: bytes, at: int, out: set[int]) -> None:
-    kind = _u16(data, at)
+def _subtable(data: bytes, table_offset: int, out: set[int]) -> None:
+    kind = _u16(data, table_offset)
     if kind == 4:
-        _format4(data, at, out)
+        _format4(data, table_offset, out)
     elif kind in (12, 13):
-        _format12(data, at, out)
+        _format12(data, table_offset, out)
     elif kind == 6:
-        first, count = _u16(data, at + 6), _u16(data, at + 8)
-        out.update(first + i for i in range(count) if _u16(data, at + 10 + 2 * i))
+        first, count = _u16(data, table_offset + 6), _u16(data, table_offset + 8)
+        out.update(first + i for i in range(count) if _u16(data, table_offset + 10 + 2 * i))
     elif kind == 0:
-        out.update(i for i in range(256) if data[at + 6 + i])
+        out.update(i for i in range(256) if data[table_offset + 6 + i])
 
 
-def _font_cmap(data: bytes, at: int) -> set[int]:
-    found = _tables(data, at).get(b"cmap")
+def _font_cmap(data: bytes, font_offset: int) -> set[int]:
+    found = _tables(data, font_offset).get(b"cmap")
     out: set[int] = set()
     if found is None:
         return out
@@ -118,7 +122,7 @@ def covered(data: bytes) -> frozenset[int]:
         if data[:4] == b"ttcf":
             count = struct.unpack_from(">I", data, 8)[0]
             offsets = struct.unpack_from(f">{count}I", data, 12)
-            return frozenset().union(*(_font_cmap(data, o) for o in offsets))
+            return frozenset().union(*(_font_cmap(data, font_offset) for font_offset in offsets))
         return frozenset(_font_cmap(data, 0))
     except (struct.error, IndexError) as exc:
         raise ValueError(tr("texts.not_font_file", error=exc)) from exc
@@ -127,51 +131,60 @@ def covered(data: bytes) -> frozenset[int]:
 def drawn(text: str) -> set[str]:
     """The characters of a text the game must draw: no markup, no placeholder, no white space, control or format
     character (the zero-width space is a break opportunity that 38,000 lines of the Asian texts hold)."""
-    return {c for c in _NOT_TEXT.sub("", text) if not c.isspace() and unicodedata.category(c) not in _SILENT}
+    return {
+        character
+        for character in _NOT_TEXT.sub("", text)
+        if not character.isspace() and unicodedata.category(character) not in _SILENT
+    }
 
 
-class FontCheck:
+class CFontCheck:
     """The fonts of one game, read on demand (the big CJK files take a moment: ``load`` runs off the window's thread)."""
 
-    def __init__(self, files: GameFiles, game: str, chain: FontChain | None = None) -> None:
-        self.files, self.game = files, game
-        self._cover: dict[str, frozenset[int]] = {}
-        self._paths: list[str] | None = None
-        self._plans: dict[str, Plan] = {}
-        self._chain = chain or (FontChain(files) if game in CHAINED else None)
+    def __init__(self, files: CGameFiles, game: str, chain: CFontChain | None = None) -> None:
+        self.m_files, self.m_game = files, game
+        self._m_cover: dict[str, frozenset[int]] = {}
+        self._m_paths: list[str] | None = None
+        self._m_plans: dict[str, SPlan] = {}
+        self._m_chain = chain or (CFontChain(files) if game in CHAINED else None)
 
     def paths(self) -> list[str]:
         """Every font file of the game, in its paths."""
-        if self._paths is None:
-            patterns = _FULL if self.game in CHAINED else LOOSE.get(self.game, ())
-            self._paths = sorted({p for pattern in patterns for p in self.files.glob(pattern)})
-        return self._paths
+        if self._m_paths is None:
+            patterns = _FULL if self.m_game in CHAINED else LOOSE.get(self.m_game, ())
+            self._m_paths = sorted({path for pattern in patterns for path in self.m_files.glob(pattern)})
+        return self._m_paths
 
-    def plan(self, language: str) -> Plan:
+    def plan(self, language: str) -> SPlan:
         """The text styles' chains for ``language`` (game 117, where the UI files are readable), else every font of the
         game; paths as the game has them."""
-        if language not in self._plans:
+        if language not in self._m_plans:
             paths = self.paths()
-            if self._chain is not None and self._chain.available:
+            if self._m_chain is not None and self._m_chain.available:
                 known = set(paths)
                 found = [
-                    StyleFaces(s.name, tuple(p for p in s.faces if p in known), s.styles, s.key)
-                    for s in self._chain.styles(language)
+                    SStyleFaces(
+                        style_faces.name,
+                        tuple(path for path in style_faces.faces if path in known),
+                        style_faces.styles,
+                        style_faces.key,
+                    )
+                    for style_faces in self._m_chain.styles(language)
                 ]
-                self._plans[language] = Plan(tuple(s for s in found if s.faces))
+                self._m_plans[language] = SPlan(tuple(style_faces for style_faces in found if style_faces.faces))
             else:
-                self._plans[language] = Plan((), tuple(paths))
-        return self._plans[language]
+                self._m_plans[language] = SPlan((), tuple(paths))
+        return self._m_plans[language]
 
     def cover(self, path: str) -> frozenset[int]:
-        if path not in self._cover:
+        if path not in self._m_cover:
             try:
-                self._cover[path] = covered(self.files.read(path))
+                self._m_cover[path] = covered(self.m_files.read(path))
             except (OSError, KeyError, ValueError):
-                self._cover[path] = frozenset()
-        return self._cover[path]
+                self._m_cover[path] = frozenset()
+        return self._m_cover[path]
 
-    def load(self, language: str) -> Plan:
+    def load(self, language: str) -> SPlan:
         """Read the character tables of a language's files (the slow step)."""
         found = self.plan(language)
         for path in (*found.faces, *found.others):
@@ -180,41 +193,47 @@ class FontCheck:
 
     def styles(self, language: str) -> list[str]:
         """The names of the text styles' fonts a language is checked against (117), else none."""
-        return [s.name for s in self.plan(language).styles]
+        return [style_faces.name for style_faces in self.plan(language).styles]
 
     @property
-    def chain(self) -> FontChain | None:
-        return self._chain
+    def chain(self) -> CFontChain | None:
+        return self._m_chain
 
     def lacking(
-        self, language: str, chars: Iterable[str], style: str | tuple[str, ...] = ""
+        self, language: str, characters: Iterable[str], style: str | tuple[str, ...] = ""
     ) -> dict[str, tuple[str, bool]]:
         """For each character a text style's chain lacks: (the names of those styles, whether another does draw it).
         ``style``: only the chains of these localized fonts (a name or an asset id, one or several; 117, 1800); without
         it every style counts, and where no style is read a character is missing when no font of the game has it."""
         found = self.plan(language)
         wanted = ({style} if isinstance(style, str) else set(style)) - {""}
-        chains = [s for s in found.styles if not wanted or wanted & {s.name, s.key}]
+        chains = [
+            style_faces for style_faces in found.styles if not wanted or wanted & {style_faces.name, style_faces.key}
+        ]
         out: dict[str, tuple[str, bool]] = {}
-        for ch in sorted(set(chars)):
-            code = ord(ch)
+        for character in sorted(set(characters)):
+            code = ord(character)
             if chains:
-                missing = [s.name for s in chains if not any(code in self.cover(p) for p in s.faces)]
+                missing = [
+                    style_faces.name
+                    for style_faces in chains
+                    if not any(code in self.cover(path) for path in style_faces.faces)
+                ]
                 if missing:
-                    out[ch] = (", ".join(missing), len(missing) < len(chains))
-            elif not any(code in self.cover(p) for p in found.others):
-                out[ch] = (tr("texts.any_font"), False)
+                    out[character] = (", ".join(missing), len(missing) < len(chains))
+            elif not any(code in self.cover(path) for path in found.others):
+                out[character] = (tr("texts.any_font"), False)
         return out
 
-    def unsupported(self, language: str, text: str, style: str | tuple[str, ...] = "") -> list[Problem]:
+    def unsupported(self, language: str, text: str, style: str | tuple[str, ...] = "") -> list[SProblem]:
         """The problems of a text's characters for a language: a warning where every style (or the picked one) lacks a
         character, a hint where only some do."""
         out = []
-        for ch, (names, elsewhere) in self.lacking(language, drawn(text), style).items():
-            shown = f"{ch} (U+{ord(ch):04X})"
+        for character, (names, elsewhere) in self.lacking(language, drawn(text), style).items():
+            shown = f"{character} (U+{ord(character):04X})"
             if elsewhere:
                 out.append(
-                    Problem(
+                    SProblem(
                         HINT,
                         "glyph",
                         tr("texts.not_fonts_other_styles_draw", char=shown, fonts=names),
@@ -222,7 +241,7 @@ class FontCheck:
                 )
             else:
                 out.append(
-                    Problem(
+                    SProblem(
                         WARNING,
                         "glyph",
                         tr(
@@ -240,4 +259,6 @@ class FontCheck:
         for text in texts:
             counts.update(drawn(text))
         found = self.lacking(language, counts, style)
-        return sorted(((ch, counts[ch], found[ch][1]) for ch in found), key=lambda row: -row[1])
+        return sorted(
+            ((character, counts[character], found[character][1]) for character in found), key=lambda row: -row[1]
+        )

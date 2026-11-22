@@ -13,9 +13,9 @@ import struct
 from dataclasses import dataclass, field
 
 from ..formats import filedb
-from ..formats.filedb import Attrib, Tag
+from ..formats.filedb import SAttrib, STag
 from . import cfgpatch
-from .cfgdoc import Doc, Node, is_config, kind_of, strip
+from .cfgdoc import SDoc, SNode, is_config, kind_of, strip
 
 CONFIG_TYPES = {"MAIN": 9, "FILE": 1, "MODEL": 2, "CLOTH": 3, "PARTICLE": 4, "DECAL": 5, "LIGHT": 6, "COLLISION": 7,
                 "SEQUENCE": 8}  # fmt: skip
@@ -28,7 +28,7 @@ NO_FAR_VIEW = {"Vertices": b"", "Indices": b"", "BoxMin": struct.pack("<3f", *[3
 
 
 @dataclass
-class Reindexed:
+class SReindexed:
     """The new ``.bfg`` (``data``), whether its lists changed against the game's (``changed``) and what could not be
     done (``problems``: then ``data`` is empty)."""
 
@@ -37,39 +37,41 @@ class Reindexed:
     problems: list[str] = field(default_factory=list)
 
 
-def child_lists(node: Node) -> dict[str, list[Node]]:
+def child_lists(node: SNode) -> dict[str, list[SNode]]:
     """The lists of child configs of a text config the ``.bfg`` has entries for: name -> configs."""
     return {
-        strip(c.name): c.children
-        for c in node.children
-        if c.children and all(is_config(g) for g in c.children) and strip(c.name) not in UNLISTED
+        strip(child.name): child.children
+        for child in node.children
+        if child.children
+        and all(is_config(grandchild) for grandchild in child.children)
+        and strip(child.name) not in UNLISTED
     }
 
 
-def _type_of(entry: Tag) -> int | None:
+def _type_of(entry: STag) -> int | None:
     found = entry.find("ConfigType")
-    return struct.unpack("<I", found.data)[0] if isinstance(found, Attrib) and len(found.data) == 4 else None
+    return struct.unpack("<I", found.data)[0] if isinstance(found, SAttrib) and len(found.data) == 4 else None
 
 
-def _entries(tag: Tag | None) -> list[Tag]:
-    return [c for c in tag.children if isinstance(c, Tag)] if tag is not None else []
+def _entries(tag: STag | None) -> list[STag]:
+    return [child for child in tag.children if isinstance(child, STag)] if tag is not None else []
 
 
-def mismatches(doc: Doc, bfg: bytes) -> list[str]:
+def mismatches(doc: SDoc, bfg: bytes) -> list[str]:
     """Where a ``.bfg`` does not line up with its text config (a list of another length, a ``ConfigType`` another
     kind has): empty when it does."""
     try:
         top = filedb.read(bfg).find("Config")
     except (ValueError, struct.error, IndexError) as exc:
         return [f"the .bfg does not read: {exc}"]
-    if not isinstance(top, Tag):
+    if not isinstance(top, STag):
         return ["the .bfg has no Config"]
     out: list[str] = []
     _check(doc.parts().node, top, "", out)
     return out
 
 
-def _check(node: Node, entry: Tag, where: str, out: list[str]) -> None:
+def _check(node: SNode, entry: STag, where: str, out: list[str]) -> None:
     want = CONFIG_TYPES.get(kind_of(node))
     if want is not None and _type_of(entry) != want:
         out.append(f"{where or '/'}: ConfigType {_type_of(entry)}, the config is {kind_of(node)} ({want})")
@@ -81,58 +83,58 @@ def _check(node: Node, entry: Tag, where: str, out: list[str]) -> None:
             continue
         for k, (config, sub) in enumerate(zip(configs, entries, strict=True)):
             _check(config, sub, f"{where}/{name}/{k}", out)
-    out += [f"{where}/{c.name}: entries for configs the text has no list of" for c in entry.children
-            if isinstance(c, Tag) and c.name not in lists and c.name in LISTS and _entries(c)]  # fmt: skip
+    out += [f"{where}/{child.name}: entries for configs the text has no list of" for child in entry.children
+            if isinstance(child, STag) and child.name not in lists and child.name in LISTS and _entries(child)]  # fmt: skip
 
 
-def blank_entry(kind: str) -> Tag | None:
+def blank_entry(kind: str) -> STag | None:
     """An entry for a part that has no baked content (None for a kind with no entries): the ``ConfigType``, and the
     two empty fields every shipped model entry has."""
     number = CONFIG_TYPES.get(kind)
     if number is None:
         return None
-    entry = Tag("Config", [Attrib("ConfigType", struct.pack("<I", number))])
+    entry = STag("Config", [SAttrib("ConfigType", struct.pack("<I", number))])
     if kind == "MODEL":
-        entry.children += [Attrib("EntityTransforms", b""), Attrib("EntityColors", b"")]
+        entry.children += [SAttrib("EntityTransforms", b""), SAttrib("EntityColors", b"")]
     return entry
 
 
-def no_far_view() -> Tag:
+def no_far_view() -> STag:
     """``LowPolyData`` as the shipped files say "no merged far-view model": empty geometry, flag 8."""
-    return Tag("LowPolyData", [
-        Attrib("Vertices", NO_FAR_VIEW["Vertices"]), Attrib("Indices", NO_FAR_VIEW["Indices"]), Tag("TextureSets"),
-        Tag("Materials"), Attrib("BoxMin", NO_FAR_VIEW["BoxMin"]), Attrib("BoxMax", NO_FAR_VIEW["BoxMax"]),
-        Attrib("Flags", NO_FAR_VIEW["Flags"]),
+    return STag("LowPolyData", [
+        SAttrib("Vertices", NO_FAR_VIEW["Vertices"]), SAttrib("Indices", NO_FAR_VIEW["Indices"]), STag("TextureSets"),
+        STag("Materials"), SAttrib("BoxMin", NO_FAR_VIEW["BoxMin"]), SAttrib("BoxMax", NO_FAR_VIEW["BoxMax"]),
+        SAttrib("Flags", NO_FAR_VIEW["Flags"]),
     ])  # fmt: skip
 
 
-def reindex(base: Doc, new: Doc, bfg: bytes) -> Reindexed:
+def reindex(base: SDoc, new: SDoc, bfg: bytes) -> SReindexed:
     """The ``.bfg`` of ``new`` (an edited text config) from ``bfg`` (the game's, of ``base``): each list of entries
     lined up with the list of configs as a patch lines the parts up. Nothing to write (``changed`` False, ``data``
     the game's bytes) when every list stayed as it was."""
     try:
         document = filedb.read(bfg)
-        tags, attrs = filedb.name_ids(bfg)
+        tags, attribute_ids = filedb.name_ids(bfg)
         version = filedb.version(bfg)
     except (ValueError, struct.error, IndexError) as exc:
-        return Reindexed(problems=[f"the game's .bfg does not read: {exc}"])
+        return SReindexed(problems=[f"the game's .bfg does not read: {exc}"])
     top = document.find("Config")
-    if not isinstance(top, Tag):
-        return Reindexed(problems=["the game's .bfg has no Config"])
+    if not isinstance(top, STag):
+        return SReindexed(problems=["the game's .bfg has no Config"])
     lines_up = mismatches(base, bfg)
     if lines_up:
-        return Reindexed(problems=[f"the game's .bfg does not line up with its config: {lines_up[0]}"])
+        return SReindexed(problems=[f"the game's .bfg does not line up with its config: {lines_up[0]}"])
     problems: list[str] = []
     changed = _align(base.parts().node, new.parts().node, top, problems)
     if problems:
-        return Reindexed(problems=problems)
+        return SReindexed(problems=problems)
     if not changed:
-        return Reindexed(bfg, False)
+        return SReindexed(bfg, False)
     _drop_far_view(top)
-    return Reindexed(filedb.write(document, tags, attrs, version), True)
+    return SReindexed(filedb.write(document, tags, attribute_ids, version), True)
 
 
-def _align(old: Node, new: Node, entry: Tag, problems: list[str]) -> bool:
+def _align(old: SNode, new: SNode, entry: STag, problems: list[str]) -> bool:
     """Put ``entry``'s lists in step with ``new``'s child lists (``old`` is the game's); whether any changed."""
     old_lists, new_lists = child_lists(old), child_lists(new)
     changed = False
@@ -140,8 +142,8 @@ def _align(old: Node, new: Node, entry: Tag, problems: list[str]) -> bool:
         olds, news = old_lists.get(name, []), new_lists.get(name, [])
         tag = entry.find(name)
         entries = _entries(tag)
-        place = {id(c): k for k, c in enumerate(olds)}
-        made: list[Tag] = []
+        place = {id(child): k for k, child in enumerate(olds)}
+        made: list[STag] = []
         order: list[int | None] = []
         for before, after in cfgpatch.pairs(olds, news, kind_of):
             if after is None:
@@ -158,7 +160,7 @@ def _align(old: Node, new: Node, entry: Tag, problems: list[str]) -> bool:
     return changed
 
 
-def _put_list(entry: Tag, name: str, tag: Tag | None, made: list[Tag]) -> None:
+def _put_list(entry: STag, name: str, tag: STag | None, made: list[STag]) -> None:
     """The list ``name`` of ``entry`` set to ``made`` (made when it is new, taken out when nothing is left)."""
     if tag is not None:
         if made:
@@ -167,13 +169,17 @@ def _put_list(entry: Tag, name: str, tag: Tag | None, made: list[Tag]) -> None:
             entry.children.remove(tag)
     elif made:
         rank = FIELD_ORDER.index(name) if name in FIELD_ORDER else len(FIELD_ORDER)
-        later = (i for i, c in enumerate(entry.children) if c.name in FIELD_ORDER and FIELD_ORDER.index(c.name) > rank)
-        entry.children.insert(next(later, len(entry.children)), Tag(name, made))
+        later = (
+            i
+            for i, child in enumerate(entry.children)
+            if child.name in FIELD_ORDER and FIELD_ORDER.index(child.name) > rank
+        )
+        entry.children.insert(next(later, len(entry.children)), STag(name, made))
 
 
-def _drop_far_view(top: Tag) -> None:
+def _drop_far_view(top: STag) -> None:
     """The edited config's merged far-view model (when it has geometry) no longer matches its parts: say there is none."""
-    for k, c in enumerate(top.children):
-        vertices = c.find("Vertices") if c.name == "LowPolyData" and isinstance(c, Tag) else None
-        if isinstance(vertices, Attrib) and vertices.data:
+    for k, child in enumerate(top.children):
+        vertices = child.find("Vertices") if child.name == "LowPolyData" and isinstance(child, STag) else None
+        if isinstance(vertices, SAttrib) and vertices.data:
             top.children[k] = no_far_view()

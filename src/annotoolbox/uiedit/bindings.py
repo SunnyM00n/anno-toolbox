@@ -42,7 +42,7 @@ def objects(root: dict, name: str) -> list[dict]:
 
 
 @dataclass
-class End:
+class SEnd:
     """One end of a binding: ``kind`` "path" (a data object and a path of UniqueIds), "constant" or "own" (one of
     the widget's custom properties); ``field`` 1 the whole value, 2 / 3 / 4 its x / y / z."""
 
@@ -62,15 +62,15 @@ class End:
     @cached_property
     def instance(self) -> str | None:
         """The instance GUID the path starts at (None: the widget itself, a list's element or item)."""
-        return next((g for m, g in reversed(self.steps) if m == CHILD and g), None)
+        return next((guid for step_mode, guid in reversed(self.steps) if step_mode == CHILD and guid), None)
 
 
 @dataclass
-class Binding:
+class SBinding:
     node: dict
     operator: str  # the operator's type hash
-    sources: list[End]
-    targets: list[End]
+    sources: list[SEnd]
+    targets: list[SEnd]
 
     @property
     def op_name(self) -> str:
@@ -78,16 +78,20 @@ class Binding:
 
 
 @dataclass
-class Graph:
-    ends: list[End]
-    bindings: list[Binding]
+class SGraph:
+    ends: list[SEnd]
+    bindings: list[SBinding]
     properties: list[dict]  # the template's custom properties
 
-    def touching(self, guid: str | None) -> list[Binding]:
+    def touching(self, guid: str | None) -> list[SBinding]:
         """The bindings with an end on the instance ``guid`` (None: every binding)."""
         if guid is None:
             return list(self.bindings)
-        return [b for b in self.bindings if any(e.instance == guid for e in (*b.sources, *b.targets))]
+        return [
+            binding
+            for binding in self.bindings
+            if any(end.instance == guid for end in (*binding.sources, *binding.targets))
+        ]
 
 
 def _steps(dobj: dict) -> list[tuple[int, str | None]]:
@@ -98,11 +102,11 @@ def _steps(dobj: dict) -> list[tuple[int, str | None]]:
     return out
 
 
-def read(root: dict) -> Graph:
+def read(root: dict) -> SGraph:
     """The bindings of a template (a widget file, a scene, a group template)."""
-    dobjs = [_steps(d) for d in objects(root, DATA_OBJECTS)]
+    dobjs = [_steps(data_object) for data_object in objects(root, DATA_OBJECTS)]
     props = list(custom_properties(root))
-    ends: list[End] = []
+    ends: list[SEnd] = []
     for pc in objects(root, CONTAINERS):
         ids, axis = [], 1
         for pid in phoenixedit.objects(pc, "PropertyPath"):
@@ -110,22 +114,24 @@ def read(root: dict) -> Graph:
             axis = int(fields.get(pid, "PropertyField", 1) or 1)
         di = int(fields.get(pc, DATA_INDEX, 0) or 0)
         steps = dobjs[di] if di < len(dobjs) else []
-        ends.append(End(len(ends), "path", pc, steps, ids, axis, uses=int(fields.get(pc, "UseCount", 0) or 0)))
-    for c in phoenixedit.objects(root, OWN):
-        i = int(fields.get(c, "CustomPropertyIndex", 0) or 0)
+        ends.append(SEnd(len(ends), "path", pc, steps, ids, axis, uses=int(fields.get(pc, "UseCount", 0) or 0)))
+    for container in phoenixedit.objects(root, OWN):
+        i = int(fields.get(container, "CustomPropertyIndex", 0) or 0)
         uid = int(fields.get(props[i], "UniqueId", 0) or 0) if i < len(props) else 0
-        axis = int(fields.get(c, "PropertyField", 1) or 1)
-        ends.append(End(len(ends), "own", c, [], [uid], axis, i, int(fields.get(c, "UseCount", 0) or 0)))
-    for c in phoenixedit.objects(root, CONSTANTS):
-        ends.append(End(len(ends), "constant", c, value=fields.get(c, "DefaultValue")))
+        axis = int(fields.get(container, "PropertyField", 1) or 1)
+        ends.append(
+            SEnd(len(ends), "own", container, [], [uid], axis, i, int(fields.get(container, "UseCount", 0) or 0))
+        )
+    for container in phoenixedit.objects(root, CONSTANTS):
+        ends.append(SEnd(len(ends), "constant", container, value=fields.get(container, "DefaultValue")))
     out = []
-    for b in phoenixedit.objects(root, BINDINGS):
-        conv = phoenixedit.objects(b, "ConverterInstance")
+    for binding in phoenixedit.objects(root, BINDINGS):
+        conv = phoenixedit.objects(binding, "ConverterInstance")
         op = f"{conv[0]['type']:08x}" if conv else operators.ASSIGN
-        src = [ends[i] for i in fields.get(b, SOURCES, []) or [] if i < len(ends)]
-        dst = [ends[i] for i in fields.get(b, TARGETS, []) or [] if i < len(ends)]
-        out.append(Binding(b, op, src, dst))
-    return Graph(ends, out, props)
+        sources = [ends[i] for i in fields.get(binding, SOURCES, []) or [] if i < len(ends)]
+        targets = [ends[i] for i in fields.get(binding, TARGETS, []) or [] if i < len(ends)]
+        out.append(SBinding(binding, op, sources, targets))
+    return SGraph(ends, out, props)
 
 
 def custom_properties(root: dict) -> list[dict]:
@@ -151,7 +157,7 @@ def property_info(prop: dict) -> dict:
 
 
 @dataclass(frozen=True)
-class EndSpec:
+class SEndSpec:
     """What an end of a new binding is: ``kind`` "path" (``instance``: a child's GUID, None for the widget itself;
     ``ids``: the UniqueIds), "constant" (``value``: (type code, value)) or "own" (``name``: a custom property)."""
 
@@ -171,53 +177,53 @@ def _stored(node: dict, field: str, value) -> None:
         phoenixedit.set_field(node, field, value)
 
 
-class Editor:
+class CEditor:
     """Adds and removes bindings of one template; ``new(type_hash)`` makes an object in the file's layouts."""
 
     def __init__(self, root: dict, new) -> None:
-        self.root, self.new = root, new
-        self.pending: list[int] = []
+        self.m_root, self.m_new = root, new
+        self.m_pending: list[int] = []
 
     def _list(self, name: str) -> list[dict]:
-        return list(objects(self.root, name))
+        return list(objects(self.m_root, name))
 
     def _set_list(self, name: str, objs: list[dict]) -> None:
-        phoenixedit.set_objects(self.root, list_name(self.root, name), objs)
+        phoenixedit.set_objects(self.m_root, list_name(self.m_root, name), objs)
 
     def _shift(self, start: int, by: int) -> None:
         """Every binding index at or after ``start`` moved by ``by`` (a container inserted before them)."""
-        for b in self._list(BINDINGS):
+        for binding in self._list(BINDINGS):
             for key in (SOURCES, TARGETS):
-                idx = fields.get(b, key, []) or []
-                fields.set_value(b, key, [i + by if i >= start else i for i in idx])
-        self.pending[:] = [i + by if i >= start else i for i in self.pending]  # the ends of the binding being made
+                indices = fields.get(binding, key, []) or []
+                fields.set_value(binding, key, [i + by if i >= start else i for i in indices])
+        self.m_pending[:] = [i + by if i >= start else i for i in self.m_pending]  # the ends of the binding being made
 
     def data_object(self, instance: str | None) -> int:
         """The data object of the widget itself (None) or of a child instance, made when the file has none."""
         objs = self._list(DATA_OBJECTS)
         want = [(SELF, None)] if instance is None else [(CHILD, instance)]
-        for i, d in enumerate(objs):
-            if _steps(d) == want:
+        for i, candidate in enumerate(objs):
+            if _steps(candidate) == want:
                 return i
-        item = self.new("7e4fae85")
+        item = self.m_new("7e4fae85")
         if instance is None:
             phoenixedit.set_field(item, "DataMode", SELF)
         else:
             phoenixedit.set_field(item, "DataMode", CHILD)
             phoenixedit.set_raw(item, DATA_REF, phoenix.ref_bytes(phoenixedit.INSTANCE_REF, instance))
-        dobj = self.new("b0dd1389")
+        dobj = self.m_new("b0dd1389")
         phoenixedit.set_objects(dobj, DATA_PATH, [item])
         self._set_list(DATA_OBJECTS, [*objs, dobj])
         return len(objs)
 
-    def end(self, spec: EndSpec) -> int:
+    def end(self, spec: SEndSpec) -> int:
         """The index of a new end for ``spec`` (an own property's container reused when one matches)."""
         pcs, consts, own = self._list(CONTAINERS), self._list(CONSTANTS), self._list(OWN)
         if spec.kind == "path":
-            pc = self.new("1bb72d66")
+            pc = self.m_new("1bb72d66")
             ids = []
             for i, uid in enumerate(spec.ids):
-                pid = self.new("6e5a7f0e")
+                pid = self.m_new("6e5a7f0e")
                 phoenixedit.set_field(pid, "UniqueId", uid)
                 if i == len(spec.ids) - 1 and spec.field != 1:
                     phoenixedit.set_field(pid, "PropertyField", spec.field)
@@ -229,24 +235,24 @@ class Editor:
             self._set_list(CONTAINERS, [*pcs, pc])
             return len(pcs)
         if spec.kind == "constant":  # the constants come last: nothing after them moves
-            c = self.new("fb2cf8c8")
+            container = self.m_new("fb2cf8c8")
             code, value = spec.value
-            fields.set_value(c, "DefaultValue", (code, value))
-            phoenixedit.set_field(c, "PropertyType", spec.ptype)
-            self._set_list(CONSTANTS, [*consts, c])
+            fields.set_value(container, "DefaultValue", (code, value))
+            phoenixedit.set_field(container, "PropertyType", spec.ptype)
+            self._set_list(CONSTANTS, [*consts, container])
             return len(pcs) + len(own) + len(consts)
         props = self._list(CUSTOM_PROPERTIES)
-        index = next(i for i, p in enumerate(props) if phoenixedit.object_name(p) == spec.name)
-        for k, c in enumerate(own):
-            same = int(fields.get(c, "CustomPropertyIndex", -1)) == index
-            if same and int(fields.get(c, "PropertyField", 1) or 1) == spec.field:
+        index = next(i for i, prop in enumerate(props) if phoenixedit.object_name(prop) == spec.name)
+        for k, container in enumerate(own):
+            same = int(fields.get(container, "CustomPropertyIndex", -1)) == index
+            if same and int(fields.get(container, "PropertyField", 1) or 1) == spec.field:
                 return len(pcs) + k
-        c = self.new("9df79719")
-        phoenixedit.set_field(c, "CustomPropertyIndex", index)
-        phoenixedit.set_field(c, "PropertyField", spec.field)
-        _stored(c, "UseCount", 0)
+        container = self.m_new("9df79719")
+        phoenixedit.set_field(container, "CustomPropertyIndex", index)
+        phoenixedit.set_field(container, "PropertyField", spec.field)
+        _stored(container, "UseCount", 0)
         self._shift(len(pcs) + len(own), 1)
-        self._set_list(OWN, [*own, c])
+        self._set_list(OWN, [*own, container])
         return len(pcs) + len(own)
 
     def _container(self, index: int) -> dict:
@@ -254,30 +260,30 @@ class Editor:
         return (pcs + own + consts)[index]
 
     def _use(self, index: int, by: int) -> None:
-        c = self._container(index)
-        if phoenixedit.get_entry(c, "UseCount") is not None:
-            phoenixedit.set_field(c, "UseCount", max(0, int(fields.get(c, "UseCount", 0)) + by))
+        container = self._container(index)
+        if phoenixedit.get_entry(container, "UseCount") is not None:
+            phoenixedit.set_field(container, "UseCount", max(0, int(fields.get(container, "UseCount", 0)) + by))
 
-    def add(self, sources: list[EndSpec], targets: list[EndSpec], op: str = operators.ASSIGN) -> dict:
+    def add(self, sources: list[SEndSpec], targets: list[SEndSpec], op: str = operators.ASSIGN) -> dict:
         """A new binding from ``sources`` through the operator ``op`` to ``targets``; returns its object."""
-        self.pending = []
+        self.m_pending = []
         for spec in (*sources, *targets):
-            self.pending.append(self.end(spec))
-        src, dst = self.pending[: len(sources)], self.pending[len(sources) :]
-        self.pending = []
-        b = self.new("edcf0433")
-        phoenixedit.set_objects(b, "ConverterInstance", [self._operator(op, len(src), len(dst))])
-        fields.set_value(b, SOURCES, src)
-        fields.set_value(b, TARGETS, dst)
-        seed = f"{len(self._list(BINDINGS))}/{src}/{dst}/{op}"
-        _stored(b, "ProfileID", str(uuid.uuid5(uuid.NAMESPACE_OID, seed)))
-        for i in (*src, *dst):
+            self.m_pending.append(self.end(spec))
+        source_ends, target_ends = self.m_pending[: len(sources)], self.m_pending[len(sources) :]
+        self.m_pending = []
+        binding = self.m_new("edcf0433")
+        phoenixedit.set_objects(binding, "ConverterInstance", [self._operator(op, len(source_ends), len(target_ends))])
+        fields.set_value(binding, SOURCES, source_ends)
+        fields.set_value(binding, TARGETS, target_ends)
+        seed = f"{len(self._list(BINDINGS))}/{source_ends}/{target_ends}/{op}"
+        _stored(binding, "ProfileID", str(uuid.uuid5(uuid.NAMESPACE_OID, seed)))
+        for i in (*source_ends, *target_ends):
             self._use(i, 1)
-        self._set_list(BINDINGS, [*self._list(BINDINGS), b])
-        return b
+        self._set_list(BINDINGS, [*self._list(BINDINGS), binding])
+        return binding
 
     def _operator(self, op: str, n_in: int, n_out: int) -> dict:
-        conv = self.new(op)
+        conv = self.m_new(op)
         _stored(conv, "570c3823", n_in)
         _stored(conv, "3f22df21", n_out)
         _stored(conv, "IsDynamic", n_in > 2)
@@ -293,12 +299,12 @@ class Editor:
 
     def remove(self, binding: dict) -> None:
         """Take a binding out; its ends lose a use, and an end no binding uses any more is removed with it."""
-        rest = [b for b in self._list(BINDINGS) if b is not binding]
+        rest = [other for other in self._list(BINDINGS) if other is not binding]
         mine = set(fields.get(binding, SOURCES, []) or []) | set(fields.get(binding, TARGETS, []) or [])
         self._set_list(BINDINGS, rest)
         for i in mine:
             self._use(i, -1)
-        used = {i for b in rest for key in (SOURCES, TARGETS) for i in fields.get(b, key, []) or []}
+        used = {i for other in rest for key in (SOURCES, TARGETS) for i in fields.get(other, key, []) or []}
         for i in sorted(mine - used, reverse=True):
             self._drop_end(i)
 

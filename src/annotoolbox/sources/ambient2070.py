@@ -1,7 +1,7 @@
 """2070's light and atmosphere sets, read from ``data/config/engine/ambientmap.xml`` and ``light.xml``.
 
 ``read`` returns every named set (``North``, ``Underwater_Void``, ``Night`` ...) with its three variants and the
-world's areas; a ``Setting`` holds the file's numbers as they are and the few products the shaders form from them (a
+world's areas; a ``SSetting`` holds the file's numbers as they are and the few products the shaders form from them (a
 colour times its power: rendering-2070 "4.1 Where the values come from"). Which variant a session shows (the eco
 balance, rendering-2070 4.1) is not in the data; callers pick one. ``read_light`` is the fallback light of
 ``light.xml``. Nothing here guesses a value: a missing tag raises ``KeyError`` naming it.
@@ -15,31 +15,39 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
 from ..formats import isd2070
-from .overlay import SourceTree
+from .overlay import CSourceTree
 
 AMBIENT_MAP = "data/config/engine/ambientmap.xml"
 LIGHT = "data/config/engine/light.xml"
 Vec = tuple[float, ...]
 
 
-def _vec(el: ET.Element, names: str) -> Vec:
-    return tuple(float(el.findtext(n)) for n in names)  # type: ignore[arg-type]
+def _child(element: ET.Element, tag: str) -> ET.Element:
+    found = element.find(tag)
+    if found is None:
+        raise KeyError(f"{tag} (in {element.tag})")
+    return found
 
 
-def _num(el: ET.Element, tag: str) -> float:
-    text = el.findtext(tag)
+def _vec(element: ET.Element, tag: str, names: str) -> Vec:
+    """The components ``names`` (``xyz``, ``rgba``) of the child ``tag``."""
+    return tuple(_num(_child(element, tag), name) for name in names)
+
+
+def _num(element: ET.Element, tag: str) -> float:
+    text = element.findtext(tag)
     if text is None:
-        raise KeyError(f"{tag} (in {el.tag})")
+        raise KeyError(f"{tag} (in {element.tag})")
     return float(text)
 
 
 def _scaled(rgb: Vec, power: float) -> Vec:
-    return tuple(c * power for c in rgb[:3])
+    return tuple(component * power for component in rgb[:3])
 
 
 @dataclass(frozen=True)
-class Water:
-    """The ``Water`` block: waves, and the light and view depths above and under the surface."""
+class SWater:
+    """The ``SWater`` block: waves, and the light and view depths above and under the surface."""
 
     wave_frequency: Vec
     wave_amplitude: Vec
@@ -59,8 +67,8 @@ class Water:
 
 
 @dataclass(frozen=True)
-class Atmosphere:
-    """The ``Atmosphere`` block: colours as stored (before their ``...Power`` in the Setting) and the fall-offs."""
+class SAtmosphere:
+    """The ``SAtmosphere`` block: colours as stored (before their ``...Power`` in the Setting) and the fall-offs."""
 
     scatter_start: float
     sun_inner_angle: float
@@ -76,7 +84,7 @@ class Atmosphere:
 
 
 @dataclass(frozen=True)
-class Setting:
+class SSetting:
     """One variant of a named set. Colours are gamma values as stored; ``sun`` and the like multiply a colour by its
     power (rendering-2070 4.1 gives the shader constant each feeds)."""
 
@@ -91,8 +99,8 @@ class Setting:
     horizon_color_power: float
     zenith_color_power: float
     cloud_color_power: float
-    water: Water
-    atmosphere: Atmosphere
+    water: SWater
+    atmosphere: SAtmosphere
     wind: Vec  # x, y: direction; z: strength; w: storm strength (the shaders' cWind)
     current: Vec
     blur_strength: float
@@ -131,103 +139,110 @@ class Setting:
 
 
 @dataclass(frozen=True)
-class Area:
+class SArea:
     name: str
     position: tuple[float, float]  # on the world map, 0..1
     setting: str  # the named set it shows
 
 
 @dataclass
-class AmbientMap:
-    areas: list[Area] = field(default_factory=list)
-    sets: dict[str, tuple[Setting, ...]] = field(default_factory=dict)
+class SAmbientMap:
+    areas: list[SArea] = field(default_factory=list)
+    sets: dict[str, tuple[SSetting, ...]] = field(default_factory=dict)
 
-    def area(self, name: str) -> Area:
-        return next(a for a in self.areas if a.name == name)
+    def area(self, name: str) -> SArea:
+        found = next((area for area in self.areas if area.name == name), None)
+        if found is None:
+            raise KeyError(f"no area {name!r} in the ambient map")
+        return found
 
-    def setting(self, name: str, variant: int = 0) -> Setting:
+    def setting(self, name: str, variant: int = 0) -> SSetting:
         return self.sets[name][variant]
 
 
-def _water(el: ET.Element) -> Water:
-    return Water(
-        _vec(el.find("WaveFrequency"), "xy"),
-        _vec(el.find("WaveAmplitude"), "xy"),
-        (_vec(el.find("WaveVelocity0"), "xy"), _vec(el.find("WaveVelocity1"), "xy")),
-        _num(el, "Choppiness"),
-        _vec(el.find("AboveWaterLightAbsorptionExponents"), "xyz"),
-        _num(el, "AboveWaterLightDepth"),
-        _num(el, "AboveWaterViewDepth"),
-        _num(el, "AboveWaterViewDepthExponent"),
-        _vec(el.find("AboveWaterScattering"), "xyz"),
-        _vec(el.find("UnderWaterLightAbsorptionExponents"), "xyz"),
-        _num(el, "UnderWaterLightDepth"),
-        _num(el, "UnderWaterViewDepth"),
-        _num(el, "UnderWaterViewDepthExponent"),
-        _vec(el.find("UnderWaterScattering"), "xyz"),
-        _num(el, "UnderWaterDOFFocusDistance"),
+def _water(element: ET.Element) -> SWater:
+    return SWater(
+        _vec(element, "WaveFrequency", "xy"),
+        _vec(element, "WaveAmplitude", "xy"),
+        (_vec(element, "WaveVelocity0", "xy"), _vec(element, "WaveVelocity1", "xy")),
+        _num(element, "Choppiness"),
+        _vec(element, "AboveWaterLightAbsorptionExponents", "xyz"),
+        _num(element, "AboveWaterLightDepth"),
+        _num(element, "AboveWaterViewDepth"),
+        _num(element, "AboveWaterViewDepthExponent"),
+        _vec(element, "AboveWaterScattering", "xyz"),
+        _vec(element, "UnderWaterLightAbsorptionExponents", "xyz"),
+        _num(element, "UnderWaterLightDepth"),
+        _num(element, "UnderWaterViewDepth"),
+        _num(element, "UnderWaterViewDepthExponent"),
+        _vec(element, "UnderWaterScattering", "xyz"),
+        _num(element, "UnderWaterDOFFocusDistance"),
     )
 
 
-def _atmosphere(el: ET.Element) -> Atmosphere:
-    return Atmosphere(
-        _num(el, "ScatterStart"),
-        _num(el, "SunInnerAngle"),
-        _num(el, "SunOuterAngle"),
-        _num(el, "SunFallOff"),
-        _num(el, "HorizonFallOff"),
-        _num(el, "DistanceFallOff"),
-        _num(el, "CloudDensity"),
-        _vec(el.find("SunColor"), "rgba"),
-        _vec(el.find("HorizonColor"), "rgba"),
-        _vec(el.find("ZenithColor"), "rgba"),
-        _vec(el.find("CloudColor"), "rgba"),
+def _atmosphere(element: ET.Element) -> SAtmosphere:
+    return SAtmosphere(
+        _num(element, "ScatterStart"),
+        _num(element, "SunInnerAngle"),
+        _num(element, "SunOuterAngle"),
+        _num(element, "SunFallOff"),
+        _num(element, "HorizonFallOff"),
+        _num(element, "DistanceFallOff"),
+        _num(element, "CloudDensity"),
+        _vec(element, "SunColor", "rgba"),
+        _vec(element, "HorizonColor", "rgba"),
+        _vec(element, "ZenithColor", "rgba"),
+        _vec(element, "CloudColor", "rgba"),
     )
 
 
-def _setting(el: ET.Element) -> Setting:
-    return Setting(
-        _vec(el.find("DiffuseColor"), "rgba"),
-        _num(el, "DiffuseColorPower"),
-        _vec(el.find("AmbientColor"), "rgba"),
-        _num(el, "AmbientColorPower"),
-        _vec(el.find("MoodColor"), "rgba"),
-        _num(el, "MoodColorPower"),
-        _num(el, "InvCloudShadowFac"),
-        _num(el, "SunColorPower"),
-        _num(el, "HorizonColorPower"),
-        _num(el, "ZenithColorPower"),
-        _num(el, "CloudColorPower"),
-        _water(el.find("Water")),
-        _atmosphere(el.find("Atmosphere")),
-        _vec(el.find("Wind"), "xyzw"),
-        _vec(el.find("Current"), "xyzw"),
-        _num(el, "BlurStrength"),
-        _vec(el.find("LightDirection"), "xyz"),
-        _num(el, "CamYRotOffset"),
+def _setting(element: ET.Element) -> SSetting:
+    return SSetting(
+        _vec(element, "DiffuseColor", "rgba"),
+        _num(element, "DiffuseColorPower"),
+        _vec(element, "AmbientColor", "rgba"),
+        _num(element, "AmbientColorPower"),
+        _vec(element, "MoodColor", "rgba"),
+        _num(element, "MoodColorPower"),
+        _num(element, "InvCloudShadowFac"),
+        _num(element, "SunColorPower"),
+        _num(element, "HorizonColorPower"),
+        _num(element, "ZenithColorPower"),
+        _num(element, "CloudColorPower"),
+        _water(_child(element, "Water")),
+        _atmosphere(_child(element, "Atmosphere")),
+        _vec(element, "Wind", "xyzw"),
+        _vec(element, "Current", "xyzw"),
+        _num(element, "BlurStrength"),
+        _vec(element, "LightDirection", "xyz"),
+        _num(element, "CamYRotOffset"),
     )
 
 
-def parse(text: str) -> AmbientMap:
+def parse(text: str) -> SAmbientMap:
     """The text of ``ambientmap.xml`` as sets and areas."""
     root = ET.fromstring(text)
-    out = AmbientMap()
+    out = SAmbientMap()
     for item in root.findall("GlobalAreas/i"):
-        pos = item.find("Position")
+        position_element = item.find("Position")
         out.areas.append(
-            Area(item.findtext("Name"), (float(pos.findtext("x")), float(pos.findtext("y"))), item.findtext("Setting"))
+            SArea(
+                item.findtext("Name"),
+                (float(position_element.findtext("x")), float(position_element.findtext("y"))),
+                item.findtext("Setting"),
+            )
         )
     for named in root.find("Settings"):
-        out.sets[named.tag] = tuple(_setting(v) for v in named)
+        out.sets[named.tag] = tuple(_setting(child) for child in named)
     return out
 
 
-def read(tree: SourceTree) -> AmbientMap:
+def read(tree: CSourceTree) -> SAmbientMap:
     return parse(tree.read_text(AMBIENT_MAP, "latin-1"))
 
 
 @dataclass(frozen=True)
-class Light:
+class SLight:
     """``light.xml``: the light used when no set applies."""
 
     diffuse: Vec
@@ -237,7 +252,7 @@ class Light:
     cam_y_rot_offset: float
 
 
-def read_light(tree: SourceTree) -> Light:
+def read_light(tree: CSourceTree) -> SLight:
     root = isd2070.parse(tree.read_bytes(LIGHT)).find("m_LightInfo")
     if root is None:
         raise KeyError("m_LightInfo (in light.xml)")
@@ -246,9 +261,9 @@ def read_light(tree: SourceTree) -> Light:
         data = root.find(name).data  # four float32: the file stores its colours as binary values
         return struct.unpack("<4f", data)
 
-    d = root.find("m_Direction")
-    direction = tuple(float(d.value(axis)) for axis in "xyz")
-    return Light(
+    direction_element = root.find("m_Direction")
+    direction = tuple(float(direction_element.value(axis)) for axis in "xyz")
+    return SLight(
         colour("m_Diffuse"),
         colour("m_Ambient"),
         colour("m_Specular"),

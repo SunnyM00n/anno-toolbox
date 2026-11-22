@@ -22,7 +22,7 @@ _ENUM_ITEM = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*(-?0x[0-9A-Fa-f]+|-?\d+)\s*,?
 
 
 @dataclass
-class Item:
+class SItem:
     name: str
     id: int  # the data id in datasets.xml
     lua: int | None = None  # the index in the Lua stub
@@ -31,16 +31,16 @@ class Item:
 
 
 @dataclass
-class Dataset:
+class SDataset:
     group: str
     name: str
     id: int
     description: str = ""
-    items: list[Item] = field(default_factory=list)
+    items: list[SItem] = field(default_factory=list)
 
 
 @dataclass
-class LuaEnum:
+class SLuaEnum:
     space: str  # ``datasets`` or ``halo``
     name: str
     values: list[tuple[str, int]]
@@ -50,59 +50,59 @@ def _int(text: str | None) -> int:
     return int(text.strip()) if text and text.strip().lstrip("-").isdigit() else 0
 
 
-def read_datasets(text: str) -> list[Dataset]:
+def read_datasets(text: str) -> list[SDataset]:
     """Every ``DataSet`` of a ``datasets.xml`` in file order, with its group (a group name may repeat)."""
     root = ET.fromstring(text)
     out = []
     for group in root.iter("Group"):
         gname = group.findtext("Name", "")
-        for ds in group.findall("DataSet"):
+        for dataset in group.findall("DataSet"):
             items = [
-                Item(
-                    it.findtext("Name", ""),
-                    _int(it.findtext("Id")),
-                    description=(it.findtext("Description") or "").strip(),
-                    hidden_in=(it.findtext("SkipXmlExportInVersion") or "").strip(),
+                SItem(
+                    item.findtext("Name", ""),
+                    _int(item.findtext("Id")),
+                    description=(item.findtext("Description") or "").strip(),
+                    hidden_in=(item.findtext("SkipXmlExportInVersion") or "").strip(),
                 )
-                for it in ds.findall("Items/Item")
+                for item in dataset.findall("Items/Item")
             ]
             out.append(
-                Dataset(
+                SDataset(
                     gname,
-                    ds.findtext("Name", ""),
-                    _int(ds.findtext("Id")),
-                    (ds.findtext("Description") or "").strip(),
+                    dataset.findtext("Name", ""),
+                    _int(dataset.findtext("Id")),
+                    (dataset.findtext("Description") or "").strip(),
                     items,
                 )
             )
     return out
 
 
-def read_lua_enum(text: str) -> LuaEnum | None:
+def read_lua_enum(text: str) -> SLuaEnum | None:
     """The enum table of one generated Lua stub (``datasets.X = {...}`` or ``halo.X = {...}``); ``Invalid`` and
     ``Count`` kept as they stand."""
     head = _ENUM_HEAD.search(text)
     if head is None:
         return None
     body = text[head.end() : text.find("}", head.end())]
-    values = [(k, int(v, 0)) for k, v in _ENUM_ITEM.findall(body)]
-    return LuaEnum(head.group(1), head.group(2), values)
+    values = [(k, int(value, 0)) for k, value in _ENUM_ITEM.findall(body)]
+    return SLuaEnum(head.group(1), head.group(2), values)
 
 
-def attach_lua(datasets: list[Dataset], stubs: list[LuaEnum]) -> list[LuaEnum]:
+def attach_lua(datasets: list[SDataset], stubs: list[SLuaEnum]) -> list[SLuaEnum]:
     """Each item's Lua index from the dataset's stub (matched by name); returns the stubs with no dataset."""
-    by_name = {s.name: s for s in stubs}
-    for ds in datasets:
-        stub = by_name.pop(ds.name, None)
+    by_name = {lua_enum.name: lua_enum for lua_enum in stubs}
+    for dataset in datasets:
+        stub = by_name.pop(dataset.name, None)
         if stub is None:
             continue
         index = dict(stub.values)
-        for item in ds.items:
+        for item in dataset.items:
             item.lua = index.get(item.name)
-    return sorted(by_name.values(), key=lambda s: s.name.lower())
+    return sorted(by_name.values(), key=lambda lua_enum: lua_enum.name.lower())
 
 
-def collect(files) -> tuple[list[Dataset], list[LuaEnum], list[LuaEnum]]:
+def collect(files) -> tuple[list[SDataset], list[SLuaEnum], list[SLuaEnum]]:
     """(datasets with their Lua indexes, Lua-only dataset stubs, engine enums) of an install (``Anno117Files``)."""
     datasets = read_datasets(files.read(DATASETS_XML).decode("utf-8", errors="replace"))
     stubs, engine = [], []
@@ -113,39 +113,39 @@ def collect(files) -> tuple[list[Dataset], list[LuaEnum], list[LuaEnum]]:
                 if enum is not None:
                     out.append(enum)
     lua_only = attach_lua(datasets, stubs)
-    return datasets, lua_only, sorted(engine, key=lambda e: e.name.lower())
+    return datasets, lua_only, sorted(engine, key=lambda entry: entry.name.lower())
 
 
 def _cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
-def _dataset_md(ds: Dataset) -> list[str]:
-    fixed = " **Fixed by the engine: cannot grow by data.**" if ds.name in FIXED else ""
-    lines = [f"### {ds.name}", "", f"Group {ds.group}, dataset id {ds.id}.{fixed}"]
-    if ds.description:
-        lines += ["", _cell(ds.description)]
+def _dataset_md(dataset: SDataset) -> list[str]:
+    fixed = " **Fixed by the engine: cannot grow by data.**" if dataset.name in FIXED else ""
+    lines = [f"### {dataset.name}", "", f"Group {dataset.group}, dataset id {dataset.id}.{fixed}"]
+    if dataset.description:
+        lines += ["", _cell(dataset.description)]
     lines += ["", "| Item | Data id | Lua | Note |", "| --- | ---: | ---: | --- |"]
-    for it in ds.items:
+    for item in dataset.items:
         note = "; ".join(
-            x for x in (_cell(it.description), f"not exported in {it.hidden_in}" if it.hidden_in else "") if x
+            x for x in (_cell(item.description), f"not exported in {item.hidden_in}" if item.hidden_in else "") if x
         )
-        lua = "" if it.lua is None else str(it.lua)
-        lines.append(f"| `{it.name}` | {it.id} | {lua} | {note} |")
+        lua = "" if item.lua is None else str(item.lua)
+        lines.append(f"| `{item.name}` | {item.id} | {lua} | {note} |")
     return lines + [""]
 
 
-def _enum_md(enum: LuaEnum, hexed: bool) -> list[str]:
-    rows = [f"| `{k}` | {f'0x{v & 0xFFFFFFFF:08X}' if hexed else v} |" for k, v in enum.values]
+def _enum_md(enum: SLuaEnum, hexed: bool) -> list[str]:
+    rows = [f"| `{k}` | {f'0x{value & 0xFFFFFFFF:08X}' if hexed else value} |" for k, value in enum.values]
     return [f"### {enum.space}.{enum.name}", "", "| Value | Number |", "| --- | ---: |", *rows, ""]
 
 
-def render_markdown(datasets: list[Dataset], lua_only: list[LuaEnum], engine: list[LuaEnum], build: str) -> str:
+def render_markdown(datasets: list[SDataset], lua_only: list[SLuaEnum], engine: list[SLuaEnum], build: str) -> str:
     """The whole reference as Markdown: datasets by group, Lua-only datasets, engine enums."""
-    groups: dict[str, list[Dataset]] = {}
-    for ds in datasets:
-        groups.setdefault(ds.group, []).append(ds)
-    items = sum(len(ds.items) for ds in datasets)
+    groups: dict[str, list[SDataset]] = {}
+    for dataset in datasets:
+        groups.setdefault(dataset.group, []).append(dataset)
+    items = sum(len(dataset.items) for dataset in datasets)
     lines = [
         "# Anno 117's enums",
         "",
@@ -166,12 +166,13 @@ def render_markdown(datasets: list[Dataset], lua_only: list[LuaEnum], engine: li
         "",
     ]
     lines += [
-        f"- {g}: " + ", ".join(ds.name for ds in sorted(dss, key=lambda d: d.name.lower())) for g, dss in groups.items()
+        f"- {group}: " + ", ".join(dataset.name for dataset in sorted(dss, key=lambda dataset: dataset.name.lower()))
+        for group, dss in groups.items()
     ]
-    for g, dss in groups.items():
-        lines += ["", f"## {g}", ""]
-        for ds in sorted(dss, key=lambda d: d.name.lower()):
-            lines += _dataset_md(ds)
+    for group, dss in groups.items():
+        lines += ["", f"## {group}", ""]
+        for dataset in sorted(dss, key=lambda dataset: dataset.name.lower()):
+            lines += _dataset_md(dataset)
     lines += ["## Only in the Lua stubs", ""]
     for enum in lua_only:
         lines += _enum_md(enum, hexed=False)
@@ -181,51 +182,51 @@ def render_markdown(datasets: list[Dataset], lua_only: list[LuaEnum], engine: li
     return "\n".join(lines).rstrip() + "\n"
 
 
-def datasets_from_json(doc: dict) -> list[Dataset]:
+def datasets_from_json(document: dict) -> list[SDataset]:
     """The datasets of a ``to_json`` document (``docs/formats/enums-117.json``), for code that needs the ids offline."""
     return [
-        Dataset(
-            d["group"],
-            d["name"],
-            d["id"],
-            d.get("description", ""),
+        SDataset(
+            item["group"],
+            item["name"],
+            item["id"],
+            item.get("description", ""),
             [
-                Item(i["name"], i["id"], i.get("lua"), i.get("description", ""), i.get("hidden_in", ""))
-                for i in d["items"]
+                SItem(i["name"], i["id"], i.get("lua"), i.get("description", ""), i.get("hidden_in", ""))
+                for i in item["items"]
             ],
         )
-        for d in doc["datasets"]
+        for item in document["datasets"]
     ]
 
 
-def to_json(datasets: list[Dataset], lua_only: list[LuaEnum], engine: list[LuaEnum], build: str) -> dict:
+def to_json(datasets: list[SDataset], lua_only: list[SLuaEnum], engine: list[SLuaEnum], build: str) -> dict:
     """The same reference as plain data."""
 
-    def enum(e: LuaEnum) -> dict:
-        return {"name": e.name, "space": e.space, "values": dict(e.values)}
+    def enum(entry: SLuaEnum) -> dict:
+        return {"name": entry.name, "space": entry.space, "values": dict(entry.values)}
 
     return {
         "build": build,
         "datasets": [
             {
-                "group": ds.group,
-                "name": ds.name,
-                "id": ds.id,
-                "fixed": ds.name in FIXED,
-                "description": ds.description,
+                "group": dataset.group,
+                "name": dataset.name,
+                "id": dataset.id,
+                "fixed": dataset.name in FIXED,
+                "description": dataset.description,
                 "items": [
                     {
-                        "name": it.name,
-                        "id": it.id,
-                        "lua": it.lua,
-                        "description": it.description,
-                        "hidden_in": it.hidden_in,
+                        "name": item.name,
+                        "id": item.id,
+                        "lua": item.lua,
+                        "description": item.description,
+                        "hidden_in": item.hidden_in,
                     }
-                    for it in ds.items
+                    for item in dataset.items
                 ],
             }
-            for ds in datasets
+            for dataset in datasets
         ],
-        "lua_only": [enum(e) for e in lua_only],
-        "engine": [enum(e) for e in engine],
+        "lua_only": [enum(entry) for entry in lua_only],
+        "engine": [enum(entry) for entry in engine],
     }

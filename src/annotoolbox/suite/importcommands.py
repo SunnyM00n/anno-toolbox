@@ -14,7 +14,7 @@ from ..infra.i18n import tr
 from ..modloader.mods import MODINFO_NAMES
 from . import archivemod, archivemodbuild, carriedpart, importchecks, importmeta, importresume, projectimport, reimport
 from . import project as projects
-from .settings import Settings, settings_file
+from .settings import CSettings, settings_file
 
 
 def register(sub: argparse._SubParsersAction) -> argparse._SubParsersAction:
@@ -28,34 +28,38 @@ def register(sub: argparse._SubParsersAction) -> argparse._SubParsersAction:
 
 
 def add_import(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
+    parser = sub.add_parser(
         "import",
         help="import a mod (a folder or a .zip, or an older game's archive) into a new project folder; the mod is never changed",
     )
-    p.add_argument(
+    parser.add_argument(
         "source", type=Path, help="the mod folder (the one with modinfo.json), a .zip, or an older game's .rda archive"
     )
-    p.add_argument(
+    parser.add_argument(
         "--game",
         default=None,
         help="an older game's archive mod: the game it is for (anno2070, anno1404, anno1701, anno2205); a folder of "
         "loose files by game path needs it, an archive only when its version leaves two games (V2.0: 1404, 2070)",
     )
-    p.add_argument("folder", type=Path, help="the new, empty folder of the project")
-    p.add_argument("--copy", action="store_true", help="copy every file (default: hard links where the disk allows)")
-    p.add_argument(
+    parser.add_argument("folder", type=Path, help="the new, empty folder of the project")
+    parser.add_argument(
+        "--copy", action="store_true", help="copy every file (default: hard links where the disk allows)"
+    )
+    parser.add_argument(
         "--no-hash",
         action="store_true",
         help="do not read every file for its SHA-256 (much faster for a very large mod)",
     )
-    p.add_argument("--build", action="store_true", help="then build the mod into <folder>/build/<mod id>")
-    p.add_argument(
+    parser.add_argument("--build", action="store_true", help="then build the mod into <folder>/build/<mod id>")
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="then build, and compare the build with the source (exit 1 if not identical)",
     )
-    p.add_argument("--settings", type=Path, default=None, help="the Toolbox's settings file (the own GUID reserve)")
-    p.set_defaults(func=cmd_import)
+    parser.add_argument(
+        "--settings", type=Path, default=None, help="the Toolbox's settings file (the own GUID reserve)"
+    )
+    parser.set_defaults(func=cmd_import)
 
 
 def _say(text: str) -> None:
@@ -65,7 +69,7 @@ def _say(text: str) -> None:
 
 def cmd_import(args: argparse.Namespace) -> int:
     path = args.settings or settings_file()
-    settings = Settings.load(path)
+    settings = CSettings.load(path)
     if getattr(args, "game", None) or (args.source.is_file() and args.source.suffix.lower() == ".rda"):
         return _import_archive(args, settings, path)
     report = projectimport.import_mod(
@@ -73,8 +77,8 @@ def cmd_import(args: argparse.Namespace) -> int:
         args.folder,
         settings,
         _say,
-        link=not args.copy,
-        hash_files=not args.no_hash,
+        use_links=not args.copy,
+        is_hashed=not args.no_hash,
         context=importchecks.context_from_settings(settings, path.parent / importresume.PENDING),
     )
     settings.save(path)
@@ -82,7 +86,7 @@ def cmd_import(args: argparse.Namespace) -> int:
     print(tr("common.import_took", seconds=f"{report.seconds:.1f}"))
     if not (args.build or args.verify):
         return 0
-    proj = projects.Project.open(args.folder)
+    proj = projects.CProject.open(args.folder)
     started = time.monotonic()
     result = projects.build(proj, _parts(), settings, _say)
     print("\n".join(result.lines()))
@@ -97,12 +101,14 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0 if diff.identical else 1
 
 
-def _import_archive(args: argparse.Namespace, settings: Settings, path: Path) -> int:
+def _import_archive(args: argparse.Namespace, settings: CSettings, path: Path) -> int:
     """``mod import`` for an older game's archive mod (docs/mod-import.md, section 16): import, and with ``--build`` /
     ``--verify`` build the archive again and compare its members (and its bytes) with the source."""
     try:
-        report = archivemod.import_archive_mod(args.source, args.folder, args.game, settings, _say, link=not args.copy)
-    except projectimport.ImportRefused as exc:
+        report = archivemod.import_archive_mod(
+            args.source, args.folder, args.game, settings, _say, use_links=not args.copy
+        )
+    except projectimport.CImportRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     settings.save(path)
@@ -110,7 +116,7 @@ def _import_archive(args: argparse.Namespace, settings: Settings, path: Path) ->
     print(tr("common.import_took", seconds=f"{report.seconds:.1f}"))
     if not (args.build or args.verify):
         return 0
-    proj = projects.Project.open(args.folder)
+    proj = projects.CProject.open(args.folder)
     result = projects.build(proj, _parts(), settings, _say, _deliveries())
     print("\n".join(result.lines()))
     if not args.verify:
@@ -127,7 +133,7 @@ def _import_archive(args: argparse.Namespace, settings: Settings, path: Path) ->
     return 0 if diff.identical else 1
 
 
-def _deliveries() -> dict[str, projects.Delivery]:
+def _deliveries() -> dict[str, projects.SDelivery]:
     """How the older games take a project: with the island deliveries where the apps can be imported, else the
     archive mods alone."""
     try:
@@ -138,18 +144,12 @@ def _deliveries() -> dict[str, projects.Delivery]:
         return archivemodbuild.deliveries()
 
 
-def _parts() -> list[projects.Part]:
-    """The parts the build merges: every app's (the files an import gave an app are built from its folder), the
-    carried part alone where the apps cannot be imported (no Qt)."""
-    try:
-        from . import apps
-
-        return apps.parts()
-    except ImportError:
-        return [carriedpart.PART]
+def _parts() -> list[projects.SPart]:
+    """The parts the build merges (``carriedpart.build_parts``)."""
+    return carriedpart.build_parts()
 
 
-def _source_folder(source: Path, proj: projects.Project) -> tuple[Path, tuple[str, ...]]:
+def _source_folder(source: Path, proj: projects.CProject) -> tuple[Path, tuple[str, ...]]:
     """What to compare the build with: the mod itself, or for a ``.zip`` (no folder) the files the import kept, the
     ``modinfo`` the build adds then left out of the comparison."""
     if source.is_file():
@@ -158,58 +158,64 @@ def _source_folder(source: Path, proj: projects.Project) -> tuple[Path, tuple[st
 
 
 def add_resume(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
+    parser = sub.add_parser(
         "resume", help="finish an import that was cut short (the project folder holds import-state.json), or remove it"
     )
-    p.add_argument("folder", type=Path, help="the half-made project's folder")
-    p.add_argument(
+    parser.add_argument("folder", type=Path, nargs="?", help="the half-made project's folder (not needed with --list)")
+    parser.add_argument(
         "--discard", action="store_true", help="remove the half-made project instead (the mod is not touched)"
     )
-    p.add_argument("--list", action="store_true", help="list the half-made imports the Toolbox knows of and stop")
-    p.add_argument("--settings", type=Path, default=None, help="the Toolbox's settings file")
-    p.set_defaults(func=cmd_resume)
+    parser.add_argument("--list", action="store_true", help="list the half-made imports the Toolbox knows of and stop")
+    parser.add_argument("--settings", type=Path, default=None, help="the Toolbox's settings file")
+    parser.set_defaults(func=cmd_resume)
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
     path = args.settings or settings_file()
     registry = path.parent / importresume.PENDING
     if args.list:
-        print(chr(10).join(p.line() for p in importresume.pending(registry)) or tr("common.import_pending_none"))
+        print(
+            "\n".join(pending_import.line() for pending_import in importresume.pending(registry))
+            or tr("common.import_pending_none")
+        )
         return 0
+    if args.folder is None:
+        print(f"error: {tr('common.import_folder_needed')}", file=sys.stderr)
+        return 2
     if args.discard:
         gone = importresume.discard(args.folder, registry)
         print(tr("common.import_discarded" if gone else "common.import_resume_none", folder=args.folder))
         return 0 if gone else 1
-    settings = Settings.load(path)
+    settings = CSettings.load(path)
     try:
         report = importresume.resume(
-            args.folder, settings, _say, importchecks.context_from_settings(settings, registry), resumable=False
+            args.folder, settings, _say, importchecks.context_from_settings(settings, registry), is_resumable=False
         )
-    except projectimport.ImportRefused as exc:
+    except projectimport.CImportRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     settings.save(path)
-    print(chr(10).join(report.lines()))
+    print("\n".join(report.lines()))
     return 0
 
 
 def add_reimport(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
+    parser = sub.add_parser(
         "reimport",
         help="compare a mod with its project by the import's manifest and take what changed (never overwrites an edit unasked)",
     )
-    p.add_argument("project", type=Path, help="the imported project's folder")
-    p.add_argument(
+    parser.add_argument("project", type=Path, help="the imported project's folder")
+    parser.add_argument(
         "source", type=Path, nargs="?", default=None, help="the mod (default: the one the project came from)"
     )
-    p.add_argument("--apply", action="store_true", help="carry it out (without: only the comparison is printed)")
-    p.add_argument(
+    parser.add_argument("--apply", action="store_true", help="carry it out (without: only the comparison is printed)")
+    parser.add_argument(
         "--conflicts",
         choices=(reimport.KEEP, reimport.TAKE),
         default=reimport.KEEP,
         help="for a file both sides changed: keep the project's (default) or take the mod's",
     )
-    p.set_defaults(func=cmd_reimport)
+    parser.set_defaults(func=cmd_reimport)
 
 
 def cmd_reimport(args: argparse.Namespace) -> int:
@@ -217,12 +223,12 @@ def cmd_reimport(args: argparse.Namespace) -> int:
     source = args.source or Path(meta.source if meta else "")
     try:
         made = reimport.plan(args.project, source, _say)
-    except projectimport.ImportRefused as exc:
+    except projectimport.CImportRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(chr(10).join(made.lines()))
+    print("\n".join(made.lines()))
     if not args.apply:
         made.dispose()
         return 0
-    print(chr(10).join(reimport.apply(made, reimport.choose_all(made, args.conflicts), _say)))
+    print("\n".join(reimport.apply(made, reimport.choose_all(made, args.conflicts), _say)))
     return 0

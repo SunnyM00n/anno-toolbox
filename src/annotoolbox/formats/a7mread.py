@@ -22,12 +22,12 @@ HEIGHT_UNITS = 4.0  # render units per world unit (the same number as ``islands.
 OBJECT_GROUPS = ("GameObject", "EditorObject", "NaturePreset", "Prop")
 
 
-class IslandError(ValueError):
+class CIslandError(ValueError):
     """The archive lacks a member or a block the reader needs."""
 
 
 @dataclass
-class PlacedObject:
+class SPlacedObject:
     """One placed object: its group, asset GUID, variation, world position, rotation (quaternion x, y, z, w), scale
     (one number, or per axis for a prop) and its own model config where the island names one."""
 
@@ -40,10 +40,10 @@ class PlacedObject:
     config: str
 
 
-def members(source: bytes | rda.RdaArchive, *names: str) -> list[bytes]:
+def members(source: bytes | rda.CRdaArchive, *names: str) -> list[bytes]:
     """The named members of an island archive (its bytes, or one opened), read in order: a name is the member's exact
     path, else the one file a path ending in it names (any folder, any case)."""
-    archive = rda.RdaArchive.from_bytes(source) if isinstance(source, bytes | bytearray) else source
+    archive = rda.CRdaArchive.from_bytes(source) if isinstance(source, bytes | bytearray) else source
     by_name: dict[str, str] = {}
     for path in archive.entries:
         by_name.setdefault(path.replace("\\", "/").lower().rsplit("/", 1)[-1], path)
@@ -51,34 +51,34 @@ def members(source: bytes | rda.RdaArchive, *names: str) -> list[bytes]:
     for name in names:
         path = name if name in archive.entries else by_name.get(name.lower().rsplit("/", 1)[-1])
         if path is None:
-            raise IslandError(f"no {name} in the archive")
+            raise CIslandError(f"no {name} in the archive")
         out.append(archive.read(path))
     return out
 
 
-def coarse_steps(rd3d: filedb.Tag) -> tuple[int, array]:
+def coarse_steps(rd3d: filedb.STag) -> tuple[int, array]:
     """(samples across, the int16 steps, rows by z) of ``rd3d.data``'s ``Terrain/CoarseHeightMap``; each step is
     ``1 / HEIGHT_STEPS`` of a render unit. The width is ``2 * size + 1``."""
     terrain = rd3d.path("Terrain")
-    coarse = terrain.find("CoarseHeightMap") if isinstance(terrain, filedb.Tag) else None
-    if not isinstance(coarse, filedb.Tag) or coarse.find("width") is None or coarse.find("map") is None:
-        raise IslandError("rd3d.data has no Terrain/CoarseHeightMap")
+    coarse = terrain.find("CoarseHeightMap") if isinstance(terrain, filedb.STag) else None
+    if not isinstance(coarse, filedb.STag) or coarse.find("width") is None or coarse.find("map") is None:
+        raise CIslandError("rd3d.data has no Terrain/CoarseHeightMap")
     width, raw = coarse.find("width").u32(), coarse.find("map").data
     if width < 2 or len(raw) != width * width * 2:
-        raise IslandError(f"the height map is {len(raw)} bytes for {width} x {width} samples")
+        raise CIslandError(f"the height map is {len(raw)} bytes for {width} x {width} samples")
     steps = array("h")
     steps.frombytes(raw)
     return width, steps
 
 
-def heights(source: bytes | rda.RdaArchive) -> tuple[int, list[float]]:
+def heights(source: bytes | rda.CRdaArchive) -> tuple[int, list[float]]:
     """(samples across, the heights in world units, rows by z) of an island archive's coarse height map."""
     width, steps = coarse_steps(filedb.read(members(source, "rd3d.data")[0]))
     scale = HEIGHT_STEPS * HEIGHT_UNITS
-    return width, [s / scale for s in steps]
+    return width, [step / scale for step in steps]
 
 
-def area_docs(session: filedb.Tag) -> Iterator[tuple[filedb.Tag, filedb.Tag]]:
+def area_docs(session: filedb.STag) -> Iterator[tuple[filedb.STag, filedb.STag]]:
     """Each area of a ``GameSessionManager`` tag with data, in file order: (the area tag, its ``Data`` read as a
     FileDB document)."""
     areas = session.path("AreaManagerData")
@@ -88,20 +88,20 @@ def area_docs(session: filedb.Tag) -> Iterator[tuple[filedb.Tag, filedb.Tag]]:
             yield area, filedb.read(data.data)
 
 
-def area_objects(doc: filedb.Tag, group: str) -> filedb.Tag | None:
+def area_objects(document: filedb.STag, group: str) -> filedb.STag | None:
     """The ``objects`` list of an area document's object group (``GameObject``, ``Prop``, ``EditorObject``), which
     vanilla nests under ``AreaObjectManager`` or not."""
-    return doc.path(f"AreaObjectManager/{group}/objects") or doc.path(f"{group}/objects")
+    return document.path(f"AreaObjectManager/{group}/objects") or document.path(f"{group}/objects")
 
 
-def object_tags(session: filedb.Tag, groups: Sequence[str] = OBJECT_GROUPS) -> Iterator[tuple[str, filedb.Tag]]:
+def object_tags(session: filedb.STag, groups: Sequence[str] = OBJECT_GROUPS) -> Iterator[tuple[str, filedb.STag]]:
     """Every object tag of a session's areas as (its group, the tag): by area, then by group, then in file order."""
-    for _area, doc in area_docs(session):
+    for _area, document in area_docs(session):
         for group in groups:
-            block = area_objects(doc, group)
-            for o in block.children if block is not None else []:
-                if isinstance(o, filedb.Tag):
-                    yield group, o
+            block = area_objects(document, group)
+            for child in block.children if block is not None else []:
+                if isinstance(child, filedb.STag):
+                    yield group, child
 
 
 def _floats(tag, count: int) -> tuple[float, ...] | None:
@@ -114,18 +114,22 @@ def _u32(tag) -> int:
     return struct.unpack_from("<I", tag.data)[0] if tag is not None and len(tag.data) >= 4 else 0
 
 
-def placed(o: filedb.Tag, group: str) -> PlacedObject | None:
-    """One object tag as a ``PlacedObject``; None when it has no position."""
-    position = _floats(o.find("Position"), 3)
+def placed(object_tag: filedb.STag, group: str) -> SPlacedObject | None:
+    """One object tag as a ``SPlacedObject``; None when it has no position."""
+    position = _floats(object_tag.find("Position"), 3)
     if position is None:
         return None
-    turn = _floats(o.path("Mesh/Orientation"), 4) or _floats(o.path("Prop/Rotation"), 4) or (0.0, 0.0, 0.0, 1.0)
-    per_axis, uniform = _floats(o.path("Prop/Scale"), 3), _floats(o.path("Mesh/Scale"), 1)
-    config = o.path("DynamicVariation/ConfigFilename")
-    return PlacedObject(
+    turn = (
+        _floats(object_tag.path("Mesh/Orientation"), 4)
+        or _floats(object_tag.path("Prop/Rotation"), 4)
+        or (0.0, 0.0, 0.0, 1.0)
+    )
+    per_axis, uniform = _floats(object_tag.path("Prop/Scale"), 3), _floats(object_tag.path("Mesh/Scale"), 1)
+    config = object_tag.path("DynamicVariation/ConfigFilename")
+    return SPlacedObject(
         group,
-        _u32(o.find("guid")),
-        _u32(o.find("Variation")),
+        _u32(object_tag.find("guid")),
+        _u32(object_tag.find("Variation")),
         position,
         turn,
         per_axis or (uniform[0] if uniform else 1.0),
@@ -133,8 +137,8 @@ def placed(o: filedb.Tag, group: str) -> PlacedObject | None:
     )
 
 
-def objects(source: bytes | rda.RdaArchive) -> list[PlacedObject]:
+def objects(source: bytes | rda.CRdaArchive) -> list[SPlacedObject]:
     """Every placed object of ``gamedata.data``'s areas, in file order."""
     session = filedb.read(members(source, "gamedata.data")[0]).path("GameSessionManager")
-    found = (placed(o, group) for group, o in object_tags(session)) if session is not None else ()
+    found = (placed(object_tag, group) for group, object_tag in object_tags(session)) if session is not None else ()
     return [item for item in found if item]

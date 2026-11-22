@@ -26,7 +26,7 @@ NARROW = 2.0  # a wrap width below this many font sizes is a run-time width the 
 
 
 @dataclass
-class TextStyle:
+class STextStyle:
     size: float = 24.0
     color: tuple[int, int, int] = (255, 255, 255)
     bold: bool = False
@@ -37,7 +37,7 @@ class TextStyle:
     wrap: bool = False
     clip: bool = False
     font: str | None = None  # the localized font's GUID
-    family: str | None = None  # the Qt family drawing it (fonts.GameFonts), None: a stand-in
+    family: str | None = None  # the Qt family drawing it (fonts.CGameFonts), None: a stand-in
     leading: float = 1.2  # the step from one line to the next, in font sizes
     outline_size: float = 0.0  # in font sizes
     cut: str = ""  # past the plane's width: "", "character" or "ellipsis"
@@ -48,31 +48,34 @@ class TextStyle:
     shown: tuple[float, float] = (0.0, 0.0)  # the shown text's size, the label's own units (its DisplayedSize)
 
 
-def label(ctx, node: dict, overrides: dict) -> tuple[str, TextStyle, tuple[float, float]]:
+def label(ctx, node: dict, overrides: dict) -> tuple[str, STextStyle, tuple[float, float]]:
     """A label's text, style and box: per axis the plane's size, the shown text's, the larger or the smaller, as its
     sizing mode says (``sized``); ``style.plane`` is the rectangle the text aligns in, ``style.origin`` where the box
     starts in it."""
     text, style = label_text(ctx, node, overrides), text_style(ctx, node, overrides)
     width, height = _pair(overrides.get((PLANE,), fields.get(node, "TextPlane")))
-    if style.wrap and 0 < width < NARROW * style.size and ctx.design:
+    if style.wrap and 0 < width < NARROW * style.size and ctx.m_design:
         style.wrap, width = False, 0.0  # the game binds the width at run time; one word a line helps no one
-    w, h = ctx.text_size(text, style, width)
-    if ctx.design:  # a plane of 0 is set at run time (a binding); the design view takes the shown text's size
-        width, height = width or w, height or h
-    style.plane, style.shown = (width, height), (w, h)
+    text_width, text_height = ctx.text_size(text, style, width)
+    if ctx.m_design:  # a plane of 0 is set at run time (a binding); the design view takes the shown text's size
+        width, height = width or text_width, height or text_height
+    style.plane, style.shown = (width, height), (text_width, text_height)
     modes = (mode(node, overrides, "HorizontalSizing"), mode(node, overrides, "VerticalSizing"))
-    style.origin = box_origin(style, modes, (w, h))
-    return text, style, (sized(modes[0], width, w), sized(modes[1], height, h))
+    style.origin = box_origin(style, modes, (text_width, text_height))
+    return text, style, (sized(modes[0], width, text_width), sized(modes[1], height, text_height))
 
 
-def box_origin(style: TextStyle, modes: tuple, shown: tuple[float, float]) -> tuple[float, float]:
+def box_origin(style: STextStyle, modes: tuple, shown: tuple[float, float]) -> tuple[float, float]:
     """Where a label's box starts in its plane: on an axis whose box is the shown text's (``sized``) at the place
     the text is aligned to, else at the plane's origin (layout.md "Labels"). A
     baseline alignment needs the font's ascent, which is not known here: such a box stays at the origin."""
     free = (style.plane[0] - shown[0], style.plane[1] - shown[1])
-    at = ({1: free[0] / 2, 2: free[0]}.get(style.align, 0.0), {1: free[1] / 2, 3: free[1]}.get(style.valign, 0.0))
-    texts = (sized(m, p, s) == s and s != p for m, p, s in zip(modes, style.plane, shown, strict=True))
-    return tuple(a if text else 0.0 for a, text in zip(at, texts, strict=True))
+    origin = ({1: free[0] / 2, 2: free[0]}.get(style.align, 0.0), {1: free[1] / 2, 3: free[1]}.get(style.valign, 0.0))
+    texts = (
+        sized(axis_mode, plane, axis_shown) == axis_shown and axis_shown != plane
+        for axis_mode, plane, axis_shown in zip(modes, style.plane, shown, strict=True)
+    )
+    return tuple(value if text else 0.0 for value, text in zip(origin, texts, strict=True))
 
 
 def sized(mode, plane: float, shown: float) -> float:
@@ -81,15 +84,15 @@ def sized(mode, plane: float, shown: float) -> float:
     return {1: shown, 2: max(plane, shown), 3: min(plane, shown)}.get(int(mode or 0), plane)
 
 
-def text_top(valign: int, plane: float, height: float, ascent: float, first: float) -> float:
-    """Where a text of ``height`` starts in a plane of ``plane`` by its ``AlignmentY``: 0 top, 1 centred, 2 the last
+def text_top(valign: int, plane: float, height_px: float, ascent: float, first: float) -> float:
+    """Where a text of ``height_px`` starts in a plane of ``plane`` by its ``AlignmentY``: 0 top, 1 centred, 2 the last
     line's baseline on the plane's bottom edge, 3 bottom; ``first`` is the height of the first line (the font's own),
     all in the label's own units (layout.md "The text probe")."""
     if valign == 1:
-        return (plane - height) / 2
+        return (plane - height_px) / 2
     if valign == 2:
-        return plane - (height - first) - ascent
-    return plane - height if valign == 3 else 0.0
+        return plane - (height_px - first) - ascent
+    return plane - height_px if valign == 3 else 0.0
 
 
 def _pair(value) -> tuple[float, float]:
@@ -102,14 +105,14 @@ def label_text(ctx, node: dict, overrides: dict) -> str:
     """What a label shows: the game's held text, a binding's, else the line its ``LocalizationId`` names (with an id
     the label shows the line, as the game does: ui/117/loading-screen-and-main-menu.md "Texts"), else its stored
     text. A filler a binding got from the preview (``placeholders.TEXTS``) gives way to the label's own line."""
-    live = elements.held_for(ctx.live_text, elements.Element(node, "label"))
+    live = elements.held_for(ctx.m_live_text, elements.SElement(node, "label"))
     if live is not None:  # the game's own text, held by an optional panel, in place of the sample value
         return live
     text = overrides.get((TEXT,))
     if not text or (isinstance(text, str) and text in placeholders.FILLERS):
         loca = overrides.get((0x8000000A,)) or fields.get(node, "LocalizationId") or ""
         loca = loca if isinstance(loca, str) else ""
-        line = ctx.files.text_of(loca, ctx.language) if loca else None
+        line = ctx.m_files.text_of(loca, ctx.m_language) if loca else None
         stored = fields.get(node, "Text") if text is None else None  # a binding that wrote "" keeps it empty
         shown = overrides.get(baseline.BASELINE_TEXT)  # set only where the text is a filler or none (``baseline``)
         own = shown if shown is not None else text or stored or (f"[{loca}]" if loca else "")
@@ -128,23 +131,23 @@ def mode(node: dict, overrides: dict | None, name: str) -> int:
     return int(value)
 
 
-def text_style(ctx, node: dict, overrides: dict | None = None) -> TextStyle:
-    style = TextStyle()
-    ts = ctx.root(fields.get(node, "TextStyle"))
-    if ts is not None:
-        style.size = float(fields.get(ts, "Size", 24.0) or 24.0)
-        style.color = ctx.tint(ts, "BaseColor")
-        style.bold, style.italic = bool(fields.get(ts, "Bold")), bool(fields.get(ts, "Italic"))
-        style.font = fields.get(ts, "LocalizedFont")
-        style.leading = float(fields.get(ts, "Leading", 1.2) or 1.2)
-        if ctx.fonts is not None:
-            style.family, factor = ctx.fonts(style.font, ctx.language)
+def text_style(ctx, node: dict, overrides: dict | None = None) -> STextStyle:
+    style = STextStyle()
+    style_root = ctx.root(fields.get(node, "TextStyle"))
+    if style_root is not None:
+        style.size = float(fields.get(style_root, "Size", 24.0) or 24.0)
+        style.color = ctx.tint(style_root, "BaseColor")
+        style.bold, style.italic = bool(fields.get(style_root, "Bold")), bool(fields.get(style_root, "Italic"))
+        style.font = fields.get(style_root, "LocalizedFont")
+        style.leading = float(fields.get(style_root, "Leading", 1.2) or 1.2)
+        if ctx.m_fonts is not None:
+            style.family, factor = ctx.m_fonts(style.font, ctx.m_language)
             style.size *= factor
-        if fields.get(ts, "ShadowEnabled"):
-            style.shadow = (ctx.tint(ts, "ShadowColor"), float(fields.get(ts, "ShadowAlpha", 1.0)),
-                            float(fields.get(ts, "ShadowDistance", 2.0)), float(fields.get(ts, "ShadowAngle", 45.0)))  # fmt: skip
-        if fields.get(ts, "OutlineEnabled"):
-            style.outline = (ctx.tint(ts, "OutlineColor"), float(fields.get(ts, "OutlineAlpha", 1.0)))
+        if fields.get(style_root, "ShadowEnabled"):
+            style.shadow = (ctx.tint(style_root, "ShadowColor"), float(fields.get(style_root, "ShadowAlpha", 1.0)),
+                            float(fields.get(style_root, "ShadowDistance", 2.0)), float(fields.get(style_root, "ShadowAngle", 45.0)))  # fmt: skip
+        if fields.get(style_root, "OutlineEnabled"):
+            style.outline = (ctx.tint(style_root, "OutlineColor"), float(fields.get(style_root, "OutlineAlpha", 1.0)))
             style.outline_size = OUTLINE_SIZE
     style.align = fields.alignment_index(mode(node, overrides, "AlignmentX"))
     style.valign = mode(node, overrides, "AlignmentY")

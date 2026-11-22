@@ -12,9 +12,9 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
-from ..modloader.mods import MODINFO_NAMES, Mod, patch_target
-from .base import GameBase
-from .model import NEW, REPLACED, SAME, FileChange
+from ..modloader.mods import MODINFO_NAMES, CMod, patch_target
+from .base import CGameBase
+from .model import NEW, REPLACED, SAME, SFileChange
 
 
 def digest(data: bytes) -> str:
@@ -22,23 +22,28 @@ def digest(data: bytes) -> str:
 
 
 def classify(
-    base: GameBase, path: str, size: int, read: Callable[[], bytes], compare: bool, source: str | tuple[str, str] = ""
-) -> FileChange:
+    base: CGameBase,
+    path: str,
+    size_bytes: int,
+    read: Callable[[], bytes],
+    compare: bool,
+    source: str | tuple[str, str] = "",
+) -> SFileChange:
     """The record of one file. ``compare``: read it (for its digest, and to tell a file that is the game's own, ``SAME``)."""
     data = read() if compare else None
     sha = digest(data) if data is not None else ""
     if not base.exists(path):
-        return FileChange(path, NEW, size, digest=sha, source=source)
+        return SFileChange(path, NEW, size_bytes, digest=sha, source=source)
     if data is None:
-        return FileChange(path, REPLACED, size, source=source)
+        return SFileChange(path, REPLACED, size_bytes, source=source)
     theirs = base.read_base(path)
-    return FileChange(
-        path, SAME if theirs is not None and theirs == data else REPLACED, size, digest=sha, source=source
+    return SFileChange(
+        path, SAME if theirs is not None and theirs == data else REPLACED, size_bytes, digest=sha, source=source
     )
 
 
 def read_source(source: str | tuple[str, str]) -> bytes:
-    """The bytes of a ``FileChange.source``: a file, or a member of a ``.zip`` (``archive.zip|path inside``); a pair is
+    """The bytes of a ``SFileChange.source``: a file, or a member of a ``.zip`` (``archive.zip|path inside``); a pair is
     the mod's ``source_root`` and the file's path in it."""
     archive, bar, member = (source if isinstance(source, str) else "".join(source)).partition("|")
     if bar and archive.lower().endswith(".zip"):
@@ -53,7 +58,7 @@ def is_content(rel: str) -> bool:
     return patch_target(rel) is None and low not in MODINFO_NAMES and not low.endswith(".include.xml")
 
 
-def mod_files(base: GameBase, mod: Mod, compare_bytes: int) -> list[FileChange]:
+def mod_files(base: CGameBase, mod: CMod, compare_bytes: int) -> list[SFileChange]:
     """The files of ``mod`` that are carried whole, by path; at most ``compare_bytes`` of them are compared with the
     game's byte for byte (the sizes come from the folder listing, a mod may hold half a million files)."""
     out, root = [], mod.source_root  # one root string for the mod: a mod may carry half a million files

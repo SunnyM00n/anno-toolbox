@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QFormLayout, QHBoxLayout, QLineEdit, QPushButton, 
 
 from ..infra.i18n import tr
 from . import previewdefaults as pd
-from .previewcatalogue import Option
-from .previewwidgets import IconCombo, Section, humanise
+from .previewcatalogue import SOption
+from .previewwidgets import CIconCombo, CSection, humanise
 
 PROVINCES = {pd.LATIUM: "Latium", pd.ALBION: "Albion", pd.AEGYPTUS: "Aegyptus"}  # the names when the data has none
 PRESET, SEED, MAP, EMPEROR = (
@@ -22,82 +22,87 @@ PRESET, SEED, MAP, EMPEROR = (
 FIRST = (MAP, EMPEROR)  # the options with no data set of their own: the map type is a GUID, the emperor a participant
 
 
-class SetupSection(Section):
+class CSetupSection(CSection):
     def build(self) -> None:
-        lay = QVBoxLayout(self)
+        layout = QVBoxLayout(self)
         top = QFormLayout()
-        self.combos: dict[str, IconCombo] = {}
-        self.spins: dict[str, QSpinBox] = {}
-        self.preset = self._combo(PRESET, self.cat.presets or [Option(41206, "Campaign")])
-        self.row(top, tr("ui.preview_preset"), self.preset, (f"options.{PRESET}",), tr("ui.preview_preset_tip"))
-        self.region = IconCombo()
-        provinces = [Option(o.guid, o.name or PROVINCES.get(o.guid, str(o.guid))) for o in self.cat.regions]
-        self.region.fill(provinces or [Option(g, n) for g, n in PROVINCES.items()])
-        self.region.picked.connect(lambda guid: self.put("region", None if guid == pd.LATIUM else guid))
-        self.row(top, tr("ui.preview_region"), self.region, ("region",), tr("ui.preview_region_tip"))
+        self.m_combos: dict[str, CIconCombo] = {}
+        self.m_spins: dict[str, QSpinBox] = {}
+        self.m_preset = self._combo(PRESET, self.cat.presets or [SOption(41206, "Campaign")])
+        self.row(top, tr("ui.preview_preset"), self.m_preset, (f"options.{PRESET}",), tr("ui.preview_preset_tip"))
+        self.m_region = CIconCombo()
+        provinces = [
+            SOption(option.guid, option.name or PROVINCES.get(option.guid, str(option.guid)))
+            for option in self.cat.regions
+        ]
+        self.m_region.fill(provinces or [SOption(guid, province_name) for guid, province_name in PROVINCES.items()])
+        self.m_region.picked.connect(lambda guid: self.put("region", None if guid == pd.LATIUM else guid))
+        self.row(top, tr("ui.preview_region"), self.m_region, ("region",), tr("ui.preview_region_tip"))
         self.row(top, tr("ui.preview_seed"), self._spin(SEED), (f"options.{SEED}",), tr("ui.preview_seed_tip"))
-        lay.addLayout(top)
+        layout.addLayout(top)
         bar = QHBoxLayout()
-        self.campaign = QPushButton(tr("ui.preview_campaign_setup"))
-        self.campaign.setToolTip(tr("ui.preview_campaign_setup_tip"))
-        self.campaign.clicked.connect(lambda _c=False: self.use_campaign())
-        self.keyed.append(self.campaign)
+        self.m_campaign = QPushButton(tr("ui.preview_campaign_setup"))
+        self.m_campaign.setToolTip(tr("ui.preview_campaign_setup_tip"))
+        self.m_campaign.clicked.connect(lambda _c=False: self.use_campaign())
+        self.m_keyed.append(self.m_campaign)
         self.find = QLineEdit(placeholderText=tr("ui.preview_setup_find"))
         self.find.setToolTip(tr("ui.preview_setup_find_tip"))
         self.find.textChanged.connect(self._filter)
-        bar.addWidget(self.campaign)
+        bar.addWidget(self.m_campaign)
         bar.addWidget(self.find, 1)
-        lay.addLayout(bar)
-        self.form = QFormLayout()
-        lay.addLayout(self.form)
-        lay.addStretch(1)
-        self.rows: list[tuple[int, str]] = []
+        layout.addLayout(bar)
+        self.m_form = QFormLayout()
+        layout.addLayout(self.m_form)
+        layout.addStretch(1)
+        self.m_rows: list[tuple[int, str]] = []
         for name in self._names():
             self._option_row(name)
 
     def _names(self) -> list[str]:
         names = list(self.cat.setup)
-        names += [n for n, _v in pd.SETUP if n not in names]
-        return names + [m.removeprefix("setup.") for m in FIRST if m.removeprefix("setup.") not in names]
+        names += [name for name, _value in pd.SETUP if name not in names]
+        return names + [key.removeprefix("setup.") for key in FIRST if key.removeprefix("setup.") not in names]
 
-    def _combo(self, key: str, options: list[Option]) -> IconCombo:
-        combo = IconCombo()
+    def _combo(self, key: str, options: list[SOption]) -> CIconCombo:
+        combo = CIconCombo()
         combo.fill(options)
         combo.picked.connect(lambda guid, k=key: self.put_option(k, guid))
-        self.combos[key] = combo
+        self.m_combos[key] = combo
         return combo
 
     def _spin(self, key: str) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(0, 2**31 - 1)
         spin.setKeyboardTracking(False)
-        spin.valueChanged.connect(lambda v, k=key: self.put_option(k, v))
-        self.spins[key] = spin
+        spin.valueChanged.connect(lambda value, option=key: self.put_option(option, value))
+        self.m_spins[key] = spin
         return spin
 
     def _option_row(self, name: str) -> None:
         key = f"setup.{name}"
         values = self.cat.setup.get(name)
         if not values and key == EMPEROR:
-            values = [Option(c.participant, c.name) for c in self.cat.characters.get("emperor", [])]
+            values = [
+                SOption(character.participant, character.name) for character in self.cat.characters.get("emperor", [])
+            ]
         control = self._combo(key, values) if values else self._spin(key)
         text = humanise(name)
-        self.row(self.form, text, control, (f"options.{key}",), tr("ui.preview_option_tip", name=name))
-        self.rows.append((self.form.rowCount() - 1, text.lower()))
+        self.row(self.m_form, text, control, (f"options.{key}",), tr("ui.preview_option_tip", name=name))
+        self.m_rows.append((self.m_form.rowCount() - 1, text.lower()))
 
     def _filter(self, text: str) -> None:
         words = text.lower().split()
-        for index, label in self.rows:
-            self.form.setRowVisible(index, all(w in label for w in words))
+        for index, label in self.m_rows:
+            self.m_form.setRowVisible(index, all(word in label for word in words))
 
     def use_campaign(self) -> None:
         """Every setup option back to the campaign's, the province too."""
         mine = {f"options.{k}": None for k in self.d.options if k.startswith("setup.")}
-        self.panel.store.set_many({**mine, "region": None})
+        self.m_panel.m_store.set_many({**mine, "region": None})
 
     def refresh(self) -> None:
-        for key, combo in self.combos.items():
+        for key, combo in self.m_combos.items():
             combo.select(self.d.option(key))
-        for key, spin in self.spins.items():
+        for key, spin in self.m_spins.items():
             spin.setValue(int(self.d.option(key, 0) or 0))
-        self.region.select(self.d.region)
+        self.m_region.select(self.d.region)

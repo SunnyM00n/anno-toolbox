@@ -2,7 +2,7 @@
 the models drawn into it by the game's own shaders (``gamedraw``), the game's deferred shading over it (``gamelight``,
 a compute pass) or a stand-in light of ours, and a composite into the view's target.
 
-``GameFrame(ctx)`` is the entry: ``render(target, size, models, camera)`` records the passes; the composite writes
+``CGameFrame(ctx)`` is the entry: ``render(target, size_px, models, camera)`` records the passes; the composite writes
 the G-buffer's depth so that what a view draws itself (a ground, particles) meets the models. The G-buffer:
 ``gbuffer.fxh``; the frame: docs/rendering/frame-117.md; the plan: docs/tool-suite.md section 21.
 """
@@ -18,9 +18,9 @@ from . import gameshader as gs
 from . import gameshadow, lightclusters
 from .camera import gl, look_at, perspective
 from .gamecompute import storage_buffer
-from .gamelight import DeferredShading, Extras, Sky
-from .nativepass import Composite, draw_models
-from .rhidevice import Texture
+from .gamelight import CDeferredShading, SExtras, SSky
+from .nativepass import CComposite, draw_models
+from .rhidevice import CTexture
 
 # the engine's targets of the G-buffer pass (gbuffer.fxh): normal, albedo, gloss / metal / self-shadow, velocity
 GBUFFER = (QRhiTexture.Format.RGB10A2, QRhiTexture.Format.RGBA8, QRhiTexture.Format.RGBA8, QRhiTexture.Format.RGBA16F)
@@ -81,7 +81,7 @@ void main() {
 
 
 @dataclass(frozen=True)
-class Light:
+class SLight:
     """The stand-in light's sun (towards it), its colour, the sky's and the background's; the exposure of the
     composite's own finish."""
 
@@ -96,30 +96,38 @@ LEFT_HANDED = np.diag([1.0, 1.0, -1.0, 1.0])  # our right-handed view into the e
 
 
 @dataclass
-class Passes:
-    """The frame's passes besides the G-buffer: the shadow casters (``gamedraw.GameModel``s of the effects' shadow
+class SPasses:
+    """The frame's passes besides the G-buffer: the shadow casters (``gamedraw.CGameModel``s of the effects' shadow
     technique) with the scene's bounds (world lo, hi) the cascades are fitted to."""
 
     casters: list = field(default_factory=list)
     box: tuple | None = None
     lights: list = field(default_factory=list)  # lightclusters' lights, in the scene's axes
-    fit: object = None  # shadowfit.ShadowFit: the game's analysis fits the cascades (None: the CPU fits them)
-    transparent: list = field(default_factory=list)  # gamedraw.GameModel of the effects' Transparent techniques
-    sky: object = None  # gamesky.SkyPasses: the game's sky passes light the frame (None: the look's light)
-    water: object = None  # gamewater.SceneCopies: the copies the water reads, made before the transparent pass
-    atmosphere: object = None  # gameatmosphere.Atmosphere: the visible sky and haze (needs ``sky``)
-    look: object = None  # gameatmosphere.Look: its blur and fade
-    clouds: object = None  # gameclouds.Clouds: the clouds in the sky and their shadow (needs ``atmosphere``)
-    sea: object = None  # gamesea.Sea: the sea by the game's ocean shader, the transparent pass's first draw
-    inland: object = None  # gameinland.InlandWater: rivers and lakes by the game's shader, drawn before the sea
-    ground: Ground | None = None  # the session's terrain the models' terrain adaptation reads (None: none)
-    # the native backend's draws, recorded first in the G-buffer's and the shadow map's passes: ``gbuffer(cb, camera,
-    # size)``, ``shadow(cb, camera, cascades, info, side)``, ``casters`` (any to draw) (``terrainnative.FrameDraws``)
+    fit: object = None  # shadowfit.CShadowFit: the game's analysis fits the cascades (None: the CPU fits them)
+    transparent: list = field(default_factory=list)  # gamedraw.CGameModel of the effects' Transparent techniques
+    sky: object = None  # gamesky.CSkyPasses: the game's sky passes light the frame (None: the look's light)
+    water: object = None  # gamewater.CSceneCopies: the copies the water reads, made before the transparent pass
+    atmosphere: object = None  # gameatmosphere.CAtmosphere: the visible sky and haze (needs ``sky``)
+    look: object = None  # gameatmosphere.SLook: its blur and fade
+    clouds: object = None  # gameclouds.CClouds: the clouds in the sky and their shadow (needs ``atmosphere``)
+    sea: object = None  # gamesea.CSea: the sea by the game's ocean shader, the transparent pass's first draw
+    inland: object = None  # gameinland.CInlandWater: rivers and lakes by the game's shader, drawn before the sea
+    ground: SGround | None = None  # the session's terrain the models' terrain adaptation reads (None: none)
+    # the native backend's draws, recorded first in the G-buffer's and the shadow map's passes: ``gbuffer(command_buffer, camera,
+    # size)``, ``shadow(command_buffer, camera, cascades, info, side)``, ``casters`` (any to draw) (``terrainnative.SFrameDraws``)
     native: object = None
+    # the objects by the native backend, recorded last in both passes: like ``native`` (``objectsnative.SFrameDraws``)
+    objects: object = None
+    # the water and the transparent parts by the native backend, each run of them recorded in its place of the
+    # transparent pass (``waternative.SFrameWater``)
+    native_water: object = None
+    # the shading, sky, haze and clouds by the native backend (``shadingnative.CNativeShading``; its cascades' fit is
+    # ``fit``): ``shade`` and ``atmosphere`` in place of ``_shading`` and the atmosphere's run
+    shading: object = None
 
 
 @dataclass
-class Ground:
+class SGround:
     """The session's terrain as the terrain, the models and the decals read it beyond their own: its size, its maps
     by the shaders' names (the coarse heights and displacement, the grit and cliff coverage and textures), the
     frame's values that go with them (the grit's) (rendering/island-117-view.md "Phase 5")."""
@@ -131,204 +139,277 @@ class Ground:
     def fill(self):
         """The pass's fill writing ``cbPerFrame``'s terrain values, keyed so a still frame skips it (``stamp_of``);
         worked out once per layout and copied into every buffer of it (a moving camera fills every draw's)."""
-        s = self.size
-        values = {**self.values, "cTerrainSize": [s, s, 1 / s, 1 / s], "cTerrainHeightTexIsValid": 1}
-        token = (s, str(self.values))
+        ground_size = self.size
+        values = {
+            **self.values,
+            "cTerrainSize": [ground_size, ground_size, 1 / ground_size, 1 / ground_size],
+            "cTerrainHeightTexIsValid": 1,
+        }
+        token = (ground_size, str(self.values))
 
-        def write(c: gs.Constants) -> None:
+        def write(constants: gs.CConstants) -> None:
             for name, value in values.items():
-                c.set(name, value)
+                constants.set(name, value)
 
-        def fill(c: gs.Constants) -> None:
-            gs.replay(c, "ground", token, write)
+        def fill(constants: gs.CConstants) -> None:
+            gs.replay(constants, "ground", token, write)
 
-        fill.key = fill.common_key = ("ground", s, tuple(id(m) for m in self.maps.values()), token[1])
+        fill.key = fill.common_key = (
+            "ground",
+            ground_size,
+            tuple(id(map_texture) for map_texture in self.maps.values()),  # the fill writes size and values only
+            token[1],
+        )
         return fill
 
 
-class GameFrame:
+class CGameFrame:
     """The G-buffer of one view and the passes over it (module docstring)."""
 
-    def __init__(self, ctx, stencil: bool = False) -> None:
-        self.ctx = ctx
-        self.stencil = stencil  # the depth target holds the engine's stencil bits too (the cut-outs, the water's)
-        self.size: tuple[int, int] | None = None
-        self.targets: list = []
-        self.lit: list = []
-        self.depth = self.fbo = self.lit_fbo = None
-        self.shadow: gameshadow.ShadowMap | None = None
-        self.shadow_size = gameshadow.SIZE  # the map's side (``set_quality``)
-        self.shadow_cascades = gameshadow.COUNT  # the cascades drawn and read (``set_quality``)
-        self.cascades: gameshadow.Cascades | None = None
-        self.info = None  # cShadowInformation: the cascades as the casters and the shading read them
-        self.ray = np.identity(4)  # our camera's inverse view-projection: which way a pixel looks (the composite)
-        self.planes = (0.1, 100.0, 100.0)  # near, the view's far plane, the G-buffer's (the composite's depth)
-        self.composite = Composite(ctx, LIGHT_FS)
+    def __init__(self, ctx, has_stencil: bool = False) -> None:
+        self.m_ctx = ctx
+        # the depth target holds the engine's stencil bits too (the cut-outs, the water's)
+        self.m_has_stencil = has_stencil
+        self.m_size_px: tuple[int, int] | None = None
+        self.m_targets: list = []
+        self.m_lit: list = []
+        self.m_depth = self.m_fbo = self.m_lit_fbo = None
+        self.m_shadow: gameshadow.CShadowMap | None = None
+        self.m_shadow_size = gameshadow.SIZE  # the map's side (``set_quality``)
+        self.m_shadow_cascades = gameshadow.COUNT  # the cascades drawn and read (``set_quality``)
+        self.m_cascades: gameshadow.SCascades | None = None
+        self.m_info = None  # cShadowInformation: the cascades as the casters and the shading read them
+        self.m_ray = np.identity(4)  # our camera's inverse view-projection: which way a pixel looks (the composite)
+        self.m_planes = (0.1, 100.0, 100.0)  # near, the view's far plane, the G-buffer's (the composite's depth)
+        self.m_composite = CComposite(ctx, LIGHT_FS)
 
-    def set_quality(self, q) -> None:
-        """The rendering quality's shadow map side and cascade count (``render.quality.Quality``; None: the best),
+    def set_quality(self, quality) -> None:
+        """The rendering quality's shadow map side and cascade count (``render.quality.SQuality``; None: the best),
         from the next frame (the map is made again when its side changed); the render scale is the caller's: it
         hands the scaled size to ``camera`` and ``render``."""
-        side = q.shadow_size if q is not None else gameshadow.SIZE
-        if side != self.shadow_size and self.shadow is not None:
-            self.shadow.release()
-            self.shadow = None
-        self.shadow_size = side
-        self.shadow_cascades = q.shadow_cascades if q is not None else gameshadow.COUNT
+        side = quality.shadow_size if quality is not None else gameshadow.SIZE
+        if side != self.m_shadow_size and self.m_shadow is not None:
+            self.m_shadow.release()
+            self.m_shadow = None
+        self.m_shadow_size = side
+        self.m_shadow_cascades = quality.shadow_cascades if quality is not None else gameshadow.COUNT
 
-    def _gbuffer(self, size: tuple[int, int]) -> None:
-        if self.size == size:
+    def _gbuffer(self, size_px: tuple[int, int]) -> None:
+        if self.m_size_px == size_px:
             return
         self._drop()
-        ctx = self.ctx
-        self.targets = [ctx.native_texture(size, f, srgb=ALBEDO_SRGB and k == 1) for k, f in enumerate(GBUFFER)]
-        if self.stencil:
-            self.depth = self._depth_stencil(size)
+        ctx = self.m_ctx
+        self.m_targets = [
+            ctx.native_texture(size_px, texture_format, srgb=ALBEDO_SRGB and k == 1)
+            for k, texture_format in enumerate(GBUFFER)
+        ]
+        if self.m_has_stencil:
+            self.m_depth = self._depth_stencil(size_px)
         else:
-            self.depth = ctx.depth_renderbuffer(size)
-        self.fbo = ctx.framebuffer(self.targets, self.depth)
+            self.m_depth = ctx.depth_renderbuffer(size_px)
+        self.m_fbo = ctx.framebuffer(self.m_targets, self.m_depth)
         formats = (QRhiTexture.Format.RGBA16F, QRhiTexture.Format.R8)
-        self.lit = [ctx.native_texture(size, f, storage=True) for f in formats]
-        self.lit_fbo = ctx.framebuffer(self.lit, self.depth)  # RTT_DEFAULT: the transparent pass draws into it
-        self.size = size
+        self.m_lit = [ctx.native_texture(size_px, texture_format, storage=True) for texture_format in formats]
+        self.m_lit_fbo = ctx.framebuffer(self.m_lit, self.m_depth)  # RTT_DEFAULT: the transparent pass draws into it
+        self.m_size_px = size_px
 
-    def _depth_stencil(self, size) -> Texture:
-        depth = Texture(self.ctx, tuple(size), 1, "f4", "depth", qformat=QRhiTexture.Format.D32FS8)
+    def _depth_stencil(self, size_px) -> CTexture:
+        depth = CTexture(self.m_ctx, tuple(size_px), 1, "f4", "depth", m_qformat=QRhiTexture.Format.D32FS8)
         depth.create()
         return depth
 
-    def camera(self, size: tuple[int, int], eye, target, fov: float, near: float, far: float,
-               game_far: float = 0.0) -> gs.Camera:  # fmt: skip
-        """The engine's camera for ``size``: its view space left-handed (+z ahead, as the shadow cascades and the
+    def camera(self, size_px: tuple[int, int], eye, target, fov_rad: float, near: float, far: float,
+               game_far: float = 0.0) -> gs.SCamera:  # fmt: skip
+        """The engine's camera for ``size_px``: its view space left-handed (+z ahead, as the shadow cascades and the
         light clusters read view depth), its y turned over where the device stores images upside down against
         OpenGL, so the G-buffer reads as our own targets do (rhipass, "the right way up"). ``game_far``: the
         engine's far plane when it lies beyond the view's ``far`` (the clouds' rays end there; the cascades still
         end at ``far``, the composite writes the view's own depth)."""
-        self.planes = (near, far, max(far, game_far))
-        proj = LEFT_HANDED @ gs.perspective(fov, size[0] / max(1, size[1]), near, self.planes[2], reverse=True)
-        if self.ctx.flip_offscreen:
+        self.m_planes = (near, far, max(far, game_far))
+        proj = LEFT_HANDED @ gs.perspective(
+            fov_rad, size_px[0] / max(1, size_px[1]), near, self.m_planes[2], is_reversed=True
+        )
+        if self.m_ctx.m_flip_offscreen:
             proj = proj @ np.diag([1.0, -1.0, 1.0, 1.0])
         view = gs.look_at(np.asarray(eye, float), np.asarray(target, float)) @ LEFT_HANDED
-        self.ray = np.linalg.inv(perspective(fov, size[0] / max(1, size[1]), near, far) @ look_at(eye, target))
-        return gs.Camera(np.asarray(eye, float), view, proj, near, self.planes[2], size, far)
+        self.m_ray = np.linalg.inv(
+            perspective(fov_rad, size_px[0] / max(1, size_px[1]), near, far) @ look_at(eye, target)
+        )
+        return gs.SCamera(np.asarray(eye, float), view, proj, near, self.m_planes[2], size_px, far)
 
-    def render(self, target, size: tuple[int, int], models: list, camera: gs.Camera, light: Light | None = None,
-               finish: bool = True, shading: tuple[DeferredShading, Sky] | None = None,
-               passes: Passes | None = None) -> None:  # fmt: skip
-        """The G-buffer pass with ``models`` (``gamedraw.GameModel``), the sun's shadow map when ``passes`` has
+    def render(self, target, size_px: tuple[int, int], models: list, camera: gs.SCamera, light: SLight | None = None,
+               finish: bool = True, shading: tuple[CDeferredShading, SSky] | None = None,
+               passes: SPasses | None = None) -> None:  # fmt: skip
+        """The G-buffer pass with ``models`` (``gamedraw.CGameModel``), the sun's shadow map when ``passes`` has
         casters, the game's deferred shading when ``shading`` is given, then the composite into ``target`` (a
         framebuffer of the device; ``finish``: the whole picture, else the lit models over what it holds)."""
-        light = light or Light()
-        passes = passes or Passes()
-        self._gbuffer(size)
+        light = light or SLight()
+        passes = passes or SPasses()
+        self._gbuffer(size_px)
         ground = passes.ground
-        native = passes.native
-        external = (lambda cb: native.gbuffer(cb, camera, size)) if native is not None else None
-        self._record(self.fbo, models, size, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps,
-                     external=external)  # fmt: skip
-        self.cascades = None
-        casters = passes.casters or (native is not None and native.casters)
+        native, objects = passes.native, passes.objects
+        external = None
+        if native is not None:
+
+            def external(
+                command_buffer,
+            ) -> None:  # the cut-out volumes right after the terrain (``FrameDraws.cutouts``)
+                native.gbuffer(command_buffer, camera, size_px)
+                if objects is not None:
+                    objects.cutouts(command_buffer, camera, size_px)
+
+        after = (
+            (lambda command_buffer: objects.gbuffer(command_buffer, camera, size_px)) if objects is not None else None
+        )
+        self._record(self.m_fbo, models, size_px, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps,
+                     external=external, after=after)  # fmt: skip
+        self.m_cascades = None
+        casters = passes.casters or any(draw_pass is not None and draw_pass.casters for draw_pass in (native, objects))
         if shading is not None and casters and passes.box is not None:
-            self._shadow(size, camera, shading[1].sun, passes)
-        sky_drawn = self._lit(size, camera, shading, passes) if shading is not None else False
+            self._shadow(size_px, camera, shading[1].sun, passes)
+        sky_drawn = self._lit(size_px, camera, shading, passes) if shading is not None else False
         textures = dict(zip(("gNormal", "gAlbedo", "gMaterial", "gDepth", "gLit"),
-                            (*self.targets[:3], self.depth, self.lit[0]), strict=True))  # fmt: skip
-        d = np.asarray(light.sun, float)
+                            (*self.m_targets[:3], self.m_depth, self.m_lit[0]), strict=True))  # fmt: skip
+        sun_direction = np.asarray(light.sun, float)
         uniforms = {
-            "lit": shading is not None, "litSky": sky_drawn, "invViewProj": gl(self.ray),
-            "sunDir": tuple(d / np.linalg.norm(d)), "sunColor": tuple(light.sun_color), "sky": tuple(light.sky),
-            "background": tuple(light.background), "viewDir": tuple(-float(v) for v in camera.view[:3, 2]),
-            "finish": finish, "exposure": light.exposure, "planes": self.planes,
+            "lit": shading is not None, "litSky": sky_drawn, "invViewProj": gl(self.m_ray),
+            "sunDir": tuple(sun_direction / np.linalg.norm(sun_direction)), "sunColor": tuple(light.sun_color), "sky": tuple(light.sky),
+            "background": tuple(light.background), "viewDir": tuple(-float(component) for component in camera.view[:3, 2]),
+            "finish": finish, "exposure": light.exposure, "planes": self.m_planes,
         }  # fmt: skip
         # the game's sky at the far plane meets the cleared depth (<=); the whole picture is drawn untested
-        self.composite.draw(target, textures, uniforms, depth_test=not finish, depth_func="<=")
+        self.m_composite.draw(target, textures, uniforms, depth_test=not finish, depth_func="<=")
 
-    def _record(self, fbo, models: list, size, camera: gs.Camera, targets: int, fill=None, shared=None,
-                clear: bool = True, external=None) -> None:  # fmt: skip
-        """One pass of ``models`` (``gamedraw.GameModel``) into ``fbo``, its depth cleared to the engine's far (0)."""
+    def _record(self, framebuffer, models: list, size_px, camera: gs.SCamera, targets: int, fill=None, shared=None,
+                clear: bool = True, external=None, after=None, **native) -> None:  # fmt: skip
+        """One pass of ``models`` (``gamedraw.CGameModel``) into ``framebuffer``, its depth cleared to the engine's far (0);
+        ``native``: ``draw_models``' ``native`` and ``before``."""
 
-        draw_models(self.ctx, fbo, models, lambda m, rp, sig, batch: m.prepare(rp, sig, batch, camera, fill, shared),
-                    lambda m, cb: m.draw(cb, size), targets=targets, depth=0.0, clear=clear,
-                    external=external)  # fmt: skip
+        draw_models(
+            self.m_ctx,
+            framebuffer,
+            models,
+            lambda model, render_pass, signature, batch: model.prepare(
+                render_pass, signature, batch, camera, fill, shared
+            ),
+            lambda model, command_buffer: model.draw(command_buffer, size_px),
+            targets=targets,
+            depth=0.0,
+            clear=clear,
+            external=external,
+            after=after,
+            **native,
+        )
 
-    def _lit(self, size, camera: gs.Camera, shading: tuple, passes: Passes) -> bool:
+    def _lit(self, size_px, camera: gs.SCamera, shading: tuple, passes: SPasses) -> bool:
         """The deferred shading, the copies and the transparent pass, then the visible sky and haze over the lit
         colour (``passes.atmosphere``, with the sky passes' tables); True when the sky was drawn so."""
-        clusters = lightclusters.build(passes.lights, camera.view, camera.proj, camera.far) if passes.lights else None
-        clouds = passes.clouds if passes.clouds is not None and not passes.clouds.error else None
-        inputs, extras = self._shading(size, camera, *shading, clusters, passes.sky, clouds)
+        clusters = (
+            lightclusters.build(passes.lights, camera.view, camera.projection, camera.far) if passes.lights else None
+        )
+        clouds = passes.clouds if passes.clouds is not None and not passes.clouds.m_error else None
+        native = passes.shading if passes.shading is not None and not passes.shading.m_error else None
+        if native is not None:
+            inputs, extras = native.shade(self.m_ctx, self, size_px, camera, *shading, clusters, clouds)
+            if passes.native_water is not None:
+                passes.native_water.overlay = native.overlay(self)
+        else:
+            inputs, extras = self._shading(size_px, camera, *shading, clusters, passes.sky, clouds)
         sea = passes.sea.model(camera) if passes.sea is not None else None
         inland = passes.inland.models() if passes.inland is not None else []
         if passes.transparent or sea is not None or inland:
-            water = passes.water if passes.water is not None and not passes.water.error else None
+            water = passes.water if passes.water is not None and not passes.water.m_error else None
             if water is not None:
-                water.run(self.ctx, self.lit[0], self.depth, size, camera)
+                water.run(self.m_ctx, self.m_lit[0], self.m_depth, size_px, camera)
             if sea is not None and water is not None:  # the coast waves' step over the depth just drawn
-                passes.sea.simulate(self.ctx, {**water.inputs(), "cDepthBuffer": self.depth.native}, camera, water.fill)
+                passes.sea.simulate(
+                    self.m_ctx, {**water.inputs(), "cDepthBuffer": self.m_depth.native}, camera, water.fill
+                )
             # rivers and lakes first: their depth keeps the sea under them (the engine's cut-outs and stencil)
             first = [*inland, *([sea] if sea is not None else [])]
-            self._transparent(size, camera, shading, (inputs, extras), passes, water, first)
+            if passes.native_water is not None:  # drawn by the shipped shaders, in the same places
+                first = passes.native_water.runs(first)
+            self._transparent(size_px, camera, shading, (inputs, extras), passes, water, first)
+        if native is not None:
+            return native.atmosphere(self.m_ctx, self, size_px, camera, shading[1], passes, clouds)
         atmosphere, sky = passes.atmosphere, passes.sky
-        if atmosphere is None or atmosphere.error or sky is None or sky.error:
+        if atmosphere is None or atmosphere.m_error or sky is None or sky.m_error:
             return False
-        tables = {"cAtmosphereTransmittanceLUT": sky.transmittance, "cAtmosphereMultiscatLUT": sky.multiscat}
-        named = {**shading[0].shared(inputs), **tables, "cDepthBuffer": self.depth.native}
-        atmosphere.run(self.ctx, self.lit_fbo, size, camera, shading[1], named, passes.look, clouds)
+        tables = {"cAtmosphereTransmittanceLUT": sky.m_transmittance, "cAtmosphereMultiscatLUT": sky.m_multiscat}
+        named = {**shading[0].shared(inputs), **tables, "cDepthBuffer": self.m_depth.native}
+        atmosphere.run(self.m_ctx, self.m_lit_fbo, size_px, camera, shading[1], named, passes.look, clouds)
         return True
 
-    def _shadow(self, size, camera: gs.Camera, sun, passes: Passes) -> None:
+    def _shadow(self, size_px, camera: gs.SCamera, sun, passes: SPasses) -> None:
         """The cascades fitted (by the game's analysis over the depth just drawn, else on the CPU to the scene's
         bounds) and the casters drawn into the shadow map."""
-        if self.shadow is None:  # with stencil the cut-out volumes count in it (``CutOutShadow``'s bits)
-            side = self.shadow_size
-            own = self._depth_stencil((side, side)) if self.stencil else None
-            self.shadow = gameshadow.ShadowMap(self.ctx, side, own)
-        if self.info is None:
-            self.info = storage_buffer(self.ctx.rhi, gameshadow.INFO_BYTES * gameshadow.COUNT)
-        fit = passes.fit if passes.fit is not None and not passes.fit.error else None
-        side, used = self.shadow.size, self.shadow_cascades
+        if self.m_shadow is None:  # with stencil the cut-out volumes count in it (``CutOutShadow``'s bits)
+            side = self.m_shadow_size
+            own = self._depth_stencil((side, side)) if self.m_has_stencil else None
+            self.m_shadow = gameshadow.CShadowMap(self.m_ctx, side, own)
+        if self.m_info is None:
+            self.m_info = storage_buffer(self.m_ctx.m_rhi, gameshadow.INFO_BYTES * gameshadow.COUNT)
+        fit = passes.fit if passes.fit is not None and not passes.fit.m_error else None
+        side, used = self.m_shadow.m_size_px, self.m_shadow_cascades
         read = False  # the analysis copies its result out this frame: the buffer is left as a copy's source
         if fit is not None:
-            read = fit.read_back
-            fit.run(self.ctx, self.depth, size, camera, sun, self.info)
-            self.cascades = gameshadow.Cascades((), gs.light_travel(sun), camera.shadow_distance, True, side, used)
+            read = fit.m_read_back or getattr(fit, "m_pinned", False)  # the native fit leaves it a copy's source
+            fit.run(self.m_ctx, self.m_depth, size_px, camera, sun, self.m_info)
+            self.m_cascades = gameshadow.SCascades((), gs.light_travel(sun), camera.shadow_distance, True, side, used)
         else:
-            self.cascades = replace(gameshadow.fit(camera, passes.box, sun), size=side, used=used)
-        native, cascades, info = passes.native, self.cascades, (self.info, read)
-        external = (lambda cb: native.shadow(cb, camera, cascades, info, side)) if native is not None else None
-        self.shadow.render(passes.casters, camera, self.cascades, self.info, passes.ground, external)
+            self.m_cascades = replace(gameshadow.fit(camera, passes.box, sun), size=side, used=used)
+        native, objects, cascades, info_target = passes.native, passes.objects, self.m_cascades, (self.m_info, read)
+        external = after = None
+        if native is not None:  # every native caster before QRhi's: the information's state is the analysis's
 
-    def _shading(self, size, camera: gs.Camera, shading: DeferredShading, sky: Sky, clusters=None, passes=None,
+            def external(
+                command_buffer,
+            ) -> None:  # the terrain's shadow cleared inside the cut-outs before any model casts
+                native.shadow(command_buffer, camera, cascades, info_target, side)
+                if objects is not None:
+                    objects.cutout_shadow(command_buffer, camera, cascades, info_target, side)
+                    objects.shadow(command_buffer, camera, cascades, info_target, side)
+
+        elif objects is not None:  # after QRhi's terrain and cut-outs, which bind the information as a storage buffer
+            # and leave it in unordered access (a draw only made ahead binds nothing: ``desktopgameobjects.CAheadRun``)
+            late = (self.m_info, read and not any(not getattr(caster, "ahead", False) for caster in passes.casters))
+
+            def after(command_buffer) -> None:
+                objects.shadow(command_buffer, camera, cascades, late, side)
+
+        self.m_shadow.render(passes.casters, camera, self.m_cascades, self.m_info, passes.ground, external, after)
+
+    def _shading(self, size_px, camera: gs.SCamera, shading: CDeferredShading, sky: SSky, clusters=None, passes=None,
                  clouds=None):  # fmt: skip
         """The deferred shading's compute pass from the G-buffer into ``lit``, lit by the game's sky passes when
-        ``passes`` (``gamesky.SkyPasses``) is given, the clouds' shadow over it with ``clouds``; returns its inputs
+        ``passes`` (``gamesky.CSkyPasses``) is given, the clouds' shadow over it with ``clouds``; returns its inputs
         and extras (the transparent pass's)."""
         names = ("cGBuffer0", "cGBuffer1", "cGBuffer2")
-        inputs = {**{n: t.native for n, t in zip(names, self.targets, strict=False)}, "cDepth": self.depth.native,
-                  "cDstColor": self.lit[0].native, "cDstAlpha": self.lit[1].native}  # fmt: skip
-        if self.cascades is not None:
-            inputs["cShadowMap"] = self.shadow.texture.native
-            inputs["cShadowInformation"] = self.info
-        if passes is not None and not passes.error:
-            passes.run(self.ctx, sky, clouds)  # only when the light or the clouds changed: the results stay
-            inputs["cLightBuffer"], inputs["cPrefilteredSpecularCube"] = passes.light, passes.reflection
+        inputs = {**{name: texture.native for name, texture in zip(names, self.m_targets, strict=False)}, "cDepth": self.m_depth.native,
+                  "cDstColor": self.m_lit[0].native, "cDstAlpha": self.m_lit[1].native}  # fmt: skip
+        if self.m_cascades is not None:
+            inputs["cShadowMap"] = self.m_shadow.m_texture.native
+            inputs["cShadowInformation"] = self.m_info
+        if passes is not None and not passes.m_error:
+            passes.run(self.m_ctx, sky, clouds)  # only when the light or the clouds changed: the results stay
+            inputs["cLightBuffer"], inputs["cPrefilteredSpecularCube"] = passes.m_light, passes.m_reflection
         if clouds is not None:
-            clouds.shadowed = False
-            if self.cascades is not None:  # the clouds' transmittance along the sun, in the cascades' parts
-                clouds.shadow(self.ctx, camera, sky, self.cascades, {**shading.shared(inputs), **inputs})
+            clouds.m_shadowed = False
+            if self.m_cascades is not None:  # the clouds' transmittance along the sun, in the cascades' parts
+                clouds.shadow(self.m_ctx, camera, sky, self.m_cascades, {**shading.shared(inputs), **inputs})
             inputs.update(clouds.inputs())
-        extras = Extras(self.cascades, clusters, clouds)
+        extras = SExtras(self.m_cascades, clusters, clouds)
 
-        def compute_pass(cb, batch) -> None:
+        def compute_pass(command_buffer, batch) -> None:
             shading.prepare(batch, inputs, camera, sky, extras)
-            cb.beginComputePass(batch)
-            shading.dispatch(cb, shading.tiles(size))
-            cb.endComputePass()
+            command_buffer.beginComputePass(batch)
+            shading.dispatch(command_buffer, shading.tiles(size_px))
+            command_buffer.endComputePass()
 
-        self.ctx.native_pass(compute_pass)
+        self.m_ctx.native_pass(compute_pass)
         return inputs, extras
 
-    def _transparent(self, size, camera: gs.Camera, shading: tuple, lit: tuple, passes: Passes, water=None,
+    def _transparent(self, size_px, camera: gs.SCamera, shading: tuple, lit: tuple, passes: SPasses, water=None,
                      first: list = ()) -> None:  # fmt: skip
         """The transparent techniques (``passes.transparent``) into the lit colour and alpha over the G-buffer's depth,
         ``first`` (rivers, lakes, the sea) then the rest farthest first, lit by the shading's inputs and extras
@@ -343,35 +424,40 @@ class GameFrame:
 
         ground_fill = ground.fill() if ground is not None else None
 
-        def fill(c: gs.Constants) -> None:
-            lighting.fill(c, camera, sky, extras)
+        def fill(constants: gs.CConstants) -> None:
+            lighting.fill(constants, camera, sky, extras)
             if water is not None:
-                water.fill(c)
+                water.fill(constants)
             if ground_fill is not None:
-                ground_fill(c)
+                ground_fill(constants)
 
-        def distance(m) -> float:
-            lo, hi = m.box()
-            middle = np.asarray(m.world, float) @ np.r_[(lo + hi) / 2, 1.0]
+        def distance(model) -> float:
+            low, high = model.box()
+            middle = np.asarray(model.m_world, float) @ np.r_[(low + high) / 2, 1.0]
             return float(np.linalg.norm(middle[:3] - camera.eye))
 
         ordered = [*first, *sorted(models, key=distance, reverse=True)]
-        self._record(self.lit_fbo, ordered, size, camera, len(self.lit), fill, shared, clear=False)
+        native = {}
+        if passes.native_water is not None:
+            frame = passes.native_water
+            native = {"native": lambda command_buffer, run: frame.record(command_buffer, run, camera, [fill], shared, size_px),
+                      "before": lambda batch: frame.upload(batch, ordered)}  # fmt: skip
+        self._record(self.m_lit_fbo, ordered, size_px, camera, len(self.m_lit), fill, shared, clear=False, **native)
 
     def _drop(self) -> None:
         # a framebuffer releases only its render targets: every attachment is the owner's to release
-        for t in (*self.targets, *self.lit, self.depth, self.fbo, self.lit_fbo):
-            if t is not None:
-                t.release()
-        self.targets, self.lit, self.depth, self.fbo, self.lit_fbo = [], [], None, None, None
+        for texture in (*self.m_targets, *self.m_lit, self.m_depth, self.m_fbo, self.m_lit_fbo):
+            if texture is not None:
+                texture.release()
+        self.m_targets, self.m_lit, self.m_depth, self.m_fbo, self.m_lit_fbo = [], [], None, None, None
 
     def release(self) -> None:
         self._drop()
-        self.composite.release()
-        if self.shadow is not None:
-            self.shadow.release()
-            self.shadow = None
-        if self.info is not None:
-            self.info.destroy()
-            self.info = None
-        self.targets, self.lit, self.size = [], [], None
+        self.m_composite.release()
+        if self.m_shadow is not None:
+            self.m_shadow.release()
+            self.m_shadow = None
+        if self.m_info is not None:
+            self.m_info.destroy()
+            self.m_info = None
+        self.m_targets, self.m_lit, self.m_size_px = [], [], None

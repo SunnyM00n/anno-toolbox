@@ -2,7 +2,7 @@
 target as it is typed, the glossary's hints, the text's twin lines and voice, and the buttons that apply or take back an
 edit.
 
-``DetailPanel(actions)``; ``show_row(RowView)`` fills it, ``checked`` is the live check the window also asks.
+``CDetailPanel(actions)``; ``show_row(SRowView)`` fills it, ``checked`` is the live check the window also asks.
 """
 
 from __future__ import annotations
@@ -25,13 +25,13 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from . import checks
-from .glossary import Glossary
+from .glossary import SGlossary
 
 MARKS = {checks.ERROR: "✗", checks.WARNING: "!", checks.HINT: "·"}
 
 
 @dataclass
-class RowView:
+class SRowView:
     """What the panel shows of one text."""
 
     key: str = ""
@@ -39,8 +39,8 @@ class RowView:
     source: str = ""
     target: str = ""
     one_line: bool = False
-    glossary: Glossary | None = None
-    glyphs: Callable[[str, str], list[checks.Problem]] | None = (
+    glossary: SGlossary | None = None
+    glyphs: Callable[[str, str], list[checks.SProblem]] | None = (
         None  # (text, picked style): the characters the fonts lack
     )
     twins: list[str] = field(default_factory=list)  # lines shown in the twin list: id, what it is for, its text
@@ -52,7 +52,7 @@ class RowView:
 
 
 @dataclass
-class Actions:
+class SActions:
     """What the panel's buttons call back."""
 
     apply: Callable[[str], None]
@@ -61,90 +61,90 @@ class Actions:
     play: Callable[[str], None]  # the language whose voice to play
 
 
-class DetailPanel(QWidget):
-    def __init__(self, actions: Actions, parent=None) -> None:
+class CDetailPanel(QWidget):
+    def __init__(self, actions: SActions, parent=None) -> None:
         super().__init__(parent)
-        self.view = RowView()
+        self.m_view = SRowView()
         self.actions = actions
-        self.title = QLabel()
-        self.title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.source_box = QPlainTextEdit(readOnly=True)
-        self.target_box = QPlainTextEdit()
-        for box in (self.source_box, self.target_box):
+        self.m_title = QLabel()
+        self.m_title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.m_source_box = QPlainTextEdit(readOnly=True)
+        self.m_target_box = QPlainTextEdit()
+        for box in (self.m_source_box, self.m_target_box):
             box.setTabChangesFocus(True)  # Tab goes on to the next control; a text holds no tab
-        self.counter = QLabel()
-        self.problems = QListWidget()
-        self.problems.setMaximumHeight(90)
-        self.twins = QListWidget()
-        self.twins.setMaximumHeight(70)
-        self.twins_label = QLabel(tr("texts.twin_lines_other_portraits_gamepads"))
-        self.fill_button = QPushButton(tr("texts.fill_twins_text"))
-        self.voice_label = QLabel()
-        self.lips_label = QLabel()
-        self.style_box = QComboBox()
-        self.style_box.addItem(tr("texts.style_texts_own"), "")
-        self.style_box.addItem(tr("texts.style_every"), "*")
-        self.drawn_label = QLabel()
-        self.plain_font = self.target_box.font()  # what the boxes use where the game's font is not read
-        self.play_buttons: dict[str, QPushButton] = {}
+        self.m_counter = QLabel()
+        self.m_problems = QListWidget()
+        self.m_problems.setMaximumHeight(90)
+        self.m_twins = QListWidget()
+        self.m_twins.setMaximumHeight(70)
+        self.m_twins_label = QLabel(tr("texts.twin_lines_other_portraits_gamepads"))
+        self.m_fill_button = QPushButton(tr("texts.fill_twins_text"))
+        self.m_voice_label = QLabel()
+        self.m_lips_label = QLabel()
+        self.m_style_box = QComboBox()
+        self.m_style_box.addItem(tr("texts.style_texts_own"), "")
+        self.m_style_box.addItem(tr("texts.style_every"), "*")
+        self.m_drawn_label = QLabel()
+        self.m_plain_font = self.m_target_box.font()  # what the boxes use where the game's font is not read
+        self.m_play_buttons: dict[str, QPushButton] = {}
         apply_button = QPushButton(tr("texts.apply_ctrl_plus_enter"))
         revert_button = QPushButton(tr("texts.revert_games_text"))
         copy_button = QPushButton(tr("texts.copy_source"))
-        apply_button.clicked.connect(lambda: self.view.key and actions.apply(self.target_box.toPlainText()))
-        revert_button.clicked.connect(lambda: self.view.key and actions.revert())
-        copy_button.clicked.connect(lambda: self.target_box.setPlainText(self.source_box.toPlainText()))
-        self.fill_button.clicked.connect(lambda: self.view.key and actions.fill_twins())
+        apply_button.clicked.connect(lambda: self.m_view.key and actions.apply(self.m_target_box.toPlainText()))
+        revert_button.clicked.connect(lambda: self.m_view.key and actions.revert())
+        copy_button.clicked.connect(lambda: self.m_target_box.setPlainText(self.m_source_box.toPlainText()))
+        self.m_fill_button.clicked.connect(lambda: self.m_view.key and actions.fill_twins())
         for combo in ("Ctrl+Return", "Ctrl+Enter"):
-            QShortcut(QKeySequence(combo), self.target_box, activated=apply_button.click)
+            QShortcut(QKeySequence(combo), self.m_target_box, activated=apply_button.click)
         buttons = QHBoxLayout()
         for button in (apply_button, revert_button, copy_button):
             buttons.addWidget(button)
-        buttons.addWidget(self.counter, 1, Qt.AlignmentFlag.AlignRight)
+        buttons.addWidget(self.m_counter, 1, Qt.AlignmentFlag.AlignRight)
         style = QHBoxLayout()
-        style.addWidget(self.style_box)
-        style.addWidget(self.drawn_label, 1)
+        style.addWidget(self.m_style_box)
+        style.addWidget(self.m_drawn_label, 1)
         voice = QHBoxLayout()
-        voice.addWidget(self.voice_label, 1)
+        voice.addWidget(self.m_voice_label, 1)
         for which, text in (("source", tr("texts.play_source_voice")), ("target", tr("texts.play_target_voice"))):
-            button = self.play_buttons[which] = QPushButton(text)
-            button.clicked.connect(lambda _c=False, w=which: self.view.key and actions.play(w))
+            button = self.m_play_buttons[which] = QPushButton(text)
+            button.clicked.connect(lambda _checked=False, chosen=which: self.m_view.key and actions.play(chosen))
             voice.addWidget(button)
         lay = QVBoxLayout(self)
         for widget in (
-            self.title,
+            self.m_title,
             QLabel(tr("texts.source")),
-            self.source_box,
+            self.m_source_box,
             QLabel(tr("common.target")),
-            self.target_box,
+            self.m_target_box,
         ):
             lay.addWidget(widget, 3 if isinstance(widget, QPlainTextEdit) else 0)
         lay.addLayout(buttons)
         lay.addLayout(style)
         lay.addLayout(voice)
-        lay.addWidget(self.lips_label)
-        for widget in (self.twins_label, self.twins, self.fill_button, self.problems):
+        lay.addWidget(self.m_lips_label)
+        for widget in (self.m_twins_label, self.m_twins, self.m_fill_button, self.m_problems):
             lay.addWidget(widget)
-        self.target_box.textChanged.connect(self._live)
-        self.style_box.currentIndexChanged.connect(lambda _i: self._live())
-        self.style_box.currentIndexChanged.connect(lambda _i: self._show_face())
+        self.m_target_box.textChanged.connect(self._live)
+        self.m_style_box.currentIndexChanged.connect(lambda _index: self._live())
+        self.m_style_box.currentIndexChanged.connect(lambda _index: self._show_face())
         self.setEnabled(False)
 
-    def show_row(self, view: RowView) -> None:
-        self.view = view
-        self.title.setText(view.title)
-        self.source_box.setPlainText(view.source)
-        self.target_box.blockSignals(True)  # one check below, not one per box filled
-        self.target_box.setPlainText(view.target)
-        self.target_box.blockSignals(False)
-        self.twins.clear()
-        self.twins.addItems(view.twins)
-        for widget in (self.twins_label, self.twins, self.fill_button):
+    def show_row(self, view: SRowView) -> None:
+        self.m_view = view
+        self.m_title.setText(view.title)
+        self.m_source_box.setPlainText(view.source)
+        self.m_target_box.blockSignals(True)  # one check below, not one per box filled
+        self.m_target_box.setPlainText(view.target)
+        self.m_target_box.blockSignals(False)
+        self.m_twins.clear()
+        self.m_twins.addItems(view.twins)
+        for widget in (self.m_twins_label, self.m_twins, self.m_fill_button):
             widget.setVisible(bool(view.twins))
-        self.voice_label.setText(tr("texts.spoken_by_speaker", speaker=view.voice) if view.voice else "")
-        self.lips_label.setText(view.lips)
-        self.lips_label.setVisible(bool(view.lips))
-        self.drawn_label.setText(tr("texts.drawn_in_styles", styles=view.drawn_in) if view.drawn_in else "")
-        for which, button in self.play_buttons.items():
+        self.m_voice_label.setText(tr("texts.spoken_by_speaker", speaker=view.voice) if view.voice else "")
+        self.m_lips_label.setText(view.lips)
+        self.m_lips_label.setVisible(bool(view.lips))
+        self.m_drawn_label.setText(tr("texts.drawn_in_styles", styles=view.drawn_in) if view.drawn_in else "")
+        for which, button in self.m_play_buttons.items():
             button.setVisible(bool(view.voice))
             button.setEnabled(which in view.playable)
         self.setEnabled(bool(view.key))
@@ -153,42 +153,46 @@ class DetailPanel(QWidget):
 
     def _show_face(self) -> None:
         """Both boxes in the game's font of the picked style; where it cannot be read, the plain font and the reason."""
-        family, reason = self.view.face(self.style_box.currentData() or "") if self.view.face else (None, "")
-        font = QFont(self.plain_font)
+        family, reason = self.m_view.face(self.m_style_box.currentData() or "") if self.m_view.face else (None, "")
+        font = QFont(self.m_plain_font)
         if family:
             font = QFont(family)
-            font.setPointSizeF(self.plain_font.pointSizeF() * 1.15)
-        for box in (self.source_box, self.target_box):
+            font.setPointSizeF(self.m_plain_font.pointSizeF() * 1.15)
+        for box in (self.m_source_box, self.m_target_box):
             box.setFont(font)
             box.setToolTip(reason)
 
     def checked(self, text: str) -> list[str]:
         """The problems of ``text`` as lines (a mark, then the sentence), errors first, then the glyphs and the glossary's
         hints."""
-        view = self.view
+        view = self.m_view
         found = checks.check(view.source, text, view.one_line) + (
-            view.glyphs(text, self.style_box.currentData() or "") if view.glyphs else []
+            view.glyphs(text, self.m_style_box.currentData() or "") if view.glyphs else []
         )
-        found.sort(key=lambda p: (checks.ERROR, checks.WARNING, checks.HINT).index(p.severity))
+        found.sort(key=lambda problem: (checks.ERROR, checks.WARNING, checks.HINT).index(problem.severity))
         hints = view.glossary.hints(view.source, text) if view.glossary is not None else []
-        return [f"{MARKS[p.severity]} {p.message}" for p in found] + [f"{MARKS[checks.HINT]} {h}" for h in hints]
+        return [f"{MARKS[problem.severity]} {problem.message}" for problem in found] + [
+            f"{MARKS[checks.HINT]} {hint}" for hint in hints
+        ]
 
     def _live(self) -> None:
-        text = self.target_box.toPlainText()
-        self.problems.clear()
-        if self.view.key:
-            self.problems.addItems(self.checked(text))
-        self.counter.setText(tr("texts.target_of_source_characters", target=len(text), source=len(self.view.source)))
+        text = self.m_target_box.toPlainText()
+        self.m_problems.clear()
+        if self.m_view.key:
+            self.m_problems.addItems(self.checked(text))
+        self.m_counter.setText(
+            tr("texts.target_of_source_characters", target=len(text), source=len(self.m_view.source))
+        )
 
     def set_styles(self, choices: list[tuple[str, str]]) -> None:
         """The picker's styles after its two fixed entries (the target language's localized fonts), the pick kept."""
-        keep = self.style_box.currentData()
-        self.style_box.blockSignals(True)
-        while self.style_box.count() > 2:
-            self.style_box.removeItem(2)
+        keep = self.m_style_box.currentData()
+        self.m_style_box.blockSignals(True)
+        while self.m_style_box.count() > 2:
+            self.m_style_box.removeItem(2)
         for key, name in choices:
-            self.style_box.addItem(name, key)  # i18n: ok (a font's name)
-        self.style_box.setCurrentIndex(max(self.style_box.findData(keep), 0))
-        self.style_box.blockSignals(False)
-        self.style_box.setVisible(bool(choices))
+            self.m_style_box.addItem(name, key)  # i18n: ok (a font's name)
+        self.m_style_box.setCurrentIndex(max(self.m_style_box.findData(keep), 0))
+        self.m_style_box.blockSignals(False)
+        self.m_style_box.setVisible(bool(choices))
         self._show_face()

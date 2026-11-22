@@ -1,7 +1,7 @@
 """The live link's client interface (no transport): typed requests, events, the registry of the one link.
 
-``LiveLink`` has a method per request (``files_changed``, ``reload``, ``select``, ``jump``, ``read``, ``subscribe``)
-and an ``on_*`` per event; every answer is a ``Reply``. Not connected, it answers ``NOT_CONNECTED`` with the manual
+``CLiveLink`` has a method per request (``files_changed``, ``reload``, ``select``, ``jump``, ``read``, ``subscribe``)
+and an ``on_*`` per event; every answer is a ``SReply``. Not connected, it answers ``NOT_CONNECTED`` with the manual
 route as the message. The transport is the extension point ``register_connector``; ``current``/``use`` are the
 registry. docs/live-link.md, "Toolbox side".
 """
@@ -34,7 +34,7 @@ SCENE = "ui.scene"  # a UI scene opened or closed (docs/live-link.md section 18)
 STALLED = "stalled"  # the game drew no UI frame for a long while after an asset request (always sent, no topic)
 EVENTS = (SELECTION, EDIT_REQUEST, RELOAD, SESSION_EVENT, LOG, SCENE, STALLED)
 
-# The answers (``Reply.status``).
+# The answers (``SReply.status``).
 OK, DONE, SKIPPED, BUSY, UNAVAILABLE, REFUSED, NOT_CONNECTED = (
     "ok", "done", "skipped", "busy", "unavailable", "refused", "not connected",
 )  # fmt: skip
@@ -84,7 +84,7 @@ def manual(kind: str, game: str = "") -> str:
 
 
 @dataclass(frozen=True)
-class Reply:
+class SReply:
     """The answer to one request: ``status`` (one of the constants above), a sentence for the modder, the data."""
 
     status: str
@@ -92,7 +92,7 @@ class Reply:
     data: dict = field(default_factory=dict)
 
     @property
-    def ok(self) -> bool:
+    def is_ok(self) -> bool:
         return self.status in (OK, DONE)
 
     @property
@@ -102,7 +102,7 @@ class Reply:
 
 
 @dataclass(frozen=True)
-class Sent:
+class SSent:
     """One request as it goes (or would go) to the game: the protocol's name and its arguments."""
 
     name: str
@@ -110,7 +110,7 @@ class Sent:
 
 
 @dataclass(frozen=True)
-class LinkStatus:
+class SLinkStatus:
     """What the suite's window shows: whether a game is connected, which one, its build and the reload kinds it takes."""
 
     connected: bool = False
@@ -141,7 +141,7 @@ def check_paths(paths: Iterable[str]) -> str:
     return ""
 
 
-class LiveLink:
+class CLiveLink:
     """The interface. A transport subclasses it and sets ``_transmit`` (and ``set_status``); everything else is here.
 
     Methods are safe to call from any thread; events arrive on the transport's thread, so a window marshals them
@@ -149,170 +149,175 @@ class LiveLink:
     """
 
     def __init__(self) -> None:
-        self._status = LinkStatus()
-        self._handlers: dict[str, list[Callable]] = {name: [] for name in EVENTS}
-        self._status_handlers: list[Callable[[LinkStatus], None]] = []
-        self.sent: deque[Sent] = deque(maxlen=500)  # what was sent, or would have been (not connected)
+        self._m_status = SLinkStatus()
+        self._m_handlers: dict[str, list[Callable]] = {name: [] for name in EVENTS}
+        self._m_status_handlers: list[Callable[[SLinkStatus], None]] = []
+        self.m_sent: deque[SSent] = deque(maxlen=500)  # what was sent, or would have been (not connected)
 
     # status and capabilities
-    def status(self) -> LinkStatus:
-        return self._status
+    def status(self) -> SLinkStatus:
+        return self._m_status
 
     @property
     def connected(self) -> bool:
-        return self._status.connected
+        return self._m_status.connected
 
     def supports(self, kind: str) -> bool:
         """Whether the connected game takes ``reload(kind)``; False when not connected."""
-        return self._status.connected and kind in self._status.kinds
+        return self._m_status.connected and kind in self._m_status.kinds
 
     def capabilities(self) -> frozenset[str]:
-        return self._status.kinds if self._status.connected else frozenset()
+        return self._m_status.kinds if self._m_status.connected else frozenset()
 
-    def set_status(self, status: LinkStatus) -> None:
+    def set_status(self, status: SLinkStatus) -> None:
         """For a transport: the connection changed (connected, lost, a new game build)."""
-        self._status = status
-        for handler in list(self._status_handlers):
+        self._m_status = status
+        for handler in list(self._m_status_handlers):
             handler(status)
 
-    def on_status(self, handler: Callable[[LinkStatus], None]) -> Callable[[], None]:
-        return _add(self._status_handlers, handler)
+    def on_status(self, handler: Callable[[SLinkStatus], None]) -> Callable[[], None]:
+        return _add(self._m_status_handlers, handler)
 
     # requests (docs/live-link.md section 4)
-    def files_changed(self, paths: Iterable[str], mod: str = "") -> Reply:
+    def files_changed(self, paths: Iterable[str], mod: str = "") -> SReply:
         """The mod's files at ``paths`` (relative to its folder) were written; the answer says what each needs."""
         paths = list(paths)
-        return self._request("files.changed", {"mod": mod, "paths": paths}, paths)
+        return self._request("files.changed", _given(mod=mod or None, paths=paths), paths)  # no mod: none on the wire
 
-    def reload(self, kind: str, paths: Iterable[str] = (), mod: str = "", **args) -> Reply:
+    def reload(self, kind: str, paths: Iterable[str] = (), mod: str = "", **arguments) -> SReply:
         """Ask for the reload ``kind`` (``KINDS``); ``paths`` for models, effects and scenes, ``banks`` and ``mode``
         (``full`` or ``rebuild``, for assets) in ``args``."""
         if kind not in KINDS:
             raise ValueError(f"unknown reload kind {kind!r}")
         paths = list(paths)
-        if kind == BANKS and paths and "banks" not in args:  # a bank is named, not placed: its file's name is its name
-            names = sorted({PurePosixPath(p).stem for p in paths if p.lower().endswith(".bnk")})
+        if (
+            kind == BANKS and paths and "banks" not in arguments
+        ):  # a bank is named, not placed: its file's name is its name
+            names = sorted({PurePosixPath(path).stem for path in paths if path.lower().endswith(".bnk")})
             if not names:
-                return Reply(REFUSED, tr("common.sound_file_reloads_bank_name"))
-            args = {**args, "banks": names}
+                return SReply(REFUSED, tr("common.sound_file_reloads_bank_name"))
+            arguments = {**arguments, "banks": names}
             paths = []
-            body = {**args, **({"mod": mod} if mod else {})}
+            body = {**arguments, **({"mod": mod} if mod else {})}
         else:
-            body = {**args, **({"mod": mod, "paths": paths} if paths else {})}
+            body = {
+                **arguments,
+                **(_given(mod=mod or None, paths=paths) if paths else {}),
+            }  # an asset reload names no mod
         return self._request(f"reload.{kind}", body, paths, kind)
 
-    def select(self, guid: int | None = None, object: int | None = None) -> Reply:
+    def select(self, guid: int | None = None, object: int | None = None) -> SReply:
         """Select an object of the game: ``object`` an object id, or ``guid`` the first (next) object of an asset."""
         return self._request("select", _given(guid=guid, object=object))
 
-    def jump(self, object: int | None = None, session: str = "", position: tuple | None = None) -> Reply:
+    def jump(self, object: int | None = None, session: str = "", position: tuple | None = None) -> SReply:
         """Move the camera to an object, or to a ``position`` in a ``session``."""
         where = list(position) if position is not None else None  # a list is what the wire carries
         return self._request("jump", _given(object=object, session=session or None, position=where))
 
-    def read(self, guid: int | None = None, fields: Iterable[str] = (), object: int | None = None) -> Reply:
+    def read(self, guid: int | None = None, fields: Iterable[str] = (), object: int | None = None) -> SReply:
         """The values the game holds now: ``fields`` (value paths such as ``Building/BuildCost``) of an asset
-        ``guid``, or of an ``object``; they come back in ``Reply.data``."""
+        ``guid``, or of an ``object``; they come back in ``SReply.data``."""
         fields = list(fields)
         return self._request("read", _given(guid=guid, object=object, fields=fields), fields)
 
-    def ui_values(self, states: Iterable[str], file: str = "") -> Reply:
+    def ui_values(self, states: Iterable[str], file: str = "") -> SReply:
         """What the widgets of an open UI scene show now (docs/live-link.md section 17): of the UI ``states`` whose
         scene is open, the widgets of the widget file whose GUID is ``file`` (none: the scene file's own widgets).
-        ``Reply.data["scenes"]`` holds per scene its ``state`` and ``widgets``, each with ``guid``, ``crc``, ``name``,
+        ``SReply.data["scenes"]`` holds per scene its ``state`` and ``widgets``, each with ``guid``, ``crc``, ``name``,
         ``visible`` and, where it shows one, ``text``, ``image`` and ``values`` (its own properties by UniqueId)."""
         states = list(states)
         if not states:
-            return Reply(REFUSED, tr("common.no_ui_state_shows_file"))
+            return SReply(REFUSED, tr("common.no_ui_state_shows_file"))
         if self.connected and not self.supports(VALUES):
-            return Reply(UNAVAILABLE, tr(VALUES_OFF))
+            return SReply(UNAVAILABLE, tr(VALUES_OFF))
         return self._request("ui.values", _given(states=states, file=file or None))
 
-    def debug_list(self) -> Reply:
+    def debug_list(self) -> SReply:
         """Which debug commands the game binds right now (``data["commands"]``: id to ``available`` and ``state``) and
         the cheats it registers itself (``data["cheats"]``). docs/debug-palette.md."""
         return self._debug("debug.list", {})
 
-    def debug_run(self, command: str, values: dict | None = None) -> Reply:
+    def debug_run(self, command: str, values: dict | None = None) -> SReply:
         """Run a command of the catalogue (``debugcommands``) with typed ``values``; a command or value the catalogue does
         not know is refused here and never sent. A toggle's new state comes back in ``data["state"]``."""
         from . import debugcommands
 
         found = debugcommands.commands(self.status().game or debugcommands.GAME).get(command)
         if found is None:
-            return Reply(REFUSED, tr("common.not_debug_command_catalogue", command=command))
+            return SReply(REFUSED, tr("common.not_debug_command_catalogue", command=command))
         typed, why = debugcommands.check_values(found, dict(values or {}))
         if why:
-            return Reply(REFUSED, why)
+            return SReply(REFUSED, why)
         return self._debug("debug.run", _given(command=command, values=typed or None))
 
-    def debug_cheat(self, name: str) -> Reply:
+    def debug_cheat(self, name: str) -> SReply:
         """Trigger one of the cheats the game registers itself; the game checks the name against its own list."""
         return self._debug("debug.cheat", {"name": name})
 
-    def modules_list(self) -> Reply:
+    def modules_list(self) -> SReply:
         """The game side's modules (``data["modules"]``: each with ``name``, ``class`` - game, dev or experimental -,
         ``on``, ``switchable`` and ``why`` not); behind the debug commands' switch. docs/live-link.md section 14."""
         return self._debug("modules.list", {})
 
-    def modules_set(self, module: str, on: bool) -> Reply:
+    def modules_set(self, module: str, is_enabled: bool) -> SReply:
         """Switch one module while the game runs; the game refuses one that cannot be switched, and says why."""
-        return self._debug("modules.set", {"module": module, "on": bool(on)})
+        return self._debug("modules.set", {"module": module, "on": bool(is_enabled)})
 
-    def _debug(self, name: str, args: dict) -> Reply:
+    def _debug(self, name: str, arguments: dict) -> SReply:
         if self.connected and not self.supports(DEBUG):
-            return Reply(UNAVAILABLE, tr(DEBUG_OFF))
-        return self._request(name, args)
+            return SReply(UNAVAILABLE, tr(DEBUG_OFF))
+        return self._request(name, arguments)
 
-    def subscribe(self, topics: Iterable[str]) -> Reply:
+    def subscribe(self, topics: Iterable[str]) -> SReply:
         return self._request("subscribe", {"topics": list(topics)})
 
-    def unsubscribe(self, topics: Iterable[str]) -> Reply:
+    def unsubscribe(self, topics: Iterable[str]) -> SReply:
         return self._request("unsubscribe", {"topics": list(topics)})
 
     # events from the game
     def on(self, event: str, handler: Callable[[dict], None]) -> Callable[[], None]:
         """``handler(payload)`` for each event ``event`` of ``EVENTS`` (``SELECTION``: the selected objects, id, GUID,
         name, session; ``EDIT_REQUEST``: ``guid``, ``object``, ``game``, ``file``, ...); returns the remover."""
-        if event not in self._handlers:
+        if event not in self._m_handlers:
             raise ValueError(f"unknown event {event!r}")
-        return _add(self._handlers[event], handler)
+        return _add(self._m_handlers[event], handler)
 
     def emit(self, event: str, payload: dict) -> None:
         """For a transport (and a test): an event came in from the game."""
-        for handler in list(self._handlers.get(event, ())):
+        for handler in list(self._m_handlers.get(event, ())):
             _call(handler, payload, event)
 
     # the one place a transport differs
-    def _request(self, name: str, args: dict, paths: Iterable[str] = (), kind: str = "") -> Reply:
+    def _request(self, name: str, arguments: dict, paths: Iterable[str] = (), kind: str = "") -> SReply:
         bad = (
             check_paths(paths) if name in ("files.changed", "reload.models", "reload.effects", "reload.scenes") else ""
         )
         if bad:
-            return Reply(REFUSED, bad)
+            return SReply(REFUSED, bad)
         if not self.connected:
-            self.sent.append(Sent(name, args))
-            log.info("live link not connected: would send %s %s", name, args)
+            self.m_sent.append(SSent(name, arguments))
+            log.info("live link not connected: would send %s %s", name, arguments)
             how = manual(kind, target_game()) if kind in MANUAL else tr("common.game_link_not_connected_lower")
-            return Reply(NOT_CONNECTED, how)
+            return SReply(NOT_CONNECTED, how)
         if kind and not self.supports(kind):
             how = manual(kind, self.status().game)
-            return Reply(UNAVAILABLE, tr("common.game_build_cannot_reload", kind=kind, how=how))
-        self.sent.append(Sent(name, args))
-        return self._transmit(Sent(name, args))
+            return SReply(UNAVAILABLE, tr("common.game_build_cannot_reload", kind=kind, how=how))
+        self.m_sent.append(SSent(name, arguments))
+        return self._transmit(SSent(name, arguments))
 
-    def _transmit(self, request: Sent) -> Reply:
+    def _transmit(self, request: SSent) -> SReply:
         """EXTENSION POINT (the transport, later): send ``request`` over the pipe after the handshake, return the
-        game's answer as a ``Reply``. Called only when connected and the kind is supported."""
-        return Reply(UNAVAILABLE, tr("common.no_transport"))
+        game's answer as a ``SReply``. Called only when connected and the kind is supported."""
+        return SReply(UNAVAILABLE, tr("common.no_transport"))
 
 
-class NotConnected(LiveLink):
+class CNotConnected(CLiveLink):
     """The link of a suite with no game connected: nothing leaves, every request is recorded in ``sent`` and logged."""
 
 
 def _given(**fields) -> dict:
-    return {k: v for k, v in fields.items() if v is not None}
+    return {k: value for k, value in fields.items() if value is not None}
 
 
 def _add(handlers: list, handler: Callable) -> Callable[[], None]:
@@ -326,45 +331,45 @@ def _add(handlers: list, handler: Callable) -> Callable[[], None]:
 
 
 # The registry: every app takes the same link object, and the window's indicator follows it.
-_connectors: list[Callable[[], LiveLink | None]] = []
-_state: dict = {"link": NotConnected(), "dispatch": []}
+_g_connectors: list[Callable[[], CLiveLink | None]] = []
+_g_state: dict = {"link": CNotConnected(), "dispatch": []}
 _listeners: dict[str, list[Callable]] = {name: [] for name in (*EVENTS, "status")}
 
 
-def current() -> LiveLink:
-    """The suite's one link (``NotConnected`` until a transport is connected)."""
-    return _state["link"]
+def current() -> CLiveLink:
+    """The suite's one link (``CNotConnected`` until a transport is connected)."""
+    return _g_state["link"]
 
 
-def use(link: LiveLink) -> LiveLink:
+def use(link: CLiveLink) -> CLiveLink:
     """Make ``link`` the suite's link: the window's status and the apps' event handlers follow it from now on."""
-    for remove in _state["dispatch"]:
+    for remove in _g_state["dispatch"]:
         remove()
-    _state["link"] = link
-    _state["dispatch"] = [link.on(name, lambda payload, n=name: _dispatch(n, payload)) for name in EVENTS]
-    _state["dispatch"].append(link.on_status(lambda status: _dispatch("status", status)))
+    _g_state["link"] = link
+    _g_state["dispatch"] = [link.on(name, lambda payload, n=name: _dispatch(n, payload)) for name in EVENTS]
+    _g_state["dispatch"].append(link.on_status(lambda status: _dispatch("status", status)))
     _dispatch("status", link.status())
     return link
 
 
 def set_target_game(game: str) -> None:
     """The game the suite works on now (a project's): it picks the words of the manual route while none is linked."""
-    _state["game"] = game
+    _g_state["game"] = game
 
 
 def target_game() -> str:
     """The linked game, else the one the suite works on (``set_target_game``), else "" (Anno 117's words)."""
     status = current().status()
-    return status.game if status.connected else _state.get("game", "")
+    return status.game if status.connected else _g_state.get("game", "")
 
 
-def reset() -> LiveLink:
+def reset() -> CLiveLink:
     """Back to a link that is not connected (the start, a closed game, a test)."""
-    return use(NotConnected())
+    return use(CNotConnected())
 
 
 def on(event: str, handler: Callable) -> Callable[[], None]:
-    """``handler`` for an event of whichever link is current (``EVENTS``), or ``"status"`` (a ``LinkStatus``)."""
+    """``handler`` for an event of whichever link is current (``EVENTS``), or ``"status"`` (a ``SLinkStatus``)."""
     if event not in _listeners:
         raise ValueError(f"unknown event {event!r}")
     return _add(_listeners[event], handler)
@@ -384,21 +389,21 @@ def _call(handler: Callable, payload, event: str) -> None:
         log.exception("a handler of the live link event %s failed", event)
 
 
-def register_connector(connector: Callable[[], LiveLink | None]) -> None:
+def register_connector(connector: Callable[[], CLiveLink | None]) -> None:
     """EXTENSION POINT (the transport, later): ``connector()`` reads the game's session file, does the handshake and
-    returns a connected ``LiveLink``, or None when no game is there."""
-    if connector not in _connectors:
-        _connectors.append(connector)
+    returns a connected ``CLiveLink``, or None when no game is there."""
+    if connector not in _g_connectors:
+        _g_connectors.append(connector)
 
 
-def connect() -> LiveLink:
+def connect() -> CLiveLink:
     """Try the registered connectors; the first link that answers becomes current. Without one (today) the link stays
     not connected."""
-    for connector in _connectors:
+    for connector in _g_connectors:
         found = connector()
         if found is not None and found.connected:
             return use(found)
     return current()
 
 
-use(_state["link"])
+use(_g_state["link"])

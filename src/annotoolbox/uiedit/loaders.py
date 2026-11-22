@@ -18,16 +18,16 @@ CURRENT_ENUM_VALUE = 0x30000004
 
 def loader_kind(files, root: dict) -> str | None:
     """ "enum" or "object" for a widget file of a loader type, else None."""
-    for t in listlayout.type_chain(files, root):
-        if t == ENUM_LOADER:
+    for type_name in listlayout.type_chain(files, root):
+        if type_name == ENUM_LOADER:
             return "enum"
-        if t in OBJECT_LOADERS:
+        if type_name in OBJECT_LOADERS:
             return "object"
     return None
 
 
-def _entry(el) -> int:
-    return int(fields.get(el.node, "EnumEntry", 0) or 0)
+def _entry(element) -> int:
+    return int(fields.get(element.node, "EnumEntry", 0) or 0)
 
 
 def chosen(kind: str, children: list, inputs: dict, design: bool, pick: Callable | None = None) -> list:
@@ -39,12 +39,12 @@ def chosen(kind: str, children: list, inputs: dict, design: bool, pick: Callable
     if not children:
         return []
     if kind == "object":
-        classed = [c for c in children if fields.get(c.node, "GameObjectTemplate")]
+        classed = [child for child in children if fields.get(child.node, "GameObjectTemplate")]
         found = pick(classed) if pick is not None and classed else None
         first = [found] if found is not None else classed[:1] if design else []
-        return [c for c in children if c not in classed or c in first]
+        return [child for child in children if child not in classed or child in first]
     value = inputs.get(CURRENT_ENUM_VALUE)
-    entries = [_entry(c) for c in children if _entry(c)]
+    entries = [_entry(child) for child in children if _entry(child)]
     if not isinstance(value, int) or isinstance(value, bool):  # unknown: a known value no child has shows none
         value = entries[0] if design and entries else None
-    return [c for c in children if not _entry(c) or _entry(c) == value]
+    return [child for child in children if not _entry(child) or _entry(child) == value]

@@ -2,7 +2,7 @@
 lists by key), ``ModValue`` (a node or a value calculated, flags merged or removed) and ``ModOpContent`` (nodes taken
 from the document). Stdlib only.
 
-``merge(doc, target, content, calc)`` is the entry for a merge, ``resolve(doc, element, context, calc)`` puts the
+``merge(document, target, content, calc)`` is the entry for a merge, ``resolve(document, element, context, calc)`` puts the
 ``ModValue`` results into content about to be inserted, ``fill(content, found)`` the nodes of ``Content=``; ``calc``
 evaluates an expression (its variables replaced) at a node. The rules: ``docs/engine-modloader.md`` ("Merge,
 exactly", "ModValue and ModItem").
@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable
 
-from .patchdoc import PatchDoc
+from .patchdoc import CPatchDoc
 from .xpath import format_value, select
 
 Calc = Callable[[str, object], object]  # (expression, context node) -> XPath value
@@ -23,80 +23,80 @@ SPECIAL = frozenset({"ModValue", "ModItem", "ModOpContent", "ModValueContent"})
 
 
 def flags(text: str) -> list[str]:
-    return [f.strip() for f in (text or "").split(";") if f.strip()]
+    return [flag.strip() for flag in (text or "").split(";") if flag.strip()]
 
 
-def merge(doc: PatchDoc, target: ET.Element, content: list[ET.Element], calc: Calc) -> None:
+def merge(document: CPatchDoc, target: ET.Element, content: list[ET.Element], calc: Calc) -> None:
     """``content`` merged into ``target``: into the target itself when its one element has the target's name."""
     if len(content) == 1 and content[0].tag == target.tag:
-        _merge_into(doc, target, content[0], calc)
+        _merge_into(document, target, content[0], calc)
     else:
-        _merge_children(doc, target, content, calc)
-    doc.changed(target)
+        _merge_children(document, target, content, calc)
+    document.changed(target)
 
 
-def _merge_into(doc: PatchDoc, target: ET.Element, el: ET.Element, calc: Calc) -> None:
-    for k, v in el.attrib.items():
-        target.set(k, v)
-    kids = [c for c in el if isinstance(c.tag, str)]
+def _merge_into(document: CPatchDoc, target: ET.Element, element: ET.Element, calc: Calc) -> None:
+    for name, value in element.attrib.items():
+        target.set(name, value)
+    kids = [child for child in element if isinstance(child.tag, str)]
     if kids:
-        _merge_children(doc, target, kids, calc)
-    elif el.text is not None:
-        target.text = el.text
+        _merge_children(document, target, kids, calc)
+    elif element.text is not None:
+        target.text = element.text
 
 
-def _merge_children(doc: PatchDoc, target: ET.Element, content: list[ET.Element], calc: Calc) -> None:
+def _merge_children(document: CPatchDoc, target: ET.Element, content: list[ET.Element], calc: Calc) -> None:
     seen: Counter = Counter()
-    for el in content:
-        if el.tag == "ModItem":
-            mod_item(doc, target, el, calc)
+    for element in content:
+        if element.tag == "ModItem":
+            mod_item(document, target, element, calc)
             continue
-        if el.tag == "ModValue":
-            target.text = _value_text(doc, el, target, calc, target.text)
+        if element.tag == "ModValue":
+            target.text = _value_text(document, element, target, calc, target.text)
             continue
-        k = seen[el.tag]
-        seen[el.tag] += 1
-        same = [c for c in doc.children(target) if c.tag == el.tag]
+        k = seen[element.tag]
+        seen[element.tag] += 1
+        same = [child for child in document.children(target) if child.tag == element.tag]
         if k < len(same):
-            _merge_into(doc, same[k], el, calc)
+            _merge_into(document, same[k], element, calc)
         else:
-            new = copy.deepcopy(el)
-            resolve(doc, new, target, calc)
-            doc.insert(target, len(target), [new])
+            new = copy.deepcopy(element)
+            resolve(document, new, target, calc)
+            document.insert(target, len(target), [new])
 
 
-def mod_item(doc: PatchDoc, target: ET.Element, el: ET.Element, calc: Calc) -> None:
+def mod_item(document: CPatchDoc, target: ET.Element, element: ET.Element, calc: Calc) -> None:
     """An ``<Item>`` merged by key, or inserted where ``Append`` / ``Prepend`` says (after the last item)."""
-    key = el.get("Merge", "")
-    items = [c for c in el if isinstance(c.tag, str)]
-    found = select(doc, f"Item[{item_test(el)}]", target) if key else []
+    key = element.get("Merge", "")
+    items = [child for child in element if isinstance(child.tag, str)]
+    found = select(document, f"Item[{item_test(element)}]", target) if key else []
     if found:
-        _merge_children(doc, found[0], items, calc)
-        doc.changed(found[0])
+        _merge_children(document, found[0], items, calc)
+        document.changed(found[0])
         return
     new = ET.Element("Item")
     new.extend(copy.deepcopy(items))
-    resolve(doc, new, target, calc)
-    doc.insert(target, _item_place(doc, target, el), [new])
+    resolve(document, new, target, calc)
+    document.insert(target, _item_place(document, target, element), [new])
 
 
-def item_test(el: ET.Element) -> str:
+def item_test(element: ET.Element) -> str:
     """The test that picks an item by key: ``Merge="a=b"`` as it is, ``Merge="Key"`` by the text of its ``Key`` child."""
-    key = el.get("Merge", "")
+    key = element.get("Merge", "")
     if "=" in key:
         return key
-    value = (el.findtext(key) or "").strip() if key else ""
+    value = (element.findtext(key) or "").strip() if key else ""
     return f"{key}={_quote(value)}"
 
 
-def _item_place(doc: PatchDoc, target: ET.Element, el: ET.Element) -> int:
-    for attr, after in (("Append", True), ("Prepend", False)):
-        where = el.get(attr)
+def _item_place(document: CPatchDoc, target: ET.Element, element: ET.Element) -> int:
+    for attribute, after in (("Append", True), ("Prepend", False)):
+        where = element.get(attribute)
         if where:
-            found = select(doc, f"Item[{where}]", target)
+            found = select(document, f"Item[{where}]", target)
             if found:
-                return doc.index_of(found[0]) + (1 if after else 0)
-    items = [k for k, c in enumerate(doc.children(target)) if c.tag == "Item"]
+                return document.index_of(found[0]) + (1 if after else 0)
+    items = [k for k, child in enumerate(document.children(target)) if child.tag == "Item"]
     return items[-1] + 1 if items else len(target)
 
 
@@ -104,56 +104,58 @@ def _quote(text: str) -> str:
     return f"'{text}'" if "'" not in text else f'"{text}"'
 
 
-def resolve(doc: PatchDoc, el: ET.Element, context, calc: Calc) -> None:
-    """Every ``ModValue`` below ``el`` replaced by its result; ``context`` is the node ``el`` stands for (its
+def resolve(document: CPatchDoc, element: ET.Element, context, calc: Calc) -> None:
+    """Every ``ModValue`` below ``element`` replaced by its result; ``context`` is the node ``element`` stands for (its
     children's are found by name and position), or the node it is inserted into."""
     seen: Counter = Counter()
-    for child in list(el):
+    for child in list(element):
         if not isinstance(child.tag, str):
             continue
         if child.tag == "ModValue":
-            _apply_value(doc, el, child, context, calc)
+            _apply_value(document, element, child, context, calc)
             continue
         k = seen[child.tag]
         seen[child.tag] += 1
         sub = None
-        if isinstance(context, ET.Element) and context.tag == el.tag:
-            same = [c for c in doc.children(context) if c.tag == child.tag]
+        if isinstance(context, ET.Element) and context.tag == element.tag:
+            same = [peer for peer in document.children(context) if peer.tag == child.tag]
             sub = same[k] if k < len(same) else None
-        resolve(doc, child, sub if sub is not None else context, calc)
+        resolve(document, child, sub if sub is not None else context, calc)
 
 
-def _apply_value(doc: PatchDoc, parent: ET.Element, mv: ET.Element, context, calc: Calc) -> None:
-    at = list(parent).index(mv)
-    parent.remove(mv)
+def _apply_value(document: CPatchDoc, parent: ET.Element, mod_value: ET.Element, context, calc: Calc) -> None:
+    index = list(parent).index(mod_value)
+    parent.remove(mod_value)
     nodes = None
-    if "Insert" in mv.attrib:
-        found = calc(mv.get("Insert"), context)
-        if isinstance(found, list) and found and all(isinstance(n, ET.Element) for n in found):
-            nodes = [copy.deepcopy(n) for n in found]
-            if "SkipParent" in mv.attrib:
-                nodes = [c for n in nodes for c in n]
+    if "Insert" in mod_value.attrib:
+        found = calc(mod_value.get("Insert"), context)
+        if isinstance(found, list) and found and all(isinstance(item, ET.Element) for item in found):
+            nodes = [copy.deepcopy(item) for item in found]
+            if "SkipParent" in mod_value.attrib:
+                nodes = [child for item in nodes for child in item]
     if nodes is not None:
         for k, node in enumerate(nodes):
-            parent.insert(at + k, node)
+            parent.insert(index + k, node)
         return
     base = parent.text if parent.text and parent.text.strip() else None
-    parent.text = _value_text(doc, mv, context, calc, base)
+    parent.text = _value_text(document, mod_value, context, calc, base)
 
 
-def _value_text(doc: PatchDoc, mv: ET.Element, context, calc: Calc, base: str | None) -> str:
+def _value_text(document: CPatchDoc, mod_value: ET.Element, context, calc: Calc, base: str | None) -> str:
     """The text a ``ModValue`` gives: an ``Insert`` value, then its ``Merge`` and ``Remove`` flags."""
     text = base
-    for attr, value in mv.attrib.items():
-        if attr == "Insert":
-            text = format_value(calc(value, context), doc)
-        elif attr in ("Merge", "Remove"):
+    for attribute, value in mod_value.attrib.items():
+        if attribute == "Insert":
+            text = format_value(calc(value, context), document)
+        elif attribute in ("Merge", "Remove"):
             if text is None:
-                text = doc.string(context) if isinstance(context, ET.Element) else ""
+                text = document.string(context) if isinstance(context, ET.Element) else ""
             have = flags(text)
             names = flags(value)
             have = (
-                have + [f for f in names if f not in have] if attr == "Merge" else [f for f in have if f not in names]
+                have + [flag for flag in names if flag not in have]
+                if attribute == "Merge"
+                else [flag for flag in have if flag not in names]
             )
             text = ";".join(have)
     return text or ""
@@ -163,27 +165,29 @@ def fill(content: list[ET.Element], found) -> list[ET.Element]:
     """The operation's content with ``Content=``'s result put in: at each ``ModOpContent``, or as the whole content
     when there is none (nodes copied; ``SkipParent``: their children; a value: text)."""
     nodes = found if isinstance(found, list) else None
-    holders = [(p, c) for top in content for p in top.iter() for c in p if c.tag == "ModOpContent"]
-    tops = [c for c in content if c.tag == "ModOpContent"]
+    holders = [
+        (owner, child) for top in content for owner in top.iter() for child in owner if child.tag == "ModOpContent"
+    ]
+    tops = [child for child in content if child.tag == "ModOpContent"]
     if not holders and not tops:
-        return [copy.deepcopy(n) for n in nodes if isinstance(n, ET.Element)] if nodes is not None else content
+        return [copy.deepcopy(item) for item in nodes if isinstance(item, ET.Element)] if nodes is not None else content
     out = []
-    for el in content:
-        if el.tag == "ModOpContent":
-            out += _payload(el, nodes)
+    for element in content:
+        if element.tag == "ModOpContent":
+            out += _payload(element, nodes)
         else:
-            out.append(el)
+            out.append(element)
     for parent, holder in holders:
-        at = list(parent).index(holder)
+        index = list(parent).index(holder)
         parent.remove(holder)
         if nodes is None:
             parent.text = (parent.text or "").strip() + format_value(found)
             continue
         for k, node in enumerate(_payload(holder, nodes)):
-            parent.insert(at + k, node)
+            parent.insert(index + k, node)
     return out
 
 
 def _payload(holder: ET.Element, nodes: list | None) -> list[ET.Element]:
-    copies = [copy.deepcopy(n) for n in nodes or () if isinstance(n, ET.Element)]
-    return [c for n in copies for c in n] if "SkipParent" in holder.attrib else copies
+    copies = [copy.deepcopy(node) for node in nodes or () if isinstance(node, ET.Element)]
+    return [child for node in copies for child in node] if "SkipParent" in holder.attrib else copies

@@ -3,7 +3,7 @@ and shown - models in 3D with their configs' parts, materials, levels of detail,
 channel and level, particle effects, sound banks and clips, data files. Plan and user's guide: docs/tool-suite.md
 ("The viewer") and docs/viewer.md.
 
-``viewerwindow`` is the window (``ViewerWindow``, ``run``); ``browser`` the file browser, ``panels`` the parts tree,
+``viewerwindow`` is the window (``CViewerWindow``, ``run``); ``browser`` the file browser, ``panels`` the parts tree,
 the properties, who uses a file and the sequence timeline. The 3D view: ``modelview`` (the widget), ``modelrender``
 (the renderer, no Qt, with its light in ``modellights``, its places and poses in ``modelposes``), ``modelscene``
 (what a config draws: parts, effects, lights, decals), ``motion`` (spins and parts on joints), ``ownpass`` with ``gamepass``, ``fxcpass``,

@@ -39,7 +39,7 @@ LOG_FILE = "toolbox.log"  # in ``<appdata>/logs``: what the program's modules lo
 LOG_BYTES = 512 * 1024  # a log file's size before the next is begun
 LOG_KEPT = 2  # older log files kept beside it (toolbox.log.1, .2)
 ERRORS_KEPT = 20  # the newest error reports (``write_error_log``) that stay
-_log_handler: logging.Handler | None = None
+_g_log_handler: logging.Handler | None = None
 
 
 def prog_name(frozen: bool | None = None) -> str:
@@ -71,11 +71,11 @@ def group_parser() -> argparse.ArgumentParser:
     from ..viewer import filecommands
     from . import importcommands
 
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog=prog_name(), description="The Toolbox: models, textures, sounds and files of the Anno games."
     )
-    p.add_argument("--version", action="version", version=__version__)
-    sub = p.add_subparsers(dest="command", required=True, metavar="{" + ",".join(GROUPS) + "}")
+    parser.add_argument("--version", action="version", version=__version__)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="{" + ",".join(GROUPS) + "}")
     rdm = sub.add_parser(
         "rdm", help="RDM models: export to glTF, import, inspect, diff, validate, relayout, layouts, Granny .gr2"
     )
@@ -89,33 +89,33 @@ def group_parser() -> argparse.ArgumentParser:
     filecommands.register(sub)
     ref_commands.register(sub)
     format_commands.register(sub)
-    return p
+    return parser
 
 
 def game_keys(text: str) -> tuple[str, ...]:
     """``--games``: a comma list of the keys of ``installs.GAMES``, any of them."""
     from ..othergames.installs import GAMES
 
-    keys = tuple(dict.fromkeys(k.strip() for k in text.split(",") if k.strip()))
-    if not keys or any(k not in GAMES for k in keys):
+    keys = tuple(dict.fromkeys(key.strip() for key in text.split(",") if key.strip()))
+    if not keys or any(key not in GAMES for key in keys):
         raise argparse.ArgumentTypeError(f"{text!r}: a comma list of {', '.join(GAMES)}")
     return keys
 
 
 def window_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         prog=prog_name(), description="The window: the island editor, or with --app the suite."
     )
-    ap.add_argument("--version", action="version", version=__version__)
-    ap.add_argument("island", nargs="?", help="an island file (a game path) to open at once")
-    ap.add_argument("--mod", type=Path, help="the mod folder the island file is in")
-    ap.add_argument("--edits", type=Path, help="the edit file to use")
-    ap.add_argument(
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("island", nargs="?", help="an island file (a game path) to open at once")
+    parser.add_argument("--mod", type=Path, help="the mod folder the island file is in")
+    parser.add_argument("--edits", type=Path, help="the edit file to use")
+    parser.add_argument(
         "--games", type=game_keys, metavar="KEYS", help="restrict the editor to these games (anno117,anno1800,...)"
     )
-    ap.add_argument("--app", metavar="APP", help="the suite's window, on this app (islands, assets, viewer, ...)")
-    ap.add_argument("--smoke", action="store_true", help="with --app: open every app once and close")
-    return ap
+    parser.add_argument("--app", metavar="APP", help="the suite's window, on this app (islands, assets, viewer, ...)")
+    parser.add_argument("--smoke", action="store_true", help="with --app: open every app once and close")
+    return parser
 
 
 def run_group(argv: list[str]) -> int:
@@ -177,11 +177,11 @@ def write_error_log(logs: Path | None, kind, value, tb) -> Path | None:
         folder.mkdir(parents=True, exist_ok=True)
         stamp = f"error-{datetime.now():%Y%m%d-%H%M%S-%f}"
         text = "".join(traceback.format_exception(kind, value, tb))
-        for n in range(1, 100):  # Windows' clock steps coarsely: two errors at once must not share a file
-            path = folder / (f"{stamp}.log" if n == 1 else f"{stamp}-{n}.log")
+        for attempt in range(1, 100):  # Windows' clock steps coarsely: two errors at once must not share a file
+            path = folder / (f"{stamp}.log" if attempt == 1 else f"{stamp}-{attempt}.log")
             try:
-                with path.open("x", encoding="utf-8", newline="\n") as f:
-                    f.write(text)
+                with path.open("x", encoding="utf-8", newline="\n") as log_file:
+                    log_file.write(text)
                 return path
             except FileExistsError:
                 continue
@@ -198,9 +198,9 @@ def start_log(logs: Path | None = None) -> logging.Handler | None:
 
     from .settings import appdata
 
-    global _log_handler
-    if _log_handler is not None:
-        return _log_handler
+    global _g_log_handler
+    if _g_log_handler is not None:
+        return _g_log_handler
     folder = logs or appdata() / "logs"
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -211,19 +211,19 @@ def start_log(logs: Path | None = None) -> logging.Handler | None:
     logging.getLogger().addHandler(handler)
     logging.getLogger(__name__.split(".")[0]).setLevel(logging.INFO)
     prune_error_logs(folder, ERRORS_KEPT)
-    _log_handler = handler
+    _g_log_handler = handler
     return handler
 
 
 def stop_log() -> None:
     """Close the log file: before the uninstaller moves the data folder away (an open file would hold it), and
     in a test. The program keeps it to its end otherwise."""
-    global _log_handler
-    if _log_handler is not None:
-        logging.getLogger().removeHandler(_log_handler)
+    global _g_log_handler
+    if _g_log_handler is not None:
+        logging.getLogger().removeHandler(_g_log_handler)
         logging.getLogger(__name__.split(".")[0]).setLevel(logging.NOTSET)
-        _log_handler.close()
-        _log_handler = None
+        _g_log_handler.close()
+        _g_log_handler = None
 
 
 def prune_error_logs(folder: Path, keep: int) -> list[Path]:

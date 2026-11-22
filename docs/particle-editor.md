@@ -5,12 +5,12 @@ fields as forms, curves as graphs and colours as pickers, and plays it live in t
 edited file into the open project, from where the project's build writes it into the mod. The design is in
 `tool-suite.md` section 31, and the code is `src/annotoolbox/particleedit/`.
 
-The app is based on the six installs on the author's machine and the readers this repository already has. **Nothing
-here was tried in a game.** The list at the end says what the game must confirm.
+The app is based on the six installs on the author's machine and on the readers this repository already has.
+**Nothing here was tried in a game.** The list at the end says what the game must confirm.
 
 ## The files, per game
 
-The counts are over every installed file on 2026-11-14 (the base games with every add-on and DLC the installs hold).
+The counts are over every installed file (the base games with every add-on and DLC the installs hold).
 
 | Game | Effect file | Files | Emitters | Syntax | How the game plays it |
 |---|---|---|---|---|---|
@@ -25,16 +25,20 @@ No install holds an `.rpfx` file: the newer engines' particle file is the `.rdp`
 `gpu_particles.fx` (117) and sprite sheets as Bink movies for the interface (`fx_*.bk2`). Neither is an effect file
 that a model places, so the app does not open them.
 
-Every one of these files reads into the app's document and writes back **byte for byte** when nothing changed
-(the installed test, 2026-11-14: all 1,826 files of the six games).
+Every one of these files reads into the app's document and writes back **byte for byte** when nothing changed.
+This holds for all 1,826 files of the six games.
+
+Note: the counts and the byte-for-byte test were run on 2026-11-14 against the installed games.
 
 ### 117, 1800 and 2205: the baked effect (`.rdp`)
 
 The format is described in `engine-particles.md` "Particles": `<Tag>value</>` lines, nested
-blocks closed by `</>`, and `CDATA[<u32 length><bytes>]` blobs. The engine never simulates. It replays, per particle,
-a first and last frame and a material, and per tick a position, rotation, scale and colour. The three games write the
-same tags. 2205 leaves out `DoSort` and `Invincible` in some files, and 117 adds the most. The 2205 file
-`data/graphics/particles/electricity/electricity_01.rdp` is empty (0 bytes); the app opens it as empty and read only.
+blocks closed by `</>`, and `CDATA[<u32 length><bytes>]` blobs. The engine never simulates. It replays a first and last frame and a material per particle, and a position,
+rotation, scale and colour per tick. The three games write the
+same tags. 2205 leaves out `DoSort` and `Invincible` in some files, and 117 adds the most.
+
+The 2205 file `data/graphics/particles/electricity/electricity_01.rdp` is empty (0 bytes). The app opens it as empty and
+read only.
 
 **The header** (every file but the empty one):
 
@@ -65,9 +69,14 @@ same tags. 2205 leaves out `DoSort` and `Invincible` in some files, and 117 adds
 
 **The blobs** `P_Starts`, `P_Ends`, `P_Materials`, `T_Positions`, `T_Rotations`, `T_Scales`, `T_Colors` (and
 `T_Occlusion` in 36 of 117's files) are what the bake wrote. The app shows their sizes and changes them only as a
-whole. **Tint** multiplies every tick's colour and alpha by a picked colour (`T_Colors` is stored as blue, green, red,
-alpha). **Fade** sets the alpha of the first and last tick of each particle to 0, as vanilla files do. Curves over a
-particle's life do not exist in this format: what a 2070 or 1701 emitter has as a curve is baked into the ticks here.
+whole.
+
+- **Tint** multiplies every tick's colour and alpha by a picked colour (`T_Colors` is stored as blue, green, red,
+  alpha).
+- **Fade** sets the alpha of the first and last tick of each particle to 0, as vanilla files do.
+
+Curves over a particle's life do not exist in this format. What a 2070 or 1701 emitter has as a curve is baked into the
+ticks here.
 
 ### The cfg particle parts (117, 1800, 2205)
 
@@ -88,22 +97,25 @@ engine-particles "The cfg side":
 | `ReceiveShadows`, `SoftParticlesEnabled`, `UseDepthBias`, `EarlyPass`, `VolumeBlended`, `AlwaysVisible`, `DarkenAtNight`, `BypassExposure` | the newer switches of the draw (the viewer's game-shader look reads the first three, shader-compile.md section 11) |
 | `SubImageSize`, the four distance tags with a literal semicolon (`<DistanceScaleStartDistance;>`) | a flipbook's tile count; fading by distance |
 
-A sequence starts a particle by its index in the list (`Type` 1, `StartTime`, `EndTime`, `ParticleID`). The object
-builder edits all of this as config fields. The Particles app shows the block of the effect it opened from a model, and
-saves it with the config.
+A sequence starts a particle by its index in the list (`Type` 1, `StartTime`, `EndTime`, `ParticleID`).
 
-The older games place an effect in the config too: 2070 and 1404 with an `EFFECT` in `Effects` (`FileName`,
-`Transformer`, a visibility mask, a colour), 1701 with a `.mcf` part of class 3 (`m_EffectFilename`,
-`m_EffectStartParameter`, `m_EffectTimeOffset`, `m_EffectLoopDuration`, `m_EffectSize`, `m_EffectWindForce`,
-`m_EffectRotateFree`).
+The object builder edits all of this as config fields. The Particles app shows the block of the effect it opened from a
+model, and saves it with the config.
+
+The older games place an effect in the config too:
+
+- 2070 and 1404 use an `EFFECT` in `Effects` (`FileName`, `Transformer`, a visibility mask, a colour).
+- 1701 uses a `.mcf` part of class 3 (`m_EffectFilename`, `m_EffectStartParameter`, `m_EffectTimeOffset`,
+  `m_EffectLoopDuration`, `m_EffectSize`, `m_EffectWindForce`, `m_EffectRotateFree`).
 
 ### 2070 and 1404: the emitter list (`.efc`)
 
 The file holds tags without a root element: `<Effect0>`, `<Effect1>` and so on. Each one is an emitter, with its
 values as `<Name>value</Name>` lines (the reader is `models.particles2070`; the format is in engine-particles
-"Particles"). The two games write the same tags, with two exceptions. 1404 has `Blending` (0 in 236 emitters, 1 in
-173, 2 in 11, 3 in 4) where 2070 has `Technique`, and it has `LEmitter`, `Reflect`, `Refract` and `Shadow` where 2070
-has `Reflection`.
+"Particles"). The two games write the same tags, with two exceptions:
+
+- 1404 has `Blending` (0 in 236 emitters, 1 in 173, 2 in 11, 3 in 4) where 2070 has `Technique`.
+- 1404 has `LEmitter`, `Reflect`, `Refract` and `Shadow` where 2070 has `Reflection`.
 
 **The header:**
 
@@ -113,7 +125,7 @@ has `Reflection`.
 | `EffectType` | 1 particles (2070: 472 emitters, 1404: 296), 2 a mesh (114, 28), 3 a billboard (83, 90), 4 a line (15, 5), 5 mass (0, 1), 6 an arrow (1, 4), 7 a flame (26, 0) |
 | `Texture0` (`Texture1`, `Texture2` always empty) | the texture; an atlas whose tile `AtlasOffsetU/V` to `AtlasTilingU/V` (the opposite corner) is shown |
 | `Shader` | the effect shader (`effect_particle.fx`, `effect_model.fx`) |
-| `Technique` (2070) / `Blending` (1404) | 2070: 0 alpha blend, 1 additive, 2 refract, 3 z-write, 4 no depth test, 5 the water's wave map; 1404's numbers are taken to mean the same for 0 and 1 (not checked): the viewer's effect reader (`models.particles2070.parse_efc`) reads `Blending` where an emitter has no `Technique`, so 1404's additive emitters are drawn additive; its 2 and 3 (15 emitters) are not known and are drawn as alpha blend |
+| `Technique` (2070) / `Blending` (1404) | 2070: 0 alpha blend, 1 additive, 2 refract, 3 z-write, 4 no depth test, 5 the water's wave map; 1404: see the note below the table |
 | `Delay`, `LifeTime`, `Duration` | ms: the start after the effect, a particle's life, how long the emitter emits |
 | `Loop`, `Bound` | 1 repeats; 1 the particles follow the emitter |
 | `OffsetX/Y/Z` | the emitter's place in the effect |
@@ -121,6 +133,11 @@ has `Reflection`.
 | `WindDependency` | 0 to 1: how much the wind moves the particles |
 | `Model`, `TexOffset` | a mesh emitter's `.rdm`; its texture's random offset |
 | `RenderTarget`, `LReceiver`, `LEmitter`, `Reflection` / `Reflect`, `Refract`, `Shadow`, `Heat`, `Glow` | the draw's targets and switches (the names; no reader here interprets them) |
+
+Note on `Blending`: 1404's numbers are taken to mean the same as 2070's for 0 and 1 (not checked). For this, the viewer's effect reader
+(`models.particles2070.parse_efc`) reads `Blending` where an emitter has no `Technique`. So 1404's additive emitters are
+drawn additive. Its 2 and 3 (15 emitters) are not known and are drawn as
+alpha blend.
 
 **The curves.** A curve `X` is five tags and its knots:
 
@@ -151,16 +168,20 @@ Values are straight between knots and held outside them. The files hold these cu
 The syntax and the kinds are described in [`formats/anno1701-effects.md`](formats/anno1701-effects.md). A file is one
 `Effect` block with an emitter block per kind (`ParticleEffect` 305, `BillboardEffect` 150, `InstancingEffect` 53,
 `SprayEffect` 43, `InstancingSlowEffect` 38, `GrannyEffect` 20, `FireWorxEffect` 9, `SuperNovaEffect` 8,
-`VolumeChainsEffect` 4). Each emitter has its header, plain numbers, **graphs** (`Minimum`, `Maximum`, `Single`,
-`Value`, `Linear` and `Point` blocks of `p` x y, tangents `i` and `o`, `udt`) and **colour lists** (`Color` blocks of
-`RGBA` and `Time`). The instancing kinds write `Loop` twice. Both lines are kept and shown, and the second is the one
-the viewer plays.
+`VolumeChainsEffect` 4). Each emitter has these parts:
+
+- its header and plain numbers
+- **graphs** (`Minimum`, `Maximum`, `Single`, `Value`, `Linear` and `Point` blocks of `p` x y, tangents `i` and `o`,
+  `udt`)
+- **colour lists** (`Color` blocks of `RGBA` and `Time`)
+
+The instancing kinds write `Loop` twice. Both lines are kept and shown, and the second is the one the viewer plays.
 
 ### What the preview draws of the 1701 kinds
 
 The viewer's reader draws `ParticleEffect`, `BillboardEffect`, `InstancingEffect`, `InstancingSlowEffect` and
 `SprayEffect` ([`formats/anno1701-effects.md`](formats/anno1701-effects.md)). The kinds in the table below are drawn
-from the fields the files hold. Every rule is inferred from the field names and values, and nothing was seen in the
+from the fields the files hold. Every rule is inferred from the field names and values. Nothing was seen in the
 game:
 
 | Kind | Emitters | The preview |
@@ -184,8 +205,8 @@ Note: the table's kinds were added on 2026-11-14.
   that model's config, either with a ModOps patch (`.cfg.xml`) that sets its `FileName` or by replacing the whole
   config.
 - **2205, 2070, 1404, 1701**: there is no mod loader. A mod is files in an archive that the game reads after its own
-  (the project's delivery, `tool-suite.md` section 18). The same two ways apply with whole files: the
-  effect at its own path, or a new effect file and the config that names it, replaced whole.
+  (the project's delivery, `tool-suite.md` section 18). The same two ways apply with whole files. One is the
+  effect at its own path. The other is a new effect file and the config that names it, replaced whole.
 - **A new effect** is a file at a path of the mod's own. It plays once a config names it (the object builder adds a
   `PARTICLE` or `EFFECT` part for it).
 
@@ -232,9 +253,13 @@ Note: the table's kinds were added on 2026-11-14.
 - **Edition.** The app is part of the public Toolbox.
 
 **From the viewer**: File > Edit the effect in the particle editor opens an effect through `edit_effect`, with the
-model config that places it (`viewer.effectlink`). It opens the effect of the part selected in the Parts panel (a
-`PARTICLE` or `EFFECT` part), or else the only effect of the open model, or the effect file itself. The entry is shown
-when the suite provides the Particles app. File > Open from a model does the same inside the app.
+model config that places it (`viewer.effectlink`). It opens one of three things, in this order:
+
+- the effect of the part selected in the Parts panel (a `PARTICLE` or `EFFECT` part)
+- else the only effect of the open model
+- else the effect file itself
+
+The entry is shown when the suite provides the Particles app. File > Open from a model does the same inside the app.
 
 ### New emitters
 
@@ -247,11 +272,15 @@ There are three ways to add an emitter, each one undo step:
   game. The files do not say what a blank emitter holds, so a game's own emitter is the template. The game's `.efc`
   files are read once in the background (about a second), and only kinds of the file's own syntax are offered.
 
-The copy is made to start with the effect, at its origin: `Delay` and `OffsetX/Y/Z` are 0 (2070, 1404), `StartDelay`
-is 0 and `Position` is 0 0 0 (1701). Its name is `Copy of <name>` (the name is the studio tool's own, 1701's files
-hold them; a second copy of the same name gets ` 2`), and 2070 and 1404 number it `Effect<n+1>`. Everything else
-(texture, curves, colours, the other fields) is the template's, so the new emitter is of that kind and plays at once.
-An `.rdp` has no emitters (the effect is baked), so the entries are off for it.
+The copy is made to start with the effect, at its origin:
+
+- In 2070 and 1404, `Delay` and `OffsetX/Y/Z` are 0.
+- In 1701, `StartDelay` is 0 and `Position` is 0 0 0.
+
+Its name is `Copy of <name>` (the name is the studio tool's own, 1701's files hold them; a second copy of the same name
+gets ` 2`), and 2070 and 1404 number it `Effect<n+1>`. Everything else (texture, curves, colours, the other fields) is
+the template's, so the new emitter is of that kind and plays at once. An `.rdp` has no emitters (the effect is baked),
+so the entries are off for it.
 
 Edit > Remove the selected emitter takes it out (one undo step; an effect keeps at least one emitter). In 2070's and
 1404's files the emitters after it take the tag of the one before, so `Effect0`, `Effect1` ... stay without a gap, as
@@ -259,7 +288,9 @@ in every file of the games. In 1701 the emitter's lines are removed.
 
 ## What to check in the game
 
-None of this was tried in a game (as of 2026-11-14).
+None of this was tried in a game.
+
+Note: this holds as of 2026-11-14.
 
 - [ ] 117: an `.rdp` edited and saved at its own path (a tint, `MaxScale`, `FrameTime`) shows the change on every model
   that places it.

@@ -1,6 +1,6 @@
 """The UI editor: the Phoenix UI files of 117, 1800 and the History Editions browsed, previewed, edited and built into a mod.
 
-Start at ``uiwindow.UiWindow`` (the suite's UI app, or ``uiwindow.run`` alone); docs/tool-suite.md section 20 is the
+Start at ``uiwindow.CUiWindow`` (the suite's UI app, or ``uiwindow.run`` alone); docs/tool-suite.md section 20 is the
 design, docs/ui-editor.md the user's guide. The parts, each one job:
 
 - ``uifiles``: the game's UI files by kind and name, decoded on demand, who names a file; ``library``: the Widget

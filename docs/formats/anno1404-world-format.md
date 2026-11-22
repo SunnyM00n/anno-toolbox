@@ -63,9 +63,9 @@ Root `WorldConfig`, in this order:
 |---|---|
 | `Width`, `Height` | world size in tiles; square (256 to 1536 in the shipped worlds) |
 | `Areas` | list of optional records: `m_Name` and `m_Shape` (a shape in world tiles); named areas for scripts and quests |
-| `WorldLightProfiles` | `North`, `South`: light profile names (keys of `data/config/engine/AmbientMap.xml`), empty for the default |
+| `WorldLightProfiles` | `North`, `South`: light profile names (keys of `data/config/engine/SAmbientMap.xml`), empty for the default |
 | `Islands` | map from island id (1, 2, ...; a new island takes the lowest free id) to an optional `IslandConfig` |
-| `GameData` | `PlayerInfos`: map from player 0..7 to `m_Type` (1 human, 2 computer), `m_Profile` (AI profile GUID) and `m_Color` (colour) |
+| `CGameData` | `PlayerInfos`: map from player 0..7 to `m_Type` (1 human, 2 computer), `m_Profile` (AI profile GUID) and `m_Color` (colour) |
 
 `IslandConfig`:
 

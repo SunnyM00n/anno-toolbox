@@ -19,7 +19,7 @@ PAGE_BORDER = 1  # the Downsampled level's texels beyond the page on each side
 
 def build_terrain(island, gamedata_files: dict[str, bytes], levels: bool = True, pages: bool = True) -> dict:
     """Write ``island``'s terrain from its final heights (``island``: a builder with the terrain writers,
-    ``islandterrain.TerrainMixin`` and ``islandwater.WaterMixin``): heightmaps, sea maps, and with ``levels`` the node
+    ``islandterrain.CTerrainMixin`` and ``islandwater.CWaterMixin``): heightmaps, sea maps, and with ``levels`` the node
     bounds and the stored LOD meshes, with ``pages`` the height pages. Returns the new ``_gamedata`` files."""
     island.apply_heights()
     island.apply_water_maps()
@@ -34,61 +34,39 @@ def build_terrain(island, gamedata_files: dict[str, bytes], levels: bool = True,
     return out
 
 
-def encode_page(doc, ground, x0: float, z0: float, tiles: float) -> None:
+def encode_page(doc, ground, min_x: float, min_z: float, tiles: float) -> None:
     """Fill a height page (``doc``: its FileDB, ``HeightMap/Downsampled`` and ``Deltas``) so the game's rebuild lands
     on ``ground(xs, zs)`` (heightmap units, tile coordinates, outer product with rows z) over the page at
-    (``x0``, ``z0``), ``tiles`` wide: the 66x66 samples, then each refinement level coarsest first
+    (``min_x``, ``min_z``), ``tiles`` wide: the 66x66 samples, then each refinement level coarsest first
     (``islandterrain.page_delta``)."""
     import numpy as np
 
     from .islandterrain import page_delta
 
-    ds = doc.path("HeightMap/Downsampled")
-    dw = ds.find("width").u32()
-    idx = (np.arange(dw) - PAGE_BORDER + 0.5) * tiles / (dw - 2 * PAGE_BORDER)
-    down = np.clip(np.rint(ground(x0 + idx, z0 + idx) * 64) + 32768, 0, 65535).astype("<u2")
-    ds.find("map").data = down.tobytes()
+    downsampled = doc.path("HeightMap/Downsampled")
+    sample_count = downsampled.find("width").u32()
+    index = (np.arange(sample_count) - PAGE_BORDER + 0.5) * tiles / (sample_count - 2 * PAGE_BORDER)
+    down = np.clip(np.rint(ground(min_x + index, min_z + index) * 64) + 32768, 0, 65535).astype("<u2")
+    downsampled.find("map").data = down.tobytes()
     rebuilt = (down.astype(np.float64) - 32768) / 256  # world units, as the game reads it
-    for delta in sorted(doc.path("HeightMap/Deltas").findall("#1"), key=lambda d: d.path("Data").find("width").u32()):
-        rebuilt = page_delta(delta, rebuilt, lambda pos: ground(x0 + pos, z0 + pos), tiles)
+    for delta in sorted(
+        doc.path("HeightMap/Deltas").findall("#1"), key=lambda candidate: candidate.path("Data").find("width").u32()
+    ):
+        rebuilt = page_delta(delta, rebuilt, lambda position: ground(min_x + position, min_z + position), tiles)
 
 
-def write_page(data: bytes, ground, x0: float, z0: float, tiles: float, template: bytes | None = None) -> bytes:
+def write_page(data: bytes, ground, min_x: float, min_z: float, tiles: float, template: bytes | None = None) -> bytes:
     """A page file (``_CTT``, size, zlib FileDB) encoded from ``ground`` (``encode_page``) on the layout of the page
     ``template`` (default: ``data`` itself)."""
     base = template if template is not None else data
     raw = zlib.decompress(base[8:])
     doc, ids = filedb.read(raw), filedb.name_ids(raw)
-    encode_page(doc, ground, x0, z0, tiles)
+    encode_page(doc, ground, min_x, min_z, tiles)
     body = filedb.write(doc, *ids, version=filedb.version(raw))
     return base[:4] + struct.pack("<I", len(body)) + zlib.compress(body, 1)
 
 
-def page_levels(data: bytes) -> dict:
-    """An existing page's surface at each of its levels as the game rebuilds it (world units, texel centres), keyed
-    by the level's width: the 66x66 samples, then each refinement level (``gameterrain.rebuild_page`` step by step)."""
-    import numpy as np
-
-    from .islandterrain import page_up2
-
-    doc = filedb.read(zlib.decompress(data[8:]))
-    ds = doc.path("HeightMap/Downsampled")
-    w = ds.find("width").u32()
-    level = (np.frombuffer(ds.find("map").data, "<u2").reshape(w, w).astype(np.float64) - 32768) / 256
-    out = {w: level}
-    for delta in sorted(doc.path("HeightMap/Deltas").findall("#1"), key=lambda d: d.path("Data").find("width").u32()):
-        width = delta.path("Data").find("width").u32()
-        q = delta.find("QuantBits")
-        bits = struct.unpack("<I", q.data)[0] if q is not None else 8
-        scale = struct.unpack("<f", delta.find("ScaleFactor").data)[0]
-        half = 2 ** (bits - 1)
-        codes = np.frombuffer(delta.path("Data/map").data, np.uint8).reshape(width, width).astype(np.float64)
-        level = page_up2(level) + (codes - half) * 256 / (scale * half)
-        out[width] = level
-    return out
-
-
-def page_field(data: bytes, lift, x0: float, z0: float, tiles: float):
+def page_field(data: bytes, lift, min_x: float, min_z: float, tiles: float):
     """The ground of an existing page (``data``) plus ``lift(xs, zs)`` (world units, outer product) as ``ground`` for
     ``encode_page``: the page's own surface - the coarse map with its detail, the residual - with the edit of the
     coarse map added. The encoder asks for each level's texel centres in turn; each is answered with the page's own
@@ -96,7 +74,9 @@ def page_field(data: bytes, lift, x0: float, z0: float, tiles: float):
     codes, and elsewhere lands within one height code of its old surface plus the edit."""
     import numpy as np
 
-    levels = page_levels(data)
+    from .gameterrain import rebuild_levels
+
+    levels = rebuild_levels(data)
 
     def ground(xs, zs):
         xs = np.asarray(xs, float)

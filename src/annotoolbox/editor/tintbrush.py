@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 
 from ..infra.i18n import N_, tr
-from .editchange import Change, copy_json
+from .editchange import SChange, copy_json
 
 PRESETS = (
     (N_("common.darker"), (0.7, 0.7, 0.7)),
@@ -23,54 +23,54 @@ PRESETS = (
 )  # the factors the albedo is multiplied with at full strength: 1 leaves it
 
 
-class TintEdits:
-    """The tint strokes of one ``EditSession``; ``cells`` is None (there is no grid to outline)."""
+class CTintEdits:
+    """The tint strokes of one ``CEditSession``; ``cells`` is None (there is no grid to outline)."""
 
-    cells = None
+    m_cells = None
 
     def __init__(self, session) -> None:
-        self.s = session
-        self.stroke: dict | None = None
+        self.m_session = session
+        self.m_stroke: dict | None = None
 
     @property
     def strokes(self) -> list[dict]:
-        return self.s.edits.setdefault("tint", [])
+        return self.m_session.m_edits.setdefault("tint", [])
 
-    def begin(self, value: tuple[int, float], radius: float, x: float, z: float) -> None:
+    def begin(self, value: tuple[int, float], radius_tiles: float, x: float, z: float) -> None:
         """Start a stroke: ``value`` the preset's index and the brush's strength."""
-        s = self.s
-        if s.readonly:
+        session = self.m_session
+        if session.m_readonly:
             return
         preset, strength = value
-        s._brush = {"kind": "tint", "before": copy_json(self.strokes)}
-        self.stroke = {
+        session._m_brush = {"kind": "tint", "before": copy_json(self.strokes)}
+        self.m_stroke = {
             "color": list(PRESETS[preset][1]),
-            "radius": float(radius),
+            "radius": float(radius_tiles),
             "strength": round(float(strength), 3),
             "points": [[round(x, 2), round(z, 2)]],
         }
-        self.strokes.append(self.stroke)
-        s._notify(Change())
+        self.strokes.append(self.m_stroke)
+        session._notify(SChange())
 
     def to(self, x: float, z: float) -> None:
-        s, stroke = self.s, self.stroke
-        if not s._brush or s._brush["kind"] != "tint" or stroke is None:
+        session, stroke = self.m_session, self.m_stroke
+        if not session._m_brush or session._m_brush["kind"] != "tint" or stroke is None:
             return
         last = stroke["points"][-1]
         if math.hypot(x - last[0], z - last[1]) >= stroke["radius"] / 4:
             stroke["points"].append([round(x, 2), round(z, 2)])
-            s._notify(Change())
+            session._notify(SChange())
 
     def end(self) -> None:
-        s = self.s
-        b, s._brush = s._brush, None
-        self.stroke = None
-        if not b or b["kind"] != "tint":
+        session = self.m_session
+        brush, session._m_brush = session._m_brush, None
+        self.m_stroke = None
+        if not brush or brush["kind"] != "tint":
             return
-        before, after = b["before"], copy_json(self.strokes)
+        before, after = brush["before"], copy_json(self.strokes)
 
         def put(strokes: list[dict]) -> None:
-            s.edits["tint"] = copy_json(strokes)
-            s._notify(Change())
+            session.m_edits["tint"] = copy_json(strokes)
+            session._notify(SChange())
 
-        s._push(tr("islands.tint_lower"), lambda: put(before), lambda: put(after))
+        session._push(tr("islands.tint_lower"), lambda: put(before), lambda: put(after))

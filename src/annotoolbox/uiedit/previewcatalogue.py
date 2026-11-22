@@ -2,8 +2,8 @@
 customization (portraits, emblems, colours, banner parts, title words), the regions, tiers, DLCs, the assets locked at
 the start, the research nodes and the session setup's options with their values.
 
-``read(game)`` takes an opened ``assetedit.assetgame.Game`` (slow: read it off the window's thread) and gives a
-``Catalogue``; ``Catalogue.defaults()`` the campaign's ``previewdefaults.Defaults`` knowing every picture and colour.
+``read(game)`` takes an opened ``assetedit.assetgame.CGame`` (slow: read it off the window's thread) and gives a
+``SCatalogue``; ``SCatalogue.defaults()`` the campaign's ``previewdefaults.SDefaults`` knowing every picture and colour.
 docs/ui-editor.md, "What the preview assumes about the player".
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .previewdefaults import Character, Defaults
+from .previewdefaults import SCharacter, SDefaults
 
 ROLE_OF_TEMPLATE = (("Emperor", "emperor"), ("Pirate", "pirate"), ("2ndParty", "rival"), ("Human", "player"),
                     ("3rdParty", "trader"))  # fmt: skip
@@ -27,7 +27,7 @@ TECH_ROW = re.compile(r"(-?\d+)\s+(-?\d+)")  # "Tech Economy -1 1 ...": the node
 
 
 @dataclass(frozen=True)
-class Option:
+class SOption:
     """One choice: an asset (or a data set item) with its name, icon and group."""
 
     guid: int
@@ -41,180 +41,202 @@ class Option:
 
 
 @dataclass
-class Catalogue:
-    characters: dict[str, list[Character]] = field(default_factory=dict)  # role -> participants
-    portraits: list[Option] = field(default_factory=list)  # the profile customization's
-    emblems: list[Option] = field(default_factory=list)
-    colours: list[Option] = field(default_factory=list)
-    banner: dict[str, list[Option]] = field(default_factory=dict)  # BannerShape ... -> the parts
-    titles: dict[str, list[Option]] = field(default_factory=dict)  # prefix, suffix -> the words
-    regions: list[Option] = field(default_factory=list)  # the provinces (sessions) with their region
-    tiers: list[Option] = field(default_factory=list)  # the population levels, group = their region
-    dlcs: list[Option] = field(default_factory=list)
-    unlocks: list[Option] = field(default_factory=list)  # locked at the start, group = their template
-    research: list[Option] = field(default_factory=list)  # group = the research category
-    setup: dict[str, list[Option]] = field(default_factory=dict)  # Setup... option -> its values (guid: data id)
-    presets: list[Option] = field(default_factory=list)  # the difficulty presets
+class SCatalogue:
+    characters: dict[str, list[SCharacter]] = field(default_factory=dict)  # role -> participants
+    portraits: list[SOption] = field(default_factory=list)  # the profile customization's
+    emblems: list[SOption] = field(default_factory=list)
+    colours: list[SOption] = field(default_factory=list)
+    banner: dict[str, list[SOption]] = field(default_factory=dict)  # BannerShape ... -> the parts
+    titles: dict[str, list[SOption]] = field(default_factory=dict)  # prefix, suffix -> the words
+    regions: list[SOption] = field(default_factory=list)  # the provinces (sessions) with their region
+    tiers: list[SOption] = field(default_factory=list)  # the population levels, group = their region
+    dlcs: list[SOption] = field(default_factory=list)
+    unlocks: list[SOption] = field(default_factory=list)  # locked at the start, group = their template
+    research: list[SOption] = field(default_factory=list)  # group = the research category
+    setup: dict[str, list[SOption]] = field(default_factory=dict)  # Setup... option -> its values (guid: data id)
+    presets: list[SOption] = field(default_factory=list)  # the difficulty presets
 
-    def defaults(self, base: Defaults | None = None) -> Defaults:
+    def defaults(self, base: SDefaults | None = None) -> SDefaults:
         """``base`` (the campaign's) knowing the catalogue's characters, pictures and colours."""
-        d = base or Defaults()
-        d.known = {c.participant: c for cs in self.characters.values() for c in cs}
-        d.pictures = {o.guid: o.icon for o in (*self.portraits, *self.emblems) if o.icon}
-        d.colours = {o.guid: o.rgb for o in self.colours if o.rgb}
-        return d
+        defaults = base or SDefaults()
+        defaults.known = {
+            character.participant: character
+            for character_list in self.characters.values()
+            for character in character_list
+        }
+        defaults.pictures = {option.guid: option.icon for option in (*self.portraits, *self.emblems) if option.icon}
+        defaults.colours = {option.guid: option.rgb for option in self.colours if option.rgb}
+        return defaults
 
 
-def _text(el, path: str) -> str:
-    found = el.find(path) if el is not None else None
+def _text(element, path: str) -> str:
+    found = element.find(path) if element is not None else None
     return found.text.strip() if found is not None and found.text else ""
 
 
-def _int(el, path: str) -> int:
-    value = _text(el, path)
+def _int(element, path: str) -> int:
+    value = _text(element, path)
     return int(value) if value.lstrip("-").isdigit() else 0
 
 
 def argb(value: int) -> tuple[int, int, int]:
     """A colour stored as a signed ARGB number as (r, g, b)."""
-    u = value & 0xFFFFFFFF
-    return (u >> 16) & 255, (u >> 8) & 255, u & 255
+    unsigned = value & 0xFFFFFFFF
+    return (unsigned >> 16) & 255, (unsigned >> 8) & 255, unsigned & 255
 
 
-class _Reader:
+class _CReader:
     def __init__(self, game, language: str) -> None:
-        self.game, self.index, self.texts = game, game.index, game.texts(language)
-        self.english = game.texts("english") if language != "english" else self.texts
+        self.m_game, self.m_index, self.m_texts = game, game.m_index, game.texts(language)
+        self.m_english = game.texts("english") if language != "english" else self.m_texts
 
     def name(self, guid: int) -> str:
-        el = self.index.element(guid) if guid in self.index.by_guid else None
+        element = self.m_index.element(guid) if guid in self.m_index.m_by_guid else None
         for path in ("Values/Text/OasisId", "Values/Portrait/PortraitName"):
-            key = _text(el, path)
-            if key and (found := self.texts.get(key) or self.english.get(key)):
+            key = _text(element, path)
+            if key and (found := self.m_texts.get(key) or self.m_english.get(key)):
                 return found
-        entry = self.index.by_guid.get(guid)
+        entry = self.m_index.m_by_guid.get(guid)
         return entry.name if entry is not None else str(guid)
 
-    def option(self, guid: int, group: str = "", **extra) -> Option:
-        el = self.index.element(guid) if guid in self.index.by_guid else None
-        icon = _text(el, "Values/Standard/IconFilename") or _text(el, "Values/Banner/Filename")  # a banner part's
-        return Option(guid, self.name(guid), icon, group, **extra)
+    def option(self, guid: int, group: str = "", **extra) -> SOption:
+        element = self.m_index.element(guid) if guid in self.m_index.m_by_guid else None
+        icon = _text(element, "Values/Standard/IconFilename") or _text(
+            element, "Values/Banner/Filename"
+        )  # a banner part's
+        return SOption(guid, self.name(guid), icon, group, **extra)
 
-    def colour(self, guid: int) -> Option:
-        el = self.index.element(guid) if guid in self.index.by_guid else None
-        raw = _text(el, "Values/ParticipantColor/ParticipantUIColor/None")
-        return Option(guid, self.name(guid), "", "", argb(int(raw)) if raw.lstrip("-").isdigit() else None)
+    def colour(self, guid: int) -> SOption:
+        element = self.m_index.element(guid) if guid in self.m_index.m_by_guid else None
+        raw = _text(element, "Values/ParticipantColor/ParticipantUIColor/None")
+        return SOption(guid, self.name(guid), "", "", argb(int(raw)) if raw.lstrip("-").isdigit() else None)
 
     def of_template(self, template: str) -> list[int]:
-        return [g for g, e in self.index.by_guid.items() if getattr(e, "template", "") == template]
+        return [
+            guid for guid, element in self.m_index.m_by_guid.items() if getattr(element, "template", "") == template
+        ]
 
-    def character(self, guid: int, role: str, region: str) -> Character:
-        el = self.index.element(guid)
-        portrait, emblem = _int(el, "Values/Participant/Portrait"), _int(el, "Values/Participant/CompanyIcon")
-        colour = self.colour(_int(el, "Values/Participant/DefaultColor"))
-        return Character(role, guid, self.name(guid), portrait, self.option(portrait).icon if portrait else "",
+    def character(self, guid: int, role: str, region: str) -> SCharacter:
+        element = self.m_index.element(guid)
+        portrait, emblem = _int(element, "Values/Participant/Portrait"), _int(element, "Values/Participant/CompanyIcon")
+        colour = self.colour(_int(element, "Values/Participant/DefaultColor"))
+        return SCharacter(role, guid, self.name(guid), portrait, self.option(portrait).icon if portrait else "",
                          emblem, self.option(emblem).icon if emblem else "", colour.guid, colour.rgb or (255, 255, 255),
                          region)  # fmt: skip
 
 
-def _characters(r: _Reader) -> dict[str, list[Character]]:
-    out: dict[str, list[Character]] = {}
-    for guid, entry in sorted(r.index.by_guid.items()):
+def _characters(reader: _CReader) -> dict[str, list[SCharacter]]:
+    out: dict[str, list[SCharacter]] = {}
+    for guid, entry in sorted(reader.m_index.m_by_guid.items()):
         template = getattr(entry, "template", "") or ""
-        if not template.startswith("Participant") or any(w in template for w in ("Group", "Color", "NoTrader")):
+        if not template.startswith("Participant") or any(
+            excluded_word in template for excluded_word in ("Group", "Color", "NoTrader")
+        ):
             continue
         role = next((role for word, role in ROLE_OF_TEMPLATE if word in template), "")
-        el = r.index.element(guid)
-        if not role or not _int(el, "Values/Participant/Portrait"):
+        element = reader.m_index.element(guid)
+        if not role or not _int(element, "Values/Participant/Portrait"):
             continue  # a template of participants, or one with no face
-        region = "Celtic" if any(w in entry.name for w in ("Celtic", "Wetlands", "Albion")) else "Roman"
-        region = "Egyptian" if any(w in entry.name for w in ("Aegyptus", "Egypt")) else region
-        out.setdefault(role, []).append(r.character(guid, role, region))
+        region = (
+            "Celtic"
+            if any(excluded_word in entry.name for excluded_word in ("Celtic", "Wetlands", "Albion"))
+            else "Roman"
+        )
+        region = "Egyptian" if any(excluded_word in entry.name for excluded_word in ("Aegyptus", "Egypt")) else region
+        out.setdefault(role, []).append(reader.character(guid, role, region))
     return out
 
 
-def _customization(r: _Reader, cat: Catalogue) -> None:
-    el = r.index.element(CUSTOMIZATION) if CUSTOMIZATION in r.index.by_guid else None
-    scene = el.find("Values/ProfileCustomizationScene") if el is not None else None
+def _customization(reader: _CReader, cat: SCatalogue) -> None:
+    element = reader.m_index.element(CUSTOMIZATION) if CUSTOMIZATION in reader.m_index.m_by_guid else None
+    scene = element.find("Values/ProfileCustomizationScene") if element is not None else None
     if scene is None:
         return
-    cat.portraits = [r.option(int(x.text)) for x in scene.iter("Portrait") if x.text and x.text.isdigit()]
-    cat.emblems = [r.option(int(x.text)) for x in scene.iter("Logo") if x.text and x.text.isdigit()]
-    cat.colours = [r.colour(int(x.text)) for x in scene.iter("Colors") if x.text and x.text.isdigit()]
+    cat.portraits = [reader.option(int(x.text)) for x in scene.iter("Portrait") if x.text and x.text.isdigit()]
+    cat.emblems = [reader.option(int(x.text)) for x in scene.iter("Logo") if x.text and x.text.isdigit()]
+    cat.colours = [reader.colour(int(x.text)) for x in scene.iter("Colors") if x.text and x.text.isdigit()]
     for part, tag in (("BannerShape", "Shape"), ("BannerPattern", "Pattern"),
                       ("BannerBackgroundPattern", "BackgroundPattern"), ("BannerStripes", "Stripes")):  # fmt: skip
-        cat.banner[part] = [r.option(int(x.text)) for x in scene.iter(tag) if x.text and x.text.isdigit()]
-    cat.titles = {"prefix": [r.option(int(x.text)) for x in scene.iter("Prefix") if x.text and x.text.isdigit()],
-                  "suffix": [r.option(int(x.text)) for x in scene.iter("Suffix") if x.text and x.text.isdigit()]}  # fmt: skip
+        cat.banner[part] = [reader.option(int(x.text)) for x in scene.iter(tag) if x.text and x.text.isdigit()]
+    cat.titles = {"prefix": [reader.option(int(x.text)) for x in scene.iter("Prefix") if x.text and x.text.isdigit()],
+                  "suffix": [reader.option(int(x.text)) for x in scene.iter("Suffix") if x.text and x.text.isdigit()]}  # fmt: skip
 
 
-def _progression(r: _Reader, cat: Catalogue) -> None:
-    for guid in sorted(r.of_template("PopulationGroup7")):
-        el = r.index.element(guid)
-        region = _text(el, "Values/PopulationGroup7/Regional")
-        levels = [int(x.text) for x in el.iter("Level") if x.text and x.text.isdigit()]
-        cat.tiers += [r.option(g, region, tier=i + 1) for i, g in enumerate(levels)]
-    for guid in sorted(r.of_template("SessionModerate")):
-        el = r.index.element(guid)
-        if _text(el, "Values/Session/IsVisibleInGameSetup") == "1":
-            region = _int(el, "Values/Session/Region")
-            cat.regions.append(r.option(guid, r.name(region) if region else ""))
-    dlcs = r.index.element(DLC_CONTROLLER) if DLC_CONTROLLER in r.index.by_guid else None
-    cat.dlcs = [r.option(int(x.text)) for x in (dlcs.iter("DLC") if dlcs is not None else ()) if x.text.isdigit()]
-    for guid, entry in sorted(r.index.by_guid.items()):
-        el = r.index.element(guid)
-        if _text(el, "Values/Locked/DefaultLockedState") == "1":
-            cat.unlocks.append(r.option(guid, getattr(entry, "template", "") or ""))
+def _progression(reader: _CReader, cat: SCatalogue) -> None:
+    for guid in sorted(reader.of_template("PopulationGroup7")):
+        element = reader.m_index.element(guid)
+        region = _text(element, "Values/PopulationGroup7/Regional")
+        levels = [int(x.text) for x in element.iter("Level") if x.text and x.text.isdigit()]
+        cat.tiers += [reader.option(population_level, region, tier=i + 1) for i, population_level in enumerate(levels)]
+    for guid in sorted(reader.of_template("SessionModerate")):
+        element = reader.m_index.element(guid)
+        if _text(element, "Values/Session/IsVisibleInGameSetup") == "1":
+            region = _int(element, "Values/Session/Region")
+            cat.regions.append(reader.option(guid, reader.name(region) if region else ""))
+    dlcs = reader.m_index.element(DLC_CONTROLLER) if DLC_CONTROLLER in reader.m_index.m_by_guid else None
+    cat.dlcs = [
+        reader.option(int(x.text))
+        for x in (dlcs.iter("DLC") if dlcs is not None else ())
+        if x.text and x.text.isdigit()
+    ]
+    for guid, entry in sorted(reader.m_index.m_by_guid.items()):
+        element = reader.m_index.element(guid)
+        if _text(element, "Values/Locked/DefaultLockedState") == "1":
+            cat.unlocks.append(reader.option(guid, getattr(entry, "template", "") or ""))
 
 
-def _trees(r: _Reader, cat: Catalogue) -> tuple[dict[int, tuple[str, int]], dict[str, tuple[str, int]]]:
+def _trees(reader: _CReader, cat: SCatalogue) -> tuple[dict[int, tuple[str, int]], dict[str, tuple[str, int]]]:
     """The research trees: node -> (tree name, DLC of the tree), and the trees by their ``CategoryType`` (the DLC
     ones, ``DLC01``..., are named as the DLC is, and ``Text`` ties a tree to its DLC product)."""
-    product = {_text(r.index.element(o.guid), "Values/Text/OasisId"): o.guid for o in cat.dlcs}
+    product = {_text(reader.m_index.element(option.guid), "Values/Text/OasisId"): option.guid for option in cat.dlcs}
     of_node, by_type = {}, {}
-    for guid in r.of_template("TechCategory"):
-        el = r.index.element(guid)
-        tree = (r.name(guid), product.get(_text(el, "Values/Text/OasisId"), 0))
-        by_type[_text(el, "Values/TechCategory/CategoryType")] = tree
-        for x in el.iter("Tech"):
+    for guid in reader.of_template("TechCategory"):
+        element = reader.m_index.element(guid)
+        tree = (reader.name(guid), product.get(_text(element, "Values/Text/OasisId"), 0))
+        by_type[_text(element, "Values/TechCategory/CategoryType")] = tree
+        for x in element.iter("Tech"):
             if x.text and x.text.isdigit():
                 of_node[int(x.text)] = tree
     return of_node, by_type
 
 
-def _research(r: _Reader, cat: Catalogue) -> None:
-    of_node, by_type = _trees(r, cat)
-    for guid in sorted(r.of_template("Tech")):
-        el = r.index.element(guid)
-        if _text(el, "Values/Tech/IsGate") == "1":
+def _research(reader: _CReader, cat: SCatalogue) -> None:
+    of_node, by_type = _trees(reader, cat)
+    for guid in sorted(reader.of_template("Tech")):
+        element = reader.m_index.element(guid)
+        if _text(element, "Values/Tech/IsGate") == "1":
             continue  # a gate between the tree's stages, not a node a player researches
-        asset = r.index.by_guid[guid].name or ""
+        asset = reader.m_index.m_by_guid[guid].name or ""
         row = TECH_ROW.search(asset)
-        repeat = any("repeat" in c.tag.lower() and (c.text or "").strip() not in ("", "0") for c in el.iter())
-        name = r.texts.get(_text(el, "Values/Tech/TechName"), "") or r.name(guid)
+        repeat = any(
+            "repeat" in child.tag.lower() and (child.text or "").strip() not in ("", "0") for child in element.iter()
+        )
+        name = reader.m_texts.get(_text(element, "Values/Tech/TechName"), "") or reader.name(guid)
         kind = DLC_TECH.search(asset)  # a node in no tree list is still named for the DLC it belongs to
         tree = of_node.get(guid) or (by_type.get(kind.group(1)) if kind else None) or ("", 0)
         if guid not in of_node and CUT.search(asset):
             tree = (UNUSED, 0)  # cut from the game: in no tree
-        cat.research.append(Option(guid, name, _text(el, "Values/Standard/IconFilename"), tree[0],
+        cat.research.append(SOption(guid, name, _text(element, "Values/Standard/IconFilename"), tree[0],
                                    tier=abs(int(row.group(2))) if row else 0, repeatable=repeat, dlc=tree[1]))  # fmt: skip
 
 
-def _setup(r: _Reader, cat: Catalogue) -> None:
-    prop = r.game.schema.properties.get(SETUP_TEMPLATE)
+def _setup(reader: _CReader, cat: SCatalogue) -> None:
+    prop = reader.m_game.m_schema.properties.get(SETUP_TEMPLATE)
     for spec in prop.values if prop is not None else []:
-        data_set = r.game.schema.data_sets.get(spec.data_set) if spec.data_set else None
+        data_set = reader.m_game.m_schema.data_sets.get(spec.data_set) if spec.data_set else None
         if data_set is not None and spec.name.startswith("Setup"):
-            cat.setup[spec.name] = [Option(int(i) if i.lstrip("-").isdigit() else n, n) for n, i in data_set.items]
-    cat.presets = [r.option(g) for g in sorted(r.of_template(SETUP_TEMPLATE))]
+            cat.setup[spec.name] = [
+                SOption(int(i) if i.lstrip("-").isdigit() else name, name) for name, i in data_set.items
+            ]
+    cat.presets = [reader.option(guid) for guid in sorted(reader.of_template(SETUP_TEMPLATE))]
 
 
-def read(game, language: str = "english") -> Catalogue:
-    """Every choice the preview's defaults can take, from the game's assets (``assetgame.Game``)."""
-    r = _Reader(game, language)
-    cat = Catalogue(characters=_characters(r))
-    _customization(r, cat)
-    _progression(r, cat)
-    _research(r, cat)
-    _setup(r, cat)
+def read(game, language: str = "english") -> SCatalogue:
+    """Every choice the preview's defaults can take, from the game's assets (``assetgame.CGame``)."""
+    reader = _CReader(game, language)
+    cat = SCatalogue(characters=_characters(reader))
+    _customization(reader, cat)
+    _progression(reader, cat)
+    _research(reader, cat)
+    _setup(reader, cat)
     return cat

@@ -1,5 +1,5 @@
 """The Anno games the editor and the tools open: how an install is told apart, its engine generation, its
-archives in override order, its index (``Game.index``), where its islands and its Documents folder are, which
+archives in override order, its index (``SGame.index``), where its islands and its Documents folder are, which
 editor opens the islands.
 
 The generation is the studio's own numbering (1701 is 3, 117 is 8) and splits the games into two
@@ -19,8 +19,12 @@ from pathlib import Path
 
 def _numbered(folder: Path, stem: str = "data") -> list[Path]:
     """``<stem>0.rda``, ``<stem>1.rda``, ... in number order (a text sort puts data10 before data2)."""
-    found = [(int(m[1]), p) for p in folder.glob(f"{stem}*.rda") if (m := re.fullmatch(rf"{stem}(\d+)", p.stem))]
-    return [p for _, p in sorted(found)]
+    found = [
+        (int(match[1]), path)
+        for path in folder.glob(f"{stem}*.rda")
+        if (match := re.fullmatch(rf"{stem}(\d+)", path.stem))
+    ]
+    return [path for _, path in sorted(found)]
 
 
 def _archives_1404(root: Path) -> list[Path]:
@@ -50,20 +54,22 @@ def _archives_2070(root: Path) -> list[Path]:
     from ..sources.overlay import archive_root
 
     return (
-        [a for a in archive_root(root).iterdir() if a.suffix.lower() == ".rda"] if (root / "maindata").is_dir() else []
+        [archive for archive in archive_root(root).iterdir() if archive.suffix.lower() == ".rda"]
+        if (root / "maindata").is_dir()
+        else []
     )
 
 
 def _index_117(folder: Path, cache: Path | None, replace=None):
-    from ..sources.anno117 import Anno117Files
+    from ..sources.anno117 import CAnno117Files
 
-    return Anno117Files(folder, cache_dir=cache)
+    return CAnno117Files(folder, cache_dir=cache)
 
 
 def _index_2070(folder: Path, cache: Path | None, replace=None):
-    from ..sources.overlay import SourceTree
+    from ..sources.overlay import CSourceTree
 
-    return SourceTree(folder, cache_dir=cache)
+    return CSourceTree(folder, cache_dir=cache)
 
 
 OLD, NEW = "old", "new"  # engine families: tagged-text islands / FileDB level data
@@ -74,7 +80,7 @@ def family(engine: int) -> str:
 
 
 @dataclass(frozen=True)
-class Game:
+class SGame:
     key: str
     name: str
     engine: int  # the generation (module docstring)
@@ -105,7 +111,9 @@ class Game:
         return self.key.removeprefix("anno") + "_"
 
     def is_install(self, folder: Path) -> bool:
-        if any((folder / exe).is_file() for exe in self.exes) and all((folder / n).is_file() for n in self.needs):
+        if any((folder / exe).is_file() for exe in self.exes) and all(
+            (folder / needed).is_file() for needed in self.needs
+        ):
             return True
         if os.name == "nt":
             return False
@@ -128,10 +136,12 @@ class Game:
             from .isd1701 import source_tree
 
             return source_tree(folder, replace=replace)
-        from ..sources.overlay import SourceTree
+        from ..sources.overlay import CSourceTree
 
         files = self.archives(folder)
-        return SourceTree.from_archives([r for f in files if (r := replace(f) if replace else f) is not None], cache)
+        return CSourceTree.from_archives(
+            [replaced for file in files if (replaced := replace(file) if replace else file) is not None], cache
+        )
 
     def tree(self, folder: Path, replace=None):
         """``index`` without a cache folder, as the island editor and its tests ask for it."""
@@ -143,7 +153,7 @@ class Game:
 GAMES = {
     g.key: g
     for g in (
-        Game(
+        SGame(
             "anno117",
             "Anno 117",
             8,
@@ -158,7 +168,7 @@ GAMES = {
             opener=_index_117,
             island_folder="/islands/",
         ),
-        Game(
+        SGame(
             "anno1800",
             "Anno 1800",
             7,
@@ -170,7 +180,7 @@ GAMES = {
             documents="Anno 1800",
             mod_loader=True,
         ),
-        Game(
+        SGame(
             "anno2205",
             "Anno 2205",
             6,
@@ -181,7 +191,7 @@ GAMES = {
             "a6m",  # whole session maps (editor.formats.a7m.session): terrain, ground and objects
             documents="Anno 2205",  # config, log and accounts (the live link's session file goes beside them)
         ),
-        Game(
+        SGame(
             "anno2070",
             "Anno 2070",
             5,
@@ -194,7 +204,7 @@ GAMES = {
             archive_dir="maindata",
             opener=_index_2070,
         ),
-        Game(
+        SGame(
             "anno1404",
             "Anno 1404 (with Venice)",
             4,
@@ -204,7 +214,7 @@ GAMES = {
             ".isd",
             "isd",  # 2070's island format: isd2070 reads it as it is
         ),
-        Game(
+        SGame(
             "anno1701",
             "Anno 1701",
             3,
@@ -218,7 +228,7 @@ GAMES = {
 }
 
 
-def keys(test: Callable[[Game], bool]) -> tuple[str, ...]:
+def keys(test: Callable[[SGame], bool]) -> tuple[str, ...]:
     """The keys of the games that pass ``test``, in the order of ``GAMES``."""
     return tuple(key for key, game in GAMES.items() if test(game))
 
@@ -236,7 +246,7 @@ def detect(candidates: list[Path]) -> dict[str, str]:
     return found
 
 
-def islands(game: Game, tree) -> list[str]:
+def islands(game: SGame, tree) -> list[str]:
     """The game's island files, as game paths."""
-    found = {p for prefix in game.islands for p in tree.iter_paths(prefix, suffix=game.suffix)}
-    return sorted(p for p in found if game.island_folder in p)
+    found = {path for prefix in game.islands for path in tree.iter_paths(prefix, suffix=game.suffix)}
+    return sorted(path for path in found if game.island_folder in path)

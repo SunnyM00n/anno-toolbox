@@ -25,7 +25,7 @@ TITLE = "Anno Toolbox"  # the shortcut's name
 
 
 @dataclass(frozen=True)
-class Places:
+class SPlaces:
     start_menu: Path  # the user's Start menu, Programs
     desktop: Path
 
@@ -36,11 +36,11 @@ def _guid(text: str):
     import uuid
     from ctypes import wintypes
 
-    class GUID(ctypes.Structure):
+    class SGUID(ctypes.Structure):
         _fields_ = [("a", wintypes.DWORD), ("b", wintypes.WORD), ("c", wintypes.WORD), ("d", ctypes.c_ubyte * 8)]
 
     raw = uuid.UUID(text)
-    return GUID(raw.time_low, raw.time_mid, raw.time_hi_version, (ctypes.c_ubyte * 8)(*raw.bytes[8:]))
+    return SGUID(raw.time_low, raw.time_mid, raw.time_hi_version, (ctypes.c_ubyte * 8)(*raw.bytes[8:]))
 
 
 def known_folder(guid: str) -> Path | None:
@@ -59,13 +59,13 @@ def known_folder(guid: str) -> Path | None:
         ctypes.windll.ole32.CoTaskMemFree(out)
 
 
-def places() -> Places | None:
+def places() -> SPlaces | None:
     if sys.platform != "win32":  # the applications menu's folder and the desktop of the freedesktop.org specs
         desktop = _xdg_user_dir("DESKTOP") or Path.home() / "Desktop"
-        return Places(_xdg("XDG_DATA_HOME", ".local/share") / "applications", desktop)
+        return SPlaces(_xdg("XDG_DATA_HOME", ".local/share") / "applications", desktop)
     programs = known_folder("A77F5D77-2E2B-44C3-A6A2-ABA601054A51")  # FOLDERID_Programs (the user's)
     desktop = known_folder("B4BFCC3A-DB2C-424C-B029-7FE99A87C641")  # FOLDERID_Desktop
-    return Places(programs, desktop) if programs and desktop else None
+    return SPlaces(programs, desktop) if programs and desktop else None
 
 
 def link_path(folder: Path, title: str = TITLE) -> Path:
@@ -110,10 +110,10 @@ def create_entry(path: Path, target: Path, description: str = "") -> None:
         )
 
 
-def _method(obj, index: int, restype, *argtypes):
+def _method(com_object, index: int, restype, *argtypes):
     import ctypes
 
-    table = ctypes.cast(ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
+    table = ctypes.cast(ctypes.cast(com_object, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
     return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(table[index])
 
 
@@ -140,9 +140,9 @@ def _shell_link():
 def _release(*objects) -> None:
     import ctypes
 
-    for obj in objects:
-        if obj:
-            _method(obj, 2, ctypes.c_ulong)(obj)
+    for com_object in objects:
+        if com_object:
+            _method(com_object, 2, ctypes.c_ulong)(com_object)
 
 
 def create_link(path: Path, target: Path, description: str = "", arguments: str = "") -> None:
@@ -156,15 +156,15 @@ def create_link(path: Path, target: Path, description: str = "", arguments: str 
     path.parent.mkdir(parents=True, exist_ok=True)
     link, persist = _shell_link()
     try:
-        w = ctypes.c_wchar_p
-        _method(link, 20, ctypes.HRESULT, w)(link, str(target))  # SetPath
-        _method(link, 9, ctypes.HRESULT, w)(link, str(target.parent))  # SetWorkingDirectory
-        _method(link, 17, ctypes.HRESULT, w, ctypes.c_int)(link, str(target), 0)  # SetIconLocation
+        wide_text_type = ctypes.c_wchar_p
+        _method(link, 20, ctypes.HRESULT, wide_text_type)(link, str(target))  # SetPath
+        _method(link, 9, ctypes.HRESULT, wide_text_type)(link, str(target.parent))  # SetWorkingDirectory
+        _method(link, 17, ctypes.HRESULT, wide_text_type, ctypes.c_int)(link, str(target), 0)  # SetIconLocation
         if description:
-            _method(link, 7, ctypes.HRESULT, w)(link, description)  # SetDescription
+            _method(link, 7, ctypes.HRESULT, wide_text_type)(link, description)  # SetDescription
         if arguments:
-            _method(link, 11, ctypes.HRESULT, w)(link, arguments)  # SetArguments
-        _method(persist, 6, ctypes.HRESULT, w, ctypes.c_int)(persist, str(path), 1)  # IPersistFile.Save
+            _method(link, 11, ctypes.HRESULT, wide_text_type)(link, arguments)  # SetArguments
+        _method(persist, 6, ctypes.HRESULT, wide_text_type, ctypes.c_int)(persist, str(path), 1)  # IPersistFile.Save
     except OSError as exc:
         raise OSError(f"could not write {path}: {exc}") from exc
     finally:
@@ -187,11 +187,11 @@ def link_target(path: Path) -> Path | None:
     link, persist = _shell_link()
     try:
         _method(persist, 5, ctypes.HRESULT, ctypes.c_wchar_p, ctypes.c_ulong)(persist, str(path), 0)  # Load
-        buf = ctypes.create_unicode_buffer(520)
+        buffer = ctypes.create_unicode_buffer(520)
         _method(link, 3, ctypes.HRESULT, ctypes.c_wchar_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_ulong)(
-            link, buf, 520, None, 0
+            link, buffer, 520, None, 0
         )  # GetPath
-        return Path(buf.value) if buf.value else None
+        return Path(buffer.value) if buffer.value else None
     except OSError:
         return None
     finally:
@@ -202,8 +202,8 @@ def sync(
     start_menu: bool,
     desktop: bool,
     target: Path,
-    where: Places,
-    make: Callable[[Path, Path, str], None] = lambda p, t, d: create_link(p, t, d),
+    where: SPlaces,
+    make: Callable[[Path, Path, str], None] = lambda path, target, description: create_link(path, target, description),
 ) -> list[str]:
     """Make the shortcuts that are chosen, remove the ones that are not (only ours: named ``TITLE``). Returns what
     went wrong, one text per shortcut that could not be made or removed."""
@@ -220,7 +220,7 @@ def sync(
     return problems
 
 
-def remove_ours(where: Places, root: Path, read: Callable[[Path], Path | None] = link_target) -> list[Path]:
+def remove_ours(where: SPlaces, root: Path, read: Callable[[Path], Path | None] = link_target) -> list[Path]:
     """Delete the shortcuts named ``TITLE`` in ``where`` that point into the install ``root``; the others (the old
     installer's, a person's own) stay. Returns what was removed."""
     removed = []
@@ -239,6 +239,6 @@ def _inside(path: Path, root: Path) -> bool:
     return here == there or here.startswith(there + os.sep)
 
 
-def present(where: Places) -> tuple[bool, bool]:
+def present(where: SPlaces) -> tuple[bool, bool]:
     """(Start menu entry, desktop shortcut) as they are on disk."""
     return link_path(where.start_menu).is_file(), link_path(where.desktop).is_file()

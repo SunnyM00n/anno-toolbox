@@ -18,11 +18,11 @@ from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
-from ..sources.gametree import GameTree
+from ..sources.gametree import CGameTree
 from ..sources.overlay import normalize
 from . import importmeta, modclassify
 from . import project as projects
-from .project import ALL_GAMES, ISLAND_EDITS, UI_EDITS, EditsFolder
+from .project import ALL_GAMES, ISLAND_EDITS, UI_EDITS, SEditsFolder
 
 SOUND_GAMES = ("anno117", "anno1800", "anno2205", "anno2070", "anno1404", "anno1701")
 # owner -> (the app's folder in the project, the games the app keeps work for): the folders of the apps' ``EDITS``
@@ -44,7 +44,7 @@ def owner_of(game: str, rel: str, nested: tuple[str, ...] = ()) -> str:
     """The whole-file app that takes the mod path ``rel`` (else ``modclassify.CARRIED``). A file inside a nested mod
     stays carried at its own path: it is not a path of the game."""
     low = rel.replace("\\", "/").lower()
-    if any(low.startswith(n.lower().rstrip("/") + "/") for n in nested):
+    if any(low.startswith(nested_path.lower().rstrip("/") + "/") for nested_path in nested):
         return modclassify.CARRIED
     owner = modclassify.classify(game, rel).owner
     folder = FOLDERS.get(owner)
@@ -57,23 +57,23 @@ def root_for(project_dir: Path | str, game: str, owner: str) -> Path:
     return Path(project_dir) / (folder[0] if folder else importmeta.MOD_FILES) / game
 
 
-def nested_of(meta: importmeta.Meta | None) -> tuple[str, ...]:
-    return tuple(n["path"] for n in meta.nested) if meta else ()
+def nested_of(import_meta: importmeta.SMeta | None) -> tuple[str, ...]:
+    return tuple(entry["path"] for entry in import_meta.nested) if import_meta else ()
 
 
-def _apps_files(project: projects.Project) -> dict[str, Path]:
+def _apps_files(project: projects.CProject) -> dict[str, Path]:
     """Lower-case game path -> the project's file, over every whole-file app's folder."""
     found: dict[str, Path] = {}
     for name, games in FOLDERS.values():
         if project.game in games:
-            found.update({p.lower(): f for p, f in EditsFolder(name, games).saved_files(project).items()})
+            found.update({path.lower(): file for path, file in SEditsFolder(name, games).saved_files(project).items()})
     return found
 
 
 LAYERED_RECORD = "layered.json"  # in the project folder: the Assets app edits on top of the mod's patch file
 
 
-def layered_record(project: projects.Project) -> dict | None:
+def layered_record(project: projects.CProject) -> dict | None:
     """The layered Assets record (``patch``: the mod's patch file it adds an include to, ``include``: the include file
     it writes; docs/mod-import.md, "Phase 6 as built"), None when the project is not layered."""
     try:
@@ -83,7 +83,7 @@ def layered_record(project: projects.Project) -> dict | None:
     return data if isinstance(data, dict) and data.get("patch") else None
 
 
-def held_paths(project: projects.Project) -> set[str]:
+def held_paths(project: projects.CProject) -> set[str]:
     """The (lower-case) mod paths the whole-file apps hold, and the patch file a layered Assets project writes itself:
     the carried part leaves them out, so each path is written by exactly one part."""
     if importmeta.read_meta(project.folder) is None:
@@ -94,16 +94,16 @@ def held_paths(project: projects.Project) -> set[str]:
     return held
 
 
-def take_into_apps(project: projects.Project, say: Say = lambda _t: None) -> Counter:
+def take_into_apps(project: projects.CProject, say: Say = lambda _t: None) -> Counter:
     """Move the files an import left in ``mod-files`` that a whole-file app takes into that app's folder (a project
     imported before the app learned the kind, or a file given back by mistake); ``owner -> files moved``. Nothing is
     read or copied: a move within the project. ``say`` is called between chunks and may raise to stop."""
-    meta = importmeta.read_meta(project.folder)
+    import_meta = importmeta.read_meta(project.folder)
     moved: Counter = Counter()
-    if meta is None:
+    if import_meta is None:
         return moved
     carried = project.folder / importmeta.MOD_FILES / project.game
-    nested, made = nested_of(meta), set()
+    nested, made = nested_of(import_meta), set()
     for done, (rel, _size, _digest) in enumerate(importmeta.read_manifest(project.folder)):
         owner = owner_of(project.game, rel, nested)
         source = carried / rel
@@ -132,17 +132,22 @@ def _manifest(folder: str, stamp: tuple[int, int], game: str, nested: tuple[str,
     }
 
 
-def imported(project: projects.Project) -> dict[str, tuple[int, str]]:
+def imported(project: projects.CProject) -> dict[str, tuple[int, str]]:
     """What the import gave the apps: lower-case mod path -> (size, sha256 or "" when the import did not hash)."""
-    meta = importmeta.read_meta(project.folder)
+    import_meta = importmeta.read_meta(project.folder)
     path = project.folder / importmeta.FILES_FILE
-    if meta is None or not path.is_file():
+    if import_meta is None or not path.is_file():
         return {}
-    st = path.stat()
-    return _manifest(str(project.folder), (st.st_mtime_ns, st.st_size), project.game, nested_of(meta))
+    stat_result = path.stat()
+    return _manifest(
+        str(project.folder), (stat_result.st_mtime_ns, stat_result.st_size), project.game, nested_of(import_meta)
+    )
 
 
-_checked: dict[tuple[str, int, int], bool] = {}
+@lru_cache(maxsize=2048)  # a file that changed has a new stamp: an old answer is never read again and ages out
+def _hash_matches(path: str, stamp: tuple[int, int], sha256: str) -> bool:
+    with open(path, "rb") as file_handle:
+        return hashlib.file_digest(file_handle, "sha256").hexdigest() == sha256
 
 
 def is_base(base: dict[str, tuple[int, str]], rel: str, file: Path) -> bool:
@@ -152,37 +157,35 @@ def is_base(base: dict[str, tuple[int, str]], rel: str, file: Path) -> bool:
     if wanted is None:
         return False
     try:
-        st = file.stat()
+        stat_result = file.stat()
     except OSError:
         return False
-    if st.st_size != wanted[0]:
+    if stat_result.st_size != wanted[0]:
         return False
     if not wanted[1]:
         return True
-    key = (f"{file}|{wanted[1]}", st.st_mtime_ns, st.st_size)
-    if key not in _checked:
-        with file.open("rb") as fh:
-            _checked[key] = hashlib.file_digest(fh, "sha256").hexdigest() == wanted[1]
-    return _checked[key]
+    return _hash_matches(str(file), (stat_result.st_mtime_ns, stat_result.st_size), wanted[1])
 
 
-def edited(project: projects.Project, edits: EditsFolder, game: str | None = None) -> dict[str, Path]:
+def edited(project: projects.CProject, edits: SEditsFolder, game: str | None = None) -> dict[str, Path]:
     """``edits.saved_files`` without the files that are still the imported ones: what the person saved, so an app does
     not show an imported file as its change, nor takes it out again when an edit is undone."""
     saved = edits.saved_files(project, game)
     base = imported(project) if (game or project.game) == project.game else {}
-    return {p: f for p, f in saved.items() if not is_base(base, p, f)} if base else saved
+    return {path: file for path, file in saved.items() if not is_base(base, path, file)} if base else saved
 
 
-def laid(tree: GameTree, project: projects.Project, edits: EditsFolder) -> GameTree:
+def laid(tree: CGameTree, project: projects.CProject, edits: SEditsFolder) -> CGameTree:
     """``tree`` with the imported files of this app laid under it as part of the game: they are what the app's
     documents are read from and compared against, so an imported file is the base and not a change. A file the person
     saved over one is not laid (the project's copy is then the app's own work, restored over the game's by the app).
     Content is read when first asked for and kept."""
-    if tree.game != project.game:
+    if tree.m_game != project.game:
         return tree
     base = imported(project)
-    keys = {normalize(p): f for p, f in edits.saved_files(project).items() if base and is_base(base, p, f)}
+    keys = {
+        normalize(path): file for path, file in edits.saved_files(project).items() if base and is_base(base, path, file)
+    }
     if not keys:
         return tree
     cache: dict[str, bytes] = {}
@@ -194,15 +197,15 @@ def laid(tree: GameTree, project: projects.Project, edits: EditsFolder) -> GameT
             cache[key] = keys[key].read_bytes()
         return cache[key]
 
-    top = GameTree(
-        f"{tree.name} + {project.mod_id}",
+    top = CGameTree(
+        f"{tree.m_name} + {project.mod_id}",
         read,
-        [*tree.paths, *keys],
+        [*tree.m_paths, *keys],
         lambda key: project.mod_id if key in keys else tree.origin(key),
-        tree.game,
-        deleted=tree.deleted,
-        stamp=f"{tree.stamp}|{project.mod_id}",
+        tree.m_game,
+        deleted=tree.m_deleted,
+        stamp=f"{tree.m_stamp}|{project.mod_id}",
     )
-    top.folder = tree.folder
-    top.local_of = lambda key: keys.get(key) or tree.local(key)
+    top.m_folder = tree.m_folder
+    top.m_local_of = lambda key: keys.get(key) or tree.local(key)
     return top

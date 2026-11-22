@@ -29,19 +29,23 @@ setting means the standard place, `<Documents>/Anno 117 - Pax Romana/mods` or `<
 
 `mods/profile.txt` names the active profile, and `mods/profiles/<name>.txt` lists mods by ModID, one per line. A `#` in
 front switches a mod off. `EnableNewMods` (or `# EnableNewMods`) switches on every unlisted mod of the mods folders,
-but never Ubisoft's `.ubi` examples. The manager writes exactly that layout, the game's own comments included, and
-changes only the line of the mod you touched. Your comments, blank lines, order and line ends stay. The menu
+but never Ubisoft's `.ubi` examples.
+The manager writes exactly that layout, the game's own comments included, and changes only the line of the mod you
+touched.
+Your comments, blank lines, order and line ends stay. The menu
 **Profile** has: new (empty), copy, rename (the active profile follows), delete (the active one is refused), make
 active, and "No mods at the next start" (an empty `ActiveProfile`). A file is written whole beside the old one and then
 moved over it.
 
 A mod listed twice (`foo` and `# foo`) counts by its last line, in the tree, the load order and the asset editor's
-import alike. The same holds for two `ActiveProfile` lines, and "make active" rewrites both (the rule is inferred, see
-`engine-modloader.md` "Where mods live"). A profile saved in ANSI (Windows-1252) or with a
+import alike.
+The same holds for two `ActiveProfile` lines, and "make active" rewrites both.
+The rule is inferred (see `engine-modloader.md` "Where mods live"). A profile saved in ANSI (Windows-1252) or with a
 byte order mark is written back the way it was read, and each line keeps its own line end.
 
 A one-word `# note` line reads as a switched-off mod, as it does in the game. The game rewrites the active profile at
-every start and hot reload (with its own `# not installed` notes). Your ids stay.
+every start and hot reload, with its own `# not installed` notes.
+Your ids stay.
 
 ## Order and problems
 
@@ -63,11 +67,13 @@ profile alone:
 **Check > Check the mods that are on** (F6) runs in the background and adds the slow findings to the same tab. The
 first is the mod lint of every mod that is on (`modlint`: the silent mistakes of `engine-modloader.md`). The second
 needs the game's folder to be set: every ModOp is applied to the game's files in the loader's order, and each operation
-that matches nothing is listed as `op:nomatch` with its file and line. Without the install only the lint runs. The
-status line names the mod the check is at, and **Stop** at its right ends the check before the next mod (a stopped
-check reports nothing). The findings are those of the profile as it was checked: they go when another profile is
-picked, when a mod of the profile is switched or `EnableNewMods` changes, and when the mods folder is read again. A
-check that ends after such a change says so and is not shown.
+that matches nothing is listed as `op:nomatch` with its file and line. Without the install only the lint runs. 
+The status line names the mod the check is at, and **Stop** at its right ends the check before the next mod.
+A stopped check reports nothing.
+The findings are those of the profile as it was checked.
+They go when another profile is picked, when a mod of the profile is switched or `EnableNewMods` changes, and when the
+mods folder is read again.
+A check that ends after such a change says so and is not shown.
 
 **Check > Compare the selected mod in Mod diff** and **Compare the mods that are on in Mod diff** open the Mod diff app
 ([`mod-diff.md`](mod-diff.md)) with that question and run it (a mod against the game; the open profile's conflicts, in
@@ -87,10 +93,11 @@ rewritten at each start. It is the only feedback the game gives.
 mods, or a zip with the mod at its top or one folder down. A zip entry that reaches outside its folder is refused. The
 folder gets the mod's own folder name, or its ModID. A name that is not one plain folder name (a path, `..`, a drive, a
 device name such as `con`) is refused. Every mod of one install is checked first: if one is refused, none is installed.
-The copy runs in the background. The status line says what it is at (the zip being unpacked, the mod being copied) and
-**Stop** at its right ends it between two files unpacked, two folders copied or two mods: the staging folder is
-removed, a mod that is not in whole is not in at all, and the status line names the mods that were installed until
-then (the running game is told of those).
+The copy runs in the background.
+The status line says what it is at (the zip being unpacked, the mod being copied).
+**Stop** at its right ends it between two files unpacked, two folders copied or two mods.
+The staging folder is then removed, and a mod that is not in whole is not in at all.
+The status line names the mods that were installed until then, and the running game is told of those.
 
 An older copy of the same ModID is replaced in three steps. The new one is copied into a staging folder, the old
 folder is renamed aside, and the new one is renamed into its place (the old one comes back when that fails). Only then
@@ -120,8 +127,8 @@ to the active profile can be written over. **Game > Reload in the running game**
 link it says to press Shift+F3 with the hot reload mod on. Every switch, install and removal makes one announcement to
 the link and puts its sentence on the status line.
 
-Nothing here blocks the window. These all run on a background thread (`suite/background`) and say their result on the
-status line when done:
+Nothing here blocks the window.
+These all run on a background thread (`suite/background`) and say their result on the status line when done:
 
 - the look for the game's process (about half a second per look, every 5 seconds while the page is shown)
 - the reload (the game answers within seconds, up to 3 minutes)
@@ -145,8 +152,10 @@ islands go into an archive (2070: `patch9.rda`, 1404: the last `data` archive of
 - **Loose files** (below the list): the other way to change a game's files, with no archive touched. With
   `PreferLocalFiles` on in `engine.ini`, the games that read it take a loose file under the install (`data/...`) over
   the archive's copy. The page shows where each game's `engine.ini` is, whether the setting is on, and the loose mods
-  installed. The `engine.ini` files are under `Documents`; only 2205's folder name was seen, the others are the games'
-  usual names, and the first that holds a file is used.
+  installed.
+  The `engine.ini` files are under `Documents`.
+  Only 2205's folder name was seen, and the others are the games' usual names.
+  The first folder that holds a file is used.
 
   **Turn PreferLocalFiles on/off** changes only that value in `engine.ini`. The file's own spelling and encoding stay,
   and the file as it was is kept once in the workspace under `loose-mods/<game>/`.
@@ -174,7 +183,7 @@ is not listed.
 2. In a scratch folder, lay out one small file that the game reads at start and shows, in the game's own folders (a
    text or tuning file under `data/...`, taken from the game's archive with the Viewer's export). Change one visible
    value in it (a number, a name).
-3. Temporarily add the game to `LOOSE_CONFIRMED` (or construct `LooseGame(key, install, workspace, force=True)` in a
+3. Temporarily add the game to `LOOSE_CONFIRMED` (or construct `CLooseGame(key, install, workspace, force=True)` in a
    Python shell). Turn **PreferLocalFiles on**, run **Install a folder of loose files** with that folder, and start the
    game.
 4. If the change shows, loose files win in that game. If it does not, remove the loose mod, turn the setting off, and

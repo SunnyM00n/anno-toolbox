@@ -1,9 +1,9 @@
 """The object brush: spray any model of the library over the ground along a stroke, with a spacing between the
 objects, a random turn and a little random size.
 
-``ObjectBrush`` is one stroke on an ``EditSession``: ``begin`` at the first point, ``to`` for each further point,
+``CObjectBrush`` is one stroke on an ``CEditSession``: ``begin`` at the first point, ``to`` for each further point,
 ``end`` when the button goes up; everything the stroke placed is one step of the undo stack. The placed objects are
-ordinary added objects (``EditSession.place``), so the edit file and the build need nothing new. The forest brush is
+ordinary added objects (``CEditSession.place``), so the edit file and the build need nothing new. The forest brush is
 its form for trees (island-editor "Full spec").
 """
 
@@ -13,7 +13,7 @@ import math
 import random
 
 from ..infra.i18n import tr
-from .editsession import EditSession
+from .editsession import CEditSession
 from .selection import one_change
 
 SPACING = 2.0  # tiles between two sprayed objects, at least
@@ -22,86 +22,96 @@ LAND = 0.05  # no object is sprayed onto ground lower than this (the sea)
 TRIES = 6  # candidate spots per tile of path and unit of strength
 
 
-class ObjectBrush:
+class CObjectBrush:
     """One stroke of the object brush for the library pick ``pick`` (a model or an editor-only asset)."""
 
     def __init__(
         self,
-        session: EditSession,
+        session: CEditSession,
         pick: dict,
-        radius: float,
+        radius_tiles: float,
         strength: float = 0.5,
-        spacing: float = SPACING,
+        spacing_tiles: float = SPACING,
         random_turn: bool = True,
         random_scale: bool = True,
         seed: int | None = None,
     ) -> None:
-        self.session, self.pick = session, pick
-        self.radius, self.strength, self.spacing = float(radius), float(strength), max(0.25, float(spacing))
-        self.random_turn, self.random_scale = random_turn, random_scale
-        self.rnd = random.Random(seed)
-        self.placed: list = []
-        self.points: list[tuple[float, float]] = []  # where this stroke put something, for the spacing
-        self.last: tuple[float, float] | None = None
-        self._change = None  # the open undo step of the stroke
+        self.m_session, self.m_pick = session, pick
+        self.m_radius_tiles, self.m_strength, self.m_spacing_tiles = (
+            float(radius_tiles),
+            float(strength),
+            max(0.25, float(spacing_tiles)),
+        )
+        self.m_random_turn, self.m_random_scale = random_turn, random_scale
+        self.m_rnd = random.Random(seed)
+        self.m_placed: list = []
+        self.m_points: list[tuple[float, float]] = []  # where this stroke put something, for the spacing
+        self.m_last: tuple[float, float] | None = None
+        self._m_change = None  # the open undo step of the stroke
 
     @property
     def usable(self) -> bool:
         """A pick that can be sprayed: a model or an editor-only asset (a forest tree has its own brush)."""
         return (
-            not self.session.readonly
-            and self.pick.get("tree") is None
-            and bool(self.pick.get("cfg") or self.pick.get("guid"))
+            not self.m_session.m_readonly
+            and self.m_pick.get("tree") is None
+            and bool(self.m_pick.get("cfg") or self.m_pick.get("guid"))
         )
 
     def begin(self, x: float, z: float) -> int:
-        self.last = None
-        if self._change is None:
-            self._change = one_change(self.session, tr("islands.spray"))
-            self._change.__enter__()
+        self.m_last = None
+        if self._m_change is None:
+            self._m_change = one_change(self.m_session, tr("islands.spray"))
+            self._m_change.__enter__()
         return self.to(x, z)
 
     def to(self, x: float, z: float) -> int:
         """Spray along the way from the last point to (x, z); returns how many objects this step placed."""
         if not self.usable:
             return 0
-        a, b = self.last or (x, z), (x, z)
-        self.last = b
-        length = math.hypot(b[0] - a[0], b[1] - a[1])
-        steps = max(1, math.ceil(length / max(self.radius / 2, 0.5)))
+        start, end = self.m_last or (x, z), (x, z)
+        self.m_last = end
+        length = math.hypot(end[0] - start[0], end[1] - start[1])
+        steps = max(1, math.ceil(length / max(self.m_radius_tiles / 2, 0.5)))
         count = 0
         for k in range(1, steps + 1) if length else (1,):
-            t = k / steps
-            count += self._stamp(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            progress = k / steps
+            count += self._stamp(start[0] + (end[0] - start[0]) * progress, start[1] + (end[1] - start[1]) * progress)
         return count
 
-    def _stamp(self, cx: float, cz: float) -> int:
-        tries = max(1, round(TRIES * self.strength * (self.radius / self.spacing) ** 2 / 4))
+    def _stamp(self, centre_x: float, centre_z: float) -> int:
+        tries = max(1, round(TRIES * self.m_strength * (self.m_radius_tiles / self.m_spacing_tiles) ** 2 / 4))
         made = 0
         for _ in range(tries):
-            r, a = self.radius * math.sqrt(self.rnd.random()), self.rnd.random() * 2 * math.pi
-            x, z = cx + r * math.cos(a), cz + r * math.sin(a)
-            s = self.session
-            if not (0 <= x <= s.size and 0 <= z <= s.size) or s.height_at(x, z) < LAND or self._crowded(x, z):
+            distance, angle = self.m_radius_tiles * math.sqrt(self.m_rnd.random()), self.m_rnd.random() * 2 * math.pi
+            x, z = centre_x + distance * math.cos(angle), centre_z + distance * math.sin(angle)
+            session = self.m_session
+            if (
+                not (0 <= x <= session.m_size_tiles and 0 <= z <= session.m_size_tiles)
+                or session.height_at(x, z) < LAND
+                or self._crowded(x, z)
+            ):
                 continue
-            yaw = self.rnd.random() * 2 * math.pi if self.random_turn else 0.0
-            entry = s.place(self.pick, [x, s.height_at(x, z), z], yaw)
+            yaw = self.m_rnd.random() * 2 * math.pi if self.m_random_turn else 0.0
+            entry = session.place(self.m_pick, [x, session.height_at(x, z), z], yaw)
             if entry is None:
                 continue
-            if self.random_scale and not self.pick.get("guid"):
-                size = 1 + (self.rnd.random() * 2 - 1) * SCALE_SPREAD
-                s.set_transform(entry, scale=[size] * 3 if entry.kind == "prop" else size)
-            self.placed.append(entry)
-            self.points.append((x, z))
+            if self.m_random_scale and not self.m_pick.get("guid"):
+                size = 1 + (self.m_rnd.random() * 2 - 1) * SCALE_SPREAD
+                session.set_transform(entry, scale=[size] * 3 if entry.kind == "prop" else size)
+            self.m_placed.append(entry)
+            self.m_points.append((x, z))
             made += 1
         return made
 
     def _crowded(self, x: float, z: float) -> bool:
-        return any(math.hypot(x - px, z - pz) < self.spacing for px, pz in self.points)
+        return any(
+            math.hypot(x - placed_x, z - placed_z) < self.m_spacing_tiles for placed_x, placed_z in self.m_points
+        )
 
     def end(self) -> int:
         """Close the stroke: its placements become one undo step (named "spray"); returns how many there were."""
-        if self._change is not None:
-            self._change.__exit__(None, None, None)
-            self._change = None
-        return len(self.placed)
+        if self._m_change is not None:
+            self._m_change.__exit__(None, None, None)
+            self._m_change = None
+        return len(self.m_placed)

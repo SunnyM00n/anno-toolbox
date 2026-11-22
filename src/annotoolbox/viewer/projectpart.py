@@ -1,4 +1,4 @@
-"""The viewer's share of a project's mod (``suite.project.Part``): the models imported from glTF, kept under
+"""The viewer's share of a project's mod (``suite.project.SPart``): the models imported from glTF, kept under
 ``model-edits/<game>/<game path>`` and put into the mod at the path they replace or add.
 
 ``PART`` is what ``suite.apps.parts`` lists; ``EDITS.save_files`` is the import dialog's way to keep a model in the
@@ -9,7 +9,7 @@ project, ``EDITS.saved_files`` lists what the project holds. The build copies th
 from __future__ import annotations
 
 from ..infra.i18n import N_
-from ..suite.project import MODEL_EDITS, EditsFolder
+from ..suite.project import MODEL_EDITS, SEditsFolder
 
-EDITS = EditsFolder(MODEL_EDITS)
+EDITS = SEditsFolder(MODEL_EDITS)
 PART = EDITS.part("models", N_("viewer.imported_models"), "Imported models")

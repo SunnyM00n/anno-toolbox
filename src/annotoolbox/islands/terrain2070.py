@@ -21,7 +21,7 @@ from ..infra import buildcache
 from ..models import fileresolve, texbackend
 from ..models.textures import dds_to_png, encoder_id, png_to_bc4, png_to_bc7, vector_data
 from ..sources.balancingtext import tag_text
-from ..sources.overlay import SourceTree
+from ..sources.overlay import CSourceTree
 from . import riverbed
 
 CACHE = "ground"  # buildcache namespace: a ground material's maps, by its source maps, the tools and this module
@@ -36,7 +36,7 @@ OBJECT_LAYERS = {94, 95, 96, 98, 99, 104}  # grass/bush placement layers, not te
 
 
 @dataclass
-class GroundTexture:
+class SGroundTexture:
     guid: int
     name: str
     diffuse: str  # 2070 path of the _0.dds
@@ -44,9 +44,9 @@ class GroundTexture:
     mean_color: tuple[int, int, int]
 
 
-def splat_ids(tree: SourceTree) -> dict[int, int]:
+def splat_ids(tree: CSourceTree) -> dict[int, int]:
     """Ground texture GUID -> ``SplatID``: 2070 lays a chunk's layers on in ascending SplatID, not in
-    the order the island file lists them (rendering-2070 §2.1; ``isd2070.Island.order``)."""
+    the order the island file lists them (rendering-2070 §2.1; ``isd2070.CIsland.order``)."""
     text = tree.read_bytes(GROUND_TEXTURES).decode("utf-8", "ignore")
     out = {}
     for block in re.findall(r"<Texture>(.*?)</Texture>", text, re.S):
@@ -56,21 +56,21 @@ def splat_ids(tree: SourceTree) -> dict[int, int]:
     return out
 
 
-def read_ground_textures(tree: SourceTree) -> list[GroundTexture]:
+def read_ground_textures(tree: CSourceTree) -> list[SGroundTexture]:
     text = tree.read_bytes(GROUND_TEXTURES).decode("utf-8", "ignore")
     out = []
     for block in re.findall(r"<Texture>(.*?)</Texture>", text, re.S):
-        g = functools.partial(tag_text, block)
-        guid = int(g("GUID"))
-        diffuse = g("DiffuseTexture").replace("\\", "/").lower()
+        field = functools.partial(tag_text, block)
+        guid = int(field("GUID"))
+        diffuse = field("DiffuseTexture").replace("\\", "/").lower()
         if guid in OBJECT_LAYERS or not diffuse or "wiki_dummy" in diffuse:
             continue
-        normal = g("NormalTexture").replace("\\", "/").lower() or None
-        rgb = tuple(int((re.search(f"<{c}>(\\d+)</{c}>", block) or [0, "255"])[1]) for c in "RGB")
+        normal = field("NormalTexture").replace("\\", "/").lower() or None
+        rgb = tuple(int((re.search(f"<{channel}>(\\d+)</{channel}>", block) or [0, "255"])[1]) for channel in "RGB")
         out.append(
-            GroundTexture(
+            SGroundTexture(
                 guid,
-                g("Name"),
+                field("Name"),
                 diffuse.replace(".png", "_0.dds"),
                 normal.replace(".png", "_0.dds") if normal else None,
                 rgb,
@@ -87,12 +87,12 @@ def paint_curve(alpha):
     grass in 117 (in game, 2026-10-16)."""
     import numpy as np
 
-    a = np.asarray(alpha, np.float32).ravel()[:: max(1, np.asarray(alpha).size // 65536)]
-    c = np.linspace(0.0, 1.0, 256, dtype=np.float32)[:, None]
-    return np.clip(5 * (a[None, :] - 1) + 6 * c, 0, 1).mean(axis=1)
+    samples = np.asarray(alpha, np.float32).ravel()[:: max(1, np.asarray(alpha).size // 65536)]
+    levels = np.linspace(0.0, 1.0, 256, dtype=np.float32)[:, None]
+    return np.clip(5 * (samples[None, :] - 1) + 6 * levels, 0, 1).mean(axis=1)
 
 
-def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path) -> tuple:
+def convert_texture(tree: CSourceTree, texture: SGroundTexture, out: Path, work: Path) -> tuple:
     """Write one material (four maps + XML); returns the material XML's game path, the mean
     alpha of its diffuse (117's blend reads it, ``islandground.blend_alpha``) and its 2070 paint
     curve (``paint_curve``). A material converted before comes from the cache."""
@@ -104,10 +104,10 @@ def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
         encoder_id(),
         buildcache.code_version("islands.terrain2070"),
         buildcache.libs_version(),
-        tex.diffuse,
-        tree.read_bytes(tex.diffuse),
-        tex.normal,
-        tree.read_bytes(tex.normal) if tex.normal and tree.exists(tex.normal) else None,
+        texture.diffuse,
+        tree.read_bytes(texture.diffuse),
+        texture.normal,
+        tree.read_bytes(texture.normal) if texture.normal and tree.exists(texture.normal) else None,
     )
     if (hit := buildcache.get_files(CACHE, key)) is not None:
         meta = json.loads(hit.pop("meta"))
@@ -115,9 +115,9 @@ def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
         for rel, data in hit.items():
             buildcache.write_atomic(out / meta["folder"] / rel, data)
         return meta["cfg"], meta["alpha"], curve
-    cfg, alpha, curve = _render_texture(tree, tex, out, work)
+    cfg, alpha, curve = _render_texture(tree, texture, out, work)
     folder = cfg.rpartition("/")[0]
-    files = {p.name: p.read_bytes() for p in (out / folder).iterdir() if p.is_file()}
+    files = {path.name: path.read_bytes() for path in (out / folder).iterdir() if path.is_file()}
     meta = {"folder": folder, "cfg": cfg, "alpha": alpha}
     buildcache.put_files(
         CACHE, key, {"meta": json.dumps(meta).encode(), "curve": np.asarray(curve, np.float32).tobytes(), **files}
@@ -125,52 +125,52 @@ def convert_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
     return cfg, alpha, curve
 
 
-def _render_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path) -> tuple:
+def _render_texture(tree: CSourceTree, texture: SGroundTexture, out: Path, work: Path) -> tuple:
     from PIL import Image, ImageChops, ImageFilter
 
-    name = "a2070_" + re.sub(r"[^a-z0-9_]+", "_", Path(tex.diffuse).stem.replace("_diff_0", "").lower())
+    name = "a2070_" + re.sub(r"[^a-z0-9_]+", "_", Path(texture.diffuse).stem.replace("_diff_0", "").lower())
     folder = f"{OUT_DIR}/materials/{name}"
-    dst = out / folder
-    dst.mkdir(parents=True, exist_ok=True)
-    src = work / f"{name}_d.dds"
-    src.write_bytes(tree.read_bytes(tex.diffuse))
-    diff = Image.open(dds_to_png(src, work)).convert("RGBA")
+    destination = out / folder
+    destination.mkdir(parents=True, exist_ok=True)
+    source = work / f"{name}_d.dds"
+    source.write_bytes(tree.read_bytes(texture.diffuse))
+    diff = Image.open(dds_to_png(source, work)).convert("RGBA")
     diff_png = work / f"{name}_diff.png"
     diff.save(diff_png)
-    png_to_bc7(diff_png, dst / f"{name}_diff_0.dds")
+    png_to_bc7(diff_png, destination / f"{name}_diff_0.dds")
 
-    if tex.normal and tree.exists(tex.normal):
+    if texture.normal and tree.exists(texture.normal):
         nsrc = work / f"{name}_n.dds"
-        nsrc.write_bytes(tree.read_bytes(tex.normal))
+        nsrc.write_bytes(tree.read_bytes(texture.normal))
         norm = Image.open(dds_to_png(nsrc, work)).convert("RGBA")
     else:
         norm = Image.new("RGBA", diff.size, (128, 128, 0, 10))
-    r, g, _, gloss = norm.split()
+    red, green, _, gloss = norm.split()
     # rebuild Z from XY: z = sqrt(1 - x^2 - y^2)
     import numpy as np
 
-    x = np.asarray(r, dtype=np.float32) / 127.5 - 1
-    y = np.asarray(g, dtype=np.float32) / 127.5 - 1
+    x = np.asarray(red, dtype=np.float32) / 127.5 - 1
+    y = np.asarray(green, dtype=np.float32) / 127.5 - 1
     z = np.sqrt(np.clip(1 - x * x - y * y, 0, 1))
-    b = Image.fromarray(np.clip((z + 1) * 127.5, 0, 255).astype(np.uint8))
-    full = Image.merge("RGBA", (r, g, b, Image.new("L", norm.size, 255)))
+    blue = Image.fromarray(np.clip((z + 1) * 127.5, 0, 255).astype(np.uint8))
+    full = Image.merge("RGBA", (red, green, blue, Image.new("L", norm.size, 255)))
     norm_png = work / f"{name}_norm.png"
     full.save(norm_png)
     with vector_data():
-        png_to_bc7(norm_png, dst / f"{name}_norm_0.dds")
+        png_to_bc7(norm_png, destination / f"{name}_norm_0.dds")
 
     spec = gloss.point(lambda v: max(5, min(90, v * 3)))
     spec_png = work / f"{name}_spec.png"
     Image.merge("RGBA", (spec, spec, spec, Image.new("L", spec.size, 255))).save(spec_png)
-    png_to_bc7(spec_png, dst / f"{name}_spec_0.dds")
+    png_to_bc7(spec_png, destination / f"{name}_spec_0.dds")
 
     lum = diff.convert("L")
     blur = lum.filter(ImageFilter.GaussianBlur(8))
     detail = ImageChops.subtract(lum, blur, scale=1.0, offset=128)  # high-pass around 128
-    height = detail.point(lambda v: max(0, min(40, 8 + (v - 128) // 2)))
+    height_image = detail.point(lambda value: max(0, min(40, 8 + (value - 128) // 2)))
     height_png = work / f"{name}_height.png"
-    height.save(height_png)
-    png_to_bc4(height_png, dst / f"{name}_height_0.dds")
+    height_image.save(height_png)
+    png_to_bc4(height_png, destination / f"{name}_height_0.dds")
 
     xml = (
         f"<Material>\n<DiffuseFileName>{folder}/{name}_diff.psd</DiffuseFileName>\n"
@@ -178,9 +178,9 @@ def _render_texture(tree: SourceTree, tex: GroundTexture, out: Path, work: Path)
         f"<SpecFileName>{folder}/{name}_spec.psd</SpecFileName>\n"
         f"<NormalFileName>{folder}/{name}_norm.psd</NormalFileName>\n</Material>\n"
     )
-    (dst / f"{name}.cfg").write_text(xml, encoding="utf-8", newline="\n")
+    (destination / f"{name}.cfg").write_text(xml, encoding="utf-8", newline="\n")
     alpha = np.asarray(diff.getchannel("A"), np.float32) / 255
-    curve = riverbed.bed_curve(alpha) if tex.guid == riverbed.RIVER_BED_GUID else paint_curve(alpha)
+    curve = riverbed.bed_curve(alpha) if texture.guid == riverbed.RIVER_BED else paint_curve(alpha)
     return f"{folder}/{name}.cfg", float(alpha.mean()), curve
 
 
@@ -219,26 +219,26 @@ def material_style(name: str) -> tuple[float, str]:
     return DEFAULT_STYLE
 
 
-def texture_scale(tree: SourceTree) -> float:
+def texture_scale(tree: CSourceTree) -> float:
     """World units one ground texture tile spans, shared by every 2070 ground texture."""
     if not tree.exists(GROUND_TEXTURES):
         return DEFAULT_TEXTURE_SCALE
-    m = re.search(
+    match = re.search(
         r"<TextureScale>\s*([0-9.]+)\s*</TextureScale>", tree.read_bytes(GROUND_TEXTURES).decode("utf-8", "ignore")
     )
-    scale = float(m.group(1)) if m else 0.0
+    scale = float(match.group(1)) if match else 0.0
     return scale if scale > 0 else DEFAULT_TEXTURE_SCALE
 
 
-def build_material_set(tree: SourceTree, anno117_files, out: Path) -> tuple[dict[int, int], dict[int, tuple], dict]:
+def build_material_set(tree: CSourceTree, anno117_files, out: Path) -> tuple[dict[int, int], dict[int, tuple], dict]:
     """Turn every 2070 ground texture into a 117 one and write the material set; returns 2070 texture GUID ->
     117 material ID, per material ID its AlphaSharpness and mean diffuse alpha (for
-    ``islandground.GroundMixin.apply_materials``), and per 2070 texture GUID its paint curve
-    (``paint_curve``, for ``IslandBuilder.paint_curves``)."""
+    ``islandground.CGroundMixin.apply_materials``), and per 2070 texture GUID its paint curve
+    (``paint_curve``, for ``CIslandBuilder.paint_curves``)."""
     textures = read_ground_textures(tree)
     if tree.exists(riverbed.BED_DIFFUSE):  # 2070 draws it under every river (riverbed): a material of the set
         name, normal = riverbed.BED_NAME, riverbed.BED_NORMAL
-        textures.append(GroundTexture(riverbed.RIVER_BED_GUID, name, riverbed.BED_DIFFUSE, normal, (128, 128, 128)))
+        textures.append(SGroundTexture(riverbed.RIVER_BED, name, riverbed.BED_DIFFUSE, normal, (128, 128, 128)))
     if len(textures) > 32:
         raise ValueError(f"{len(textures)} ground textures; material IDs have 5 bits")
     roman = anno117_files.read(ROMAN_SET).decode("utf-8", "ignore")
@@ -249,22 +249,22 @@ def build_material_set(tree: SourceTree, anno117_files, out: Path) -> tuple[dict
     material_of = {}
     transfer = {}
     curves = {}
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_terrain_") as tmp:
-        work = Path(tmp)
-        for mid, tex in enumerate(textures):
-            path, mean_alpha, curves[tex.guid] = convert_texture(tree, tex, out, work)
-            entry = re.sub(r"<ID>\d+</>", f"<ID>{mid}</>", template)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_terrain_") as temp_dir:
+        work = Path(temp_dir)
+        for material_id, texture in enumerate(textures):
+            path, mean_alpha, curves[texture.guid] = convert_texture(tree, texture, out, work)
+            entry = re.sub(r"<ID>\d+</>", f"<ID>{material_id}</>", template)
             entry = re.sub(r"<FileName>[^<]*</>", f"<FileName>{path}</>", entry, count=1)
-            entry = re.sub(r"<ImportLabel>[^<]*</>", f"<ImportLabel>{tex.name}</>", entry)
-            sharp, ground = material_style(tex.name)
+            entry = re.sub(r"<ImportLabel>[^<]*</>", f"<ImportLabel>{texture.name}</>", entry)
+            sharp, ground = material_style(texture.name)
             entry = re.sub(r"<Repetition>[^<]*</>", f"<Repetition>{repetition:.6f}</>", entry)
             for tag in NO_DISPLACEMENT:
                 entry = re.sub(rf"<{tag}>[^<]*</>", f"<{tag}>0.000000</>", entry)
             entry = re.sub(r"<AlphaSharpness>[^<]*</>", f"<AlphaSharpness>{sharp:.6f}</>", entry)
             entry = re.sub(r"<GroundType>[^<]*</>", f"<GroundType>{ground}</>", entry)
             entries.append(entry)
-            material_of[tex.guid] = mid
-            transfer[mid] = (sharp, mean_alpha)
+            material_of[texture.guid] = material_id
+            transfer[material_id] = (sharp, mean_alpha)
     # 2070 textures that map onto others (MapToGUID) and unknown GUIDs fall back to the sea bed.
     # The set closes after its last material, as vanilla's do; bytes keep its CRLF line ends.
     text = header + "".join(entries) + "</>\r\n"
@@ -273,34 +273,13 @@ def build_material_set(tree: SourceTree, anno117_files, out: Path) -> tuple[dict
     return material_of, transfer, curves
 
 
-# The 2070 texture families by name; "soil" is the family an unknown texture falls into.
-MATERIAL_CLASSES = (
-    ("gras", "grass"),
-    ("beach", "sand"),
-    ("sand", "sand"),
-    ("earth", "grass"),
-    ("mountain", "rock"),
-    ("stone", "rock"),
-    ("lava", "rock"),
-    ("water", "water"),
-)
-
-
-def material_class(name: str) -> str:
-    low = name.lower()
-    for part, kind in MATERIAL_CLASSES:
-        if part in low:
-            return kind
-    return "soil"
-
-
 VANILLA_SET_DIR = "/graphics/library/environment/material_sets/"
 _ENTRY = re.compile(r"<Material>.*?\r?\n</>\r?\n", re.S)
 
 
 def vanilla_materials(files, set_dir: str = VANILLA_SET_DIR) -> list[dict]:
     """Every ground material of 117's own material sets (``set_dir``: another game's folder of sets, 1800's), once each:
-    ``{"file", "set", "name", "diffuse", "normal", "repetition"}`` (``files``: ``islandview.Files``, ``list`` and
+    ``{"file", "set", "name", "diffuse", "normal", "repetition"}`` (``files``: ``islandview.CFiles``, ``list`` and
     ``read``)."""
     out: dict[str, dict] = {}
     for path in files.list("data/"):
@@ -314,11 +293,11 @@ def vanilla_materials(files, set_dir: str = VANILLA_SET_DIR) -> list[dict]:
             label = (re.search(r"<ImportLabel>([^<]*)</>", entry) or [None, ""])[1] or Path(fname).stem
             rep = float((re.search(r"<Repetition>([^<]*)</>", entry) or [None, "4"])[1])
             try:
-                mat = files.read(fname).decode("utf-8", "ignore")
-                d = re.search(r"<DiffuseFileName>([^<]*)</(?:DiffuseFileName)?>", mat)
-                diffuse = d.group(1).replace("\\", "/") if d else None
-                nm = re.search(r"<NormalFileName>([^<]*)</(?:NormalFileName)?>", mat)
-                normal = nm.group(1).replace("\\", "/") if nm else None
+                material_text = files.read(fname).decode("utf-8", "ignore")
+                diffuse_match = re.search(r"<DiffuseFileName>([^<]*)</(?:DiffuseFileName)?>", material_text)
+                diffuse = diffuse_match.group(1).replace("\\", "/") if diffuse_match else None
+                normal_match = re.search(r"<NormalFileName>([^<]*)</(?:NormalFileName)?>", material_text)
+                normal = normal_match.group(1).replace("\\", "/") if normal_match else None
             except Exception:
                 diffuse = normal = None
             out[fname.lower()] = {
@@ -339,41 +318,48 @@ def material_colour(files, material: str) -> tuple[int, int, int] | None:
     from PIL import Image
 
     text = files.read(material).decode("utf-8", "ignore")
-    m = re.search(r"<DiffuseFileName>([^<]*)</(?:DiffuseFileName)?>", text)
-    if not m:
+    match = re.search(r"<DiffuseFileName>([^<]*)</(?:DiffuseFileName)?>", text)
+    if not match:
         return None
-    dds = re.sub(r"\.(psd|png|tga)$", "", m.group(1).replace("\\", "/"), flags=re.I) + "_0.dds"
+    dds = re.sub(r"\.(psd|png|tga)$", "", match.group(1).replace("\\", "/"), flags=re.I) + "_0.dds"
     data = files.read(dds)
     try:
-        img = Image.fromarray(fileresolve.decode(data), "RGBA").convert("RGB").resize((16, 16))
-    except fileresolve.DecodeError:  # a format the in-process decoders do not read: texconv
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_mat_") as tmp:
-            src = Path(tmp) / "diffuse.dds"
-            src.write_bytes(data)
-            img = Image.open(dds_to_png(src, Path(tmp))).convert("RGB").resize((16, 16))
-    return tuple(int(v) for v in np.asarray(img, np.float32).reshape(-1, 3).mean(axis=0))
+        image = Image.fromarray(fileresolve.decode(data), "RGBA").convert("RGB").resize((16, 16))
+    except fileresolve.CDecodeError:  # a format the in-process decoders do not read: texconv
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_mat_") as temp_dir:
+            source = Path(temp_dir) / "diffuse.dds"
+            source.write_bytes(data)
+            image = Image.open(dds_to_png(source, Path(temp_dir))).convert("RGB").resize((16, 16))
+    return tuple(int(channel) for channel in np.asarray(image, np.float32).reshape(-1, 3).mean(axis=0))
 
 
 def _label(entry: str) -> str:
-    m = re.search(r"<ImportLabel>([^<]*)</>", entry) or re.search(r"<FileName>([^<]*)</>", entry)
-    return Path(m.group(1)).stem if m else ""
+    match = re.search(r"<ImportLabel>([^<]*)</>", entry) or re.search(r"<FileName>([^<]*)</>", entry)
+    return Path(match.group(1)).stem if match else ""
 
 
 def _extra_entries(files, extra: dict) -> dict[int, tuple[str, int]]:
     """The added 117 materials' set entries (``extra``: ``"id"`` -> ``{"file", "set"}``) with their IDs, and
     each one's place in its own set."""
     entries = {}
-    for mid, m in sorted(extra.items(), key=lambda kv: int(kv[0])):
-        if not 0 <= int(mid) < 32:
-            raise ValueError(f"material ID {mid}: a set holds 0-31")
-        source = files.read(m["set"]).decode("utf-8", "ignore")
+    for material_id, material in sorted(extra.items(), key=lambda kv: int(kv[0])):
+        if not 0 <= int(material_id) < 32:
+            raise ValueError(f"material ID {material_id}: a set holds 0-31")
+        source = files.read(material["set"]).decode("utf-8", "ignore")
         entry = next(
-            (e for e in _ENTRY.findall(source) if f"<FileName>{m['file']}</>" in e.replace("\\", "/")),
+            (
+                candidate
+                for candidate in _ENTRY.findall(source)
+                if f"<FileName>{material['file']}</>" in candidate.replace("\\", "/")
+            ),
             None,
         )
         if entry is None:
-            raise KeyError(f"{m['file']} is not in {m['set']}")
-        entries[int(mid)] = (re.sub(r"<ID>\d+</>", f"<ID>{int(mid)}</>", entry), _ENTRY.findall(source).index(entry))
+            raise KeyError(f"{material['file']} is not in {material['set']}")
+        entries[int(material_id)] = (
+            re.sub(r"<ID>\d+</>", f"<ID>{int(material_id)}</>", entry),
+            _ENTRY.findall(source).index(entry),
+        )
     return entries
 
 
@@ -382,8 +368,8 @@ def draw_order(text: str, files, extra: dict) -> list[int]:
     is, each added one placed by its family (``materialorder``)."""
     from .materialorder import merged_order
 
-    own = [(int(re.search(r"<ID>(\d+)</>", e).group(1)), _label(e)) for e in _ENTRY.findall(text)]
-    foreign = [(mid, _label(e), rank) for mid, (e, rank) in _extra_entries(files, extra).items()]
+    own = [(int(re.search(r"<ID>(\d+)</>", entry).group(1)), _label(entry)) for entry in _ENTRY.findall(text)]
+    foreign = [(mid, _label(entry), rank) for mid, (entry, rank) in _extra_entries(files, extra).items()]
     return merged_order(own, foreign)
 
 
@@ -397,8 +383,8 @@ def compose_set(text: str, files, extra: dict) -> str:
     ``{"file", "set"}``), each copied with its set entry's style and listed where ``draw_order`` puts it (117 draws in
     list order); the set's header and footer stay."""
     found = list(_ENTRY.finditer(text))
-    by_id = {int(re.search(r"<ID>(\d+)</>", m.group(0)).group(1)): m.group(0) for m in found}
-    by_id |= {mid: e for mid, (e, _) in _extra_entries(files, extra).items()}
+    by_id = {int(re.search(r"<ID>(\d+)</>", match.group(0)).group(1)): match.group(0) for match in found}
+    by_id |= {mid: entry for mid, (entry, _) in _extra_entries(files, extra).items()}
     body = "".join(by_id[mid] for mid in draw_order(text, files, extra))
     return text[: found[0].start()] + body + text[found[-1].end() :]
 
@@ -410,19 +396,3 @@ def island_material_set(files, out: Path, extra: dict, island: str) -> str:
     path = f"{OUT_DIR}/a2070_materialset_{island}.cfg"
     (out / path).write_bytes(compose_set(text, files, extra).encode("utf-8"))
     return path
-
-
-def class_share(isl, tree: SourceTree, kind: str):
-    """Per tile corner of ``isl`` (rows z), how much of 2070's painted ground is of the class
-    ``kind`` (``material_class``), the layers laid in their paint order. A numpy array."""
-    import numpy as np
-
-    of_kind = {t.guid for t in read_ground_textures(tree) if material_class(t.name) == kind}
-    share = None
-    for idx, grid in isl.texture_layers().items():
-        a = np.asarray(grid, np.float32) / 255
-        if share is None:  # the base layer covers everything
-            share = np.full(a.shape, 1.0 if idx in of_kind else 0.0, np.float32)
-        else:
-            share = share * (1 - a) + a * (1.0 if idx in of_kind else 0.0)
-    return share

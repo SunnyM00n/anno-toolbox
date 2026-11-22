@@ -18,30 +18,30 @@ from ..formats import gltf as gltf_format
 from ..formats import rdmread
 from ..rdm import images, rdmgltf
 from ..sources.overlay import normalize
-from .run import Job, Made
+from .run import SJob, SMade
 
 RDM_REF = re.compile(r"[\w\-./\\ ]+?\.rdm", re.IGNORECASE)
 LOD_LEVELS = 10  # a mesh named at any level stands for the chain of up to this many
 
 
-def _form(job: Job) -> str:
+def _form(job: SJob) -> str:
     return "glb" if "glb" in job.formats else "gltf"
 
 
-def _lod_chain(job: Job, path: str) -> list[str]:
+def _lod_chain(job: SJob, path: str) -> list[str]:
     from ..models import configtree  # numpy: the light install exports the plain kinds without it
 
     return configtree.lod_files(path, job.source.exists, any_level=True, count=LOD_LEVELS)
 
 
-def _folder_files(job: Job, suffix: str) -> list[str]:
+def _folder_files(job: SJob, suffix: str) -> list[str]:
     """The files of ``options.anims_folder`` that end in ``suffix``, the exported file left out (the source must
     list a folder: ``under``)."""
     under = getattr(job.source, "under", None)
     if not job.options.anims_folder or under is None:
         return []
     folder = normalize(job.options.anims_folder).rstrip("/") + "/"
-    return [p for p in under(folder) if p.endswith(suffix) and p != job.path]
+    return [path for path in under(folder) if path.endswith(suffix) and path != job.path]
 
 
 def _moves_only(tracks: set[str], joints: set[str]) -> bool:
@@ -49,21 +49,24 @@ def _moves_only(tracks: set[str], joints: set[str]) -> bool:
     return bool(tracks) and tracks <= joints
 
 
-def _animations(job: Job, rdm: rdmread.RdmFile) -> list[rdmgltf.Source]:
+def _animations(job: SJob, rdm: rdmread.SRdmFile) -> list[rdmgltf.SSource]:
     """The animation files of the folder some entry of which moves only joints of the mesh."""
-    joints = {j.name for s in rdm.skeletons for j in s.joints}
+    joints = {j.name for skeleton in rdm.skeletons for j in skeleton.joints}
     out = []
     for path in _folder_files(job, ".rdm"):
         try:
             found = rdmread.read_rdm(job.source.read(path))
-        except (ValueError, rdmread.RdmReadError):
+        except (ValueError, rdmread.CRdmReadError):
             continue
-        if any(_moves_only({t.joint for t in a.tracks if t.keys}, joints) for a in found.animations):
-            out.append(rdmgltf.Source(PurePosixPath(path).name, found))
+        if any(
+            _moves_only({track.joint for track in animation.tracks if track.keys}, joints)
+            for animation in found.animations
+        ):
+            out.append(rdmgltf.SSource(PurePosixPath(path).name, found))
     return out
 
 
-def _textures(job: Job, sources: list[rdmgltf.Source], notes: list[str]) -> list[rdmgltf.Texture]:
+def _textures(job: SJob, sources: list[rdmgltf.SSource], notes: list[str]) -> list[rdmgltf.STexture]:
     out, seen = [], set()
     for source in sources:
         for material in source.rdm.materials:
@@ -72,7 +75,7 @@ def _textures(job: Job, sources: list[rdmgltf.Source], notes: list[str]) -> list
                 continue
             seen.add(path)
             tries = [path, re.sub(r"\.\w+$", "", path) + "_0.dds", re.sub(r"\.\w+$", "", path) + ".dds"]
-            found = next((p for p in tries if job.source.exists(p)), "")
+            found = next((candidate for candidate in tries if job.source.exists(candidate)), "")
             if not found:
                 notes.append(f"texture {path} of material {material.name} is not in the files")
                 continue
@@ -86,55 +89,68 @@ def _textures(job: Job, sources: list[rdmgltf.Source], notes: list[str]) -> list
     return out
 
 
-def rdm_files(job: Job, path: str) -> tuple[dict[str, bytes], list[str]]:
-    """The glTF files (name -> bytes) and notes of one ``.rdm`` game path."""
+def rdm_files(job: SJob, path: str, stem: str = "") -> tuple[dict[str, bytes], list[str]]:
+    """The glTF files (name -> bytes) and notes of one ``.rdm`` game path. ``stem`` names the files other than the
+    ``.rdm``'s own (a config's meshes: ``<config>-<mesh>``, so the mesh's own export in the batch keeps its name)."""
     paths = _lod_chain(job, path) if job.options.lods else [path]
-    sources = [rdmgltf.Source(PurePosixPath(p).name, rdmread.read_rdm(job.source.read(p))) for p in paths]
-    if not any(s.rdm.meshes for s in sources):
+    sources = [
+        rdmgltf.SSource(PurePosixPath(member_path).name, rdmread.read_rdm(job.source.read(member_path)))
+        for member_path in paths
+    ]
+    if not any(source.rdm.meshes for source in sources):
         return {}, [f"{path}: no mesh (an animation file goes along with the mesh it moves: anims_folder)"]
     animations = _animations(job, sources[0].rdm)
     notes: list[str] = []
     textures = _textures(job, sources, notes) if job.options.with_textures else []
-    options = rdmgltf.Options(axes=job.options.axes, strict=job.options.strict)
+    options = rdmgltf.SOptions(axes=job.options.axes, strict=job.options.strict)
     builder, more = rdmgltf.export(sources, animations, textures, options)
-    target = PurePosixPath(path).with_suffix(".glb" if _form(job) == "glb" else ".gltf")
-    files = {p.as_posix(): b for p, b in builder.files(target, _form(job)).items()}
+    suffix = ".glb" if _form(job) == "glb" else ".gltf"
+    target = PurePosixPath(path).with_name(stem + suffix) if stem else PurePosixPath(path).with_suffix(suffix)
+    files = {member_path.as_posix(): content for member_path, content in builder.files(target, _form(job)).items()}
     return files, notes + more
 
 
-def _granny_animations(job: Job, joints: set[str]) -> list:
+def _granny_animations(job: SJob, joints: set[str]) -> list:
     """The animations of the folder's ``.gr2`` files that move only joints the mesh has."""
     from ..formats import grannyanim, grannyread
 
     out = []
     for path in _folder_files(job, ".gr2"):
         try:
-            found = grannyanim.read_animations(grannyread.GrannyFile(job.source.read(path)).root())
-        except (grannyread.GrannyError, KeyError):
+            found = grannyanim.read_animations(grannyread.CGrannyFile(job.source.read(path)).root())
+        except (grannyread.CGrannyError, KeyError):
             continue
-        out += [a for a in found if _moves_only({t.name for g in a.groups for t in g.tracks}, joints)]
+        out += [
+            animation
+            for animation in found
+            if _moves_only({track.name for group in animation.groups for track in group.tracks}, joints)
+        ]
     return out
 
 
-def granny_files(job: Job) -> tuple[dict[str, bytes], list[str]]:
+def granny_files(job: SJob) -> tuple[dict[str, bytes], list[str]]:
     """The glTF files and notes of one ``.gr2``: its meshes, skeletons and animations through the RDM toolchain, in
     1404's units (1701's divided by 32: one unit a tile)."""
     from ..formats import grannyanim, grannyread
     from ..rdm import grannygltf
 
-    joints = {b.name for s in grannyanim.read_skeletons(grannyread.GrannyFile(job.data).root()) for b in s.bones}
-    units = grannygltf.GAME_UNITS.get(getattr(job.source, "game", ""), grannygltf.GrannyOptions())
+    joints = {
+        bone.name
+        for skeleton in grannyanim.read_skeletons(grannyread.CGrannyFile(job.data).root())
+        for bone in skeleton.bones
+    }
+    units = grannygltf.GAME_UNITS.get(getattr(job.source, "m_game", ""), grannygltf.SGrannyOptions())
     rdm = grannygltf.granny_to_rdm(job.data, _granny_animations(job, joints), units.scale)
     if not rdm.meshes and not rdm.animations:
         return {}, [f"{job.path}: no mesh and no animation"]
     name = PurePosixPath(job.path).with_suffix(".rdm").name
-    options = rdmgltf.Options(axes=job.options.axes, strict=job.options.strict)
-    builder, notes = rdmgltf.export([rdmgltf.Source(name, rdm)], [], [], options)
+    options = rdmgltf.SOptions(axes=job.options.axes, strict=job.options.strict)
+    builder, notes = rdmgltf.export([rdmgltf.SSource(name, rdm)], [], [], options)
     target = PurePosixPath(job.path).with_suffix(".glb" if _form(job) == "glb" else ".gltf")
-    return {p.as_posix(): b for p, b in builder.files(target, _form(job)).items()}, notes
+    return {path.as_posix(): content for path, content in builder.files(target, _form(job)).items()}, notes
 
 
-def _gr2_to_rdm(job: Job, made: Made) -> None:
+def _gr2_to_rdm(job: SJob, made: SMade) -> None:
     """The ``.rdm`` files of a ``.gr2`` for ``options.rdm_target`` (``rdm.grannyrdm``): the mesh file and an animation
     file for each animation of the file and of the folder's ``.gr2`` files that move only its bones."""
     from ..rdm import grannyrdm
@@ -146,19 +162,19 @@ def _gr2_to_rdm(job: Job, made: Made) -> None:
             except (OSError, KeyError):
                 continue
 
-    game = getattr(job.source, "game", "")
-    opts = grannyrdm.Options(job.options.rdm_target, game if game in grannyrdm.SOURCE_TILE else "")
+    game = getattr(job.source, "m_game", "")
+    options = grannyrdm.SOptions(job.options.rdm_target, game if game in grannyrdm.SOURCE_TILE else "")
     extra = grannyrdm.animation_files(candidates(), grannyrdm.bone_names(job.data))
-    done = grannyrdm.convert(job.data, PurePosixPath(job.path).stem, opts, extra)
+    done = grannyrdm.convert(job.data, PurePosixPath(job.path).stem, options, extra)
     folder = PurePosixPath(job.path).parent
     made.files.update({(folder / name).as_posix(): body for name, body in done.files.items()})
     made.notes += done.notes
 
 
-def export(job: Job) -> Made:
+def export(job: SJob) -> SMade:
     """glTF of a model file, and the ``.rdm`` files of a Granny ``.gr2`` (the ``rdm`` form)."""
     suffix = PurePosixPath(job.path).suffix.lower()
-    made = Made()
+    made = SMade()
     gltf = bool(job.formats & {"glb", "gltf"})
     try:
         if suffix == ".gr2":
@@ -174,7 +190,7 @@ def export(job: Job) -> Made:
             _config(job, made)
         else:
             made.notes.append(f"no glTF form for {suffix} files")
-    except (rdmgltf.ExportError, rdmread.RdmReadError, gltf_format.GltfError, ValueError, KeyError) as exc:
+    except (rdmgltf.CExportError, rdmread.CRdmReadError, gltf_format.CGltfError, ValueError, KeyError) as exc:
         made.notes.append(f"not exported: {exc}")
         made.status = "failed"
     if not made.files and made.status == "written" and not made.notes:
@@ -182,7 +198,7 @@ def export(job: Job) -> Made:
     return made
 
 
-def _mesh_refs(job: Job) -> list[str]:
+def _mesh_refs(job: SJob) -> list[str]:
     """The path of every mesh a config names: the file its game loads for the name (``mesh_file``: a
     117 config names the ``.fbx``, the game ships the ``.rdm``), else the name as a path. A config that does not
     parse is searched for ``.rdm`` names."""
@@ -190,14 +206,16 @@ def _mesh_refs(job: Job) -> list[str]:
 
     text = job.data.decode("utf-8", "replace")
     try:
-        names = [n.get("FileName") for n in configtree.read_tree(text).walk()]
+        names = [name.get("FileName") for name in configtree.read_tree(text).walk()]
     except ET.ParseError:
-        names = [m.group(0).strip() for m in RDM_REF.finditer(text)]
-    names = [n for n in names if re.search(r"\.(rdm|fbx)$", n.strip(), re.IGNORECASE)]
-    return list(dict.fromkeys(fileresolve.mesh_file(n, job.source.exists) or normalize(n, studio=True) for n in names))
+        names = [match.group(0).strip() for match in RDM_REF.finditer(text)]
+    names = [name for name in names if re.search(r"\.(rdm|fbx)$", name.strip(), re.IGNORECASE)]
+    return list(
+        dict.fromkeys(fileresolve.mesh_file(name, job.source.exists) or normalize(name, studio=True) for name in names)
+    )
 
 
-def _config(job: Job, made: Made) -> None:
+def _config(job: SJob, made: SMade) -> None:
     """Every mesh a config names that the files hold, each as a glTF of its own."""
     refs = _mesh_refs(job)
     exported, skipped = 0, []
@@ -206,8 +224,8 @@ def _config(job: Job, made: Made) -> None:
             skipped.append(ref)
             continue
         try:
-            files, notes = rdm_files(job, ref)
-        except (rdmgltf.ExportError, rdmread.RdmReadError, ValueError) as exc:
+            files, notes = rdm_files(job, ref, f"{PurePosixPath(job.path).stem}-{PurePosixPath(ref).stem}")
+        except (rdmgltf.CExportError, rdmread.CRdmReadError, ValueError) as exc:
             skipped.append(f"{ref} ({exc})")
             continue
         made.files.update(files)

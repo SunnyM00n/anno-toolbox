@@ -32,12 +32,14 @@ def encode_object(node: dict) -> bytes:
     else:
         out += bytes([2, node["flags"]]) + (node["guid"] if node["flags"] & 2 else b"")
     out += struct.pack("<I", node["type"]) + leb128.encode(node["n"]) + node["mask"]
-    for e in node["fields"]:
-        if "raw" in e:
-            out += e["raw"]
+    for field in node["fields"]:
+        if "raw" in field:
+            out += field["raw"]
         else:
-            gaps = e.get("gaps") or [b""] * len(e["objs"])
-            out += e["head"] + b"".join(encode_object(o) + g for o, g in zip(e["objs"], gaps, strict=True))
+            gaps = field.get("gaps") or [b""] * len(field["objs"])
+            out += field["head"] + b"".join(
+                encode_object(child) + gap for child, gap in zip(field["objs"], gaps, strict=True)
+            )
     return bytes(out)
 
 
@@ -48,16 +50,16 @@ def type_order(schema: dict, root: dict, guid_of: dict[str, str] | None = None) 
     types: list[str] = []
 
     def add(node: dict) -> None:
-        h = f"{node['type']:08x}"
-        if h not in types:
-            types.append(h)
-        for rec in type_chain(schema, node["schema_type"], guid_of):
-            if rec not in types:
-                types.append(rec)
-            for e in node["fields"]:
-                if e["record"] == rec:
-                    for o in e["objs"]:
-                        add(o)
+        type_hex = f"{node['type']:08x}"
+        if type_hex not in types:
+            types.append(type_hex)
+        for record in type_chain(schema, node["schema_type"], guid_of):
+            if record not in types:
+                types.append(record)
+            for field in node["fields"]:
+                if field["record"] == record:
+                    for child in field["objs"]:
+                        add(child)
 
     add(root)
     return types
@@ -68,38 +70,38 @@ def shape_tokens(root: dict, types: list[str]) -> list[tuple]:
     (embedded 0x4000 and boxed objects have none), ``42 count`` for a non-empty object list, ``code>>8 count``
     for a non-empty list of plain values, and ``51 count`` after the object's fields for each such list with
     field flag 0x10000 (the PropertyIdPath lists)."""
-    toks: list[tuple] = []
+    tokens: list[tuple] = []
 
-    def typed(e: dict) -> None:  # the count (kind 0), then per value its code, an object as an object
-        codes, objs = [c for _, c, _ in typed_values(e)], iter(e["objs"])
-        toks.extend([(0, len(codes))] if codes else [])
-        for c in codes:
-            walk(next(objs), True) if c in TYPED_OBJECTS else toks.append((c >> 8, 1))
+    def typed(field: dict) -> None:  # the count (kind 0), then per value its code, an object as an object
+        codes, objs = [code for _, code, _ in typed_values(field)], iter(field["objs"])
+        tokens.extend([(0, len(codes))] if codes else [])
+        for code in codes:
+            walk(next(objs), True) if code in TYPED_OBJECTS else tokens.append((code >> 8, 1))
 
     def walk(node: dict, token: bool) -> None:
         if token:
-            toks.append((0x40, 1, types.index(f"{node['type']:08x}")))
+            tokens.append((0x40, 1, types.index(f"{node['type']:08x}")))
         late = []
-        for e in node["fields"]:
-            code = int(e["field"]["code"], 16)
+        for field in node["fields"]:
+            code = int(field["field"]["code"], 16)
             if code == TYPED_VALUES:
-                typed(e)
+                typed(field)
                 continue
-            if "raw" in e:
-                if code & 1 and e["raw"][:1] != b"\x00":
-                    n = leb128.decode(e["raw"])[0]
-                    toks.append((code >> 8, n))
-                    if int(e["field"]["flags"], 16) & 0x10000:
-                        late.append((0x51, n))
+            if "raw" in field:
+                if code & 1 and field["raw"][:1] != b"\x00":
+                    length = leb128.decode(field["raw"])[0]
+                    tokens.append((code >> 8, length))
+                    if int(field["field"]["flags"], 16) & 0x10000:
+                        late.append((0x51, length))
                 continue
             if code == 0x4201:
-                toks.append((0x42, len(e["objs"])))
-            for o in e["objs"]:
-                walk(o, code in (0x4200, 0x4201))
-        toks.extend(late)
+                tokens.append((0x42, len(field["objs"])))
+            for child in field["objs"]:
+                walk(child, code in (0x4200, 0x4201))
+        tokens.extend(late)
 
     walk(root, True)
-    return toks
+    return tokens
 
 
 def encode_file(
@@ -111,24 +113,24 @@ def encode_file(
     file had: editors up to 17.19 wrote another, phoenix-scene-format.md "Shape prefix") when it holds the same kinds."""
     schema = full_schema(schema)
     types = type_order(schema, root, guid_of)
-    toks = shape_tokens(root, types)
+    tokens = shape_tokens(root, types)
     counts = [0] * len(types)
     sums: dict[int, int] = {}
-    for t in toks:
-        if t[0] == 0x40:
-            counts[t[2]] += 1
+    for token in tokens:
+        if token[0] == 0x40:
+            counts[token[2]] += 1
         else:
-            sums[t[0]] = sums.get(t[0], 0) + t[1]
+            sums[token[0]] = sums.get(token[0], 0) + token[1]
     out = bytearray(head[:16]) + leb128.encode(len(types))
-    for h, c in zip(types, counts, strict=False):
-        out += struct.pack("<I", int(h, 16)) + uuid.UUID(guid_of[h]).bytes_le + leb128.encode(c)
+    for type_hash, count in zip(types, counts, strict=False):
+        out += struct.pack("<I", int(type_hash, 16)) + uuid.UUID(guid_of[type_hash]).bytes_le + leb128.encode(count)
     untyped = sums.pop(0, 0)  # the typed value lists' counts go into the varint after the totals
     out += leb128.encode(len(sums))
     order = kind_order if kind_order is not None and sorted(kind_order) == sorted(sums) else sorted(sums, reverse=True)
     for k in order:
         out += bytes([k]) + leb128.encode(sums[k])
-    body = b"".join(bytes([t[0]]) + b"".join(leb128.encode(x) for x in t[1:]) for t in toks)
-    out += leb128.encode(untyped) + leb128.encode(len(toks)) + leb128.encode(len(body)) + body + b"\x02"
+    body = b"".join(bytes([token[0]]) + b"".join(leb128.encode(x) for x in token[1:]) for token in tokens)
+    out += leb128.encode(untyped) + leb128.encode(len(tokens)) + leb128.encode(len(body)) + body + b"\x02"
     return bytes(out) + encode_object(root)
 
 
@@ -137,9 +139,11 @@ def header(kind: str, tool: tuple[int, int, int] = TOOL_VERSION) -> bytes:
     return b"PHX" + kind.encode("ascii") + bytes(tool) + struct.pack("<HIH", SERIALIZER, MAGIC_CONST, FLAGS)
 
 
-def save(d) -> bytes:
+def save(document) -> bytes:
     """A decoded file (``phoenixread.load``) back to bytes, under its own header."""
-    return encode_file(d.s, d.b[:16], d.root, d.guid_of, d.kind_order)
+    return encode_file(
+        document.m_schema, document.m_data[:16], document.m_root, document.m_guid_of, document.m_kind_order
+    )
 
 
 def write_file(schema: dict, kind: str, root: dict, guid_of: dict[str, str]) -> bytes:

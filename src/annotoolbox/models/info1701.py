@@ -25,7 +25,7 @@ Polygons = list[list[tuple[float, float]]]
 
 
 @dataclass(frozen=True)
-class Cells:
+class SCells:
     """A block's cells (x, z as written: no 0) at ``resolution`` cells a tile."""
 
     resolution: int
@@ -33,16 +33,19 @@ class Cells:
 
     def tiles(self) -> list[tuple[float, float, float, float]]:
         """Each cell as (x0, z0, x1, z1) in tiles from the grid point."""
-        r = float(self.resolution)
-        return [(_low(x) / r, _low(z) / r, (_low(x) + 1) / r, (_low(z) + 1) / r) for x, z in self.cells]
+        resolution = float(self.resolution)
+        return [
+            (_low(x) / resolution, _low(z) / resolution, (_low(x) + 1) / resolution, (_low(z) + 1) / resolution)
+            for x, z in self.cells
+        ]
 
 
 @dataclass
-class Info1701:
+class SInfo1701:
     """An ``.info``: the box (min, max; tiles), the blocks by name, the dummies (name -> centre, extents; tiles)."""
 
     box: tuple[tuple[float, ...], tuple[float, ...]] = ((0.0,) * 3, (0.0,) * 3)
-    blocks: dict[str, Cells] = field(default_factory=dict)
+    blocks: dict[str, SCells] = field(default_factory=dict)
     dummies: dict[str, tuple[tuple[float, ...], tuple[float, ...]]] = field(default_factory=dict)
 
 
@@ -51,47 +54,47 @@ def _low(k: int) -> int:
     return k - 1 if k > 0 else k
 
 
-def read_info(text: str) -> Info1701:
+def read_info(text: str) -> SInfo1701:
     """An ``.info``'s text (tagged elements without a root). A text that does not parse gives an empty one."""
     try:
         root = ET.fromstring(f"<info>{BARE_AMP.sub('&amp;', text)}</info>")
     except ET.ParseError:
-        return Info1701()
-    out = Info1701()
+        return SInfo1701()
+    out = SInfo1701()
     box = root.find("BoundingBox")
     if box is not None:
-        out.box = tuple(tuple(child_float(box, f"{e}/{a}") / UNITS for a in "xyz") for e in ("Min", "Max"))
+        out.box = tuple(tuple(child_float(box, f"{edge}/{left}") / UNITS for left in "xyz") for edge in ("Min", "Max"))
     for name in BLOCKS:
         node = root.find(name)
         if node is None:
             continue
         # NoBuildings counts whole tiles: the one file that gives it 32 a tile matches the islands only at 1
         resolution = 1 if name == FOOTPRINT else int(child_float(node, "GridResolution", 1.0)) or 1
-        cells = tuple((int(child_float(p, "x")), int(child_float(p, "z"))) for p in node.findall("GridPos"))
-        out.blocks[name] = Cells(resolution, cells)
+        cells = tuple((int(child_float(point, "x")), int(child_float(point, "z"))) for point in node.findall("GridPos"))
+        out.blocks[name] = SCells(resolution, cells)
     for dummy in root.findall("Dummies/*"):
-        centre = tuple(child_float(dummy, f"Center.{a}") / DUMMY_UNITS for a in "xyz")
-        extents = tuple(child_float(dummy, f"Extents.{a}") / DUMMY_UNITS for a in "xyz")
+        centre = tuple(child_float(dummy, f"Center.{left}") / DUMMY_UNITS for left in "xyz")
+        extents = tuple(child_float(dummy, f"Extents.{left}") / DUMMY_UNITS for left in "xyz")
         out.dummies[dummy.tag] = (centre, extents)
     return out
 
 
-def rectangles(cells: Cells, offset: tuple[float, float] = (0.0, 0.0)) -> Polygons:
+def rectangles(cells: SCells, offset: tuple[float, float] = (0.0, 0.0)) -> Polygons:
     """A block's cells merged into rectangles (runs along x, then equal runs along z), in tiles from the object's
     origin (``offset``: the origin's tiles past the grid point)."""
-    r = cells.resolution
+    resolution = cells.resolution
     taken = {(_low(x), _low(z)) for x, z in cells.cells}
     runs: dict[tuple[int, int], list[int]] = {}  # (x0, x1) -> the rows that have that run
     for z in sorted({z for _x, z in taken}):
         xs = sorted(x for x, zz in taken if zz == z)
-        start = prev = xs[0]
+        start = previous = xs[0]
         for x in [*xs[1:], None]:
-            if x is not None and x == prev + 1:
-                prev = x
+            if x is not None and x == previous + 1:
+                previous = x
                 continue
-            runs.setdefault((start, prev + 1), []).append(z)
+            runs.setdefault((start, previous + 1), []).append(z)
             if x is not None:
-                start = prev = x
+                start = previous = x
     out = []
     for (x0, x1), rows in sorted(runs.items()):
         first = last = rows[0]
@@ -99,9 +102,9 @@ def rectangles(cells: Cells, offset: tuple[float, float] = (0.0, 0.0)) -> Polygo
             if z is not None and z == last + 1:
                 last = z
                 continue
-            a, b = x0 / r - offset[0], first / r - offset[1]
-            c, d = x1 / r - offset[0], (last + 1) / r - offset[1]
-            out.append([(a, b), (c, b), (c, d), (a, d)])
+            left, top = x0 / resolution - offset[0], first / resolution - offset[1]
+            right, bottom = x1 / resolution - offset[0], (last + 1) / resolution - offset[1]
+            out.append([(left, top), (right, top), (right, bottom), (left, bottom)])
             if z is not None:
                 first = last = z
     return out
@@ -110,7 +113,7 @@ def rectangles(cells: Cells, offset: tuple[float, float] = (0.0, 0.0)) -> Polygo
 def ocf_offset(ocf_text: str) -> tuple[float, float]:
     """An ``.ocf``'s ``XOffset`` / ``ZOffset`` in tiles."""
     found = [re.search(rf"<{tag}>(-?\d+)</{tag}>", ocf_text) for tag in ("XOffset", "ZOffset")]
-    return tuple(int(m.group(1)) / UNITS if m else 0.0 for m in found)
+    return tuple(int(match.group(1)) / UNITS if match else 0.0 for match in found)
 
 
 def footprint(info_text: str, ocf_text: str = "") -> Polygons:

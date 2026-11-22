@@ -1,8 +1,8 @@
 """The 3D scene behind the UI preview drawn by the suite's renderers: a model of the game drawn offscreen as the viewer
 draws it, or an island as the island editor's view draws it (the game's own shaders on a QRhi device), handed to the
-preview as a ``worldscene.Scene``.
+preview as a ``worldscene.CScene``.
 
-``Still(subject, done).start()`` is the entry, ``Model(tree, game, path)`` and ``Island(settings, game, path)`` the
+``CStill(subject, done).start()`` is the entry, ``CModel(tree, game, path)`` and ``CIsland(settings, game, path)`` the
 two subjects: what a subject shows is read off the window's thread, then drawn one frame per timer tick on it (a QRhi
 device belongs to that thread) until its files are in, and ``done`` gets the scene or the error. ``configs``,
 ``islands`` and ``game_camera`` read what a game offers. docs/ui/117/world-effects.md, "What the editor does".
@@ -21,16 +21,16 @@ from PySide6.QtCore import QObject, QTimer
 
 from ..editor import editorapp, islandfiles
 from ..editor.desktop.desktopeditor import open_session
-from ..editor.desktop.desktoprender import ViewOptions
-from ..editor.desktop.desktoprhiview import RhiIslandView3D
+from ..editor.desktop.desktoprender import SViewOptions
+from ..editor.desktop.desktoprhiview import CRhiIslandView3D
 from ..infra.i18n import tr
 from ..render import rhiview
-from ..render.camera import OrbitCamera
-from ..suite.background import Background
+from ..render.camera import COrbitCamera
+from ..suite.background import CBackground
 from ..viewer import modelscene
-from ..viewer.modelfiles import ModelFiles
-from ..viewer.modelrender import ViewState
-from ..viewer.modelview import RhiModelView
+from ..viewer.modelfiles import CModelFiles
+from ..viewer.modelrender import SViewState
+from ..viewer.modelview import CRhiModelView
 from . import worldscene
 
 TICK_MS = 20  # the renderers load their files a few per frame: frames often, small ones
@@ -44,31 +44,31 @@ CAMERA_FILES = ("data/base/config/game/camera.xml", "data/config/game/camera.xml
 
 
 @dataclass(frozen=True)
-class GameCamera:
+class SGameCamera:
     """A step of the game camera (a ``camera.xml`` ``Preset``): the eye's height over the point it looks at, the angle
     below the horizontal and the vertical field of view, in radians (world-effects.md, "The game's camera")."""
 
-    height: float
-    pitch: float
-    fov: float
+    height_m: float
+    pitch_rad: float
+    fov_rad: float
 
     def place(self, view, session) -> None:
         """Point the island view at the island's middle on its ground (not below the sea), its heading kept."""
-        middle = session.size / 2
+        middle = session.m_size_tiles / 2
         ground = max(0.0, float(session.height_at(middle, middle)))
-        camera = OrbitCamera(view.to_view([middle, ground, middle]), self.height / math.sin(self.pitch))
-        camera.yaw, camera.pitch, camera.fov = view.camera.yaw, self.pitch, self.fov
-        view.camera, view.fov = camera, math.degrees(self.fov)
+        camera = COrbitCamera(view.to_view([middle, ground, middle]), self.height_m / math.sin(self.pitch_rad))
+        camera.m_yaw_rad, camera.m_pitch_rad, camera.m_fov_rad = view.m_camera.m_yaw_rad, self.pitch_rad, self.fov_rad
+        view.m_camera, view.m_fov_deg = camera, math.degrees(self.fov_rad)
 
 
 def _number(text: str | None) -> float | None:
-    m = re.fullmatch(r"\s*(-?[\d.]+)f?\s*", text or "")
-    return float(m.group(1)) if m else None
+    match = re.fullmatch(r"\s*(-?[\d.]+)f?\s*", text or "")
+    return float(match.group(1)) if match else None
 
 
-def game_camera(tree) -> GameCamera | None:
+def game_camera(tree) -> SGameCamera | None:
     """The step a session starts at (``Normal/Settings`` ``DefaultPreset``), None for a game without one."""
-    path = next((p for p in CAMERA_FILES if tree.exists(p)), None)
+    path = next((candidate for candidate in CAMERA_FILES if tree.exists(candidate)), None)
     if path is None:
         return None
     # its comments hold "--" rules, which XML does not allow: they go before it is parsed
@@ -79,49 +79,56 @@ def game_camera(tree) -> GameCamera | None:
         return None
     settings = normal.find("Settings") if normal is not None else None
     step = settings.get("DefaultPreset") if settings is not None else None
-    preset = next((p for p in normal.iter("Preset") if p.get("ID") == step), None) if step else None
+    preset = (
+        next((candidate for candidate in normal.iter("Preset") if candidate.get("ID") == step), None) if step else None
+    )
     values = [_number(preset.get(k)) for k in ("Height", "Pitch", "Fov")] if preset is not None else [None]
     if None in values or values[0] <= 0 or not 0 < values[1] < math.pi / 2 or values[2] <= 0:
         return None
-    return GameCamera(*values)
+    return SGameCamera(*values)
 
 
 def configs(tree) -> list[str]:
     """The model configs of a game: its ``.cfg`` files under a ``graphics`` folder."""
-    return sorted(p for p in tree.paths if p.endswith(".cfg") and "/graphics/" in p)
+    return sorted(path for path in tree.m_paths if path.endswith(".cfg") and "/graphics/" in path)
 
 
 def islands(settings, game: str) -> list[str]:
     """The island files of a game as the island editor lists them (its install folder from ``settings``)."""
-    return islandfiles.island_paths(game, editorapp.App(settings=settings, games=(game,)).island_tree(game))
+    return islandfiles.island_paths(game, editorapp.CApp(settings=settings, games=(game,)).island_tree(game))
 
 
 def device() -> str | None:
     """The first QRhi backend this machine can draw with (a ``QApplication`` must exist), None for none."""
-    return next((b for b in DEVICES if rhiview.available(b)), None)
+    return next((backend for backend in DEVICES if rhiview.available(backend)), None)
 
 
-class Model:
+class CModel:
     """A model config drawn by the viewer's offscreen view (``view``: a test passes its own)."""
 
     def __init__(self, tree, game: str, path: str, view: Callable[[str], object] | None = None) -> None:
-        self.tree, self.game, self.path, self._view = tree, game, path, view
-        self.key, self.wait = f"model:{path}", WAIT
+        self.m_tree, self.m_game, self.m_path, self._m_view = tree, game, path, view
+        self.m_key, self.m_wait = f"model:{path}", WAIT
 
     def read(self):
-        return modelscene.build(self.tree, self.path, self.game)
+        return modelscene.build(self.m_tree, self.m_path, self.m_game)
 
     def view(self, backend: str):
-        return (self._view or RhiModelView)(backend)
+        return (self._m_view or CRhiModelView)(backend)
 
     def show(self, view, scene) -> None:
-        view.state = ViewState(look="shaders", particles=False)
-        view.show_scene(scene, ModelFiles(self.tree))
+        view.m_state = SViewState(look="shaders", particles=False)
+        view.show_scene(scene, CModelFiles(self.m_tree))
 
     @staticmethod
     def ready(view) -> bool:
-        r = view.renderer
-        return r is not None and r.box is not None and not r.busy() and r.shown_parts_in(view.state)
+        renderer = view.m_renderer
+        return (
+            renderer is not None
+            and renderer.m_box is not None
+            and not renderer.busy()
+            and renderer.shown_parts_in(view.m_state)
+        )
 
     @staticmethod
     def frame(view) -> None:
@@ -132,49 +139,49 @@ class Model:
         view.release()  # the device's resources, before the widget goes
 
 
-class Island:
+class CIsland:
     """An island drawn by the island editor's view, opened as the island editor opens it, read only, from the game's
     default camera step (``tree``: the game's files it is read from; ``view``: a test passes its own; ``open``: what
     reads the island, ``(editor, session)``; ``look``: the view's options for 117's islands, the game's by default)."""
 
     def __init__(self, settings, game: str, path: str, view: Callable[[str], object] | None = None,
                  open: Callable[[], tuple] | None = None, look: dict | None = None, tree=None) -> None:  # fmt: skip
-        self.settings, self.game, self.path, self._view, self._open = settings, game, path, view, open
-        self.look, self.tree = GAME_LOOK if look is None else look, tree
-        self.key, self.wait = f"island:{path}", ISLAND_WAIT
-        self._busy, self._since = -1, 0.0  # the loading count last seen, and since when
+        self.m_settings, self.m_game, self.m_path, self._m_view, self._m_open = settings, game, path, view, open
+        self.m_look, self.m_tree = GAME_LOOK if look is None else look, tree
+        self.m_key, self.m_wait = f"island:{path}", ISLAND_WAIT
+        self._m_busy, self._m_since = -1, 0.0  # the loading count last seen, and since when
 
     def read(self) -> tuple:
         """``(editor, session, the game's camera step or None)``."""
-        camera = game_camera(self.tree) if self.tree is not None else None
-        if self._open is not None:
-            return (*self._open(), camera)
-        app = editorapp.App(settings=self.settings, games=(self.game,))
-        info = {**app.open(self.game, self.path), "editable": False}  # nothing is saved from here
-        editor, _island, session = open_session(app.editor, info)
+        camera = game_camera(self.m_tree) if self.m_tree is not None else None
+        if self._m_open is not None:
+            return (*self._m_open(), camera)
+        app = editorapp.CApp(settings=self.m_settings, games=(self.m_game,))
+        opened = {**app.open(self.m_game, self.m_path), "editable": False}  # nothing is saved from here
+        editor, _island, session = open_session(app.m_editor, opened)
         return editor, session, camera
 
     def view(self, backend: str):
-        return (self._view or (lambda b: RhiIslandView3D(backend=b)))(backend)
+        return (self._m_view or (lambda backend_name: CRhiIslandView3D(backend=backend_name)))(backend)
 
     def show(self, view, opened: tuple) -> None:
         """Load the island and point the camera before the first frame: the view loads what is near its camera first."""
         editor, session, camera = opened
         view.load(session, editor)
-        native = not session.island.get("game") and not session.anno2070_editing  # 117's rules for 117's islands
-        view.opts = ViewOptions(scheme=view.opts.scheme, **(self.look if native else {}))
-        view.opts.layers["markers"] = False  # the editor's markers are no part of the game's picture
+        native = not session.m_island.get("game") and not session.m_anno2070_editing  # 117's rules for 117's islands
+        view.m_opts = SViewOptions(scheme=view.m_opts.scheme, **(self.m_look if native else {}))
+        view.m_opts.layers["markers"] = False  # the editor's markers are no part of the game's picture
         if camera is not None:
             camera.place(view, session)
 
     def ready(self, view) -> bool:
         """Nothing loading, or the count unchanged for ``QUIET`` seconds (the island editor's own pictures wait so)."""
-        if view.renderer is None:
+        if view.m_renderer is None:
             return False
-        busy, now = view.renderer.busy(), time.monotonic()
-        if busy != self._busy:
-            self._busy, self._since = busy, now
-        return busy == 0 or now - self._since > QUIET
+        busy, now = view.m_renderer.busy(), time.monotonic()
+        if busy != self._m_busy:
+            self._m_busy, self._m_since = busy, now
+        return busy == 0 or now - self._m_since > QUIET
 
     @staticmethod
     def frame(view) -> None:
@@ -185,70 +192,70 @@ class Island:
         """The view frees its renderer when it is closed."""
 
 
-class Still(QObject):
+class CStill(QObject):
     """One subject drawn offscreen at the reference frame's size; ``done(scene or exception)`` once, on the window's
     thread, unless it was ``cancel``led. The caller keeps it while it draws (its timer goes with it)."""
 
-    def __init__(self, subject, done: Callable[[object], None], size: tuple[int, int] = worldscene.SIZE) -> None:
+    def __init__(self, subject, done: Callable[[object], None], size_px: tuple[int, int] = worldscene.SIZE) -> None:
         super().__init__()
-        self.subject, self.done, self.size = subject, done, size
-        self.view, self.started, self.cancelled = None, 0.0, False
-        self.background = Background(self)
-        self.timer = QTimer(self)
-        self.timer.setInterval(TICK_MS)
-        self.timer.timeout.connect(self._tick)
+        self.m_subject, self.m_done, self.m_size_px = subject, done, size_px
+        self.m_view, self.m_started, self.m_cancelled = None, 0.0, False
+        self.m_background = CBackground(self)
+        self.m_timer = QTimer(self)
+        self.m_timer.setInterval(TICK_MS)
+        self.m_timer.timeout.connect(self._tick)
 
-    def start(self, backend: str | None = None, wait: bool = False) -> None:
-        """Read the subject (off the window's thread unless ``wait``), then draw it on ``backend`` (``device()``)."""
+    def start(self, backend: str | None = None, is_waiting: bool = False) -> None:
+        """Read the subject (off the window's thread unless ``is_waiting``), then draw it on ``backend`` (``device()``)."""
         backend = backend or device()
         if backend is None:
-            self.done(RuntimeError(tr("ui.no_direct3d_opengl_device_draw")))
+            self.m_done(RuntimeError(tr("ui.no_direct3d_opengl_device_draw")))
             return
-        self.background.run(self.subject.read, lambda got: self._read(got, backend), wait)
+        self.m_background.run(self.m_subject.read, lambda got: self._read(got, backend), is_waiting)
 
     def cancel(self) -> None:
         """Stop drawing; ``done`` is not called."""
-        self.cancelled = True
+        self.m_cancelled = True
         self._release()
 
     def _read(self, got, backend: str) -> None:
-        if self.cancelled:
+        if self.m_cancelled:
             return
         if isinstance(got, Exception):
-            self.done(got)
+            self.m_done(got)
             return
         try:
-            self.view = self.subject.view(backend)
-            self.subject.show(self.view, got)
+            self.m_view = self.m_subject.view(backend)
+            self.m_subject.show(self.m_view, got)
         except (RuntimeError, OSError, ValueError) as error:  # no view on this device, the subject's files unreadable
             self._finish(error)
             return
-        self.started = time.monotonic()
-        self.timer.start()
+        self.m_started = time.monotonic()
+        self.m_timer.start()
 
     def _tick(self) -> None:
         """One frame: the subject drawn small while its files load; once they are in, framed and drawn at full size."""
         try:
-            self.view.picture(*PROBE)
-            if self.view.failed:
-                raise RuntimeError(self.view.failed)
-            if self.subject.ready(self.view):
-                self.subject.frame(self.view)
-                self.view.picture(*self.size)  # what loaded during the framing frame is drawn in the next
-                self._finish(worldscene.from_image(self.view.picture(*self.size), self.subject.key))
-            elif time.monotonic() - self.started > self.subject.wait:
-                raise RuntimeError(tr("ui.scenes_files_not_come_within", n=round(self.subject.wait / 60)))
+            self.m_view.picture(*PROBE)
+            if self.m_view.m_failed:
+                raise RuntimeError(self.m_view.m_failed)
+            if self.m_subject.ready(self.m_view):
+                self.m_subject.frame(self.m_view)
+                self.m_view.picture(*self.m_size_px)  # what loaded during the framing frame is drawn in the next
+                self._finish(worldscene.from_image(self.m_view.picture(*self.m_size_px), self.m_subject.m_key))
+            elif time.monotonic() - self.m_started > self.m_subject.m_wait:
+                raise RuntimeError(tr("ui.scenes_files_not_come_within", n=round(self.m_subject.m_wait / 60)))
         except (RuntimeError, ValueError) as error:
             self._finish(error)
 
     def _release(self) -> None:
-        self.timer.stop()
-        view, self.view = self.view, None
+        self.m_timer.stop()
+        view, self.m_view = self.m_view, None
         if view is not None:
-            self.subject.release(view)
+            self.m_subject.release(view)
             view.close()
             view.deleteLater()
 
     def _finish(self, result) -> None:
         self._release()
-        self.done(result)
+        self.m_done(result)

@@ -4,7 +4,7 @@
 each the start of its run in the index texture and its counts, and the index texture (512 wide). A model viewer puts
 every light in every cell: a scene of one model holds a few lights, and the shader skips those out of range itself.
 
-``Lamp`` is one light; ``rows``, ``cells`` (2205) and ``buffer_cells`` (1800) the data, ``ClusterTextures(ctx)`` it on
+``SLamp`` is one light; ``rows``, ``cells`` (2205) and ``buffer_cells`` (1800) the data, ``CClusterTextures(ctx)`` it on
 the device. docs/rendering/shader-compile.md section 11, "Local lights".
 """
 
@@ -24,7 +24,7 @@ BUFFER_CELLS = 4096
 
 
 @dataclass(frozen=True)
-class Lamp:
+class SLamp:
     """One light where it stands (the view's axes): ``color`` its radiance, ``falloff`` the exponent of its range;
     a spot's ``axis`` (unit, where it shines) and the cosines of its cone's inner and outer half-angles."""
 
@@ -38,19 +38,19 @@ class Lamp:
     volume: float = 0.0  # 2070's glow of the air round the light (lights2070)
 
 
-def rows(points: list[Lamp], spots: list[Lamp]) -> tuple[list, list]:
+def rows(points: list[SLamp], spots: list[SLamp]) -> tuple[list, list]:
     """The rows of ``cPointLights`` (position, range; colour, falloff) and ``cSpotLights`` (position, falloff;
     colour, cos outer; the direction back towards the light times the range, 1 / (cos inner - cos outer)): the
     shader takes the spot's cone factor as (dot(to light, direction) - cos outer) x that last value."""
-    p = []
+    point_rows = []
     for lamp in points[:MAX_LIGHTS]:
-        p += [[*lamp.position, lamp.range], [*lamp.color, lamp.falloff]]
-    s = []
+        point_rows += [[*lamp.position, lamp.range], [*lamp.color, lamp.falloff]]
+    spot_rows = []
     for lamp in spots[:MAX_LIGHTS]:
         back = -np.asarray(lamp.axis or (0, -1, 0), float) * lamp.range
         delta = 1.0 / max(1e-4, lamp.cos_inner - lamp.cos_outer)
-        s += [[*lamp.position, lamp.falloff], [*lamp.color, lamp.cos_outer], [*back, delta]]
-    return p, s
+        spot_rows += [[*lamp.position, lamp.falloff], [*lamp.color, lamp.cos_outer], [*back, delta]]
+    return point_rows, spot_rows
 
 
 def cells(n_points: int, n_spots: int) -> tuple[np.ndarray, np.ndarray]:
@@ -74,32 +74,32 @@ def buffer_cells(n_points: int, n_spots: int) -> list[list[int]]:
     return [[0, n_points | (n_spots << 11)]] * BUFFER_CELLS
 
 
-class ClusterTextures:
+class CClusterTextures:
     """The two textures on the device, made again when the lights' counts change."""
 
     def __init__(self, ctx) -> None:
-        self.ctx, self.key, self.made = ctx, None, []
+        self.m_ctx, self.m_key, self.m_made = ctx, None, []
 
-    def update(self, points: list[Lamp], spots: list[Lamp], game: str = "anno2205") -> tuple[dict, dict]:
+    def update(self, points: list[SLamp], spots: list[SLamp], game: str = "anno2205") -> tuple[dict, dict]:
         """The textures by the shader's names and the buffers' rows by name (1800: its cells as buffer rows)."""
         key = (min(len(points), MAX_LIGHTS), min(len(spots), MAX_LIGHTS))
-        if key != self.key:
+        if key != self.m_key:
             self.release()
             grid, index = cells(*key)
-            self.made = [self.ctx.texture3d(CELLS, 2, grid.tobytes(), dtype="u4"),
-                         self.ctx.texture((INDEX_WIDTH, index.shape[0]), 1, index.tobytes(), dtype="u4")]  # fmt: skip
-            self.key = key
-        p, s = rows(points, spots)
+            self.m_made = [self.m_ctx.texture3d(CELLS, 2, grid.tobytes(), dtype="u4"),
+                         self.m_ctx.texture((INDEX_WIDTH, index.shape[0]), 1, index.tobytes(), dtype="u4")]  # fmt: skip
+            self.m_key = key
+        point_rows, spot_rows = rows(points, spots)
         if game == "anno1800":
-            return {"cLightIndexTex": self.made[1].native}, {
-                "cPointLights": p, "cSpotLights": s, "cLightClusterBuffer": buffer_cells(*key)
+            return {"cLightIndexTex": self.m_made[1].native}, {
+                "cPointLights": point_rows, "cSpotLights": spot_rows, "cLightClusterBuffer": buffer_cells(*key)
             }  # fmt: skip
-        return {"cLightClusterTex": self.made[0].native, "cLightIndexTex": self.made[1].native}, {
-            "cPointLights": p,
-            "cSpotLights": s,
+        return {"cLightClusterTex": self.m_made[0].native, "cLightIndexTex": self.m_made[1].native}, {
+            "cPointLights": point_rows,
+            "cSpotLights": spot_rows,
         }
 
     def release(self) -> None:
-        for t in self.made:
-            t.release()
-        self.made, self.key = [], None
+        for texture in self.m_made:
+            texture.release()
+        self.m_made, self.m_key = [], None

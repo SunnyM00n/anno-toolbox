@@ -25,9 +25,9 @@ def write_companion(mods_dir: Path, key: str = EDIT_KEY, mod_id: str = MOD_ID) -
     assets = root / "data/base/config/export/assets.xml"
     assets.parent.mkdir(parents=True, exist_ok=True)
     binding = modxml.shortcut_binding(EDIT_COMMAND, key, ACTIVE)
-    op = f'<ModOp GUID="{modxml.SHORTCUT_CONFIG}" Add="ShortcutConfig/InputBindings">{binding}</ModOp>'
+    mod_operation = f'<ModOp GUID="{modxml.SHORTCUT_CONFIG}" Add="ShortcutConfig/InputBindings">{binding}</ModOp>'
     assets.write_text(
-        modxml.modops([op], "game link companion: edit the selected object"), encoding="utf-8", newline="\n"
+        modxml.modops([mod_operation], "game link companion: edit the selected object"), encoding="utf-8", newline="\n"
     )
     (root / "modinfo.json").write_text(
         modxml.modinfo(

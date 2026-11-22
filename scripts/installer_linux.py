@@ -63,16 +63,16 @@ def pack_command(
 ) -> list[str]:  # fmt: skip
     """``vpk pack`` on Linux: an AppImage of the program folder with deltas against the earlier packages in ``out``. The
     packer has no shortcut option here (the program writes its own .desktop entry, ``suite/shortcuts.py``)."""
-    cmd = [
+    command = [
         vpk, "pack", "--packId", edition.pack_id, "--packVersion", bundle.semver(version), "--packDir", str(app),
         "--mainExe", bundle.PROGRAM, "--packTitle", edition.product, "--packAuthors", "Anno Toolbox",
         "--outputDir", str(out), "--runtime", RUNTIME, "--categories", CATEGORIES, "--delta", "BestSpeed",
     ]  # fmt: skip
     if icon:
-        cmd += ["--icon", str(icon)]
+        command += ["--icon", str(icon)]
     if notes:
-        cmd += ["--releaseNotes", str(notes)]
-    return cmd
+        command += ["--releaseNotes", str(notes)]
+    return command
 
 
 def release_files(out: Path, edition: bundle.Edition, version: str) -> list[Path]:
@@ -81,18 +81,18 @@ def release_files(out: Path, edition: bundle.Edition, version: str) -> list[Path
     sem, pid = bundle.semver(version), edition.pack_id
     names = [release_appimage_name(edition), f"{pid}-{sem}-linux-full.nupkg", f"{pid}-{sem}-linux-delta.nupkg"]
     names += [*FEED_FILES, tarball_name(edition, version)]
-    return [out / n for n in names if (out / n).is_file()]
+    return [out / name for name in names if (out / name).is_file()]
 
 
-def write_icon(path: Path, size: int = 256) -> Path:
+def write_icon(path: Path, size_px: int = 256) -> Path:
     """The program's icon as a PNG, drawn with Pillow (the project has no icon file): the toolbar's orange and water
     blue on a dark tile, a roof over a wave."""
     from PIL import Image, ImageDraw
 
     scale = 4  # drawn large, scaled down: smooth edges
-    big = size * scale
-    img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    big = size_px * scale
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
     unit = big / 64
     draw.rounded_rectangle((2 * unit, 2 * unit, 62 * unit, 62 * unit), radius=10 * unit, fill="#26292e")
     draw.polygon([(32 * unit, 12 * unit), (54 * unit, 34 * unit), (10 * unit, 34 * unit)], fill="#f28c28")
@@ -100,7 +100,7 @@ def write_icon(path: Path, size: int = 256) -> Path:
     for x in range(10, 54, 12):
         draw.arc((x * unit, 44 * unit, (x + 12) * unit, 56 * unit), 0, 180, fill="#5aa9e6", width=int(3 * unit))
     path.parent.mkdir(parents=True, exist_ok=True)
-    img.resize((size, size), Image.LANCZOS).save(path)
+    image.resize((size_px, size_px), Image.LANCZOS).save(path)
     return path
 
 
@@ -129,7 +129,7 @@ def make_tarball(app: Path, out: Path, edition: bundle.Edition, version: str) ->
 def write_sums(out: Path, files: list[Path]) -> Path:
     """``SHA256SUMS-linux`` for this release's files, read back and checked at once (as ``build_app.write_sums``)."""
     sums = out / SUMS
-    sums.write_text(bundle.sums_text(out, [f.name for f in files]), encoding="utf-8", newline="\n")
+    sums.write_text(bundle.sums_text(out, [file.name for file in files]), encoding="utf-8", newline="\n")
     if bad := bundle.verify_sums(out, sums.read_text(encoding="utf-8")):
         raise SystemExit(f"{SUMS} does not verify:\n  " + "\n  ".join(bad))
     return sums

@@ -4,7 +4,7 @@ by ``waterocean.fx`` on instanced square chunks of 16 units in rings of coarser 
 refracting the lit scene's copy, reflecting the sky cube; ``info_map`` the island's water info map as the engine
 builds it.
 
-``Ocean2070(ctx, stages, dummies, water)`` is the entry (``frame2070.ocean_pass`` draws it): ``waves`` records the
+``COcean2070(ctx, stages, dummies, water)`` is the entry (``frame2070.ocean_pass`` draws it): ``waves`` records the
 wave passes, ``draws`` gives the ocean's draws for ``chunk_rings``. docs/rendering/shader-compile.md section 10.
 """
 
@@ -17,14 +17,14 @@ import numpy as np
 from PySide6.QtGui import QRhiTexture
 
 from . import gameshader as gs
-from .fxcdraw import FxcDraw
-from .gamedraw import Mesh, Program
+from .fxcdraw import CFxcDraw
+from .gamedraw import CMesh, CProgram
 from .nativepass import draw_pass
 from .sea2205 import grid_mesh
-from .sky2070 import CUBE_TECHNIQUE, SkyCube
+from .sky2070 import CUBE_TECHNIQUE, CSkyCube
 from .sky2070 import FX as SKY_FX
 
-F = QRhiTexture.Format
+TEXTURE_FORMAT = QRhiTexture.Format
 FX = "data/system/shaders/fx/waterocean.fx"
 GRID_FX = "data/system/shaders/fx/watergrid.fx"
 TECHNIQUE = "OceanSurfaceOverWaterStandardShadow"  # shadow method 0, as the frame's
@@ -64,34 +64,34 @@ INFO_COAST_SCALE = 0.0883883  # 1 / (8 sqrt 2): the farthest land it can find is
 
 
 @dataclass(frozen=True)
-class Sea:
+class SSea:
     """Where a frame draws the sea: round ``centre`` (x, z in the game's axes) at least ``reach`` units, with the
     engine's fixed maps (``WAVES``, ``RIPPLES``, ``CAUSTICS``) by path as loaded; ``info`` the water info map (a
     texture; None: the deep-water stand-in ``DEEP``) and ``texel`` its ``cWaterConfig.xy`` (0.5 / its texels a side,
-    its corner at the origin); ``coast`` the coast waves (``coast2070.CoastWaves``) and ``reflection`` the planar
+    its corner at the origin); ``coast`` the coast waves (``coast2070.CCoastWaves``) and ``reflection`` the planar
     reflection's map, for an ocean compiled with ``ISLAND_DEFINES``."""
 
     centre: tuple[float, float]
     reach: float
     maps: dict
-    info: object = None
+    info_map: object = None
     texel: tuple[float, float] = (0.5, 0.5)
     coast: object = None
     reflection: object = None
 
 
-def info_depth(heights: np.ndarray, step: float) -> np.ndarray:
+def info_depth(heights: np.ndarray, step_tiles: float) -> np.ndarray:
     """The water info map's depth factor (its alpha, a byte a texel) as the water manager builds it once per world
     from the terrain: per ``INFO_TEXEL`` square the terrain's height at its corner into ``INFO_DEPTH``'s ramp (deep
     water 255, the coast 1); around every chunk of land (``INFO_LAND_CHUNK``) the 7 x 7 minimum, then the 7 x 7 mean of
     that; then 160 + 95/255 of it. ``heights``: [z, x] at ``step`` units from the origin, the game's axes."""
-    n = int(math.ceil((heights.shape[0] - 1) * step / INFO_TEXEL))
-    at = np.arange(n) * INFO_TEXEL / step
-    h = sample_grid(heights, at)
-    a, b = INFO_DEPTH
-    first = (np.clip(a - h * b, 1 / 255, 1.0) * 255).astype(np.int32)
+    texel_count = int(math.ceil((heights.shape[0] - 1) * step_tiles / INFO_TEXEL))
+    at = np.arange(texel_count) * INFO_TEXEL / step_tiles
+    sampled = sample_grid(heights, at)
+    offset, slope = INFO_DEPTH
+    first = (np.clip(offset - sampled * slope, 1 / 255, 1.0) * 255).astype(np.int32)
     spread = np.full_like(first, 255)
-    land = _land_chunks(heights, step, n)
+    land = _land_chunks(heights, step_tiles, texel_count)
     for x0, x1, z0, z1 in land:
         spread[z0:z1, x0:x1] = _window(first, (x0, x1, z0, z1), np.nanmin)
     for x0, x1, z0, z1 in land:
@@ -99,44 +99,48 @@ def info_depth(heights: np.ndarray, step: float) -> np.ndarray:
     return ((INFO_LIFT + (first * 0.37254902).astype(np.int32)) & 255).astype(np.uint8)
 
 
-def info_map(heights: np.ndarray, step: float) -> np.ndarray:
+def info_map(heights: np.ndarray, step_tiles: float) -> np.ndarray:
     """The water info map as the ocean and the coast waves read it: RGBA bytes [z, x], the land height, the coast
     distance and the steep coast of ``info_coast`` and the depth factor ``info_depth`` in alpha."""
-    depth = info_depth(heights, step)
+    depth = info_depth(heights, step_tiles)
     out = np.zeros((*depth.shape, 4), np.uint8)
-    out[..., :3] = info_coast(heights, step)[: depth.shape[0], : depth.shape[1]]
+    out[..., :3] = info_coast(heights, step_tiles)[: depth.shape[0], : depth.shape[1]]
     out[..., 3] = depth
     return out
 
 
-def info_coast(heights: np.ndarray, step: float) -> np.ndarray:
+def info_coast(heights: np.ndarray, step_tiles: float) -> np.ndarray:
     """The water info map's red, green and blue (bytes [z, x, 3]) as the water manager builds them, each texel at its
     middle: red the land height clamped to 0..1; green the coast distance, 0 on land, 1 from 12 below the water, else
     the nearest land within 8 units each way / (8 sqrt 2) (1 with none), past 0.4 stretched by the engine's noise;
     blue the steep coast, 255 unless the coast is farther than 0.2 and the water there shallower than 8 times it
     (the ground textures' ``ShallowCoast`` flag would clear it near land: no 2070 texture sets it). Rivers are not
     read (the engine clears blue and green near one)."""
-    n = int(math.ceil((heights.shape[0] - 1) * step / INFO_TEXEL))
-    mid = (np.arange(n) * INFO_TEXEL + INFO_TEXEL / 2) / step
-    h = sample_grid(heights, mid)
-    units = int(round((heights.shape[0] - 1) * step))
-    land = sample_grid(heights, np.arange(units + 1) / step) >= 0.0
+    texel_count = int(math.ceil((heights.shape[0] - 1) * step_tiles / INFO_TEXEL))
+    mid = (np.arange(texel_count) * INFO_TEXEL + INFO_TEXEL / 2) / step_tiles
+    sampled = sample_grid(heights, mid)
+    units = int(round((heights.shape[0] - 1) * step_tiles))
+    land = sample_grid(heights, np.arange(units + 1) / step_tiles) >= 0.0
     reach = INFO_COAST_REACH
     pad = np.pad(land, reach, constant_values=False)
-    centre = (np.arange(n) * 2 + 1 + reach).clip(0, units + 2 * reach)
-    near = np.ones((n, n))
+    centre = (np.arange(texel_count) * 2 + 1 + reach).clip(0, units + 2 * reach)
+    near = np.ones((texel_count, texel_count))
     for i in range(-reach, reach + 1):
         for j in range(-reach, reach + 1):
             found = pad[np.ix_(centre + i, centre + j)]
             near = np.where(found, np.minimum(near, math.hypot(i, j) * INFO_COAST_SCALE), near)
-    shore = (h > INFO_DEEP) & (h < 0.0)
-    g = np.where(h >= 0.0, 0.0, np.where(shore, near, 1.0))
-    steep = np.where(shore & (g > 0.2) & (h / np.maximum(g, 1e-6) >= -8.0), 0, 255)
-    x, z = np.meshgrid(np.arange(n), np.arange(n))
+    shore = (sampled > INFO_DEEP) & (sampled < 0.0)
+    coast_distance = np.where(sampled >= 0.0, 0.0, np.where(shore, near, 1.0))
+    steep = np.where(shore & (coast_distance > 0.2) & (sampled / np.maximum(coast_distance, 1e-6) >= -8.0), 0, 255)
+    x, z = np.meshgrid(np.arange(texel_count), np.arange(texel_count))
     noise = ((np.sin(1.6 * x) + np.cos(1.6 * z)) * 0.38 + 0.76) ** 3
-    g = np.where((h < 0.0) & (g > 0.4), np.minimum(g + (g - 0.4) * (5 / 3) * noise, 1.0), g)
-    red = np.clip(h, 0.0, 1.0)
-    return np.stack([red * 255, g * 255, steep], -1).astype(np.uint8)
+    coast_distance = np.where(
+        (sampled < 0.0) & (coast_distance > 0.4),
+        np.minimum(coast_distance + (coast_distance - 0.4) * (5 / 3) * noise, 1.0),
+        coast_distance,
+    )
+    red = np.clip(sampled, 0.0, 1.0)
+    return np.stack([red * 255, coast_distance * 255, steep], -1).astype(np.uint8)
 
 
 def sample_grid(heights: np.ndarray, at: np.ndarray) -> np.ndarray:
@@ -145,33 +149,40 @@ def sample_grid(heights: np.ndarray, at: np.ndarray) -> np.ndarray:
     last = heights.shape[0] - 1
     at = np.clip(at, 0, last)
     i = np.minimum(at.astype(np.int64), last - 1 if last > 0 else 0)
-    f = at - i
+    fraction = at - i
     j = np.minimum(i + 1, last)
-    rows = heights[i] * (1 - f)[:, None] + heights[j] * f[:, None]
-    return rows[:, i] * (1 - f)[None, :] + rows[:, j] * f[None, :]
+    rows = heights[i] * (1 - fraction)[:, None] + heights[j] * fraction[:, None]
+    return rows[:, i] * (1 - fraction)[None, :] + rows[:, j] * fraction[None, :]
 
 
-def _land_chunks(heights: np.ndarray, step: float, n: int) -> list[tuple[int, int, int, int]]:
+def _land_chunks(heights: np.ndarray, step_tiles: float, texel_count: int) -> list[tuple[int, int, int, int]]:
     """Per terrain chunk whose highest point is above ``INFO_LAND_CHUNK``: its texels widened by ``INFO_REACH``
     (x0, x1, z0, z1), clipped to the map."""
-    per = int(round(INFO_CHUNK * INFO_TEXEL / step))
+    per = int(round(INFO_CHUNK * INFO_TEXEL / step_tiles))
     out = []
     for cz in range(0, heights.shape[0] - 1, per):
         for cx in range(0, heights.shape[1] - 1, per):
             if float(heights[cz : cz + per + 1, cx : cx + per + 1].max()) > INFO_LAND_CHUNK:
-                tx, tz, r = cx // per * INFO_CHUNK, cz // per * INFO_CHUNK, INFO_REACH
-                out.append((max(tx - r, 0), min(tx + INFO_CHUNK + r, n), max(tz - r, 0), min(tz + INFO_CHUNK + r, n)))
+                tx, tz, reach = cx // per * INFO_CHUNK, cz // per * INFO_CHUNK, INFO_REACH
+                out.append(
+                    (
+                        max(tx - reach, 0),
+                        min(tx + INFO_CHUNK + reach, texel_count),
+                        max(tz - reach, 0),
+                        min(tz + INFO_CHUNK + reach, texel_count),
+                    )
+                )
     return out
 
 
-def _window(src: np.ndarray, box: tuple[int, int, int, int], op) -> np.ndarray:
+def _window(source: np.ndarray, box: tuple[int, int, int, int], op) -> np.ndarray:
     """``op(window, axis)`` over the 7 x 7 window of each texel of ``box`` in ``src`` (the texels off the map left
     out)."""
     x0, x1, z0, z1 = box
-    r = INFO_REACH
-    pad = np.pad(src.astype(np.float64), r, constant_values=np.nan)
-    rows = np.stack([pad[z0 + dz : z1 + dz, x0 : x1 + 2 * r] for dz in range(2 * r + 1)], -1)
-    win = np.stack([rows[:, dx : dx + (x1 - x0)] for dx in range(2 * r + 1)], -1).reshape(z1 - z0, x1 - x0, -1)
+    reach = INFO_REACH
+    pad = np.pad(source.astype(np.float64), reach, constant_values=np.nan)
+    rows = np.stack([pad[z0 + dz : z1 + dz, x0 : x1 + 2 * reach] for dz in range(2 * reach + 1)], -1)
+    win = np.stack([rows[:, dx : dx + (x1 - x0)] for dx in range(2 * reach + 1)], -1).reshape(z1 - z0, x1 - x0, -1)
     return op(win, -1).astype(np.int32)
 
 
@@ -185,23 +196,23 @@ def wave_values(water, seconds: float) -> dict:
     (and half the great amplitude) and the two scrolls, each advanced by velocity / frequency a second and kept in 0..1
     (the second sample's v offset -0.5 from the start)."""
     (fx, fy), (ax, ay) = water.wave_frequency[:2], water.wave_amplitude[:2]
-    (v0x, v0y), (v1x, v1y) = (v[:2] for v in water.wave_velocity)
-    t = float(seconds)
+    (v0x, v0y), (v1x, v1y) = (velocity[:2] for velocity in water.wave_velocity)
+    time_s = float(seconds)
     return {"cWaterFrequency": [fx, fy, 0.0, 0.0], "cWaterAmplitude": [ax, ay, 0.0, 0.0],
             "cWaterChoppiness": [water.choppiness, ax * 0.5, 0.0, 0.0],
-            "cWaterVelocity0": [(t * v0x / fx) % 1.0, 0.0, (-t * v1x / fx) % 1.0, -0.5],
-            "cWaterVelocity1": [(t * v0y / fy) % 1.0, 0.0, (-t * v1y / fy) % 1.0, -0.5]}  # fmt: skip
+            "cWaterVelocity0": [(time_s * v0x / fx) % 1.0, 0.0, (-time_s * v1x / fx) % 1.0, -0.5],
+            "cWaterVelocity1": [(time_s * v0y / fy) % 1.0, 0.0, (-time_s * v1y / fy) % 1.0, -0.5]}  # fmt: skip
 
 
 def ocean_values(water, seconds: float, toward_sun, view_dir, texel=(0.5, 0.5)) -> dict:
-    """The ocean's own constants: the config (the info map's ``texel``, ``Sea.texel``, and 1/``TILE``), the ripples'
+    """The ocean's own constants: the config (the info map's ``texel``, ``SSea.texel``, and 1/``TILE``), the ripples'
     and caustics' scroll by the game's milliseconds, the setting's above-water light, the glint's sun and the fake
     double refraction by the camera's tilt (``view_dir``: the camera's forward direction) [inferred]."""
-    ms = float(seconds) * 1000.0
+    time_ms = float(seconds) * 1000.0
     tilt = 0.75 * (1.0 - abs(float(view_dir[1]))) + 0.2
     return {"cWaterConfig": [*texel, 1.0 / TILE, 0.0],
-            "cWaterRipplesOffset": [(2e-5 * ms) % 1.0, 0.0, (0.5 - 2e-5 * ms) % 1.0, 0.4],
-            "cWaterCausticsOffset": [(5e-5 * ms) % 1.0, 0.0, (4e-5 * ms + 0.5) % 1.0, 0.4],
+            "cWaterRipplesOffset": [(2e-5 * time_ms) % 1.0, 0.0, (0.5 - 2e-5 * time_ms) % 1.0, 0.4],
+            "cWaterCausticsOffset": [(5e-5 * time_ms) % 1.0, 0.0, (4e-5 * time_ms + 0.5) % 1.0, 0.4],
             "cWaterLightAbsorptionExp": [*water.above_absorption[:3], 0.0],
             "cWaterLightDepth": [water.above_light_depth, 0.0, 0.0, 0.0],
             "cWaterViewDepth": [water.above_view_depth, water.above_view_exponent, 0.0, 0.0],
@@ -209,11 +220,19 @@ def ocean_values(water, seconds: float, toward_sun, view_dir, texel=(0.5, 0.5)) 
             "cWaterLightDirection": [*toward_sun[:3], 0.0], "cUserConstant1": [tilt, 0.0, 0.0, 0.0]}  # fmt: skip
 
 
-def corners(sea: Sea, height: float = SWELL) -> np.ndarray:
+def corners(sea: SSea, height_m: float = SWELL) -> np.ndarray:
     """The eight corners of the box the sea's chunks and waves fill (``chunk_rings``' square, ``height`` up and down)."""
     half = max(float(sea.reach), MIN_REACH)
-    (x, z), h = sea.centre, height
-    return np.array([[x + a * half, b * h, z + c * half] for a in (-1, 1) for b in (-1, 1) for c in (-1, 1)], float)
+    (x, z), vertical = sea.centre, height_m
+    return np.array(
+        [
+            [x + side_x * half, side_y * vertical, z + side_z * half]
+            for side_x in (-1, 1)
+            for side_y in (-1, 1)
+            for side_z in (-1, 1)
+        ],
+        float,
+    )
 
 
 def chunk_rings(centre, reach: float, eye) -> dict[int, list[tuple[float, float]]]:
@@ -221,14 +240,14 @@ def chunk_rings(centre, reach: float, eye) -> dict[int, list[tuple[float, float]
     level by its centre's distance from ``eye`` less 8 against ``RINGS`` (beyond the last: none)."""
     half = max(float(reach), MIN_REACH)
     eye = np.asarray(eye, float)
-    lo = [math.floor((float(c) - half) / CHUNK) for c in centre]
-    hi = [math.ceil((float(c) + half) / CHUNK) for c in centre]
+    lo = [math.floor((float(coordinate) - half) / CHUNK) for coordinate in centre]
+    hi = [math.ceil((float(coordinate) + half) / CHUNK) for coordinate in centre]
     out: dict[int, list] = {}
     for i in range(lo[0], hi[0]):
         for k in range(lo[1], hi[1]):
             x, z = i * CHUNK, k * CHUNK
-            d = float(np.linalg.norm(eye - (x + CHUNK / 2, 0.0, z + CHUNK / 2))) - CHUNK / 2
-            level = next((n for n, ring in enumerate(RINGS) if d < ring), None)
+            distance = float(np.linalg.norm(eye - (x + CHUNK / 2, 0.0, z + CHUNK / 2))) - CHUNK / 2
+            level = next((index for index, ring in enumerate(RINGS) if distance < ring), None)
             if level is not None:
                 out.setdefault(level, []).append((x, z))
     return out
@@ -237,65 +256,73 @@ def chunk_rings(centre, reach: float, eye) -> dict[int, list[tuple[float, float]
 def level_values(level: int) -> dict:
     """``cWaterChunkConfig0`` and ``1`` of a level: 16 units a chunk, one row a chunk; the morph towards the next
     coarser grid (the last level's own) over the ring's last ``MORPH`` units."""
-    r = GRIDS[level] // 2 if level < len(GRIDS) - 1 else GRIDS[level]
+    rows = GRIDS[level] // 2 if level < len(GRIDS) - 1 else GRIDS[level]
     start, rate = MORPH
     return {"cWaterChunkConfig0": [0.0, 1.0, CHUNK, 0.0],
-            "cWaterChunkConfig1": [r / CHUNK, CHUNK / r, RINGS[level] - start, rate]}  # fmt: skip
+            "cWaterChunkConfig1": [rows / CHUNK, CHUNK / rows, RINGS[level] - start, rate]}  # fmt: skip
 
 
-def screen_p2() -> Mesh:
+def screen_p2() -> CMesh:
     """A triangle over the screen with float2 positions (the wave passes' ``p2``)."""
-    v = np.array([[-1, -1], [3, -1], [-1, 3]], "<f4")
-    return Mesh(v.tobytes(), 8, ((0, 7, 2, 0),), np.array([0, 1, 2], np.uint32), 3)
+    vertices = np.array([[-1, -1], [3, -1], [-1, 3]], "<f4")
+    return CMesh(vertices.tobytes(), 8, ((0, 7, 2, 0),), np.array([0, 1, 2], np.uint32), 3)
 
 
-class Ocean2070:
+class COcean2070:
     """The wave passes, their two maps and the ocean's draws (module docstring); the draws per level and batch are
     kept and filled anew each frame."""
 
     def __init__(self, ctx, stages: dict, dummies, water) -> None:
-        self.ctx, self.dummies, self.water = ctx, dummies, water
-        tri = screen_p2()
+        self.m_ctx, self.m_dummies, self.m_water = ctx, dummies, water
+        triangle = screen_p2()
         flat = {"cull": "none", "depth_test": False, "depth_write": False, "blend": False}
-        self.position, self.normal = (
-            FxcDraw(ctx, Program(s.vs, s.ps), tri, replace(s.state, **flat), dummies)
-            for s in (stages["position"], stages["normal"])
+        self.m_position, self.m_normal = (
+            CFxcDraw(
+                ctx, CProgram(stage.vertex_stage, stage.pixel_stage), triangle, replace(stage.state, **flat), dummies
+            )
+            for stage in (stages["position"], stages["normal"])
         )
-        self.stages = stages["ocean"]
-        self.grids = [grid_mesh(q) for q in GRIDS]  # 2205's chunk grid: the same p2 over 0..1, drawn unculled
-        self.draw_calls: dict[tuple[int, int], FxcDraw] = {}
-        self.maps: list = []  # the position and normal maps and their framebuffers, made on first use
-        self.cube = SkyCube(ctx, stages["cube"], dummies)  # the sky it reflects (set_volume: its clouds)
+        self.m_stages = stages["ocean"]
+        self.m_grids = [grid_mesh(quads) for quads in GRIDS]  # 2205's chunk grid: the same p2 over 0..1, drawn unculled
+        self.m_draw_calls: dict[tuple[int, int], CFxcDraw] = {}
+        self.m_maps: list = []  # the position and normal maps and their framebuffers, made on first use
+        self.m_cube = CSkyCube(ctx, stages["cube"], dummies)  # the sky it reflects (set_volume: its clouds)
 
     def _targets(self) -> None:
-        if self.maps:
+        if self.m_maps:
             return
         size = (MAP_SIZE, MAP_SIZE)
-        position = self.ctx.native_texture(size, F.RGBA16F)
-        normal = self.ctx.native_texture(size, F.RGBA8)
-        self.maps = [position, self.ctx.framebuffer([position]), normal, self.ctx.framebuffer([normal])]
+        position = self.m_ctx.native_texture(size, TEXTURE_FORMAT.RGBA16F)
+        normal = self.m_ctx.native_texture(size, TEXTURE_FORMAT.RGBA8)
+        self.m_maps = [position, self.m_ctx.framebuffer([position]), normal, self.m_ctx.framebuffer([normal])]
 
     def waves(self, seconds: float, textures: dict) -> dict:
         """The two wave passes after ``seconds`` (``textures``: ``WAVES`` loaded); the maps by the ocean's names."""
         self._targets()
-        position, position_fbo, normal, normal_fbo = self.maps
-        values = wave_values(self.water, seconds)
+        position, position_fbo, normal, normal_fbo = self.m_maps
+        values = wave_values(self.m_water, seconds)
 
-        def fill(c: dict) -> None:
-            gs.set_values(c.values(), values)
+        def fill(buffer: dict) -> None:
+            gs.set_values(buffer.values(), values)
 
         size = (MAP_SIZE, MAP_SIZE)
-        for draw, fbo, maps in ((self.position, position_fbo, textures),
-                                (self.normal, normal_fbo, {"cTexture2": position.native})):  # fmt: skip
-            draw_pass(self.ctx, fbo, lambda rp, sig, batch, d=draw, m=maps: d.prepare(rp, sig, batch, m, fill),
-                      lambda cb, d=draw: d.draw(cb, size))  # fmt: skip
+        for draw, fbo, maps in ((self.m_position, position_fbo, textures),
+                                (self.m_normal, normal_fbo, {"cTexture2": position.native})):  # fmt: skip
+            draw_pass(
+                self.m_ctx,
+                fbo,
+                lambda render_pass, signature, batch, pass_draw=draw, pass_maps=maps: pass_draw.prepare(
+                    render_pass, signature, batch, pass_maps, fill
+                ),
+                lambda command_buffer, pass_draw=draw: pass_draw.draw(command_buffer, size),
+            )
         return {"cTexture0": position.native, "cTexture1": normal.native}
 
     def sky_cube(self, fill):
-        """The sky the sea reflects, rendered for this frame (``sky2070.SkyCube``; ``fill``: the sky's values)."""
-        return self.cube.render(fill)
+        """The sky the sea reflects, rendered for this frame (``sky2070.CSkyCube``; ``fill``: the sky's values)."""
+        return self.m_cube.render(fill)
 
-    def draws(self, rings: dict) -> list[tuple[FxcDraw, dict]]:
+    def draws(self, rings: dict) -> list[tuple[CFxcDraw, dict]]:
         """The ocean's draws for ``chunk_rings``: per level batches of at most ``PER_DRAW`` chunks, each draw with its
         instance count set and the constants it adds (the level's config and the chunks' corners)."""
         out = []
@@ -303,22 +330,28 @@ class Ocean2070:
             for k in range(0, len(corners), PER_DRAW):
                 batch = corners[k : k + PER_DRAW]
                 key = (level, k // PER_DRAW)
-                if key not in self.draw_calls:
-                    s = self.stages
-                    d = FxcDraw(self.ctx, Program(s.vs, s.ps), self.grids[level], s.state, self.dummies)
-                    d.fallbacks = dict(FALLBACKS)
-                    self.draw_calls[key] = d
-                draw = self.draw_calls[key]
-                draw.instances = len(batch)
+                if key not in self.m_draw_calls:
+                    stage = self.m_stages
+                    draw_call = CFxcDraw(
+                        self.m_ctx,
+                        CProgram(stage.vertex_stage, stage.pixel_stage),
+                        self.m_grids[level],
+                        stage.state,
+                        self.m_dummies,
+                    )
+                    draw_call.m_fallbacks = dict(FALLBACKS)
+                    self.m_draw_calls[key] = draw_call
+                draw = self.m_draw_calls[key]
+                draw.m_instances = len(batch)
                 rows = [[x, z, 0.0, 0.0] for x, z in batch] + [[0.0] * 4] * (PER_DRAW - len(batch))
                 out.append((draw, {**level_values(level), "cWaterChunkData": rows}))
         return out
 
     def release(self) -> None:
-        for d in (self.position, self.normal, *self.draw_calls.values()):
-            d.release()
-        self.draw_calls = {}
-        for t in (self.maps[3], self.maps[2], self.maps[1], self.maps[0]) if self.maps else ():
-            t.release()
-        self.maps = []
-        self.cube.release()
+        for draw_call in (self.m_position, self.m_normal, *self.m_draw_calls.values()):
+            draw_call.release()
+        self.m_draw_calls = {}
+        for texture in (self.m_maps[3], self.m_maps[2], self.m_maps[1], self.m_maps[0]) if self.m_maps else ():
+            texture.release()
+        self.m_maps = []
+        self.m_cube.release()

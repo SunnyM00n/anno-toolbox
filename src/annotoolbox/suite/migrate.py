@@ -30,7 +30,7 @@ NOT_INSTALLED = 1605
 OK_CODES = (0, 3010, NOT_INSTALLED)  # 3010: done, a restart is advised (never forced: /norestart)
 
 
-class Registry(Protocol):
+class IRegistry(Protocol):
     """The part of the current user's registry the logic reads."""
 
     def read(self, key: str, name: str) -> str | None: ...
@@ -38,7 +38,7 @@ class Registry(Protocol):
     def delete_tree(self, key: str) -> None: ...
 
 
-class WinRegistry:
+class CWinRegistry:
     """``HKEY_CURRENT_USER`` through ``winreg``; every failure is an absent value."""
 
     def read(self, key: str, name: str) -> str | None:
@@ -70,33 +70,33 @@ class WinRegistry:
             pass
 
 
-def leftover_code(reg: Registry) -> str:
+def leftover_code(registry: IRegistry) -> str:
     """The migration package's own product code, "" when there is none or the value is not a product code."""
-    code = (reg.read(MIGRATION_KEY, "ProductCode") or "").strip()
+    code = (registry.read(MIGRATION_KEY, "ProductCode") or "").strip()
     return code if PRODUCT_CODE.match(code) else ""
 
 
-def carried_shortcuts(reg: Registry) -> tuple[bool, bool] | None:
+def carried_shortcuts(registry: IRegistry) -> tuple[bool, bool] | None:
     """(Start menu entry, desktop shortcut) of the old install: the migration package's record, else the old install's
     own components when it is still there. None when neither says anything (a fresh install)."""
-    own = [reg.read(MIGRATION_KEY, n) for n in ("StartMenu", "Desktop")]
-    if any(v is not None for v in own):
+    own = [registry.read(MIGRATION_KEY, value_name) for value_name in ("StartMenu", "Desktop")]
+    if any(value is not None for value in own):
         return bool(own[0]), bool(own[1])
-    legacy = [reg.read(LEGACY_KEY, n) for n in ("StartMenu", "DesktopShortcut")]
-    if any(v is not None for v in legacy):
+    legacy = [registry.read(LEGACY_KEY, value_name) for value_name in ("StartMenu", "DesktopShortcut")]
+    if any(value is not None for value in legacy):
         return legacy[0] is not None, legacy[1] is not None
     return None
 
 
-def old_products(reg: Registry) -> list[str]:
+def old_products(registry: IRegistry) -> list[str]:
     """Product codes of Windows-installer entries of this program in the user's Apps list: the old installs."""
     found = []
-    for name in reg.subkeys(UNINSTALL_KEY):
+    for name in registry.subkeys(UNINSTALL_KEY):
         key = UNINSTALL_KEY + "\\" + name
         if (
             PRODUCT_CODE.match(name)
-            and reg.read(key, "WindowsInstaller") == "1"
-            and (reg.read(key, "DisplayName") or "").startswith(PRODUCT_NAME)
+            and registry.read(key, "WindowsInstaller") == "1"
+            and (registry.read(key, "DisplayName") or "").startswith(PRODUCT_NAME)
         ):
             found.append(name)
     return found
@@ -133,14 +133,14 @@ def remove_product(
     return "busy"
 
 
-def remove_leftover(reg: Registry | None = None, run=_run, sleep=time.sleep) -> str:
+def remove_leftover(registry: IRegistry | None = None, run=_run, sleep=time.sleep) -> str:
     """The migration package's own entry removed quietly: "none" (nothing to do), "removed", "busy" or "failed". The
     record is deleted once it is gone, so the program asks no more."""
-    reg = reg or WinRegistry()
-    code = leftover_code(reg)
+    registry = registry or CWinRegistry()
+    code = leftover_code(registry)
     if not code:
         return "none"
     result = remove_product(code, run, sleep)
     if result == "removed":
-        reg.delete_tree(MIGRATION_KEY)
+        registry.delete_tree(MIGRATION_KEY)
     return result

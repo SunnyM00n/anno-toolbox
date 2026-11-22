@@ -18,7 +18,7 @@ from ..infra.i18n import tr
 from ..mod import modxml, xmlbuild
 from ..suite import islandguids
 from . import grow, pool, rules, template, variants
-from .mapdoc import MapDoc
+from .mapdoc import CMapDoc
 
 NEW_FOLDER = "data/mods/{mod}/maps/{name}/{name}"
 COMMENT = "a map written by the map editor"
@@ -27,7 +27,7 @@ _NAME = re.compile(r"^[a-z0-9_]+$")
 
 
 @dataclass(frozen=True)
-class Choice:
+class SChoice:
     """How a template is written: over the vanilla one, or as a new map ``name`` with the asset GUID ``guid``."""
 
     as_new: bool = False
@@ -36,30 +36,30 @@ class Choice:
     mod_id: str = "my-map"
 
 
-def _session_files(doc: MapDoc, target: str) -> dict[str, bytes]:
+def _session_files(doc: CMapDoc, target: str) -> dict[str, bytes]:
     """The map's ``.a7t`` and ``.a7te`` (grown, else the game's) under a new stem."""
-    stem, grown = doc.path.rsplit(".", 1)[0], doc.grown.files if doc.grown else {}
+    stem, grown = doc.m_path.rsplit(".", 1)[0], doc.m_grown.files if doc.m_grown else {}
     out = {}
     for suffix in (".a7t", ".a7te"):
-        data = grown.get(suffix) or (doc.tree.read(stem + suffix) if doc.tree.exists(stem + suffix) else None)
+        data = grown.get(suffix) or (doc.m_tree.read(stem + suffix) if doc.m_tree.exists(stem + suffix) else None)
         if data is not None:
             out[target + suffix] = data
     return out
 
 
-def _check_new(choice: Choice) -> None:
+def _check_new(choice: SChoice) -> None:
     if not _NAME.match(choice.name) or not choice.guid:
         raise ValueError(tr("maps.new_map_needs_name_lower"))
 
 
-def map_files(doc: MapDoc, choice: Choice | None = None) -> dict[str, bytes]:
+def map_files(doc: CMapDoc, choice: SChoice | None = None) -> dict[str, bytes]:
     """Game path -> bytes of everything the edited map needs in a mod (or, for an older game, in its archives)."""
-    choice = choice or Choice()
+    choice = choice or SChoice()
     if not doc.is_template:
-        return {doc.path: doc.render()}
-    stem = doc.path.rsplit(".", 1)[0]
-    grown = doc.grown.files if doc.grown else {}
-    ops = list(doc.grown.asset_ops) if doc.grown else []
+        return {doc.m_path: doc.render()}
+    stem = doc.m_path.rsplit(".", 1)[0]
+    grown = doc.m_grown.files if doc.m_grown else {}
+    ops = list(doc.m_grown.asset_ops) if doc.m_grown else []
     files: dict[str, bytes] = {}
     if choice.as_new:
         _check_new(choice)
@@ -68,58 +68,58 @@ def map_files(doc: MapDoc, choice: Choice | None = None) -> dict[str, bytes]:
         files[target + ".a7tinfo"] = doc.render()
         ops = [new_asset_op(doc, choice, target + ".a7t")]  # a new asset carries its horizon islands itself
     else:
-        files[doc.path] = doc.render()
+        files[doc.m_path] = doc.render()
         for suffix in (".a7t", ".a7te"):
             if suffix in grown:
                 files[stem + suffix] = grown[suffix]
     if ops:
-        files[pool.ASSET_FILES[doc.game]] = modxml.modops(ops, COMMENT).encode("utf-8")
+        files[pool.ASSET_FILES[doc.m_game]] = modxml.modops(ops, COMMENT).encode("utf-8")
     return files
 
 
 def variant_files(
-    doc: MapDoc, choice: Choice, guids: dict[str, int] | None = None
-) -> tuple[dict[str, bytes], dict[str, list[rules.Finding]]]:
+    doc: CMapDoc, choice: SChoice, guids: dict[str, int] | None = None
+) -> tuple[dict[str, bytes], dict[str, list[rules.SFinding]]]:
     """The three difficulties of the open map (taken as the medium one): as three new maps ``<name>_<level>`` with
     ``guids`` per level, or over a vanilla ``_medium`` map and its two siblings. Returns the files and each level's
     findings."""
     if not doc.is_template:
         raise ValueError(tr("maps.difficulties_map_templates_117_1800"))
-    if not choice.as_new and doc.grown is not None:
+    if not choice.as_new and doc.m_grown is not None:
         raise ValueError(tr("maps.grown_maps_difficulties_written_new"))
     files: dict[str, bytes] = {}
-    findings: dict[str, list[rules.Finding]] = {}
+    findings: dict[str, list[rules.SFinding]] = {}
     ops = []
     base = doc.render()
     for level in variants.LEVELS:
-        t = template.read(base)
-        t.elements = variants.derive(t.elements, level.key, doc.maps.classes)
-        findings[level.key] = rules.check(doc.facts(t.elements))
+        map_template = template.read(base)
+        map_template.elements = variants.derive(map_template.elements, level.key, doc.m_maps.m_classes)
+        findings[level.key] = rules.check(doc.facts(map_template.elements))
         if choice.as_new:
             own = replace(choice, name=f"{choice.name}_{level.key}", guid=(guids or {}).get(level.key, 0))
             _check_new(own)
             target = NEW_FOLDER.format(mod=own.mod_id, name=own.name)
             files.update(_session_files(doc, target))
-            files[target + ".a7tinfo"] = t.render()
+            files[target + ".a7tinfo"] = map_template.render()
             ops.append(new_asset_op(doc, own, target + ".a7t", level.island_size))
             continue
-        path = doc.path if level.key == "medium" else variants.sibling(doc.path, level.key)
-        if not path or not doc.tree.exists(path):
-            raise ValueError(tr("maps.no_vanilla_easy_hard_maps", path=doc.path))
-        files[path] = t.render()
+        path = doc.m_path if level.key == "medium" else variants.sibling(doc.m_path, level.key)
+        if not path or not doc.m_tree.exists(path):
+            raise ValueError(tr("maps.no_vanilla_easy_hard_maps", path=doc.m_path))
+        files[path] = map_template.render()
     if ops:
-        files[pool.ASSET_FILES[doc.game]] = modxml.modops(ops, COMMENT).encode("utf-8")
+        files[pool.ASSET_FILES[doc.m_game]] = modxml.modops(ops, COMMENT).encode("utf-8")
     return files, findings
 
 
-def new_asset_op(doc: MapDoc, choice: Choice, a7t: str, island_size: str = "") -> str:
+def new_asset_op(doc: CMapDoc, choice: SChoice, a7t: str, island_size: str = "") -> str:
     """The ModOp adding a ``MapTemplate`` asset for the new map: the vanilla one's copy (its horizon islands as the
     map has them: moved by a growth, the enlarged map's for an enlarged template) with the new GUID, name and file, no
     enlarged variant, ``island_size`` when given; after the vanilla asset."""
-    asset = doc.maps.asset_of(doc.path)
+    asset = doc.m_maps.asset_of(doc.m_path)
     if asset is None:
-        raise ValueError(tr("maps.no_maptemplate_asset_copy_new", path=doc.path))
-    text = doc.grown.asset_text if doc.grown and doc.grown.asset_text else asset.text
+        raise ValueError(tr("maps.no_maptemplate_asset_copy_new", path=doc.m_path))
+    text = doc.m_grown.asset_text if doc.m_grown and doc.m_grown.asset_text else asset.text
     if doc.is_enlarged():
         own = grow.horizon_list(text, grow.ENLARGED_HORIZONS)
         renamed = own.replace(grow.ENLARGED_HORIZONS, grow.HORIZONS)
@@ -143,7 +143,7 @@ def taken_guids(project) -> set[int]:
     taken = set(islandguids.held(project.island_guids))
     try:
         data = json.loads((project.asset_edits / f"{project.game}.json").read_text(encoding="utf-8"))
-        taken |= {int(g) for g in data.get("new", {})}
+        taken |= {int(guid) for guid in data.get("new", {})}
     except (OSError, ValueError, AttributeError, TypeError):
         pass
     return taken
@@ -156,7 +156,7 @@ def suggest_guid(project_range: tuple[int, int], taken: set[int], name: str, kep
         return kept[name]
     lo, hi = project_range
     used = taken | set(kept.values())
-    return next((g for g in range(hi, lo - 1, -1) if g not in used), 0)
+    return next((guid for guid in range(hi, lo - 1, -1) if guid not in used), 0)
 
 
 def guid_problem(guid: int, project_range: tuple[int, int], taken: set[int], kept: dict[str, int], name: str) -> str:
@@ -166,14 +166,16 @@ def guid_problem(guid: int, project_range: tuple[int, int], taken: set[int], kep
         return tr("maps.guid_lies_outside_projects_range", guid=guid, lo=lo, hi=hi)
     if guid in taken:
         return tr("maps.guid_belongs_another_asset_project", guid=guid)
-    other = next((n for n, g in kept.items() if g == guid and n != name), "")
+    other = next(
+        (other_name for other_name, other_guid in kept.items() if other_guid == guid and other_name != name), ""
+    )
     return tr("maps.guid_belongs_new_map", guid=guid, name=other) if other else ""
 
 
 def read_guids(folder: Path) -> dict[str, int]:
     path = folder / GUIDS
     try:
-        return {str(k): int(v) for k, v in json.loads(path.read_text(encoding="utf-8")).items()}
+        return {str(k): int(guid) for k, guid in json.loads(path.read_text(encoding="utf-8")).items()}
     except (OSError, ValueError, AttributeError, TypeError):  # no file, or one that is no list of GUIDs
         return {}
 
@@ -196,6 +198,6 @@ def write_mod(folder: Path, files: dict[str, bytes], mod_id: str, title: str, re
         dest = out / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
-    info = modxml.modinfo(mod_id, "Map", title, tr("maps.map_written_editor"), requires_new_game=True)
-    (out / "modinfo.json").write_text(info, encoding="utf-8", newline="\n")
+    mod_info = modxml.modinfo(mod_id, "Map", title, tr("maps.map_written_editor"), requires_new_game=True)
+    (out / "modinfo.json").write_text(mod_info, encoding="utf-8", newline="\n")
     return out

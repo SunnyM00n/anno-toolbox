@@ -7,7 +7,7 @@ import os
 from tests import memorygate
 
 
-class _Clock:
+class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
 
@@ -21,7 +21,7 @@ class _Clock:
 def test_the_gate_opens_when_memory_comes_back_and_at_its_limit(monkeypatch):
     monkeypatch.setenv("ANNO_TEST_MIN_FREE_MB", "1000")
     monkeypatch.setenv("ANNO_TEST_MEMORY_WAIT", "30")
-    clock = _Clock()
+    clock = FakeClock()
     readings = iter([200.0, 500.0, 1500.0])
     assert memorygate.wait(lambda: next(readings), clock.sleep, clock) == 2.0
     clock.now = 0.0

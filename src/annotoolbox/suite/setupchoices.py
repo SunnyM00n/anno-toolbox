@@ -2,7 +2,7 @@
 
 The page opens on the first start after an installation (``installevents`` leaves the mark) and, for a program that
 has no installer (a source run), when there was no settings file yet. Its answers go into the suite's settings;
-the games' folders are the ones ``Settings.load`` already found, each confirmed or changed here. ``docs/installer.md``,
+the games' folders are the ones ``CSettings.load`` already found, each confirmed or changed here. ``docs/installer.md``,
 "First-run setup".
 """
 
@@ -13,11 +13,11 @@ from pathlib import Path
 
 from ..infra import i18n
 from ..othergames import installs
-from .settings import Settings
+from .settings import CSettings
 
 
 @dataclass
-class Choices:
+class SChoices:
     language: str
     check_updates: bool
     start_menu: bool
@@ -26,7 +26,7 @@ class Choices:
     remove_old: tuple[str, ...] = ()  # product codes of old installs to uninstall
 
 
-def pending(settings: Settings, mark: bool, settings_existed: bool) -> bool:
+def pending(settings: CSettings, mark: bool, settings_existed: bool) -> bool:
     """Whether the setup page opens at this start: never once it was answered; yes after the installer's first start
     (``mark``) and for a person who never had a settings file."""
     return not settings.setup_done and (mark or not settings_existed)
@@ -41,14 +41,14 @@ def folder_problem(key: str, folder: str) -> str:
     folder = folder.strip()
     if not folder or installs.GAMES[key].is_install(Path(folder)):
         return ""
-    return Settings(**{key: folder}).missing(key)
+    return CSettings(**{key: folder}).missing(key)
 
 
-def defaults(settings: Settings, carried: tuple[bool, bool] | None = None) -> Choices:
-    """What the page starts from: the settings as they are (``Settings.load`` has found the games), the shortcut
+def defaults(settings: CSettings, carried: tuple[bool, bool] | None = None) -> SChoices:
+    """What the page starts from: the settings as they are (``CSettings.load`` has found the games), the shortcut
     choice of the old install when there was one, else both ticked."""
     start_menu, desktop = carried if carried is not None else (settings.shortcut_start_menu, settings.shortcut_desktop)
-    return Choices(
+    return SChoices(
         settings.language,
         settings.check_updates,
         start_menu,
@@ -57,7 +57,7 @@ def defaults(settings: Settings, carried: tuple[bool, bool] | None = None) -> Ch
     )
 
 
-def apply(settings: Settings, choices: Choices) -> list[str]:
+def apply(settings: CSettings, choices: SChoices) -> list[str]:
     """Write the answers into ``settings`` and mark the page answered. A folder that is not that game's install is
     left as it was and named in the result."""
     problems = []

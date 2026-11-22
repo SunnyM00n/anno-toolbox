@@ -1,7 +1,7 @@
 """The suite's Project window: which project is open, the mod it makes (id, name, version, game, GUID range), what
 each app holds for it, and the one build and install of the mod (``suite.project``; docs/tool-suite.md, C4).
 
-``ProjectDialog(shell, parts)`` is the window; the shell opens it from the switcher. Switching the project changes
+``CProjectDialog(shell, parts)`` is the window; the shell opens it from the switcher. Switching the project changes
 where the apps read and write their work from the next island or game they open.
 """
 
@@ -30,43 +30,45 @@ from PySide6.QtWidgets import (
 from ..infra.i18n import N_, english, number, tr
 from ..modloader.mods import DEPENDENCY_KINDS
 from ..sources import gametree
-from . import guidrangedialog, importdialog, importmeta, importresume, projectdeps
-from . import guidranges as gr
+from . import guidrangedialog, guidranges, importdialog, importmeta, importresume, projectdeps
 from . import project as projects
-from .background import Background, JobTalk
+from .background import CBackground, CJobTalk
 
 
-class ProjectDialog(QDialog):
-    def __init__(self, shell, parts: list[projects.Part]) -> None:
+class CProjectDialog(QDialog):
+    """The Project window: the open project's mod fields, what each app holds for it, and its build and install."""
+
+    def __init__(self, shell, parts: list[projects.SPart]) -> None:
         super().__init__(shell)
-        self.shell, self.parts = shell, parts
+        self.m_shell, self.m_parts = shell, parts
         self.setWindowTitle(tr("common.project"))
         self.resize(720, 620)
-        self.background = Background(self)
-        self.folder = QLabel()
-        self.mod_id, self.name, self.version = QLineEdit(), QLineEdit(), QLineEdit()
-        self.game = QComboBox()
+        self.m_background = CBackground(self)
+        self.m_folder = QLabel()
+        self.m_mod_id, self.m_name, self.m_version = QLineEdit(), QLineEdit(), QLineEdit()
+        self.m_game = QComboBox()
         for key in projects.ALL_GAMES:
-            self.game.addItem(gametree.GAMES[key], key)
-        self.guids = QLabel()
-        self.guid_sel = guidrangedialog.Selection(gr.CUSTOM, "", projects.DEFAULT_RANGE)
-        self.deps = {kind: QLineEdit() for kind in DEPENDENCY_KINDS}
-        self.bundle = QListWidget()
-        self.contents = QListWidget()
-        self.log = QPlainTextEdit(readOnly=True)
-        self.buttons: dict[str, QPushButton] = {}
-        self.talk: JobTalk | None = None  # the running import's progress and stop
-        self.stop_button = QPushButton(tr("common.stop"))
-        self.stop_button.clicked.connect(self.stop_import)
-        self.stop_button.hide()
-        self._importing: Path | None = None  # the folder of the import that runs
+            self.m_game.addItem(gametree.GAMES[key], key)
+        self.m_guid_range = QLabel()
+        self.m_guid_selection = guidrangedialog.SSelection(guidranges.CUSTOM, "", projects.DEFAULT_RANGE)
+        self.m_deps = {kind: QLineEdit() for kind in DEPENDENCY_KINDS}
+        self.m_bundle = QListWidget()
+        self.m_contents = QListWidget()
+        self.m_log = QPlainTextEdit(readOnly=True)
+        self.m_buttons: dict[str, QPushButton] = {}
+        self.m_talk: CJobTalk | None = None  # the running import's progress and stop
+        self.m_stop_button = QPushButton(tr("common.stop"))
+        self.m_stop_button.clicked.connect(self.stop_import)
+        self.m_stop_button.hide()
+        self._m_importing: Path | None = None  # the folder of the import that runs
+        self._m_is_building = False  # a build (or build and install) runs off the window's thread
         self._layout()
         self.load_current()
         QTimer.singleShot(0, self.offer_pending)  # a half-made import of an earlier run: resume or remove it
 
     def _layout(self) -> None:
         top = QHBoxLayout()
-        top.addWidget(self.folder, 1)
+        top.addWidget(self.m_folder, 1)
         for label, slot in (
             (N_("common.open"), self.ask_open),
             (N_("common.new"), self.ask_new),
@@ -75,15 +77,15 @@ class ProjectDialog(QDialog):
             top.addWidget(self._button(label, slot))
         top.addWidget(self._import_button())
         form = QFormLayout()
-        form.addRow(tr("common.mod_id"), self.mod_id)
-        form.addRow(tr("common.name"), self.name)
-        form.addRow(tr("common.version"), self.version)
-        form.addRow(tr("common.game"), self.game)
+        form.addRow(tr("common.mod_id"), self.m_mod_id)
+        form.addRow(tr("common.name"), self.m_name)
+        form.addRow(tr("common.version"), self.m_version)
+        form.addRow(tr("common.game"), self.m_game)
         guids = QHBoxLayout()
-        guids.addWidget(self.guids, 1)
+        guids.addWidget(self.m_guid_range, 1)
         guids.addWidget(self._button(N_("common.choose"), self.choose_range))
         form.addRow(tr("common.guid_range"), guids)
-        for kind, edit in self.deps.items():
+        for kind, edit in self.m_deps.items():
             edit.setPlaceholderText(
                 tr("common.mod_ids_separated_commas_loads")
                 if kind == "LoadAfter"
@@ -93,7 +95,7 @@ class ProjectDialog(QDialog):
                 tr("common.load_after") if kind == "LoadAfter" else kind, edit
             )  # i18n: ok (the other kinds are the loader's keys)
         carried = QHBoxLayout()
-        carried.addWidget(self.bundle, 1)
+        carried.addWidget(self.m_bundle, 1)
         side = QVBoxLayout()
         side.addWidget(self._button(N_("common.add_mod_folder"), self.add_bundle))
         side.addWidget(self._button(N_("common.remove"), self.remove_bundle))
@@ -106,22 +108,22 @@ class ProjectDialog(QDialog):
             (N_("common.build_install"), self.install),
         ):
             actions.addWidget(self._button(label, slot))
-        actions.addWidget(self.stop_button)
-        for key, one in self.handovers().items():
-            actions.addWidget(self._button(one.take_label, lambda key=key: self.take_handover(key)))
-            actions.addWidget(self._button(one.undo_label, lambda key=key: self.undo_handover(key)))
-        lay = QVBoxLayout(self)
-        lay.addLayout(top)
-        lay.addLayout(form)
-        lay.addWidget(QLabel(tr("common.what_apps_hold_projects_game")))
-        lay.addWidget(self.contents)
-        lay.addLayout(actions)
-        lay.addWidget(self.log, 1)
+        actions.addWidget(self.m_stop_button)
+        for key, handover in self.handovers().items():
+            actions.addWidget(self._button(handover.take_label, lambda key=key: self.take_handover(key)))
+            actions.addWidget(self._button(handover.undo_label, lambda key=key: self.undo_handover(key)))
+        layout = QVBoxLayout(self)
+        layout.addLayout(top)
+        layout.addLayout(form)
+        layout.addWidget(QLabel(tr("common.what_apps_hold_projects_game")))
+        layout.addWidget(self.m_contents)
+        layout.addLayout(actions)
+        layout.addWidget(self.m_log, 1)
 
     def _button(self, label: str, slot) -> QPushButton:
         button = QPushButton(tr(label))
         button.clicked.connect(lambda _c=False: slot())
-        self.buttons[english(label).replace("&&", "&")] = button  # the buttons' keys: their English words
+        self.m_buttons[english(label).replace("&&", "&")] = button  # the buttons' keys: their English words
         return button
 
     def _import_button(self) -> QPushButton:
@@ -139,7 +141,7 @@ class ProjectDialog(QDialog):
         menu.addSeparator()
         menu.addAction(tr("common.reimport_menu")).triggered.connect(lambda _c=False: self.ask_reimport())
         button.setMenu(menu)
-        self.buttons[english(N_("common.import_mod_button"))] = button
+        self.m_buttons[english(N_("common.import_mod_button"))] = button
         return button
 
     # the project shown
@@ -147,147 +149,160 @@ class ProjectDialog(QDialog):
         """The settings' project; one whose file does not read is shown as such, with Open, New and the workspace
         still there to choose another (Save, Build and Install wait for a project that reads)."""
         try:
-            self.load(projects.current(self.shell.settings))
+            self.load(projects.current(self.m_shell.m_settings))
         except ValueError as exc:
-            self.load(projects.Project(projects.folder_of(self.shell.settings)))
-            self.folder.setText(tr("common.open_another_project_use_workspace", error=exc))
+            self.load(projects.CProject(projects.folder_of(self.m_shell.m_settings)))
+            self.m_folder.setText(tr("common.open_another_project_use_workspace", error=exc))
             for key in ("Save", "Build mod", "Build & install"):
-                self.buttons[key].setEnabled(False)
+                self.m_buttons[key].setEnabled(False)
             self.say(str(exc))
 
-    def load(self, project: projects.Project) -> None:
-        self.project = project
+    def load(self, project: projects.CProject) -> None:
+        self.m_project = project
         self._busy(False)
         if project.defined:
-            self.folder.setText(str(project.folder))
+            self.m_folder.setText(str(project.folder))
         else:
-            self.folder.setText(tr("common.no_project_file_yet_defaults", folder=project.folder))
-        self.mod_id.setText(project.mod_id)
-        self.name.setText(project.name)
-        self.version.setText(project.version)
-        self.game.setCurrentIndex(max(0, self.game.findData(project.game)))
-        self.guid_sel = guidrangedialog.Selection(project.guid_choice, project.guid_source, project.guid_range)
-        for kind, edit in self.deps.items():
+            self.m_folder.setText(tr("common.no_project_file_yet_defaults", folder=project.folder))
+        self.m_mod_id.setText(project.mod_id)
+        self.m_name.setText(project.name)
+        self.m_version.setText(project.version)
+        self.m_game.setCurrentIndex(max(0, self.m_game.findData(project.game)))
+        self.m_guid_selection = guidrangedialog.SSelection(project.guid_choice, project.guid_source, project.guid_range)
+        for kind, edit in self.m_deps.items():
             edit.setText(", ".join(project.dependencies.get(kind, [])))
-        self.bundle.clear()
-        self.bundle.addItems([str(b) for b in project.bundle])
+        self.m_bundle.clear()
+        self.m_bundle.addItems([str(mod_folder) for mod_folder in project.bundle])
         self.show_range()
         self.show_contents()
 
     def add_bundle(self) -> None:
         name = QFileDialog.getExistingDirectory(self, tr("common.mod_folder_modinfo_json_build"))
         if name:
-            self.bundle.addItem(name)
+            self.m_bundle.addItem(name)
 
     def remove_bundle(self) -> None:
-        for item in self.bundle.selectedItems():
-            self.bundle.takeItem(self.bundle.row(item))
+        for item in self.m_bundle.selectedItems():
+            self.m_bundle.takeItem(self.m_bundle.row(item))
 
     def show_range(self) -> None:
-        lo, hi = self.guid_sel.span
+        first_guid, last_guid = self.m_guid_selection.span
         how = {
-            gr.OWN: N_("common.my_own_range_lower"),
-            gr.PUBLIC: N_("common.declared_free_range"),
-            gr.CUSTOM: N_("common.typed_in"),
+            guidranges.OWN: N_("common.my_own_range_lower"),
+            guidranges.PUBLIC: N_("common.declared_free_range"),
+            guidranges.CUSTOM: N_("common.typed_in"),
         }
-        self.guids.setText(f"{number(lo)} - {number(hi)} ({tr(how[self.guid_sel.choice])})")
+        self.m_guid_range.setText(
+            f"{number(first_guid)} - {number(last_guid)} ({tr(how[self.m_guid_selection.choice])})"
+        )
 
     def choose_range(self) -> None:
         """The three ways to a range (``guidrangedialog``): own, publicly declared, typed in."""
-        settings, game = self.shell.settings, self.game.currentData()
-        others = projects.other_ranges(settings, self.project.folder, game)
-        picked = guidrangedialog.ask(self, game, settings, others, self.guid_sel)
+        settings, game = self.m_shell.m_settings, self.m_game.currentData()
+        others = projects.other_ranges(settings, self.m_project.folder, game)
+        picked = guidrangedialog.ask(self, game, settings, others, self.m_guid_selection)
         if picked is not None:
-            self.guid_sel = picked
-            self.shell.save_settings()  # the own reserve is made on first use
+            self.m_guid_selection = picked
+            self.m_shell.save_settings()  # the own reserve is made on first use
             self.show_range()
 
     def show_contents(self) -> None:
-        self.contents.clear()
-        for part in self.parts:
+        self.m_contents.clear()
+        for part in self.m_parts:
             title = tr(part.title)
             try:
-                has = part.has_work(self.project)
+                has_edits = part.has_work(self.m_project)
             except (OSError, ValueError) as exc:
                 note = tr("common.part_not_read_error", part=title, error=exc)
             else:
-                if has:
+                if has_edits:
                     note = tr("common.edits_to_build", part=title)
                 else:
                     note = tr("common.part_nothing_game", part=title)
-            QListWidgetItem(note, self.contents)
+            QListWidgetItem(note, self.m_contents)
         self._show_handover()
 
     def handovers(self) -> dict:
-        """The apps' ways to take an imported mod's carried files (``Part.handover`` and its ``more``), by the part's key
+        """The apps' ways to take an imported mod's carried files (``SPart.handover`` and its ``more``), by the part's key
         (the further ways: ``<key>+<n>``)."""
         out = {}
-        for part in self.parts:
+        for part in self.m_parts:
             if part.handover is not None:
                 out[part.key] = part.handover
-                out.update({f"{part.key}+{n}": more for n, more in enumerate(part.handover.more, 1)})
+                out.update({f"{part.key}+{index}": more for index, more in enumerate(part.handover.more, 1)})
         return out
 
     def _show_handover(self) -> None:
         """Each hand-over's two buttons: the first for an imported project that can still hand over, the other for one
         that has."""
-        for one in self.handovers().values():
-            self.buttons[english(one.take_label)].setEnabled(one.can_take(self.project))
-            self.buttons[english(one.undo_label)].setEnabled(one.can_undo(self.project))
+        for handover in self.handovers().values():
+            self.m_buttons[english(handover.take_label)].setEnabled(handover.can_take(self.m_project))
+            self.m_buttons[english(handover.undo_label)].setEnabled(handover.can_undo(self.m_project))
 
-    def take_handover(self, key: str = "assets", wait: bool = False, confirm=None) -> None:
+    def take_handover(self, key: str = "assets", is_waiting: bool = False, confirm=None) -> None:
         """Hand the imported mod's carried files to the app ``key`` after the report of what that loses."""
         self._busy(True)
         extra = {"confirm": confirm} if confirm else {}
         self.handovers()[key].start_take(
-            self, self.project, self.shell.settings, self.background, self.say, self._handover_done, wait, **extra
+            self,
+            self.m_project,
+            self.m_shell.m_settings,
+            self.m_background,
+            self.say,
+            self._handover_done,
+            is_waiting,
+            **extra,
         )
 
     def undo_handover(self, key: str = "assets", confirm=None) -> None:
         extra = {"confirm": confirm} if confirm else {}
-        self.handovers()[key].undo(self, self.project, self.say, **extra)
+        self.handovers()[key].undo(self, self.m_project, self.say, **extra)
         self.show_contents()
 
     def _handover_done(self) -> None:
         self._busy(False)
         self.show_contents()
 
-    def edited(self) -> projects.Project:
+    def edited(self) -> projects.CProject:
         """The project as the fields say (``ValueError`` with the reason when they do not make one)."""
-        p = projects.Project(
-            self.project.folder,
-            mod_id=self.mod_id.text().strip(),
-            name=self.name.text().strip(),
-            version=self.version.text().strip() or "0.1.0",
-            game=self.game.currentData(),
-            category=self.project.category,
-            description=self.project.description,
-            guid_range=self.guid_sel.span,
-            guid_choice=self.guid_sel.choice,
-            guid_source=self.guid_sel.source,
-            dependencies=projectdeps.clean({k: _ids(e.text()) for k, e in self.deps.items()}),
-            bundle=[self.bundle.item(k).text() for k in range(self.bundle.count())],
-            defined=self.project.defined,
+        edited_project = projects.CProject(
+            self.m_project.folder,
+            mod_id=self.m_mod_id.text().strip(),
+            name=self.m_name.text().strip(),
+            version=self.m_version.text().strip() or "0.1.0",
+            game=self.m_game.currentData(),
+            category=self.m_project.category,
+            description=self.m_project.description,
+            guid_range=self.m_guid_selection.span,
+            guid_choice=self.m_guid_selection.choice,
+            guid_source=self.m_guid_selection.source,
+            dependencies=projectdeps.clean({kind: _ids(edit.text()) for kind, edit in self.m_deps.items()}),
+            bundle=[self.m_bundle.item(index).text() for index in range(self.m_bundle.count())],
+            defined=self.m_project.defined,
         )
-        p.validate()
-        problems = gr.check(p.game, p.guid_range, projects.other_ranges(self.shell.settings, p.folder, p.game))
-        if gr.blocking(problems):
-            raise ValueError(gr.blocking(problems)[0].text)
+        edited_project.validate()
+        problems = guidranges.check(
+            edited_project.game,
+            edited_project.guid_range,
+            projects.other_ranges(self.m_shell.m_settings, edited_project.folder, edited_project.game),
+        )
+        if guidranges.blocking(problems):
+            raise ValueError(guidranges.blocking(problems)[0].text)
         for problem in problems:
             self.say(tr("common.guid_range_problem", problem=problem.text))
-        return p
+        return edited_project
 
     # choosing a project
     def use(self, folder: Path) -> None:
         """Open the project in ``folder``; one that does not read is said and not made the settings' project."""
         try:
-            project = projects.Project.open(folder)
+            project = projects.CProject.open(folder)
         except ValueError as exc:
             QMessageBox.warning(self, tr("common.project"), str(exc))
             return
-        self.shell.settings.project = str(folder)
-        projects.remember(self.shell.settings, folder)
-        self.shell.save_settings()
+        self.m_shell.m_settings.project = str(folder)
+        projects.remember(self.m_shell.m_settings, folder)
+        self.m_shell.save_settings()
         self.load(project)
 
     def ask_open(self) -> None:
@@ -303,9 +318,9 @@ class ProjectDialog(QDialog):
         if (folder / projects.FILE).is_file():
             QMessageBox.information(self, tr("common.project"), tr("common.folder_holds_project_already_opened"))
         else:
-            made = projects.Project.open(folder)
+            made = projects.CProject.open(folder)
             try:
-                made.choose_range(gr.OWN, "", made.guid_range, self.shell.settings)
+                made.choose_range(guidranges.OWN, "", made.guid_range, self.m_shell.m_settings)
                 made.save()
             except (ValueError, OSError) as exc:
                 QMessageBox.warning(self, tr("common.project"), str(exc))
@@ -319,14 +334,14 @@ class ProjectDialog(QDialog):
         if folder:
             self.import_mod(source, folder)
 
-    def import_mod(self, source: Path, folder: Path, wait: bool = False) -> None:
+    def import_mod(self, source: Path, folder: Path, is_waiting: bool = False) -> None:
         """The import off the window's thread, its steps in the log, Stop ends it and keeps what was made for a
-        resume; the project opens when it is done (``wait``: in this thread, for a test)."""
-        path = self.shell.settings_path
+        resume; the project opens when it is done (``is_waiting``: in this thread, for a test)."""
+        path = self.m_shell.m_settings_path
         self._job(
             folder,
             lambda talk, done: importdialog.start(
-                talk, self.background, source, folder, self.shell.settings, done, wait, path
+                talk, self.m_background, source, folder, self.m_shell.m_settings, done, is_waiting, path
             ),
         )
 
@@ -338,91 +353,112 @@ class ProjectDialog(QDialog):
         if chosen and folder:
             self.import_archive(chosen[0], chosen[1], folder)
 
-    def import_archive(self, source: Path, game: str | None, folder: Path, wait: bool = False) -> None:
+    def import_archive(self, source: Path, game: str | None, folder: Path, is_waiting: bool = False) -> None:
         """The archive import off the window's thread, as ``import_mod`` (Stop removes the half-made project)."""
         self._job(
             folder,
             lambda talk, done: importdialog.start_archive(
-                talk, self.background, source, game, folder, self.shell.settings, done, wait
+                talk, self.m_background, source, game, folder, self.m_shell.m_settings, done, is_waiting
             ),
         )
 
-    def resume_import(self, folder: Path, wait: bool = False) -> None:
+    def resume_import(self, folder: Path, is_waiting: bool = False) -> None:
         """Continue a half-made import where it stopped."""
         self._job(
             folder,
             lambda talk, done: importdialog.start_resume(
-                talk, self.background, folder, self.shell.settings, done, wait, self.shell.settings_path
+                talk, self.m_background, folder, self.m_shell.m_settings, done, is_waiting, self.m_shell.m_settings_path
             ),
         )
 
     def _job(self, folder: Path, starter) -> None:
         self._busy(True)
-        self._importing = folder
-        self.talk = JobTalk(self)
-        self.talk.said.connect(self.say)
-        self.stop_button.setEnabled(True)
-        self.stop_button.show()
-        starter(self.talk, self._imported)
+        self._m_importing = folder
+        self.m_talk = CJobTalk(self)
+        self.m_talk.said.connect(self.say)
+        self.m_stop_button.setEnabled(True)
+        self.m_stop_button.show()
+        starter(self.m_talk, self._imported)
+
+    def can_close(self) -> bool:
+        """The Toolbox's first step of closing: a running import or build asks whether to close anyway."""
+        if self.m_talk is not None:
+            text = tr("common.import_running_close")
+        elif self._m_is_building:
+            text = tr("common.build_running_close")
+        else:
+            return True
+        return QMessageBox.question(self, tr("common.project"), text) == QMessageBox.StandardButton.Yes
+
+    def stop_work(self) -> None:
+        """The Toolbox closes after all agreed: the import stops at its next step and keeps its work (the next start
+        offers to resume it)."""
+        if self.m_talk is not None:
+            self.m_talk.stop()
 
     def stop_import(self) -> None:
-        if self.talk is not None:
-            self.talk.stop()
-            self.stop_button.setEnabled(False)
+        if self.m_talk is not None:
+            self.m_talk.stop()
+            self.m_stop_button.setEnabled(False)
 
     def _imported(self, result) -> None:
         self._ended()
-        for line in importdialog.explain(result, self._importing):
+        for line in importdialog.explain(result, self._m_importing):
             self.say(line)
         if not isinstance(result, Exception):
-            self.shell.save_settings()  # the remembered project and the own GUID reserve
+            self.m_shell.save_settings()  # the remembered project and the own GUID reserve
             self.use(result.folder)
 
     def _ended(self) -> None:
-        self.stop_button.hide()
-        if self.talk is not None:
-            self.talk.said.disconnect()
-            self.talk.deleteLater()
-            self.talk = None
+        self.m_stop_button.hide()
+        if self.m_talk is not None:
+            self.m_talk.said.disconnect()
+            self.m_talk.deleteLater()
+            self.m_talk = None
         self._busy(False)
 
-    def offer_pending(self, wait: bool = False) -> None:
+    def offer_pending(self, is_waiting: bool = False) -> None:
         """A half-made import (a stop that kept its work, or a run that ended in the middle): resume it, remove it, or
         leave it for the next start."""
-        registry = importdialog.registry_of(self.shell.settings_path)
+        registry = importdialog.registry_of(self.m_shell.m_settings_path)
         choice = importdialog.ask_pending(self, importresume.pending(registry))
         if choice is None:
             return
-        action, one = choice
+        action, pending_import = choice
         if action == "resume":
-            self.resume_import(one.folder, wait)
-        elif importresume.discard(one.folder, registry):
-            self.say(tr("common.import_discarded", folder=one.folder))
+            self.resume_import(pending_import.folder, is_waiting)
+        elif importresume.discard(pending_import.folder, registry):
+            self.say(tr("common.import_discarded", folder=pending_import.folder))
 
     def ask_reimport(self) -> None:
         """Compare the project's mod with its source again and take what changed (a file both sides changed asks)."""
-        meta = importmeta.read_meta(self.project.folder)
+        meta = importmeta.read_meta(self.m_project.folder)
         if meta is None:
             QMessageBox.information(
-                self, tr("common.project"), tr("common.reimport_not_imported", folder=self.project.folder)
+                self, tr("common.project"), tr("common.reimport_not_imported", folder=self.m_project.folder)
             )
             return
         source = Path(meta.source) if Path(meta.source).exists() else importdialog.ask_source(self)
         if source is not None:
             self.reimport(source)
 
-    def reimport(self, source: Path, choices=None, wait: bool = False) -> None:
+    def reimport(self, source: Path, choices=None, is_waiting: bool = False) -> None:
         """The comparison off the window's thread, then the question (``choices``: answered already, for a test), then
         the change."""
-        folder = self.project.folder
+        folder = self.m_project.folder
         self._job(
             folder,
             lambda talk, _done: importdialog.start_reimport_plan(
-                talk, self.background, folder, source, lambda made: self._planned(made, choices, wait), wait
+                talk,
+                self.m_background,
+                folder,
+                source,
+                lambda made: self._planned(made, choices, is_waiting),
+                is_waiting,
             ),
         )
 
-    def _planned(self, made, choices, wait: bool) -> None:
+    def _planned(self, made, choices, is_waiting: bool) -> None:
         self._ended()
         if isinstance(made, Exception):
             self.say(tr("common.import_failed", error=made))
@@ -435,9 +471,9 @@ class ProjectDialog(QDialog):
             made.dispose()
             return
         self._job(
-            made.folder,
+            made.m_folder,
             lambda talk, _done: importdialog.start_reimport_apply(
-                talk, self.background, made, choices, self._reapplied, wait
+                talk, self.m_background, made, choices, self._reapplied, is_waiting
             ),
         )
 
@@ -448,53 +484,55 @@ class ProjectDialog(QDialog):
         self.load_current()
 
     def use_workspace(self) -> None:
-        self.shell.settings.project = ""
-        self.shell.save_settings()
+        self.m_shell.m_settings.project = ""
+        self.m_shell.save_settings()
         self.load_current()
 
     # saving, building
     def save(self) -> bool:
         try:
-            self.project = self.edited()
-            self.project.save()
-            projects.remember(self.shell.settings, self.project.folder)
-            self.shell.save_settings()
+            self.m_project = self.edited()
+            self.m_project.save()
+            projects.remember(self.m_shell.m_settings, self.m_project.folder)
+            self.m_shell.save_settings()
         except (ValueError, OSError) as exc:
             QMessageBox.warning(self, tr("common.project"), str(exc))
             return False
-        self.load(self.project)
-        self.say(tr("common.saved_path", path=self.project.folder / projects.FILE))
+        self.load(self.m_project)
+        self.say(tr("common.saved_path", path=self.m_project.folder / projects.FILE))
         return True
 
     def say(self, text: str) -> None:
-        self.log.appendPlainText(text)
+        self.m_log.appendPlainText(text)
 
-    def build(self, then_install: bool = False, wait: bool = False) -> None:
-        """Save, then build the mod in the background (``wait``: in this thread, for a test)."""
+    def build(self, then_install: bool = False, is_waiting: bool = False) -> None:
+        """Save, then build the mod in the background (``is_waiting``: in this thread, for a test)."""
         if not self.save():
             return
-        project, settings = self.project, self.shell.settings
+        project, settings = self.m_project, self.m_shell.m_settings
         lines: list[str] = []
 
         def work():
-            result = projects.build(project, self.parts, settings, lines.append, self.shell.deliveries)
+            result = projects.build(project, self.m_parts, settings, lines.append, self.m_shell.m_deliveries)
             if then_install:
-                lines.append(projects.install_built(project, settings, self.shell.deliveries, lines.append))
+                lines.append(projects.install_built(project, settings, self.m_shell.m_deliveries, lines.append))
             return result
 
         self._busy(True)
-        if wait:
+        self._m_is_building = True
+        if is_waiting:
             return self._built(work_safely(work), lines)
-        self.background.run(work, lambda result: self._built(result, lines))
+        self.m_background.run(work, lambda result: self._built(result, lines))
 
     def install(self) -> None:
         self.build(then_install=True)
 
     def _busy(self, busy: bool) -> None:
-        for button in self.buttons.values():
+        for button in self.m_buttons.values():
             button.setEnabled(not busy)
 
     def _built(self, result, lines: list[str]) -> None:
+        self._m_is_building = False
         self._busy(False)
         for line in lines:
             self.say(line)
@@ -512,5 +550,5 @@ def _ids(text: str) -> list[str]:
 def work_safely(work):
     try:
         return work()
-    except Exception as exc:  # shown in the log, as the background run does
+    except Exception as exc:  # pattern: ok (a build failure is shown in the log, as the background run does)
         return exc

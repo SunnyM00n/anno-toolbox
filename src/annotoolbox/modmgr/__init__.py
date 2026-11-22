@@ -1,6 +1,6 @@
 """The mod manager: the installed mods of Anno 117 and 1800, their profiles, the order the mod loader gives them, what
-is wrong before the game starts and what the last start said. Start at ``manager.ModManager``; the window is
-``window.ModManagerWindow`` (the suite's Mods app). The user's guide is docs/mod-manager.md.
+is wrong before the game starts and what the last start said. Start at ``manager.CModManager``; the window is
+``window.CModManagerWindow`` (the suite's Mods app). The user's guide is docs/mod-manager.md.
 
 Qt-free parts, each one job (the profile file text, ``modloader.profilefile``, and the log reader,
 ``modloader.loadlog``, are the loader's own and shared with the lint and the scripts):

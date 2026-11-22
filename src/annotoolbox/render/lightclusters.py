@@ -29,7 +29,7 @@ AREA_DOUBLE_SIDED, AREA_NO_FOG = 2, 16  # AREA_LIGHT_FLAG_*
 
 
 @dataclass(frozen=True)
-class PointLight:
+class SPointLight:
     """A light as the shading reads it: its place, reach and colour (radiance: the config's colour times its
     strength)."""
 
@@ -43,7 +43,7 @@ class PointLight:
 
 
 @dataclass(frozen=True)
-class SpotLight:
+class SSpotLight:
     """A spot light: ``direction`` where it shines (unit), ``cos_inner`` / ``cos_outer`` its cone's half-angle
     cosines, ``falloff`` the config's exponent (written, not read by the shading)."""
 
@@ -63,7 +63,7 @@ class SpotLight:
 
 
 @dataclass(frozen=True)
-class AreaLight:
+class SAreaLight:
     """An area light: ``shape`` the shader's type (1 quad, 2 ellipse, 3 sphere, 4 star, 5 line), ``axis1`` and
     ``axis2`` its data vectors (half axes; a line's half length and its thickness in ``axis2[0]``), ``flags``."""
 
@@ -82,7 +82,7 @@ class AreaLight:
 
 
 @dataclass
-class Clusters:
+class SClusters:
     points: np.ndarray  # float32 [n * 12]
     cells: np.ndarray  # uint32 [cells * 2]: (first index, counts)
     indices: np.ndarray  # uint32 [128, 512]
@@ -91,7 +91,7 @@ class Clusters:
     areas: np.ndarray | None = None  # float32 [4096 * 4]: cAreaLights
 
 
-class Lamp(Protocol):
+class ILamp(Protocol):
     """A config's LIGHT as ``from_config`` reads it (the viewer's scene record has these fields)."""
 
     kind: int  # the config's Type
@@ -103,54 +103,54 @@ class Lamp(Protocol):
     no_fog: bool
 
 
-def from_config(lamp: Lamp, place, color):
+def from_config(lamp: ILamp, place, color):
     """The engine's light for a config's LIGHT ``lamp`` at ``place`` (4 x 4, column vectors, in the scene's axes) in
     ``color``: a spot shines along local -y; an area light spans local x and z and faces -y (frame-117-viewer.md 1).
     None for a type the engine's layout has no reading of."""
     found = CONFIG_KINDS.get(int(lamp.kind))
     if found is None:
         return None
-    m = np.asarray(place, float)
-    at, color = tuple(m[:3, 3]), tuple(float(c) for c in color)
+    matrix = np.asarray(place, float)
+    position, color = tuple(matrix[:3, 3]), tuple(float(component) for component in color)
     if found[0] == "point":
-        return PointLight(at, float(lamp.range), color)
+        return SPointLight(position, float(lamp.range), color)
     if found[0] == "spot":
-        axis = -m[:3, 1] / max(np.linalg.norm(m[:3, 1]), 1e-9)
-        inner, outer = (math.cos(float(a) / 2) for a in lamp.cone)
-        return SpotLight(at, float(lamp.range), color, tuple(axis), inner, outer, float(lamp.falloff))
+        axis = -matrix[:3, 1] / max(np.linalg.norm(matrix[:3, 1]), 1e-9)
+        inner, outer = (math.cos(float(angle) / 2) for angle in lamp.cone)
+        return SSpotLight(position, float(lamp.range), color, tuple(axis), inner, outer, float(lamp.falloff))
     width, height = lamp.size
     flags = (AREA_DOUBLE_SIDED if lamp.double_sided else 0) | (AREA_NO_FOG if lamp.no_fog else 0)
-    x = m[:3, 0] * width / 2
+    x = matrix[:3, 0] * width / 2
     # the second axis is -z: the shader lights the side away from cross(axis1, axis2), so the light faces -y as a spot
-    axis2 = (float(height), 0.0, 0.0) if found[1] == 5 else tuple(-m[:3, 2] * height / 2)
-    return AreaLight(at, float(lamp.range), color, found[1], tuple(x), axis2, flags)
+    axis2 = (float(height), 0.0, 0.0) if found[1] == 5 else tuple(-matrix[:3, 2] * height / 2)
+    return SAreaLight(position, float(lamp.range), color, found[1], tuple(x), axis2, flags)
 
 
 def slice_of(z: float, far: float) -> int:
     """``GetClusterSlice``: the first slice to 20 ahead, the other 15 spread to the far plane on a square root."""
     if z < NEAR_SLICE:
         return 0
-    t = min(max((z - NEAR_SLICE) / max(far - NEAR_SLICE, 1e-6), 0.0), 1.0)
-    return min(int(math.sqrt(t) * CELLS[2] + 1), CELLS[2] - 1)
+    fraction = min(max((z - NEAR_SLICE) / max(far - NEAR_SLICE, 1e-6), 0.0), 1.0)
+    return min(int(math.sqrt(fraction) * CELLS[2] + 1), CELLS[2] - 1)
 
 
 def _cell_range(light, view: np.ndarray, view_proj: np.ndarray, far: float):
     """The cells (x, y, z ranges) a light's sphere touches, or None when it lies behind the camera."""
-    p = np.asarray(light.position, float)
-    r = float(light.range)
-    zc = float(np.r_[p, 1.0] @ view[:, 2])
-    if zc + r <= 0:
+    position = np.asarray(light.position, float)
+    reach = float(light.range)
+    view_z = float(np.r_[position, 1.0] @ view[:, 2])
+    if view_z + reach <= 0:
         return None
-    offsets = np.array([[x, y, z] for x in (-r, r) for y in (-r, r) for z in (-r, r)])
-    clip = np.c_[p + offsets, np.ones(8)] @ view_proj
+    offsets = np.array([[x, y, z] for x in (-reach, reach) for y in (-reach, reach) for z in (-reach, reach)])
+    clip = np.c_[position + offsets, np.ones(8)] @ view_proj
     if np.any(clip[:, 3] <= 1e-4):  # the camera inside the bounds: every cell across
-        x0, x1, y0, y1 = 0, CELLS[0] - 1, 0, CELLS[1] - 1
+        min_x, max_x, min_y, max_y = 0, CELLS[0] - 1, 0, CELLS[1] - 1
     else:
         ndc = clip[:, :2] / clip[:, 3:4]
-        lo = np.clip((ndc.min(0) * 0.5 + 0.5) * CELLS[:2], 0, np.array(CELLS[:2]) - 1).astype(int)
-        hi = np.clip((ndc.max(0) * 0.5 + 0.5) * CELLS[:2], 0, np.array(CELLS[:2]) - 1).astype(int)
-        x0, y0, x1, y1 = lo[0], lo[1], hi[0], hi[1]
-    return (x0, x1), (y0, y1), (slice_of(max(zc - r, 0.0), far), slice_of(zc + r, far))
+        low = np.clip((ndc.min(0) * 0.5 + 0.5) * CELLS[:2], 0, np.array(CELLS[:2]) - 1).astype(int)
+        high = np.clip((ndc.max(0) * 0.5 + 0.5) * CELLS[:2], 0, np.array(CELLS[:2]) - 1).astype(int)
+        min_x, min_y, max_x, max_y = low[0], low[1], high[0], high[1]
+    return (min_x, max_x), (min_y, max_y), (slice_of(max(view_z - reach, 0.0), far), slice_of(view_z + reach, far))
 
 
 def _lists(lights: list) -> dict[str, list]:
@@ -160,7 +160,7 @@ def _lists(lights: list) -> dict[str, list]:
         out[light.kind].append(light)
     limits = {"point": COUNT_BITS["point"][1], "spot": LIGHT_ARRAY // FLOATS_PER["spot"],
               "area": LIGHT_ARRAY // FLOATS_PER["area"]}  # fmt: skip
-    return {k: v[: limits[k]] for k, v in out.items()}
+    return {k: values[: limits[k]] for k, values in out.items()}
 
 
 def _packed(lights: list, kind: str, floats: int) -> np.ndarray:
@@ -171,20 +171,20 @@ def _packed(lights: list, kind: str, floats: int) -> np.ndarray:
     return data
 
 
-def build(lights: list, view: np.ndarray, proj: np.ndarray, far: float) -> Clusters:
-    """The buffers for ``lights`` seen by a camera (``view``, ``proj``: the engine's, row vectors)."""
+def build(lights: list, view: np.ndarray, projection: np.ndarray, far: float) -> SClusters:
+    """The buffers for ``lights`` seen by a camera (``view``, ``projection``: the engine's, row vectors)."""
     kinds = _lists(lights)
     per_cell: dict[int, dict[str, list[int]]] = {}
-    view_proj = view @ proj
+    view_proj = view @ projection
     for kind, found_lights in kinds.items():
         for k, light in enumerate(found_lights):
             found = _cell_range(light, view, view_proj, far)
             if found is None:
                 continue
-            (x0, x1), (y0, y1), (z0, z1) = found
-            for z in range(z0, z1 + 1):
-                for y in range(y0, y1 + 1):
-                    for x in range(x0, x1 + 1):
+            (min_x, max_x), (min_y, max_y), (min_z, max_z) = found
+            for z in range(min_z, max_z + 1):
+                for y in range(min_y, max_y + 1):
+                    for x in range(min_x, max_x + 1):
                         cell = per_cell.setdefault(x + y * CELLS[0] + z * CELLS[0] * CELLS[1], {})
                         cell.setdefault(kind, []).append(k)
     cells = np.zeros((CELLS[0] * CELLS[1] * CELLS[2], 2), np.uint32)
@@ -203,5 +203,5 @@ def build(lights: list, view: np.ndarray, proj: np.ndarray, far: float) -> Clust
     indices = np.zeros(INDEX_SIZE[0] * INDEX_SIZE[1], np.uint32)
     indices[: len(flat)] = flat
     points = _packed(kinds["point"], "point", max(1, len(kinds["point"])) * FLOATS_PER["point"])
-    return Clusters(points, cells.ravel(), indices.reshape(INDEX_SIZE[1], INDEX_SIZE[0]), len(kinds["point"]),
+    return SClusters(points, cells.ravel(), indices.reshape(INDEX_SIZE[1], INDEX_SIZE[0]), len(kinds["point"]),
                     _packed(kinds["spot"], "spot", LIGHT_ARRAY), _packed(kinds["area"], "area", LIGHT_ARRAY))  # fmt: skip

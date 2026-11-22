@@ -1,7 +1,7 @@
 """A game's UI files: the generated Phoenix files of a game tree by kind and name, decoded on demand, the layout
 versions new objects are written in, who names a file, and the game's texts by line id.
 
-``UiFiles(tree, cache)`` is the entry over a ``sources.gametree.GameTree`` (117, 1800, or a folder of loose files);
+``CUiFiles(tree, cache)`` is the entry over a ``sources.gametree.CGameTree`` (117, 1800, or a folder of loose files);
 ``scan_users`` reads every widget file and scene once (in the background) and is kept beside the game's index;
 ``names_of`` gives the History Editions' instance names from the editor's documents. docs/formats/phoenix-scene-format.md
 is the format; docs/ui/117/scenes.md the scenes.
@@ -39,7 +39,7 @@ LOADED = 600  # decoded files kept: one scene places a few hundred, and a smalle
 
 
 @dataclass
-class Entry:
+class SEntry:
     path: str
     key: str  # the GUID, or a scene's state name
     kind: str  # two letters: WI, SC, IM ...
@@ -62,7 +62,7 @@ def generated_prefix(tree) -> str:
         return phoenix.GENERATED
     if tree.under(GAMEDATA):
         return GAMEDATA
-    found = next((p for p in tree.paths if "/studio/generated/" in p), "")
+    found = next((path for path in tree.m_paths if "/studio/generated/" in path), "")
     return found[: found.index("/studio/generated/") + len("/studio/generated/")] if found else phoenix.GENERATED
 
 
@@ -74,69 +74,69 @@ def is_guid(text: str) -> bool:
     return len(text) == 36
 
 
-class UiFiles:
-    """The UI files of one game tree; ``entries`` by key, ``load(key)`` the decoded file (``phoenixread.Decoder``)."""
+class CUiFiles:
+    """The UI files of one game tree; ``entries`` by key, ``load(key)`` the decoded file (``phoenixread.CDecoder``)."""
 
     def __init__(self, tree, cache: Path | None = None, schema: dict | None = None) -> None:
-        self.tree, self.cache = tree, Path(cache) if cache else None
-        self.schema = schema or phoenix.load_schema()
-        self.prefix = generated_prefix(tree)
-        self.entries: dict[str, Entry] = {}
-        self.versions: dict[str, str] = {}
-        self.users: dict[str, list[tuple[str, str]]] = {}  # key -> (file key, instance name) naming it
-        self.prototypes: dict[str, str] = {}  # an instance kind -> a file that has one to copy
-        self.extra: dict[str, bytes] = {}  # files over the game's: a project's copies and new files, by key
-        self.live: dict[str, dict] = {}  # the trees of files open for editing: what the preview places
-        self._loaded: OrderedDict[str, phoenixread.Decoder] = OrderedDict()
-        self._lock = threading.Lock()
-        self._texts: dict[str, dict[int, str]] = {}
-        self._documents: dict[str, str] | None = None  # file GUID -> its editor document (the History Editions)
-        self._names: dict[str, dict[str, str]] = {}
+        self.m_tree, self.m_cache = tree, Path(cache) if cache else None
+        self.m_schema = schema or phoenix.load_schema()
+        self.m_prefix = generated_prefix(tree)
+        self.m_entries: dict[str, SEntry] = {}
+        self.m_versions: dict[str, str] = {}
+        self.m_users: dict[str, list[tuple[str, str]]] = {}  # key -> (file key, instance name) naming it
+        self.m_prototypes: dict[str, str] = {}  # an instance kind -> a file that has one to copy
+        self.m_extra: dict[str, bytes] = {}  # files over the game's: a project's copies and new files, by key
+        self.m_live: dict[str, dict] = {}  # the trees of files open for editing: what the preview places
+        self._m_loaded: OrderedDict[str, phoenixread.CDecoder] = OrderedDict()
+        self._m_lock = threading.Lock()
+        self._m_texts: dict[str, dict[int, str]] = {}
+        self._m_documents: dict[str, str] | None = None  # file GUID -> its editor document (the History Editions)
+        self._m_names: dict[str, dict[str, str]] = {}
         self._index()
 
     def _cache_file(self, name: str) -> Path | None:
-        return self.cache / name if self.cache else None
+        return self.m_cache / name if self.m_cache else None
 
     def _read_cache(self, name: str) -> dict | None:
         path = self._cache_file(name)
         if path is None:
             return None
-        return buildcache.read_kept(path, {"format": CACHE_FORMAT, "stamp": self.tree.stamp})
+        return buildcache.read_kept(path, {"format": CACHE_FORMAT, "stamp": self.m_tree.m_stamp})
 
     def _write_cache(self, name: str, data: dict) -> None:
         path = self._cache_file(name)
-        if path is None or not self.tree.stamp:
+        if path is None or not self.m_tree.m_stamp:
             return
-        buildcache.write_kept(path, {"format": CACHE_FORMAT, "stamp": self.tree.stamp, **data})
+        buildcache.write_kept(path, {"format": CACHE_FORMAT, "stamp": self.m_tree.m_stamp, **data})
 
     def _index(self) -> None:
         cached = self._read_cache("ui-index.json")
         if cached is not None:
-            self.entries = {e["key"]: Entry(**e) for e in cached["entries"]}
-            self.versions = cached["versions"]
+            self.m_entries = {entry["key"]: SEntry(**entry) for entry in cached["entries"]}
+            self.m_versions = cached["versions"]
             return
         tables = []
-        for path in self.tree.under(self.prefix):
-            data = self.tree.read(path)
+        for path in self.m_tree.under(self.m_prefix):
+            data = self.m_tree.read(path)
             if not data.startswith(b"PHX"):
                 continue
             key = key_of(path)
-            self.entries[key] = Entry(path, key, data[3:5].decode("latin1"), len(data))
+            self.m_entries[key] = SEntry(path, key, data[3:5].decode("latin1"), len(data))
             try:
                 tables.append(phoenixread.type_table(data))
             except (ValueError, EOFError, IndexError):
                 continue
-        self.versions = phoenix.layout_versions(tables)
-        self._write_cache("ui-index.json", {"entries": [asdict(e) for e in self.entries.values()],
-                                            "versions": self.versions})  # fmt: skip
+        self.m_versions = phoenix.layout_versions(tables)
+        self._write_cache("ui-index.json", {"entries": [asdict(entry) for entry in self.m_entries.values()],
+                                            "versions": self.m_versions})  # fmt: skip
 
-    def of_kind(self, *kinds: str) -> list[Entry]:
-        return sorted((e for e in self.entries.values() if e.kind in kinds), key=lambda e: e.key)
+    def of_kind(self, *kinds: str) -> list[SEntry]:
+        return sorted((entry for entry in self.m_entries.values() if entry.kind in kinds), key=lambda entry: entry.key)
 
     def read(self, key: str) -> bytes:
-        if key in self.extra:
-            return self.extra[key]
-        return self.tree.read(self.entries[key].path)
+        if key in self.m_extra:
+            return self.m_extra[key]
+        return self.m_tree.read(self.m_entries[key].path)
 
     def lay_over(self, files: dict[str, bytes]) -> None:
         """A project's UI files (game path -> bytes) over the game's: they are read instead, new ones are listed."""
@@ -144,43 +144,43 @@ class UiFiles:
             key = key_of(path)
             if not data.startswith(b"PHX"):
                 continue
-            self.extra[key] = data
-            self.entries[key] = Entry(path, key, data[3:5].decode("latin1"), len(data))
-            with self._lock:
-                self._loaded.pop(key, None)
+            self.m_extra[key] = data
+            self.m_entries[key] = SEntry(path, key, data[3:5].decode("latin1"), len(data))
+            with self._m_lock:
+                self._m_loaded.pop(key, None)
 
     def drop_copy(self, key: str) -> None:
         """Forget the project's copy of a file and its open tree: the game's own is read and decoded again."""
-        self.extra.pop(key, None)
-        self.live.pop(key, None)
-        with self._lock:
-            self._loaded.pop(key, None)
+        self.m_extra.pop(key, None)
+        self.m_live.pop(key, None)
+        with self._m_lock:
+            self._m_loaded.pop(key, None)
 
-    def load(self, key: str) -> phoenixread.Decoder:
+    def load(self, key: str) -> phoenixread.CDecoder:
         """The decoded file ``key`` (kept: the next call returns the same tree, until it is dropped). The window and
         the preview's layout read files on two threads: one decoder per file for both."""
-        with self._lock:
-            hit = self._loaded.get(key)
+        with self._m_lock:
+            hit = self._m_loaded.get(key)
             if hit is not None:
-                self._loaded.move_to_end(key)
+                self._m_loaded.move_to_end(key)
                 return hit
-        d = phoenixread.load(self.read(key), self.schema)  # decoded outside the lock: the other thread goes on
-        d.log = []  # the field-by-field reading is for the decode tools; kept it would hold most of the memory
-        with self._lock:
-            d = self._loaded.setdefault(key, d)
-            self._loaded.move_to_end(key)
-            while len(self._loaded) > LOADED:
-                self._loaded.popitem(last=False)
-        return d
+        decoder = phoenixread.load(self.read(key), self.m_schema)  # decoded outside the lock: the other thread goes on
+        decoder.m_log = []  # the field-by-field reading is for the decode tools; kept it would hold most of the memory
+        with self._m_lock:
+            decoder = self._m_loaded.setdefault(key, decoder)
+            self._m_loaded.move_to_end(key)
+            while len(self._m_loaded) > LOADED:
+                self._m_loaded.popitem(last=False)
+        return decoder
 
     def root(self, key: str | None) -> dict | None:
         """The decoded root of a file, or None when the game has no such file or it does not decode."""
-        if key in self.live:
-            return self.live[key]
-        if not key or key not in self.entries:
+        if key in self.m_live:
+            return self.m_live[key]
+        if not key or key not in self.m_entries:
             return None
         try:
-            return self.load(key).root
+            return self.load(key).m_root
         except (ValueError, EOFError, KeyError, IndexError):
             return None
 
@@ -189,78 +189,89 @@ class UiFiles:
         store none (the History Editions); empty where there is no document (docs/ui-editor.md "The History
         Editions")."""
         guid = str(uuid.UUID(bytes_le=root["guid"])) if root.get("guid") else ""
-        if guid not in self._names:
-            if self._documents is None:
-                found = (p for p in self.tree.under(STUDIO) if p.endswith(".json") and not p.startswith(GAMEDATA))
-                self._documents = {p[-41:-5].lower(): p for p in found if is_guid(p[-41:-5])}
-            path = self._documents.get(guid)
-            self._names[guid] = _document_names(json.loads(self.tree.read(path))) if path else {}
-        return self._names[guid]
+        if guid not in self._m_names:
+            if self._m_documents is None:
+                found = (
+                    document_path
+                    for document_path in self.m_tree.under(STUDIO)
+                    if document_path.endswith(".json") and not document_path.startswith(GAMEDATA)
+                )
+                self._m_documents = {
+                    document_path[-41:-5].lower(): document_path
+                    for document_path in found
+                    if is_guid(document_path[-41:-5])
+                }
+            path = self._m_documents.get(guid)
+            try:
+                self._m_names[guid] = _document_names(json.loads(self.m_tree.read(path))) if path else {}
+            except ValueError:  # a document that does not read only costs the names: the file opens without them
+                self._m_names[guid] = {}
+        return self._m_names[guid]
 
     def title(self, key: str) -> str:
         """What a list shows for a file: a scene's name, a widget file's names as its instances give them."""
-        entry = self.entries.get(key)
+        entry = self.m_entries.get(key)
         if entry is None:
             return key
         if not is_guid(key):
             return key
-        names = sorted({n for _, n in self.users.get(key, []) if n})
+        names = sorted({name for _, name in self.m_users.get(key, []) if name})
         return f"{', '.join(names[:3])}{' ...' if len(names) > 3 else ''}" if names else key
 
     def scan_users(self) -> dict[str, list[tuple[str, str]]]:
         """Who names each file: (file, instance name) for every container that places it; read once, kept."""
         cached = self._read_cache("ui-users.json")
         if cached is not None:
-            self.users = {k: [tuple(x) for x in v] for k, v in cached["users"].items()}
-            return self.users
+            self.m_users = {k: [tuple(pair) for pair in pairs] for k, pairs in cached["users"].items()}
+            return self.m_users
         users: dict[str, list[tuple[str, str]]] = {}
         for entry in self.of_kind(*EDITABLE):
             try:
-                root = phoenixread.load(self.read(entry.key), self.schema).root
+                root = phoenixread.load(self.read(entry.key), self.m_schema).m_root
             except (ValueError, EOFError, KeyError, IndexError):
                 continue
-            for el in elements.tree(root).walk():
-                target = el.template if el.kind == "container" else None
+            for element in elements.tree(root).walk():
+                target = element.template if element.kind == "container" else None
                 if target:
-                    users.setdefault(target, []).append((entry.key, el.name))
-            wtype = fields.get(root, "WidgetType")
-            if wtype:
-                users.setdefault(wtype, []).append((entry.key, ""))
-        self.users = users
+                    users.setdefault(target, []).append((entry.key, element.name))
+            widget_type = fields.get(root, "WidgetType")
+            if widget_type:
+                users.setdefault(widget_type, []).append((entry.key, ""))
+        self.m_users = users
         self._write_cache("ui-users.json", {"users": users})
         return users
 
     def scene_states(self, paths: Iterable[str]) -> list[str]:
         """The UI states whose scenes show the widget files at ``paths`` (their GUID names), through the files that
         place them (``scan_users`` first; before it nothing is known). The live link's scene reload names them."""
-        todo = [p.rsplit("/", 1)[-1].lower() for p in paths]
+        todo = [path.rsplit("/", 1)[-1].lower() for path in paths]
         seen, states = set(todo), []
         while todo:
-            for user, _name in self.users.get(todo.pop(), []):
-                entry = self.entries.get(user)
+            for user, _name in self.m_users.get(todo.pop(), []):
+                entry = self.m_entries.get(user)
                 if entry is not None and entry.is_scene:
                     states.append(linkscenes.scene_state(entry.path))
                 elif user not in seen:
                     seen.add(user)
                     todo.append(user)
-        return list(dict.fromkeys(s for s in states if s))
+        return list(dict.fromkeys(state for state in states if state))
 
     def texts(self, language: str = "english") -> dict[int, str]:
         """The game's texts by line id (a label's ``LocalizationId`` is the id's 16 hex digits; 1800's a decimal
         number)."""
-        if language not in self._texts:
+        if language not in self._m_texts:
             out: dict[int, str] = {}
             for pattern in TEXTS:
                 path = pattern.format(language=language)
-                if self.tree.exists(path):
-                    text = self.tree.read(path).decode("utf-8", "replace")
-                    for m in re.finditer(
+                if self.m_tree.exists(path):
+                    text = self.m_tree.read(path).decode("utf-8", "replace")
+                    for match in re.finditer(
                         r"<(?:LineId|GUID)>(-?\d+)</(?:LineId|GUID)>\s*<Text>(.*?)</Text>", text, re.S
                     ):
-                        out[int(m.group(1))] = _unescape(m.group(2))
+                        out[int(match.group(1))] = _unescape(match.group(2))
                     break
-            self._texts[language] = out
-        return self._texts[language]
+            self._m_texts[language] = out
+        return self._m_texts[language]
 
     def text_of(self, loca_id: str, language: str = "english") -> str | None:
         """The text of a ``LocalizationId`` ("A010 D068 1398 4305"), None when the game has none."""

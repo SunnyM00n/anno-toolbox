@@ -1,15 +1,19 @@
 # Mod diff
 
-The Toolbox's Mod diff app shows what a mod really changes in the game, how two versions of a mod differ, where mods
-collide, and what an old game's archive mod replaces. This page is the user's guide and the design in one place. The
-app is the package `moddiff/`. It is opened from the suite like the other apps (`docs/suite.md`), or from the Mods app
-(see below).
+The Toolbox's Mod diff app shows what a mod really changes in the game.
+It also shows how two versions of a mod differ, where mods collide, and what an old game's archive mod replaces.
+This page is the user's guide and the design in one place.
+The app is the package `moddiff/`.
+It is opened from the suite like the other apps (`docs/suite.md`), or from the Mods app (see below).
 
-The question behind every view is the **effective result**. The mod's patches are not read as text. They are run on
-the game's files by the mod loader's rules (`modloader/`, `docs/engine-modloader.md`), in the loader's order and with
-the mods' options and conditions. The files that come out are then compared with the game's. What the loader would
-drop (an operation whose path selects nothing, a condition that does not hold) is therefore not a change, and is listed
-on its own tab.
+The question behind every view is the **effective result**.
+The mod's patches are not read as text.
+They are run on the game's files by the mod loader's rules (`modloader/`, `docs/engine-modloader.md`), in the
+loader's order and with the mods' options and conditions.
+The files that come out are then compared with the game's.
+What the loader would drop (an operation whose path selects nothing, a condition that does not hold) is therefore not
+a change.
+It is listed on its own tab.
 
 ## The six questions
 
@@ -22,40 +26,51 @@ on its own tab.
 | Archive or loose files | A community `.rda` archive (2070, 1404, 1701, 2205) or a folder of loose files against the game's own files | 2070, 1404, 1701, 2205, and loose folders of 117/1800 |
 | Two archives or folders | Each against the game, then what differs between the two results (two builds of an archive mod, two folders of loose files) | the same |
 
-2070, 1404, 1701 and 2205 have no mod loader that patches. Their mods replace whole files, so the comparison is file by
-file. The asset files and the text files among them are compared asset by asset and id by id, other XML by value, and
-the rest by size and bytes. Two archives are compared in the same way as two versions: each one against the game, then
-the two results against each other (`compare.two_archives`). Two archives of the same file name are told apart by their
-folder.
+2070, 1404, 1701 and 2205 have no mod loader that patches.
+Their mods replace whole files, so the comparison is file by file.
+The asset files and the text files among them are compared asset by asset and id by id.
+Other XML is compared by value, and the rest by size and bytes.
+Two archives are compared in the same way as two versions: each one against the game, then the two results against
+each other (`compare.two_archives`).
+Two archives of the same file name are told apart by their folder.
 
 ## What a change is
 
 A **target** is the thing a change belongs to: `(file, key)`.
 
-- In an asset file (117's and 1800's `assets.xml`, the old games' asset lists) the key is the asset's GUID. The target
-  is an asset that was **added**, **removed** or **changed**. A changed asset lists its **value changes**: the path
-  from the asset (`Values/Building/Upkeep`, `Values/Costs/Item[0]/Amount`), the value before and the value after. A
-  list that was only reordered shows no change. Entries that appeared or went show as `[+]` and `[-]`. The method is
-  the version diff's (`docs/2070-versions.md`, "How the diff compares"): `sources/valuediff.py`, shared with that
-  script. An added asset keeps its values compressed (a few hundred bytes: `Target.values()` gives them back), so a mod
-  that adds a hundred thousand assets holds them in tens of megabytes.
+- In an asset file (117's and 1800's `assets.xml`, the old games' asset lists) the key is the asset's GUID.
+  The target is an asset that was **added**, **removed** or **changed**.
+  A changed asset lists its **value changes**: the path from the asset (`Values/Building/Upkeep`,
+  `Values/Costs/Item[0]/Amount`), the value before and the value after.
+  A list that was only reordered shows no change.
+  Entries that appeared or went show as `[+]` and `[-]`.
+  The method is the version diff's (`docs/2070-versions.md`, "How the diff compares"): `sources/valuediff.py`, shared
+  with that script.
+  An added asset keeps its values compressed (a few hundred bytes: `Target.values()` gives them back).
+  A mod that adds a hundred thousand assets therefore holds them in tens of megabytes.
 - A GUID that a mod adds and that the game's file already has is reported as the later definition's values against the
-  game's. The report notes "GUID n is added again" (which of the two the game keeps is not known).
-- In a text file the key is the text id. A change has the one path `Text`.
-- In any other XML file the file is the target (the key is empty) and the paths are from its root: `templates.xml`,
-  `properties.xml`, a `.cfg` or `.fc` patch, engine settings.
-- A file that is no patch (a model, a texture, a `.lua`, a sound bank) is a **file change**. It is either new or
-  replaces the game's file, and it lists the mods that carry it. A replacement with the same bytes is reported as such:
-  it does nothing.
+  game's.
+  The report notes "GUID n is added again".
+  Which of the two the game keeps is not known.
+- In a text file the key is the text id.
+  A change has the one path `Text`.
+- In any other XML file the file is the target (the key is empty) and the paths are from its root.
+  These files are `templates.xml`, `properties.xml`, a `.cfg` or `.fc` patch, and engine settings.
+- A file that is no patch (a model, a texture, a `.lua`, a sound bank) is a **file change**.
+  It is either new or replaces the game's file, and it lists the mods that carry it.
+  A replacement with the same bytes is reported as such: it does nothing.
 
-Three things are left out: a changed asset whose only difference is the editor's bookkeeping
-(`Standard/LastChangeTime` and the like), the binary infotips (`export.bin.xml`, kept as a file, not read), and
-whatever only the game can decide (what it drops after patching).
+Three things are left out:
+
+- a changed asset whose only difference is the editor's bookkeeping (`Standard/LastChangeTime` and the like);
+- the binary infotips (`export.bin.xml`, kept as a file, not read); and
+- whatever only the game can decide (what it drops after patching).
 
 ## Conflicts
 
-The mods are run in the loader's order. Every mod's **step** is what it changed relative to the result of the mods
-before it. Two mods conflict where their steps meet:
+The mods are run in the loader's order.
+Every mod's **step** is what it changed relative to the result of the mods before it.
+Two mods conflict where their steps meet:
 
 | Kind | Meaning | Level |
 |---|---|---|
@@ -66,55 +81,74 @@ before it. Two mods conflict where their steps meet:
 | file | two mods carry a file of the same path (the later one's wins, whole, with no word in the log) | conflict |
 | asset | both changed the same asset, in different values (they merge; order matters only for lists) | overlap |
 
-Each conflict names its **winner** (the last mod of the order) and what **decided** the order: a `LoadAfter` between
-the two (or the late phase), or the loader's default, the display name `[Category] Name` as bytes. Without a
-`LoadAfter` the order can change when a mod is renamed. The list says so ("decided by name order"), because these are
-the conflicts a mod author should fix by naming the dependency.
+Each conflict names its **winner** (the last mod of the order) and what **decided** the order.
+That is a `LoadAfter` between the two (or the late phase), or the loader's default, the display name `[Category] Name`
+as bytes.
+Without a `LoadAfter` the order can change when a mod is renamed.
+The list says so ("decided by name order"), because these are the conflicts a mod author should fix by naming the
+dependency.
 
 **A mod that sets a value an earlier mod already set** changes nothing in its step, so the step alone cannot see it.
-The loader hands the run what each operation is about to put in (`Session.written`), and `moddiff/writes.py` reads the
-single values that a `merge` or `replace` sets, by the path the changes use (`Values/Product/Price`). Such a mod counts
-as touching the target (it is named in the target's mods). Its value is a row of the value conflict next to the
-others, as an **overlap** (the same value twice loses nothing). Two mods that only set the value the game already has
-change no target: the rows are there, the targets are not.
+The loader hands the run what each operation is about to put in (`Session.written`).
+`moddiff/writes.py` reads the single values that a `merge` or `replace` sets, by the path the changes use
+(`Values/Product/Price`).
+Such a mod counts as touching the target (it is named in the target's mods).
+Its value is a row of the value conflict next to the others, as an **overlap** (the same value twice loses nothing).
+Two mods that only set the value the game already has change no target: the rows are there, the targets are not.
 
 Inside a **list** (an `Item`, or a name that repeats) the entry is named by its **position in the list**
-(`Values/Building/BuildCost/Item[0]/Amount`). The changes name it the same way: an entry that differs is named by its
-position in the patched list, so a row and a change of the same entry carry the same number. An entry that only moved
-is no change, and an entry that a mod inserts before it moves the number of the ones after it. `ModItem` (an item
-found by its key) is read the same way. One that finds no item appends an entry, which is a change, not a set value.
-What a `ModValue` gives (`Insert`, flags, a calculation) is known only after the operation: the loader tells the run
-when it has run, and the value is then read from the document. Three cases are still left to the changes: an `Item`
-that a merge appends, a `replace` of a block, and a value set through a path that is no plain node (`Content=`).
+(`Values/Building/BuildCost/Item[0]/Amount`).
+The changes name it the same way.
+An entry that differs is named by its position in the patched list, so a row and a change of the same entry carry
+the same number.
+An entry that only moved is no change.
+An entry that a mod inserts before it moves the number of the ones after it.
+`ModItem` (an item found by its key) is read the same way.
+One that finds no item appends an entry, which is a change, not a set value.
+What a `ModValue` gives (`Insert`, flags, a calculation) is known only after the operation.
+The loader tells the run when it has run, and the value is then read from the document.
+Three cases are still left to the changes:
+
+- an `Item` that a merge appends,
+- a `replace` of a block, and
+- a value set through a path that is no plain node (`Content=`).
 
 ## The views
 
 - **Changes**: a tree of files, below them the targets (added, removed, changed, with the mods that touched them), and
-  below them the value changes (`path: before -> after`). A filter box matches file, key, name, template, mod, path and
-  value. It is worked out off the window's thread, a quarter second after the last key. Selecting a target shows its
-  values in full beside the tree.
+  below them the value changes (`path: before -> after`).
+  A filter box matches file, key, name, template, mod, path and value.
+  It is worked out off the window's thread, a quarter second after the last key.
+  Selecting a target shows its values in full beside the tree.
 - **Conflicts**: one row per conflict with its kind, target, path, the mods and their values in order, the winner and
-  what decided it. A double click jumps to the target.
-- **Dropped**: what the loader would log or skip (the `engine.Event`s), per mod, file and line, and the notes of the
-  report (conditions on other mods, GUIDs added again, how 1800's set was made). A game file that is not valid XML is
-  one such line per patch of it (`badbase`), and the run goes on with the other files; an archive member that is no
-  XML where the game's file is (or the reverse) is compared by its bytes. The words of ours in a conflict's values
-  (`added`, `3 value(s)`, `12 bytes`) and what decided it are shown in the interface's language; the export keeps
-  the English ones.
-- The status line counts what the run found. The work runs off the window's thread, with progress, and a run in
-  progress can be left by closing the window.
+  what decided it.
+  A double click jumps to the target.
+- **Dropped**: what the loader would log or skip (the `engine.SEvent`s), per mod, file and line, and the notes of the
+  report (conditions on other mods, GUIDs added again, how 1800's set was made).
+  A game file that is not valid XML is one such line per patch of it (`badbase`), and the run goes on with the other
+  files.
+  An archive member that is no XML where the game's file is (or the reverse) is compared by its bytes.
+  The words of ours in a conflict's values (`added`, `3 value(s)`, `12 bytes`) and what decided it are shown in the
+  interface's language.
+  The export keeps the English ones.
+- The status line counts what the run found.
+  The work runs off the window's thread, with progress, and a run in progress can be left by closing the window.
 
-**No row is left out.** The tree and the conflict table are models (`difftree.TargetModel`, `tables.ConflictModel`) that
-make a row's text only when the view asks for it. A report of a hundred and sixty thousand targets therefore shows at
-once, every one can be reached, and there is no row limit. Opening the game (its file tree takes about half a minute on
-117) starts in the background as soon as the game is chosen, so the first comparison does not pay for it.
+**No row is left out.**
+The tree and the conflict table are models (`difftree.CTargetModel`, `tables.CConflictModel`) that make a row's text
+only when the view asks for it.
+A report of a hundred and sixty thousand targets therefore shows at once, every one can be reached, and there is no
+row limit.
+Opening the game (its file tree takes about half a minute on 117) starts in the background as soon as the game is
+chosen, so the first comparison does not pay for it.
 
 **Export** (Report menu, Ctrl+E) writes the open comparison off the window's thread, in one of three forms:
 
-- **Markdown, summary** (a report to attach to a bug or a mod page): the game, the mods and versions, the counts, the
-  conflicts (the first 300), then per file the counts by kind and its first 25 targets with their first 8 values, the
-  carried files grouped by folder (three levels, the largest groups first) and the dropped lines. The report says that
-  it is a summary.
+- **Markdown, summary** (a report to attach to a bug or a mod page).
+  It holds the game, the mods and versions, the counts and the conflicts (the first 300).
+  Then, per file, it holds the counts by kind and its first 25 targets with their first 8 values.
+  It ends with the carried files grouped by folder (three levels, the largest groups first) and the dropped lines.
+  The report says that it is a summary.
 - **Markdown, every target and file**: all of it.
 - **CSV** (for a spreadsheet): always complete, with one row per value change, conflict, added or removed target, file
   change and dropped line.
@@ -123,23 +157,26 @@ Markdown and CSV are both written line by line (`export.markdown_lines`, `export
 
 ## From the Mods app
 
-The Mods app's **Check** menu has **Compare the selected mod in Mod diff** and **Compare the mods that are on in Mod diff**.
+The Mods app's **Check** menu has **Compare the selected mod in Mod diff** and **Compare the mods that are on in Mod
+diff**.
 They ask the suite (`suite.links.DIFF_MODS`, answered by this app's `open_job`), which fills the tool bar and runs the
-question. The entries are shown only where the suite has a Mod diff. A mod is passed by its ModID, a profile by its
-name (1800: `activations.json`).
+question.
+The entries are shown only where the suite has a Mod diff.
+A mod is passed by its ModID, and a profile by its name (1800: `activations.json`).
 
 ## Where the data comes from
 
-- The game: `assetedit.assetgame.open_game` (the asset index with the byte range of every asset, cached in the
-  workspace's `asset-cache` and shared with the Assets app). A patched asset file is read lazily from the index, so a
-  mod that touches a hundred assets parses a hundred.
-- The mods: `modmgr` (the folders the loader searches, a profile's mods, the order, `resolve`). A profile here is
-  therefore the Mods app's profile, with the same dependency rules. A mod's file sizes come from its folder's listing
-  (`modloader.mods.walk_sizes`), not from a `stat` per file.
-- The run: `modloader.engine.Session`, one mod at a time, so each mod's step is known (`moddiff/effect.py`).
-- The Assets app's mod import (`assetedit/modimport.py`) runs the same session over the same files: the game's readers
-  (`Game.read_base`, `Game.lazy_ranges`, which `moddiff/base.GameBase` passes on too), the game's loader rules (1800's
-  for a 1800 game) and the added assets kept as bytes.
+- The game: `assetedit.assetgame.open_game`.
+  It builds the asset index with the byte range of every asset, cached in the workspace's `asset-cache` and shared
+  with the Assets app.
+  A patched asset file is read lazily from the index, so a mod that touches a hundred assets parses a hundred.
+- The mods: `modmgr` (the folders the loader searches, a profile's mods, the order, `resolve`).
+  A profile here is therefore the Mods app's profile, with the same dependency rules.
+  A mod's file sizes come from its folder's listing (`modloader.mods.walk_sizes`), not from a `stat` per file.
+- The run: `modloader.engine.CSession`, one mod at a time, so each mod's step is known (`moddiff/effect.py`).
+- The Assets app's mod import (`assetedit/modimport.py`) runs the same session over the same files.
+  It uses the game's readers (`Game.read_base`, `Game.lazy_ranges`, which `moddiff/base.CGameBase` passes on too), the
+  game's loader rules (1800's for a 1800 game) and the added assets kept as bytes.
 
 ## Per game
 
@@ -150,38 +187,46 @@ name (1800: `activations.json`).
 
 A game without installed files cannot be compared (the window says which folder is missing).
 
-**1800's own rules** differ from 117's in how the set of mods is made, and the report says so. The evidence (read in
-the game's code) and what is inferred are in `docs/engine-modloader.md` "Anno 1800's loader":
+**1800's own rules** differ from 117's in how the set of mods is made, and the report says so.
+The evidence (taken from how the game behaves) and what is inferred are in `docs/engine-modloader.md` "Anno 1800's loader":
 
-- A mod is on unless the `activations.json` of its mods folder lists it. The profile list of the window shows that
-  file's name for 1800, and "Conflicts in a profile" means "every mod that is on" (`modloader.activations`,
-  `jobs.profile_order`).
-- A `.zip` in a mods folder holds mods in 1800 (a `modinfo.json` at its root, or a folder with one; a folder of folders
-  is a collection). It is **read in place** (`modloader/zipmods.py`; nothing is unpacked, and the archive is open
-  only while one member is read, so it can be moved or replaced while the window shows its mods). The files, sizes, includes
-  and carried files of a zip mod come from the archive, the report is the same as a folder's, and the carried files'
-  source reads `archive.zip|path inside`. Give a zip by its path (the menu of a field's `...` button has
-  **Choose a .zip of mods...** under 1800) or by the ModID of a mod in a zip of the game's mods folders. A profile
-  counts the zips in its notes. A `-` in front of a folder or a zip parks it (settled by the community documentation).
+- A mod is on unless the `activations.json` of its mods folder lists it.
+  The profile list of the window shows that file's name for 1800, and "Conflicts in a profile" means "every mod that
+  is on" (`modloader.activations`, `jobs.profile_order`).
+- A `.zip` in a mods folder holds mods in 1800 (a `modinfo.json` at its root, or a folder with one; a folder of
+  folders is a collection).
+  It is **read in place** (`modloader/zipmods.py`).
+  Nothing is unpacked, and the archive is open only while one member is read, so it can be moved or replaced while the
+  window shows its mods.
+  The files, sizes, includes and carried files of a zip mod come from the archive.
+  The report is the same as a folder's, and the carried files' source reads `archive.zip|path inside`.
+  Give a zip by its path (the menu of a field's `...` button has **Choose a .zip of mods...** under 1800) or by the
+  ModID of a mod in a zip of the game's mods folders.
+  A profile counts the zips in its notes.
+  A `-` in front of a folder or a zip parks it (settled by the community documentation).
   117 does not unpack a zip: its mods are folders only.
-- The dependency lists are top-level in `modinfo.json` (`LoadAfterIds` ...). The reader takes both shapes. The order is
-  the same.
-- The ModOps themselves: 1800's code was not read for them. The community loader's documentation and source (MIT, read
-  for behaviour only) say which are 117's own: the short forms (`Merge=` and the others), a bare `<Asset>`,
-  `Property=`, `MaxRepeat`, `ModItem`, `ModValue` and options. Under 1800 the first four are **left out and listed in
-  Dropped** (a `feature` line). The type name is read in any case, as the source reads it. `ModItem`, `ModValue` and
-  options are still applied as 117 applies them (what 1800 makes of them is unknown). `Group` with `MaxRepeat` loops in
-  117, as the documentation and the source say. The patch targets are 1800's own
-  (`data/config/export/main/asset/`). The table with its marks is in `engine-modloader.md` "Anno 1800's loader".
+- The dependency lists are top-level in `modinfo.json` (`LoadAfterIds` ...).
+  The reader takes both shapes.
+  The order is the same.
+- The ModOps themselves: 1800's code was not read for them.
+  The community loader's documentation and source (MIT, read for behaviour only) say which are 117's own: the short
+  forms (`Merge=` and the others), a bare `<Asset>`, `Property=`, `MaxRepeat`, `ModItem`, `ModValue` and options.
+  Under 1800 the first four are **left out and listed in Dropped** (a `feature` line).
+  The type name is read in any case, as the source reads it.
+  `ModItem`, `ModValue` and options are still applied as 117 applies them (what 1800 makes of them is unknown).
+  `Group` with `MaxRepeat` loops in 117, as the documentation and the source say.
+  The patch targets are 1800's own (`data/config/export/main/asset/`).
+  The table with its marks is in `engine-modloader.md` "Anno 1800's loader".
 
-Note: the game's code was read in 2026-11.
+Note: the game's own logic was read in 2026-11.
 
 ## Speed and memory
 
-The test case is the merged `anno2070` mod (160,650 added assets, 1,375 changed, 18 patch files, 476,754 carried files)
-against 117. Before the work described here, a comparison took about 158 s and wrote an 88 MB Markdown report. The
-numbers below are for the same mod and game, measured on a machine that other work was loading to 100 %. The CPU time
-of the process is therefore the fair number, and the wall clock is not:
+The test case is the merged `anno2070` mod (160,650 added assets, 1,375 changed, 18 patch files, 476,754 carried
+files) against 117.
+Before the work described here, a comparison took about 158 s and wrote an 88 MB Markdown report.
+The numbers below are for the same mod and game, measured on a machine that other work was loading to 100 %.
+The CPU time of the process is therefore the fair number, and the wall clock is not:
 
 | | First round | Now |
 |---|---|---|
@@ -196,46 +241,61 @@ Where the time went (a profiled run, one core) and what was done:
 | Cost | Before | Now |
 |---|---|---|
 | A `stat` for the size of each of 476,754 carried files | 66 s | 0 (sizes from the folder listing, `walk_sizes`) |
-| Rebuilding the lookup table of `LineId` on every text operation (94 times over 49,000 entries) | 20 s | 12 builds: the table is kept while the children of a text that it does not read change (`PatchDoc.changed(tags=...)`) |
+| Rebuilding the lookup table of `LineId` on every text operation (94 times over 49,000 entries) | 20 s | 12 builds: the table is kept while the children of a text that it does not read change (`CPatchDoc.changed(tags=...)`) |
 | Plain-path key reads by the element tree's path search (4.5 million) | 15 s | read by hand, a third of it |
 | The same added asset read three times (two data trees, two JSONs) | 16 s | once, kept compressed |
 | A text or data file read as data before and after every step | 4 s | once per file, and again only when an operation reached it |
 | Opening the game's file tree | 27 s | the same, but started when the window opens, not when Compare is pressed |
 
-**The peak.** A profile of the memory (the process's working set at each stage) found where the 1.1 GB of the run
-went. The 14 text files and `assets.xml` of the mod were **all opened before the first operation** (870 MB: each
-language's document is 55 MB, with the snapshot of its 49,000 texts). The patch file's tree and its line table took
-110 MB, and the 160,000 added assets as element trees took the rest. Two changes followed, both along the loader's own
-structure:
+**The peak.**
+A profile of the memory (the process's working set at each stage) found where the 1.1 GB of the run went.
+The 14 text files and `assets.xml` of the mod were **all opened before the first operation** (870 MB).
+Each language's document is 55 MB, with the snapshot of its 49,000 texts.
+The patch file's tree and its line table took 110 MB, and the 160,000 added assets as element trees took the rest.
+Two changes followed, both along the loader's own structure:
 
-- **A file at a time.** A mod's patch files are applied in order. Each file's document is opened when its first patch
-  file comes, compared with its snapshot when its last one is done, and **let go as soon as no later mod patches it**
-  (`Run.step`, `Run._finish`: the target's result against the game is made at that moment, while the document is there).
+- **A file at a time.**
+  A mod's patch files are applied in order.
+  Each file's document is opened when its first patch file comes, and compared with its snapshot when its last one is
+  done.
+  It is **let go as soon as no later mod patches it** (`Run.step`, `Run._finish`: the target's result against the
+  game is made at that moment, while the document is there).
   Only the file in work is held.
-- **Added assets as bytes.** The loader keeps an asset of the game's file as its bytes until an operation looks inside
-  (`PatchDoc.freeze`). An asset that a mod adds is kept the same way once it is in the document: its values are read
-  first (packed), its tree is dropped, and its bytes go to the end of the document's buffer. A later operation that
-  looks inside reads it back. The comparison reads it without keeping it (`PatchDoc.peek`). A search that needs every
-  asset that holds a text (`//Values[Standard/GUID='5']`) scans the new bytes once per text it looks for. The Assets
-  app's import keeps them the same way and reads each with `peek` when it turns the result into a change set.
+- **Added assets as bytes.**
+  The loader keeps an asset of the game's file as its bytes until an operation looks inside (`CPatchDoc.freeze`).
+  An asset that a mod adds is kept the same way once it is in the document.
+  Its values are read first (packed), its tree is dropped, and its bytes go to the end of the document's buffer.
+  A later operation that looks inside reads it back.
+  The comparison reads it without keeping it (`CPatchDoc.peek`).
+  A search that needs every asset that holds a text (`//Values[Standard/GUID='5']`) scans the new bytes once per text
+  it looks for.
+  The Assets app's import keeps them the same way and reads each with `peek` when it turns the result into a change
+  set.
 
-What is left of the 1.3 GB is the game's own index and the 476,754 carried files' records. A record keeps the mod's own
-path string where it is already lower case. It keeps its source as a pair (the mod's `source_root`, shared by all its
-files, and the path), not as a joined string. On a synthetic set of that size the records took 99 MB instead of 216 MB
-(`tracemalloc`; the real run was not measured again).
+What is left of the 1.3 GB is the game's own index and the 476,754 carried files' records.
+A record keeps the mod's own path string where it is already lower case.
+It keeps its source as a pair (the mod's `source_root`, shared by all its files, and the path), not as a joined
+string.
+On a synthetic set of that size the records took 99 MB instead of 216 MB (`tracemalloc`; the real run was not
+measured again).
 
-Note: measured on 2026-11-13 and 2026-11-14; the memory profile and the record sizes are from 2026-11-14.
+Note: measured on 2026-11-13 and 2026-11-14.
+The memory profile and the record sizes are from 2026-11-14.
 
 ## Not built, and not checked in the game
 
-- Only data was compared: no mod was started in the game for this app. Every rule that `docs/engine-modloader.md` marks
-  "not checked in game" is as uncertain here as in the loader reproduction.
-- Conditions on other mods take the branch the compared set gives (for a single mod: none of the others is on). The
-  report lists each one.
-- Added assets are compared between two versions by their values. Their position in the file is not compared.
+- Only data was compared: no mod was started in the game for this app.
+  Every rule that `docs/engine-modloader.md` marks "not checked in game" is as uncertain here as in the loader
+  reproduction.
+- Conditions on other mods take the branch the compared set gives (for a single mod: none of the others is on).
+  The report lists each one.
+- Added assets are compared between two versions by their values.
+  Their position in the file is not compared.
 - 1800: `ModItem`, `ModValue`, options and `@guid` paths are applied as 117 applies them (the documentation says they
-  are 117's; what 1800 does with them is not known). Whether an `activations.json` applies to its own folder only (as
-  read here) or to all folders was not settled. For a zip with island files, the community documentation warns that
-  they misbehave from a zip. No 1800 mod was run in the game.
-- A `ModOp` that loops with `MaxRepeat` and `Condition` follows 117's code as it was read. The community source repeats
-  a `Group` only. This is currently unverified.
+  are 117's; what 1800 does with them is not known).
+  Whether an `activations.json` applies to its own folder only (as read here) or to all folders was not settled.
+  For a zip with island files, the community documentation warns that they misbehave from a zip.
+  No 1800 mod was run in the game.
+- A `ModOp` that loops with `MaxRepeat` and `Condition` follows 117's code as it was read.
+  The community source repeats a `Group` only.
+  This is currently unverified.

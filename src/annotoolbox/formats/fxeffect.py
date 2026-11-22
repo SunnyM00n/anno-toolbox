@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .fxmaterial import MaterialFields, material_header
+from .fxmaterial import SMaterialFields, material_header
 
 # the shader setters of a pass -> (profile stage, shader model); the models are the game's (shader-compile.md)
 STAGES = {
@@ -66,17 +66,22 @@ _STATE_RE = re.compile(r"(\w+(?:\[\d+\])?)\s*=\s*([\w.]+)\s*;")
 Read = Callable[[str], bytes | None]
 
 
-class EffectError(ValueError):
+class CEffectError(ValueError):
     pass
 
 
 def prelude() -> str:
     """The macros that turn the dialect into HLSL (storage words marked, bracketed semantic indices joined) and
     the engine's samplers."""
-    lines = [f"#define {w} {MARKER}{w}" for w in TABLE_WORDS]
-    lines += [f"#define {s}(index) {s}##index" for s in INDEXED_SEMANTICS]
-    lines += [f"SamplerState {n} : register(s{r});" for n, r in SAMPLERS]
-    lines += [f"SamplerComparisonState {n} : register(s{r});" for n, r in COMPARISON_SAMPLERS]
+    lines = [f"#define {word} {MARKER}{word}" for word in TABLE_WORDS]
+    lines += [f"#define {semantic}(index) {semantic}##index" for semantic in INDEXED_SEMANTICS]
+    lines += [
+        f"SamplerState {sampler_name} : register(s{register_index});" for sampler_name, register_index in SAMPLERS
+    ]
+    lines += [
+        f"SamplerComparisonState {sampler_name} : register(s{register_index});"
+        for sampler_name, register_index in COMPARISON_SAMPLERS
+    ]
     return "\n".join(lines) + "\n" + _PRELUDE_TAIL
 
 
@@ -85,19 +90,19 @@ def expand_includes(read: Read, path: str, _stack: tuple[str, ...] = ()) -> str:
     under a ``#line`` naming its file, so the compiler's messages name the file and line they come from."""
     data = read(path)
     if data is None:
-        raise EffectError(f"{_stack[-1] if _stack else path}: include {path} not found")
+        raise CEffectError(f"{_stack[-1] if _stack else path}: include {path} not found")
     text = _pastes(_TRAILING_PASTE_RE.sub(r"\1", data.decode("utf-8", "replace").replace("\r\n", "\n")))
     out, last, line = [f'#line 1 "{path}"\n'], 0, 1
-    for m in _INCLUDE_RE.finditer(text):
-        out.append(text[last : m.start()])
-        line += text.count("\n", last, m.start())
-        target = _resolve(read, path, m.group(2))
+    for match in _INCLUDE_RE.finditer(text):
+        out.append(text[last : match.start()])
+        line += text.count("\n", last, match.start())
+        target = _resolve(read, path, match.group(2))
         if read(target) is None:  # an error only where the preprocessor takes the branch (ffx_core's GLSL)
-            out.append(f"#error include {m.group(2)} not found")
+            out.append(f"#error include {match.group(2)} not found")
         elif target not in _stack and target != path:
             out.append(expand_includes(read, target, (*_stack, path)))
         out.append(f'\n#line {line + 1} "{path}"')
-        last = m.end()
+        last = match.end()
     out.append(text[last:])
     return "".join(out)
 
@@ -116,8 +121,8 @@ def _pastes(text: str) -> str:
             cut = head.end() if head else 0
             body = line[cut:]
             while "##" in body:
-                body, n = _PASTE_RE.subn(r"FX_CAT(\1, \2)", body, count=1)
-                if not n:
+                body, replaced = _PASTE_RE.subn(r"FX_CAT(\1, \2)", body, count=1)
+                if not replaced:
                     break
             line = line[:cut] + body
         out.append(line)
@@ -150,8 +155,8 @@ def includes_of(read: Read, path: str) -> set[str]:
         current = todo.pop()
         data = read(current)
         text = (data or b"").decode("utf-8", "replace")
-        for m in _INCLUDE_RE.finditer(text):
-            target = _resolve(read, current, m.group(2))
+        for match in _INCLUDE_RE.finditer(text):
+            target = _resolve(read, current, match.group(2))
             if target not in found:
                 found.add(target)
                 todo.append(target)
@@ -160,10 +165,10 @@ def includes_of(read: Read, path: str) -> set[str]:
 
 def define_lines(defines: list[tuple[str, str]]) -> str:
     """``#define`` lines for (name, value) pairs; an empty value defines the name alone."""
-    return "".join(f"#define {n} {v}\n" if v else f"#define {n}\n" for n, v in defines)
+    return "".join(f"#define {name} {value}\n" if value else f"#define {name}\n" for name, value in defines)
 
 
-def effect_source(read: Read, path: str, defines: list[tuple[str, str]], materials: list[MaterialFields]) -> str:
+def effect_source(read: Read, path: str, defines: list[tuple[str, str]], materials: list[SMaterialFields]) -> str:
     """The whole text of one variant of an effect file, ready for the preprocessor; the engine puts its intrinsics
     header (GLSL's built-ins written in HLSL: ``equal``, ``MatrixFromRowVectors``, ...) before every shader."""
     intrinsics = expand_includes(read, INTRINSICS) if read(INTRINSICS) is not None else ""
@@ -178,7 +183,7 @@ def effect_source(read: Read, path: str, defines: list[tuple[str, str]], materia
 
 
 @dataclass(frozen=True)
-class ShaderCall:
+class SShaderCall:
     """One shader of a pass: its setter's stage, the function and the literal arguments of its uniform parameters."""
 
     stage: str
@@ -192,27 +197,27 @@ class ShaderCall:
 
 
 @dataclass
-class Technique:
+class STechnique:
     name: str
     passthrough: tuple[str, ...] = ()  # PassthroughDefines: switches the technique's shaders are compiled with
-    calls: list[ShaderCall] = field(default_factory=list)
+    calls: list[SShaderCall] = field(default_factory=list)
     state: str = ""  # the first pass's SetStateBlock: a renderstateblock of the effect
 
     @property
     def functions(self) -> set[str]:
         """The shader functions of all its passes: what they reach makes the technique's tables (fxbind)."""
-        return {c.function for c in self.calls}
+        return {call.function for call in self.calls}
 
 
 @dataclass
-class Effect:
+class SEffect:
     """An effect file after the preprocessor: its HLSL and its techniques."""
 
     hlsl: str
-    techniques: list[Technique]
+    techniques: list[STechnique]
     blocks: dict[str, dict[str, str]] = field(default_factory=dict)  # renderstateblock name -> its states (lower case)
 
-    def state_of(self, technique: Technique) -> dict[str, str]:
+    def state_of(self, technique: STechnique) -> dict[str, str]:
         """The render states of a technique's first pass (property as written -> value; empty: the defaults)."""
         return self.blocks.get(technique.state, {})
 
@@ -236,12 +241,15 @@ def matching(text: str, open_at: int, pair: str = "[]") -> int:
             depth -= 1
             if depth == 0:
                 return i
-    raise EffectError("an unclosed bracket")
+    raise CEffectError("an unclosed bracket")
 
 
-def block_end(text: str, at: int) -> int:
+def block_end(text: str, start: int) -> int:
     """The index after the ``{...}`` block that opens at or after ``at`` (and a ``;`` right after it)."""
-    close = matching(text, text.index("{", at), "{}")
+    opening = text.find("{", start)
+    if opening < 0:
+        raise CEffectError("a block without its opening brace")
+    close = matching(text, opening, "{}")
     k = close + 1
     while k < len(text) and text[k].isspace():
         k += 1
@@ -251,34 +259,36 @@ def block_end(text: str, at: int) -> int:
 _TOP_RE = re.compile(r"(?m)^[ \t]*(technique|renderstateblock|MaterialRef)\b[ \t]*(\w*)")
 
 
-def split_effect(preprocessed: str) -> Effect:
+def split_effect(preprocessed: str) -> SEffect:
     """The techniques (with their passes' shaders) and the HLSL left when the effect-only parts are taken out."""
     out, techniques, last = [], [], 0
     blocks: dict[str, dict[str, str]] = {}
-    pos = depth_at = depth = 0
+    position = depth_at = depth = 0
     while True:
-        m = _TOP_RE.search(preprocessed, pos)
-        if m is None:
+        match = _TOP_RE.search(preprocessed, position)
+        if match is None:
             break
-        depth += _depth(preprocessed, depth_at, m.start())
-        depth_at = pos = m.end()
+        depth += _depth(preprocessed, depth_at, match.start())
+        depth_at = position = match.end()
         if depth != 0:  # a word inside a function or struct: not ours
             continue
-        out.append(preprocessed[last : m.start()])
-        if m.group(1) == "MaterialRef":
-            end = preprocessed.index(";", m.end()) + 1
+        out.append(preprocessed[last : match.start()])
+        if match.group(1) == "MaterialRef":
+            end = preprocessed.find(";", match.end()) + 1
+            if not end:
+                raise CEffectError("a MaterialRef without its semicolon")
         else:
-            end = block_end(preprocessed, m.end())
-            if m.group(1) == "technique":
-                techniques.append(_technique(m.group(2), preprocessed[m.end() : end]))
-            elif m.group(1) == "renderstateblock":
-                blocks[m.group(2)] = assignments(preprocessed[m.end() : end])
-        out.append("\n" * preprocessed.count("\n", m.start(), end))  # keeps the line numbers
-        last = pos = depth_at = end
+            end = block_end(preprocessed, match.end())
+            if match.group(1) == "technique":
+                techniques.append(_technique(match.group(2), preprocessed[match.end() : end]))
+            elif match.group(1) == "renderstateblock":
+                blocks[match.group(2)] = assignments(preprocessed[match.end() : end])
+        out.append("\n" * preprocessed.count("\n", match.start(), end))  # keeps the line numbers
+        last = position = depth_at = end
     out.append(preprocessed[last:])
     hlsl = _STRING_RE.sub(_debug_string, _DEFERRED_RE.sub(_deferred, "".join(out)))
     hlsl = _GS_RE.sub(_geometry_shader, _INTERPOLATION_RE.sub(r"\1", hlsl))
-    return Effect(hlsl, techniques, blocks)
+    return SEffect(hlsl, techniques, blocks)
 
 
 # the dialect's geometry shader: its primitives as attributes, one input and one output (the stream) by name
@@ -290,12 +300,12 @@ GS_INPUTS = {"point": 1, "line": 2, "triangle": 3, "line_adj": 4, "lineadj": 4, 
 GS_STREAMS = {"point": "PointStream", "line": "LineStream", "triangle": "TriangleStream"}
 
 
-def _geometry_shader(m: re.Match) -> str:
-    prim_in, prim_out, count, returns, name, in_type, in_name, out_type, out_name, rest = m.groups()
+def _geometry_shader(match: re.Match) -> str:
+    prim_in, prim_out, count, returns, name, in_type, in_name, out_type, out_name, rest = match.groups()
     word = {"line_adj": "lineadj", "triangle_adj": "triangleadj"}.get(prim_in, prim_in)
     return (
         "\n"
-        * m.group(0).count("\n")  # the attributes' lines stay, so the lines after keep their numbers
+        * match.group(0).count("\n")  # the attributes' lines stay, so the lines after keep their numbers
         + f"[maxvertexcount({count.strip()})] {returns} {name}({word} {in_type} {in_name}[{GS_INPUTS.get(prim_in, 1)}], "
         f"inout {GS_STREAMS.get(prim_out, 'TriangleStream')}<{out_type}> {out_name}{rest})"
     )
@@ -310,14 +320,14 @@ _STRING_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 _ATTRIBUTE_OPEN_RE = re.compile(r"\[\s*\w+\s*\([^\]]*$")
 
 
-def _debug_string(m: re.Match) -> str:
-    line_start = m.string.rfind("\n", 0, m.start()) + 1
-    before = m.string[line_start : m.start()]
+def _debug_string(match: re.Match) -> str:
+    line_start = match.string.rfind("\n", 0, match.start()) + 1
+    before = match.string[line_start : match.start()]
     if before.lstrip().startswith("#") or _ATTRIBUTE_OPEN_RE.search(before):
-        return m.group(0)  # a directive's or an attribute's string stays a string
-    raw = m.group(1).encode("utf-8", "replace")[:16].ljust(16, b"\0")
+        return match.group(0)  # a directive's or an attribute's string stays a string
+    raw = match.group(1).encode("utf-8", "replace")[:16].ljust(16, b"\0")
     words = [int.from_bytes(raw[i : i + 4], "little") for i in range(0, 16, 4)]
-    return "PackDebugString(uint4(" + ", ".join(f"0x{w:08x}u" for w in words) + "))"
+    return "PackDebugString(uint4(" + ", ".join(f"0x{word:08x}u" for word in words) + "))"
 
 
 # @("#ifndef X"): a directive the effect keeps for the compiler's own preprocessor, which sees a technique's
@@ -325,11 +335,11 @@ def _debug_string(m: re.Match) -> str:
 _DEFERRED_RE = re.compile(r'@\(\s*"((?:[^"\\]|\\.)*)"\s*\)')
 
 
-def _deferred(m: re.Match) -> str:
+def _deferred(match: re.Match) -> str:
     """The directive in place, on its own line (it stands alone in the sources: no line number moves)."""
-    start = m.string.rfind("\n", 0, m.start()) + 1
-    alone = not m.string[start : m.start()].strip()
-    return ("" if alone else "\n") + m.group(1).replace('\\"', '"') + ("" if alone else "\n")
+    start = match.string.rfind("\n", 0, match.start()) + 1
+    alone = not match.string[start : match.start()].strip()
+    return ("" if alone else "\n") + match.group(1).replace('\\"', '"') + ("" if alone else "\n")
 
 
 def _depth(text: str, start: int, end: int) -> int:
@@ -337,40 +347,90 @@ def _depth(text: str, start: int, end: int) -> int:
     return text.count("{", start, end) - text.count("}", start, end)
 
 
-def _technique(name: str, body: str) -> Technique:
-    t = Technique(name)
-    m = _PASSTHROUGH_RE.search(body)
-    if m:
-        t.passthrough = tuple(x.strip() for x in m.group(1).split(",") if x.strip())
-    for setter, function, args in _SETTER_RE.findall(body):
+def _technique(name: str, body: str) -> STechnique:
+    technique = STechnique(name)
+    match = _PASSTHROUGH_RE.search(body)
+    if match:
+        technique.passthrough = tuple(x.strip() for x in match.group(1).split(",") if x.strip())
+    for setter, function, arguments in _SETTER_RE.findall(body):
         stage, model = STAGES[setter]
-        t.calls.append(ShaderCall(stage, model, function, tuple(split_args(args))))
+        technique.calls.append(SShaderCall(stage, model, function, tuple(split_arguments(arguments))))
     block = _STATE_BLOCK_RE.search(body)
-    t.state = block.group(1) if block else ""
-    return t
+    technique.state = block.group(1) if block else ""
+    return technique
 
 
-def split_args(text: str, angles: bool = False) -> list[str]:
-    """``text`` split at its top-level commas (``angles``: a parameter list, where ``<...>`` is a template's)."""
-    out, depth, cur = [], 0, ""
-    nest = {"(": 1, ")": -1, "<": 1, ">": -1} if angles else {"(": 1, ")": -1}
-    for c in text:
-        if c == "," and depth == 0:
-            out.append(cur.strip())
-            cur = ""
+def split_arguments(text: str, is_parameter_list: bool = False) -> list[str]:
+    """``text`` split at its top-level commas (``is_parameter_list``: a parameter list, where ``<...>`` is a template's)."""
+    out, depth, current = [], 0, ""
+    nest = {"(": 1, ")": -1, "<": 1, ">": -1} if is_parameter_list else {"(": 1, ")": -1}
+    for character in text:
+        if character == "," and depth == 0:
+            out.append(current.strip())
+            current = ""
             continue
-        depth += nest.get(c, 0)
-        cur += c
-    return [*out, cur.strip()] if cur.strip() or out else []
+        depth += nest.get(character, 0)
+        current += character
+    return [*out, current.strip()] if current.strip() or out else []
 
 
-def shader_calls(effect: Effect) -> list[tuple[Technique, ShaderCall]]:
+def shader_calls(effect: SEffect) -> list[tuple[STechnique, SShaderCall]]:
     """Each technique's shaders, each (passthrough set, shader) once, in file order."""
     seen, out = set(), []
-    for t in effect.techniques:
-        for c in t.calls:
-            key = (t.passthrough, c)
+    for technique in effect.techniques:
+        for call in technique.calls:
+            key = (technique.passthrough, call)
             if key not in seen:
                 seen.add(key)
-                out.append((t, c))
+                out.append((technique, call))
     return out
+
+
+_LINE_MARK_RE = re.compile(r"(?m)^[ \t]*#[ \t]*line\b[^\n]*$")
+_BLOCK_HEADS = ("cbuffer", "tbuffer", "struct", "technique", "renderstateblock", "pass")
+
+
+@dataclass
+class SDeclarations:
+    """A preprocessed effect without its function bodies and line marks, whitespace folded: ``base`` the resources,
+    constant buffers, structures, function heads and the names of its techniques and state blocks, whose bodies are
+    in ``techniques`` and ``blocks`` by name."""
+
+    base: str
+    techniques: dict[str, str] = field(default_factory=dict)
+    blocks: dict[str, str] = field(default_factory=dict)
+
+
+def _fold(text: str) -> str:
+    return " ".join(text.split())
+
+
+def declarations(preprocessed: str) -> SDeclarations:
+    """What a variant declares (``SDeclarations``). Two variants whose parts are the same differ there only in what
+    their shaders' code does (models.shaderprebuild holds the compiled shaders against each other)."""
+    text = _LINE_MARK_RE.sub("", preprocessed)
+    out, found, last, head, depth = [], SDeclarations(""), 0, 0, 0
+    i = 0
+    while i < len(text):
+        character = text[i]
+        if character == "{" and depth == 0:
+            words = text[head:i].split()
+            named = words[:1] in (["technique"], ["renderstateblock"]) and len(words) > 1
+            if named or ("(" in text[head:i] and words[:1] and words[0] not in _BLOCK_HEADS):
+                close = matching(text, i, "{}")
+                if named:  # a technique's or state block's body: kept by its name
+                    table = found.techniques if words[0] == "technique" else found.blocks
+                    table[words[1]] = _fold(text[i + 1 : close])
+                out.append(text[last:i] + "{}")  # a function's body goes
+                last = head = i = close + 1
+                continue
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+        if character in ";}" and depth == 0:
+            head = i + 1
+        i += 1
+    out.append(text[last:])
+    found.base = _fold("".join(out))
+    return found

@@ -1,4 +1,4 @@
-"""Plays a sound clip for any app of the suite: ``ClipPlayer(parent).play(name, data, folder)`` decodes a clip (a
+"""Plays a sound clip for any app of the suite: ``CClipPlayer(parent).play(name, data, folder)`` decodes a clip (a
 Wwise ``.wem``, WAV, MP3, Ogg) into ``folder`` once and hands it to Qt's media player; ``stop`` stops it.
 ``prepare`` is the decoding half, which may run off the window's thread, ``start`` the playing half.
 """
@@ -15,12 +15,12 @@ from ..infra.buildcache import write_atomic
 from ..infra.i18n import tr
 
 
-class ClipPlayer(QObject):
+class CClipPlayer(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._player = None
-        self._output = None
-        self.last_error = ""
+        self._m_player = None
+        self._m_output = None
+        self.m_last_error = ""
 
     def play(self, name: str, data: bytes, folder: Path | None) -> str:
         """Play ``data`` (named ``name`` for its form); "" when it plays, else the sentence that says why not."""
@@ -36,7 +36,7 @@ class ClipPlayer(QObject):
         cannot be played. Touches nothing of Qt: any thread may run it."""
         try:
             out, suffix = banks.playable(data, name)
-        except banks.Unplayable as exc:
+        except banks.CUnplayable as exc:
             return tr("common.cannot_play_error", error=exc)
         if folder is None:
             return tr("viewer.no_cache_folder_play")
@@ -52,13 +52,13 @@ class ClipPlayer(QObject):
         """Play a file ``prepare`` gave (the window's thread)."""
         from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 
-        if self._player is None:
-            self._player, self._output = QMediaPlayer(self), QAudioOutput(self)
-            self._player.setAudioOutput(self._output)
-            self._player.errorOccurred.connect(lambda _e, text: setattr(self, "last_error", text))
-        self._player.setSource(QUrl.fromLocalFile(str(target)))
-        self._player.play()
+        if self._m_player is None:
+            self._m_player, self._m_output = QMediaPlayer(self), QAudioOutput(self)
+            self._m_player.setAudioOutput(self._m_output)
+            self._m_player.errorOccurred.connect(lambda _e, text: setattr(self, "m_last_error", text))
+        self._m_player.setSource(QUrl.fromLocalFile(str(target)))
+        self._m_player.play()
 
     def stop(self) -> None:
-        if self._player is not None:
-            self._player.stop()
+        if self._m_player is not None:
+            self._m_player.stop()

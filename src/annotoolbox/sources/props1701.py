@@ -16,7 +16,7 @@ TEXT = "latin-1"  # every byte is a character, so what the editor does not touch
 
 
 @dataclass
-class Value:
+class SValue:
     id: int
     type: int  # 6: a whole number (flags and counts), 1: text (numbers too)
     text: str
@@ -24,90 +24,98 @@ class Value:
 
 
 @dataclass
-class Block:
+class SBlock:
     """A ``[PROPERTY]`` block: the property number and its values."""
 
     prop: int
-    values: list[Value] = field(default_factory=list)
+    values: list[SValue] = field(default_factory=list)
 
 
 @dataclass
-class PropObject:
+class SPropObject:
     guid: int
     name: str
-    values: list[Value] = field(default_factory=list)  # the object's own values (ids 100 to 104)
-    blocks: list[Block] = field(default_factory=list)
+    values: list[SValue] = field(default_factory=list)  # the object's own values (ids 100 to 104)
+    blocks: list[SBlock] = field(default_factory=list)
 
 
 @dataclass
-class Props:
-    objects: list[PropObject] = field(default_factory=list)
+class SProps:
+    objects: list[SPropObject] = field(default_factory=list)
     eol: str = "\r\n"
     tail: str = ""  # what follows the last line's end of line (empty in every shipped file)
 
-    def by_guid(self) -> dict[int, PropObject]:
-        return {o.guid: o for o in self.objects}
+    def by_guid(self) -> dict[int, SPropObject]:
+        return {prop.guid: prop for prop in self.objects}
 
     def value_types(self) -> dict[int, int]:
         """Value id -> its type (the ids keep one type in the shipped file)."""
         found: dict[int, int] = {}
-        for obj in self.objects:
-            for v in [*obj.values, *(v for b in obj.blocks for v in b.values)]:
-                found.setdefault(v.id, v.type)
+        for prop_object in self.objects:
+            for value in [*prop_object.values, *(value for block in prop_object.blocks for value in block.values)]:
+                found.setdefault(value.id, value.type)
         return found
 
 
-def _value(line: str, number: int) -> Value:
+def _value(line: str, number: int) -> SValue:
     parts = line.split(" ", 4)
     try:
-        return Value(int(parts[1]), int(parts[2]), parts[4] if len(parts) > 4 else "", int(parts[3]))
-    except (ValueError, IndexError) as exc:
-        raise ValueError(f"line {number}: not a VALUEID line: {line[:60]!r}") from exc
+        return SValue(int(parts[1]), int(parts[2]), parts[4] if len(parts) > 4 else "", int(parts[3]))
+    except (ValueError, IndexError) as error:
+        raise ValueError(f"line {number}: not a VALUEID line: {line[:60]!r}") from error
 
 
-def parse_props(data: bytes) -> Props:
+def _count(line: str, number: int) -> int:
+    """The number after the key of a ``GUID`` or ``PROPID`` line."""
+    try:
+        return int(line.split(" ", 1)[1])
+    except (ValueError, IndexError) as error:
+        raise ValueError(f"line {number}: no number in {line[:60]!r}") from error
+
+
+def parse_props(data: bytes) -> SProps:
     """The objects of a ``property.ini``; ValueError (with the line) for what does not fit its layout."""
     text = data.decode(TEXT)
     eol = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(eol)
     tail = lines.pop() if lines and lines[-1] == "" else ""
-    props = Props(eol=eol, tail="" if tail == "" and text.endswith(eol) else tail)
-    obj: PropObject | None = None
-    block: Block | None = None
+    props = SProps(eol=eol, tail="" if tail == "" and text.endswith(eol) else tail)
+    prop_object: SPropObject | None = None
+    block: SBlock | None = None
     for number, line in enumerate(lines, 1):
         key = line.split(" ", 1)[0]
         if line == "[OBJECT]":
-            obj, block = PropObject(0, ""), None
-            props.objects.append(obj)
-        elif obj is None:
+            prop_object, block = SPropObject(0, ""), None
+            props.objects.append(prop_object)
+        elif prop_object is None:
             raise ValueError(f"line {number}: {line[:60]!r} comes before the first [OBJECT]")
         elif key == "GUID":
-            obj.guid = int(line.split(" ", 1)[1])
+            prop_object.guid = _count(line, number)
         elif key == "NAME":
-            obj.name = line[5:]
+            prop_object.name = line[5:]
         elif line == "[PROPERTY]":
             continue
         elif key == "PROPID":
-            block = Block(int(line.split(" ", 1)[1]))
-            obj.blocks.append(block)
+            block = SBlock(_count(line, number))
+            prop_object.blocks.append(block)
         elif key == "VALUEID":
-            (block.values if block is not None else obj.values).append(_value(line, number))
+            (block.values if block is not None else prop_object.values).append(_value(line, number))
         else:
             raise ValueError(f"line {number}: unknown line {line[:60]!r}")
     return props
 
 
-def render_props(props: Props) -> bytes:
+def render_props(props: SProps) -> bytes:
     """The file's bytes for ``props``; what ``parse_props`` read gives its file back."""
     out: list[str] = []
 
-    def values(row: list[Value]) -> None:
-        out.extend(f"VALUEID {v.id} {v.type} {v.count} {v.text}" for v in row)
+    def values(row: list[SValue]) -> None:
+        out.extend(f"VALUEID {value.id} {value.type} {value.count} {value.text}" for value in row)
 
-    for obj in props.objects:
-        out += ["[OBJECT]", f"GUID {obj.guid}", f"NAME {obj.name}"]
-        values(obj.values)
-        for block in obj.blocks:
+    for prop_object in props.objects:
+        out += ["[OBJECT]", f"GUID {prop_object.guid}", f"NAME {prop_object.name}"]
+        values(prop_object.values)
+        for block in prop_object.blocks:
             out += ["[PROPERTY]", f"PROPID {block.prop}"]
             values(block.values)
     return (props.eol.join(out) + props.eol + props.tail).encode(TEXT)
@@ -117,7 +125,7 @@ def render_props(props: Props) -> bytes:
 
 
 @dataclass
-class Table:
+class STable:
     header: list[str]
     rows: dict[int, list[str]]  # GUID -> the cells (the header's length)
     order: list[int] = field(default_factory=list)  # the GUIDs in file order
@@ -125,7 +133,7 @@ class Table:
     raw: dict[int, str] = field(default_factory=dict)  # a row's line as the file has it
 
 
-def parse_table(data: bytes) -> Table:
+def parse_table(data: bytes) -> STable:
     """The balancing table; a row shorter than the header is padded with empty cells, a longer one is refused."""
     text = data.decode(TEXT)
     eol = "\r\n" if "\r\n" in text else "\n"
@@ -133,7 +141,7 @@ def parse_table(data: bytes) -> Table:
     if lines and lines[-1] == "":
         lines.pop()
     header = lines[0].split("\t") if lines else []
-    table = Table(header, {}, [], eol)
+    table = STable(header, {}, [], eol)
     for number, line in enumerate(lines[1:], 2):
         cells = line.split("\t")
         if not cells[0].strip().lstrip("-").isdigit() or len(cells) > len(header):
@@ -145,7 +153,7 @@ def parse_table(data: bytes) -> Table:
     return table
 
 
-def render_table(table: Table) -> bytes:
+def render_table(table: STable) -> bytes:
     """The table's bytes: a row whose cells are as parsed keeps its line, a changed one is joined again."""
     lines = ["\t".join(table.header)]
     for guid in table.order:
@@ -164,20 +172,20 @@ TAG = re.compile(r"<(/?)([A-Za-z_][\w.-]*)[^>]*?(/?)>")
 
 def _leaves(text: str) -> list[tuple[tuple[str, ...], int, int]]:
     """(path, start, end) of every element without children: the span of its text."""
-    blank = COMMENT.sub(lambda m: " " * len(m.group(0)), text)  # the same offsets, no comments
+    blank = COMMENT.sub(lambda match: " " * len(match.group(0)), text)  # the same offsets, no comments
     stack: list[list] = []  # per open element: its name, where its text starts, whether it has a child element
     found = []
-    for m in TAG.finditer(blank):
-        if m.group(1):
+    for match in TAG.finditer(blank):
+        if match.group(1):
             if stack:
                 name, start, has_child = stack.pop()
                 if not has_child:
-                    found.append((tuple(e[0] for e in stack) + (name,), start, m.start()))
+                    found.append((tuple(entry[0] for entry in stack) + (name,), start, match.start()))
             continue
         if stack:
             stack[-1][2] = True
-        if not m.group(3):
-            stack.append([m.group(2), m.end(), False])
+        if not match.group(3):
+            stack.append([match.group(2), match.end(), False])
     return found
 
 
@@ -200,7 +208,7 @@ def set_game_values(data: bytes, changes: dict[tuple[str, ...], str]) -> bytes:
     for path in changes:
         if len(spans.get(path, [])) != 1:
             raise ValueError(f"gamevalues.xml has no single setting {'/'.join(path)}")
-    for path, value in sorted(changes.items(), key=lambda kv: -spans[kv[0]][0][0]):
+    for path, value in sorted(changes.items(), key=lambda item: -spans[item[0]][0][0]):
         start, end = spans[path][0]
         text = text[:start] + value + text[end:]
     return text.encode(TEXT)

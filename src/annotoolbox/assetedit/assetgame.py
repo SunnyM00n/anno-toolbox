@@ -1,7 +1,7 @@
 """A game opened for the asset editor: its files, its schema (with another game's descriptions borrowed where its
 own has none), its asset index and its texts.
 
-``open_game(key, folder, cache)`` returns a ``Game``; ``Game.document(changes)`` the ``AssetDocument`` to edit. The
+``open_game(key, folder, cache)`` returns a ``CGame``; ``CGame.document(changes)`` the ``CAssetDocument`` to edit. The
 donor (117 borrows from 1800) is read from the user's own install at run time, never shipped
 (``docs/tool-suite.md``, "Decisions (2026-11-07)").
 """
@@ -17,12 +17,12 @@ from ..infra import i18n
 from ..infra.i18n import tr
 from ..sources import icons2070, loca2070
 from . import descriptions, game1701
-from .assetdoc import AssetDocument
-from .assetindex import AssetIndex, build_index
-from .changeset import ChangeSet
-from .gamefiles import LAYOUTS, GameFiles, Layout, asset_files, open_files
-from .origins import Layer
-from .schema import Schema, borrow, read_schema
+from .assetdoc import CAssetDocument
+from .assetindex import CAssetIndex, build_index
+from .changeset import CChangeSet
+from .gamefiles import LAYOUTS, CGameFiles, SLayout, asset_files, open_files
+from .origins import SLayer
+from .schema import SSchema, borrow, read_schema
 from .xmltree import parse, text
 
 TEXT_KEYS = ("LineId", "GUID")  # the id element of a text entry: 117's, 1800's
@@ -31,105 +31,113 @@ GAME_LANGUAGES = {"en": "english", "de": "german"}  # an interface language -> t
 
 
 @dataclass
-class Game:
-    layout: Layout
-    files: GameFiles
-    schema: Schema
-    index: AssetIndex
-    notes: list[str] = field(default_factory=list)
-    icon_data: tuple[dict, dict] = field(default_factory=lambda: ({}, {}))  # the atlases and GUID -> tile (icons2070)
-    _texts: dict[str, dict[str, str]] = field(default_factory=dict)
-    layer: Layer | None = None  # a mod laid over the game: ``files`` and ``index`` are the game with it (``layered``)
+class CGame:
+    m_layout: SLayout
+    m_files: CGameFiles
+    m_schema: SSchema
+    m_index: CAssetIndex
+    m_notes: list[str] = field(default_factory=list)
+    m_icon_data: tuple[dict, dict] = field(default_factory=lambda: ({}, {}))  # the atlases and GUID -> tile (icons2070)
+    _m_texts: dict[str, dict[str, str]] = field(default_factory=dict)
+    m_layer: SLayer | None = (
+        None  # a mod laid over the game: ``files`` and ``index`` are the game with it (``layered``)
+    )
 
-    def document(self, changes: ChangeSet | None = None, path: Path | None = None) -> AssetDocument:
-        doc = AssetDocument(self.schema, self.index, changes or ChangeSet(self.layout.key), path)
-        doc.game_texts = self.texts
-        doc.files = self.files
-        doc.layer = self.layer
+    def document(self, changes: CChangeSet | None = None, path: Path | None = None) -> CAssetDocument:
+        doc = CAssetDocument(self.m_schema, self.m_index, changes or CChangeSet(self.m_layout.key), path)
+        doc.m_game_texts = self.texts
+        doc.m_files = self.m_files
+        doc.m_layer = self.m_layer
         return doc
 
     @cached_property
     def _numbers(self) -> dict[str, int]:
-        return {p.lower(): k for k, p in reversed(list(enumerate(self.index.files)))}
+        return {path.lower(): k for k, path in reversed(list(enumerate(self.m_index.m_files)))}
 
     def file_number(self, path: str) -> int | None:
         """The index number of an asset file (``path`` lower case with forward slashes), None for any other path."""
         return self._numbers.get(path)
 
     def read_base(self, path: str) -> bytes | None:
-        """A game file's bytes as the mod loader's session reads it (``modloader.engine.Session``): an asset file from
+        """A game file's bytes as the mod loader's session reads it (``modloader.engine.CSession``): an asset file from
         the index's local copy, any other file from the game's tree; None where the game has none."""
         k = self.file_number(path)
         if k is not None:
-            return self.index.local[k].read_bytes()
-        return self.files.read(path) if self.files.exists(path) else None
+            return self.m_index.m_local[k].read_bytes()
+        return self.m_files.read(path) if self.m_files.exists(path) else None
 
     def lazy_ranges(self, path: str) -> list | None:
         """The byte range and GUID of each asset of an indexed asset file (so a session parses only the assets an
         operation reaches); None for a file that is not one."""
         k = self.file_number(path)
-        return None if k is None else [(e.start, e.end, e.guid) for e in self.index.entries if e.file == k]
+        return (
+            None
+            if k is None
+            else [(entry.start, entry.end, entry.guid) for entry in self.m_index.m_entries if entry.file == k]
+        )
 
     def texts(self, language: str = "english") -> dict[str, str]:
         """Text id -> text of one language (read once); empty where the game keeps no such file."""
-        if language not in self._texts:
-            self._texts[language] = read_texts(self.files, self.layout, language)
-        return self._texts[language]
+        if language not in self._m_texts:
+            self._m_texts[language] = read_texts(self.m_files, self.m_layout, language)
+        return self._m_texts[language]
 
 
-class LayeredFiles(GameFiles):
+class CLayeredFiles(CGameFiles):
     """A game's files with some of them replaced by files of the mod laid over it: ``over`` maps a path (lower case) to
     a real file holding the game's file with the mod applied; every other path is the game's. The stamp names the
     layer, so a cached index of the game alone is never taken for the layered one."""
 
-    def __init__(self, base: GameFiles, over: dict[str, Path], layer_stamp: str) -> None:
-        super().__init__(lambda: base.tree, f"{base.stamp}|{layer_stamp}", base.cache)
-        self.base, self.over = base, {k.lower(): v for k, v in over.items()}
+    def __init__(self, base: CGameFiles, over: dict[str, Path], layer_stamp: str) -> None:
+        super().__init__(lambda: base.tree, f"{base.m_stamp}|{layer_stamp}", base.m_cache)
+        self.m_base, self.m_over = base, {k.lower(): data for k, data in over.items()}
 
     def exists(self, path: str) -> bool:
-        return path.lower() in self.over or self.base.exists(path)
+        return path.lower() in self.m_over or self.m_base.exists(path)
 
     def read(self, path: str) -> bytes:
-        return self.over[path.lower()].read_bytes() if path.lower() in self.over else self.base.read(path)
+        return self.m_over[path.lower()].read_bytes() if path.lower() in self.m_over else self.m_base.read(path)
 
     def local(self, path: str) -> Path:
-        return self.over.get(path.lower()) or self.base.local(path)
+        return self.m_over.get(path.lower()) or self.m_base.local(path)
 
 
-def layered_game(game: Game, over: dict[str, Path], layer: Layer, layer_stamp: str) -> Game:
+def layered_game(game: CGame, over: dict[str, Path], layer: SLayer, layer_stamp: str) -> CGame:
     """``game`` with the mod laid over it: the files ``over`` replace the game's (the asset file with the mod's
     operations applied), the asset index is built over them, and ``layer`` says which assets the mod added or changed.
     The schema, the texts and the icons stay the game's."""
-    files = LayeredFiles(game.files, over, layer_stamp)
-    index = build_index(files, asset_files(game.layout, files), None, game.layout.follow_links)
-    return replace(game, files=files, index=index, layer=layer, _texts={})
+    files = CLayeredFiles(game.m_files, over, layer_stamp)
+    index = build_index(files, asset_files(game.m_layout, files), None, game.m_layout.follow_links)
+    return replace(game, m_files=files, m_index=index, m_layer=layer, _m_texts={})
 
 
-def read_schema_of(layout: Layout, files: GameFiles) -> Schema:
+def read_schema_of(layout: SLayout, files: CGameFiles) -> SSchema:
     def maybe(path: str) -> bytes | None:
         try:
             return files.local(path).read_bytes() if path else None
         except FileNotFoundError:
             return None
 
-    props = [data for p in layout.properties if (data := maybe(p)) is not None]
-    return read_schema(layout.key, props, maybe(layout.templates), maybe(layout.data_sets))
+    properties = [data for file_path in layout.properties if (data := maybe(file_path)) is not None]
+    return read_schema(layout.key, properties, maybe(layout.templates), maybe(layout.data_sets))
 
 
-def line_files(files: GameFiles, layout: Layout, language: str) -> list[str]:
+def line_files(files: CGameFiles, layout: SLayout, language: str) -> list[str]:
     """The text files of a language for a layout of ``id=text`` lines (2070, 1404), in the order they are read."""
     code = layout.language_code(language)
-    return [p for pattern in layout.texts.split("|") for p in files.glob(pattern.format(language=code))]
+    return [path for pattern in layout.texts.split("|") for path in files.glob(pattern.format(language=code))]
 
 
-def read_line_texts(files: GameFiles, layout: Layout, language: str) -> dict[str, str]:
+def read_line_texts(files: CGameFiles, layout: SLayout, language: str) -> dict[str, str]:
     out = {}
     for path in line_files(files, layout, language):
-        out |= {str(k): v for k, v in loca2070.parse_guid_text(loca2070.decode_text_file(files.read(path))).items()}
+        out |= {
+            str(k): text for k, text in loca2070.parse_guid_text(loca2070.decode_text_file(files.read(path))).items()
+        }
     return out
 
 
-def read_texts(files: GameFiles, layout: Layout, language: str) -> dict[str, str]:
+def read_texts(files: CGameFiles, layout: SLayout, language: str) -> dict[str, str]:
     if layout.text_format == "lines" and layout.texts:
         return read_line_texts(files, layout, language)
     path = layout.texts.format(language=layout.language_code(language)) if layout.texts else ""
@@ -151,9 +159,9 @@ def open_game(
     cache: Path,
     donor: Path | None = None,
     progress: Callable[[str], None] | None = None,
-) -> Game:
+) -> CGame:
     """The game ``key`` at ``folder``: schema, index (cached in ``cache``); ``donor``: the install of the game whose
-    descriptions this one borrows (``Layout.donor``), None to borrow none."""
+    descriptions this one borrows (``SLayout.donor``), None to borrow none."""
     say = progress or (lambda _text: None)
     layout = LAYOUTS[key]
     files = game1701.open_files(folder, cache) if layout.virtual else open_files(key, folder, cache)
@@ -172,8 +180,8 @@ def open_game(
         try:
             gained = borrow(schema, read_schema_of(dl, open_files(dl.key, donor, cache)))
             notes.append(tr("assets.n_descriptions_borrowed_game", n=gained, game=dl.name))
-        except (OSError, ValueError) as exc:
-            notes.append(tr("assets.no_descriptions_game_reason", game=dl.name, reason=exc))
+        except (OSError, ValueError) as error:
+            notes.append(tr("assets.no_descriptions_game_reason", game=dl.name, reason=error))
     written = descriptions.apply(schema, descriptions.load(key))
     if written:
         notes.append(tr("assets.descriptions_written_editor", n=written))
@@ -188,10 +196,10 @@ def open_game(
             )
         )
     index = build_index(files, paths, say, layout.follow_links)
-    game = Game(layout, files, schema, index, notes + index.problems)
+    game = CGame(layout, files, schema, index, notes + index.m_problems)
     if layout.atlas_icons:
         say(tr("assets.reading_icon_tables", game=layout.name))
-        game.icon_data = icons2070.load_icon_data(files.read, files.exists)
+        game.m_icon_data = icons2070.load_icon_data(files.read, files.exists)
     return game
 
 
@@ -208,7 +216,7 @@ def installed_folder(settings, key: str) -> Path | None:
     return Path(named) if named and Path(named).is_dir() else None
 
 
-def open_installed(settings, key: str, progress: Callable[[str], None] | None = None, *, borrow: bool = False) -> Game:
+def open_installed(settings, key: str, progress: Callable[[str], None] | None = None, *, borrow: bool = False) -> CGame:
     """The installed game ``key`` of the suite's settings, indexed into the shared cache; ``borrow``: with the donor's
     descriptions (the forms need them, a comparison or a build does not). FileNotFoundError when a folder is unset."""
     folder = installed_folder(settings, key)
@@ -222,7 +230,7 @@ def open_installed(settings, key: str, progress: Callable[[str], None] | None = 
     return open_game(key, folder, cache_dir(workspace), donor, progress)
 
 
-def installed_index(settings, key: str, workspace: str | Path) -> AssetIndex | None:
+def installed_index(settings, key: str, workspace: str | Path) -> CAssetIndex | None:
     """The asset index alone of the installed game ``key`` (no schema: for a reader of names, icons and values),
     from the shared cache of ``workspace``; None when its folder is not set or the game keeps no asset files."""
     folder, layout = installed_folder(settings, key), LAYOUTS.get(key)

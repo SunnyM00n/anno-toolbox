@@ -17,36 +17,38 @@ EDGE_SURE = 2  # tiles from the grid edge within which even kept ground joins th
 FLAT_NODE = 0.05  # world units: a stored-mesh node whose heights vary less is drawn as a 2x2 grid
 
 
-def edge_distance(n: int, seam=(False, False, False, False)):
+def edge_distance(corner_count: int, seam=(False, False, False, False)):
     """Corner distance (tiles) from the nearest grid edge, not counting the ``seam`` sides (west, north, east, south):
     there the grid meets another island's, whose ground must continue it."""
     import numpy as np
 
-    idx = np.arange(n, dtype=np.float64)
-    lo, hi = idx, n - 1 - idx
-    dx = np.minimum(np.inf if seam[0] else lo, np.inf if seam[2] else hi)
-    dz = np.minimum(np.inf if seam[1] else lo, np.inf if seam[3] else hi)
-    return np.minimum.outer(np.broadcast_to(dz, (n,)), np.broadcast_to(dx, (n,)))
+    index = np.arange(corner_count, dtype=np.float64)
+    low, high = index, corner_count - 1 - index
+    distance_x = np.minimum(np.inf if seam[0] else low, np.inf if seam[2] else high)
+    distance_z = np.minimum(np.inf if seam[1] else low, np.inf if seam[3] else high)
+    return np.minimum.outer(np.broadcast_to(distance_z, (corner_count,)), np.broadcast_to(distance_x, (corner_count,)))
 
 
 def floor_heights(heights, inside, land_level: float = 0.0, seam=(False, False, False, False)):
     """``heights`` (corners, world units, numpy, rows z) with the sea bed laid: corners outside 2070's terrain
     (``inside`` False: the padding and 2070's empty chunks) at ``FLOOR``, and the deep ground within ``EDGE_BLEND``
     tiles of the grid edge blended to it. Ground higher than ``land_level + KEEP_ABOVE`` stays as it is, and the
-    blend fades in over ``KEEP_FADE`` below that, so the coast, the harbours and an underwater island's plateau keep
+    blend fades in over ``KEEP_FADE`` below that, so the coast, the harbors and an underwater island's plateau keep
     2070's heights, except within ``EDGE_SURE`` tiles of the grid edge, which always lies at the floor. On a ``seam``
     side (west, north, east, south) neither rule applies: that edge keeps its ground, which the island on the other
     side of the seam has the same. Returns a new array."""
     import numpy as np
 
-    h = np.where(inside, np.asarray(heights, np.float64), FLOOR)
-    dist = edge_distance(h.shape[0], seam)  # corner distance from the nearest grid edge, tiles
-    t = np.clip(1.0 - dist / EDGE_BLEND, 0.0, 1.0)
-    w = t * t * (3 - 2 * t)  # smooth: full at the edge, none from EDGE_BLEND in
+    laid = np.where(inside, np.asarray(heights, np.float64), FLOOR)
+    distance_tiles = edge_distance(laid.shape[0], seam)  # corner distance from the nearest grid edge, tiles
+    blend_fraction = np.clip(1.0 - distance_tiles / EDGE_BLEND, 0.0, 1.0)
+    blend_weight = (
+        blend_fraction * blend_fraction * (3 - 2 * blend_fraction)
+    )  # smooth: full at the edge, none from EDGE_BLEND in
     keep = land_level + KEEP_ABOVE
-    m = np.clip((keep - h) / KEEP_FADE, 0.0, 1.0)  # 0 above keep, 1 from KEEP_FADE below it
-    m = np.where(dist <= EDGE_SURE, 1.0, m)
-    return h + (FLOOR - h) * w * m
+    keep_mask = np.clip((keep - laid) / KEEP_FADE, 0.0, 1.0)  # 0 above keep, 1 from KEEP_FADE below it
+    keep_mask = np.where(distance_tiles <= EDGE_SURE, 1.0, keep_mask)
+    return laid + (FLOOR - laid) * blend_weight * keep_mask
 
 
 def is_flat(block) -> bool:

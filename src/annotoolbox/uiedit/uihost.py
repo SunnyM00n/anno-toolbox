@@ -1,6 +1,6 @@
 """The UI app: one page for each kind of interface file, a switcher over them.
 
-``UiHost(settings, makers)`` holds the editor of the Phoenix files (Anno 117, 1800, 1404, 1701; ``uiwindow``), the
+``CUiHost(settings, makers)`` holds the editor of the Phoenix files (Anno 117, 1800, 1404, 1701; ``uiwindow``), the
 editor of 2205's Flash movies (``flashui.uiwindow``) and the viewer of the old interface (2070, 1404, 1701;
 ``oldpage``) as pages of one window, the way the island editor holds every game; a page is made (its modules imported)
 the first time it is shown, and a kind without a maker has no button. ``open_game`` is the entry other code
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -42,17 +42,19 @@ def kind_of(game: str) -> str:
     return FLASH if game == FLASH_GAME else OLD if game == OLD_GAME else PHOENIX
 
 
-class UiHost(QWidget):
+class CUiHost(QWidget):
     """The switcher on top, the open kind's editor below it."""
+
+    menus_changed = Signal()  # another kind came to the front: its menus stand for the page (``suite.centralmenu``)
 
     def __init__(self, settings, makers: dict[str, Callable[[], QMainWindow]]) -> None:
         super().__init__()
         self.settings = settings
-        self.makers = makers
-        self.pages: dict[str, QMainWindow] = {}
-        self.current: str | None = None
-        self.stack = QStackedWidget()
-        self.buttons: dict[str, QPushButton] = {}
+        self.m_makers = makers
+        self.m_pages: dict[str, QMainWindow] = {}
+        self.m_current: str | None = None
+        self.m_stack = QStackedWidget()
+        self.m_buttons: dict[str, QPushButton] = {}
         group = QButtonGroup(self, exclusive=True)
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 4, 6, 4)
@@ -62,57 +64,62 @@ class UiHost(QWidget):
             button.clicked.connect(lambda _on=False, k=key: self.pick_kind(k))
             group.addButton(button)
             bar.addWidget(button)
-            self.buttons[key] = button
+            self.m_buttons[key] = button
         bar.addStretch(1)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addLayout(bar)
-        lay.addWidget(self.stack, 1)
+        lay.addWidget(self.m_stack, 1)
         self.setWindowTitle(tr("ui.ui_editor"))
+
+    def menu_window(self) -> QMainWindow | None:
+        """The editor in front: the window whose menus the suite's menu bar shows."""
+        return self.m_pages.get(self.m_current)
 
     def page_of(self, kind: str) -> QMainWindow:
         """The editor of a kind, made when it is not yet; it is held as a page of this window."""
-        if kind not in self.pages:
-            page = self.makers[kind]()
+        if kind not in self.m_pages:
+            page = self.m_makers[kind]()
             page.setWindowFlags(Qt.WindowType.Widget)
             page.windowTitleChanged.connect(lambda _t, k=kind: self._title(k))
-            self.pages[kind] = page
-            self.stack.addWidget(page)
-        return self.pages[kind]
+            self.m_pages[kind] = page
+            self.m_stack.addWidget(page)
+        return self.m_pages[kind]
 
     def game(self) -> str:
         """The game of the page in front; "" while that page has none open."""
-        if self.current == FLASH:
+        if self.m_current == FLASH:
             return FLASH_GAME
-        if self.current == OLD:
-            return getattr(self.pages.get(OLD), "key", None) or ""
-        open_game = getattr(self.pages.get(PHOENIX), "game", None)
-        return open_game.key if open_game is not None else ""
+        if self.m_current == OLD:
+            return getattr(self.m_pages.get(OLD), "m_key", None) or ""
+        open_game = getattr(self.m_pages.get(PHOENIX), "game", None)
+        return open_game.m_key if open_game is not None else ""
 
     def pick_kind(self, kind: str) -> None:
         """A click on the switcher: the page comes to the front and the suite's other apps follow its game; a
         question cancelled in one of them leaves the page in front where it is."""
-        open_game = getattr(self.pages.get(PHOENIX), "game", None)
+        open_game = getattr(self.m_pages.get(PHOENIX), "game", None)
         if kind == FLASH:
             game = FLASH_GAME
         elif kind == OLD:
-            game = getattr(self.pages.get(OLD), "key", None) or ""
+            game = getattr(self.m_pages.get(OLD), "m_key", None) or ""
         else:
-            game = open_game.key if open_game is not None else ""
+            game = open_game.m_key if open_game is not None else ""
         if game and not gamesync.may_switch(self, game):
-            if self.current:
-                self.buttons[self.current].setChecked(True)
+            if self.m_current:
+                self.m_buttons[self.m_current].setChecked(True)
             return
         self.show_kind(kind)
 
     def show_kind(self, kind: str) -> QMainWindow:
         page = self.page_of(kind)
-        self.current = kind
-        self.stack.setCurrentWidget(page)
-        self.buttons[kind].setChecked(True)
+        self.m_current = kind
+        self.m_stack.setCurrentWidget(page)
+        self.m_buttons[kind].setChecked(True)
         self.settings.apps.setdefault(APP, {})["kind"] = kind
         self._title(kind)
+        self.menus_changed.emit()
         return page
 
     def open_game(self, game: str, *opened) -> None:
@@ -127,7 +134,7 @@ class UiHost(QWidget):
         if last.get("kind") == FLASH:
             self.show_kind(FLASH)
             return
-        if last.get("kind") == OLD and OLD in self.makers:
+        if last.get("kind") == OLD and OLD in self.m_makers:
             self.show_kind(OLD).open_game(last.get("old") or OLD_GAME)
             return
         page = self.show_kind(PHOENIX)
@@ -135,12 +142,14 @@ class UiHost(QWidget):
             page.open_game(last["game"])
 
     def _title(self, kind: str) -> None:
-        if kind == self.current:
-            self.setWindowTitle(self.pages[kind].windowTitle())
+        if kind == self.m_current:
+            self.setWindowTitle(self.m_pages[kind].windowTitle())
 
     def close(self) -> bool:
         """Close every page (each asks about its unsaved work); False when one stays open."""
-        for page in self.pages.values():
+        for page in self.m_pages.values():
             if not page.close():
+                if (shown := self.menu_window()) is not None:
+                    shown.show()  # a page that agreed before this one refused was hidden by its close
                 return False
         return super().close()

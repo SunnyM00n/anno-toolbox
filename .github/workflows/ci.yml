@@ -1,6 +1,7 @@
 name: tests
 # actions pinned by commit, at the versions release.yml uses (Node 24); bump both files together
-on: [push, pull_request]
+# Actions minutes are for releases only: this runs by hand (workflow_dispatch), never by itself.
+on: workflow_dispatch
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -61,4 +62,4 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev,gui]" nanobind==2.9.2
       - run: python scripts/build_native.py --test
-      - run: python -m pytest -q tests/test_nativegpu.py tests/test_shadernative.py
+      - run: python -m pytest -q tests/render/test_nativegpu.py tests/models/test_shadernative.py

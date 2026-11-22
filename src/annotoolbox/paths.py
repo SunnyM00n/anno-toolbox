@@ -81,9 +81,9 @@ def documents_dir() -> Path:
         import ctypes
         from ctypes import wintypes
 
-        buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0:  # CSIDL_PERSONAL
-            return Path(buf.value)
+        buffer = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buffer) == 0:  # CSIDL_PERSONAL
+            return Path(buffer.value)
     except (AttributeError, OSError):
         pass
     return Path.home() / "Documents"

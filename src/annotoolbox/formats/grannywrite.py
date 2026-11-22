@@ -3,7 +3,7 @@ type tree that describes it, in one stored section with its pointer fixups, unde
 reads. The type tag is not the runtime's own, so the runtime converts the file into its own types by member name
 and a member left out reads as zero.
 
-``write_file(root)`` is the entry, ``root`` a ``Rec`` of ``ROOT``; ``mesh_record``, ``skeleton_record``,
+``write_file(root)`` is the entry, ``root`` a ``SRec`` of ``ROOT``; ``mesh_record``, ``skeleton_record``,
 ``model_record`` and ``animation_record`` build the standard records; ``grannyread`` reads the result back.
 docs/formats/granny.md "Writing".
 """
@@ -79,36 +79,36 @@ FORMAT_KNOTS, FORMAT_IDENTITY = 1, 2  # a curve's ``Format`` byte (DaK32fC32f, D
 
 
 @dataclass(eq=False)
-class Rec:
+class SRec:
     """One record: its type and member values by name (a member left out is zero). Records are written once, so
-    one ``Rec`` referred to twice is one record in the file."""
+    one ``SRec`` referred to twice is one record in the file."""
 
     type: _T
     values: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class VariantArray:
+class SVariantArray:
     """The value of a reference to a variant array: the record type and the records, each a tuple of its values."""
 
     type: _T
     rows: list
 
 
-class _Writer:
+class _CWriter:
     """One section being written: records, strings and type definitions laid out in order, with their fixups."""
 
     def __init__(self, pointer: int) -> None:
         self.p, self.data, self.fixups = pointer, bytearray(), []
         # by id: each entry keeps its object alive, so a record made on the fly cannot hand its id to the next one
         self._types: dict[int, tuple[_T, int]] = {}
-        self._records: dict[int, tuple[Rec, int]] = {}
+        self._records: dict[int, tuple[SRec, int]] = {}
         self._strings: dict[str, int] = {}
 
-    def alloc(self, size: int) -> int:
+    def alloc(self, size_bytes: int) -> int:
         self.data += bytes(-len(self.data) % 4)
         at = len(self.data)
-        self.data += bytes(size)
+        self.data += bytes(size_bytes)
         return at
 
     def point(self, at: int, target: int | None) -> None:
@@ -126,8 +126,8 @@ class _Writer:
     def type_of(self, members: _T) -> int:
         """A type definition (its members' names and target types first), once per type."""
         if id(members) not in self._types:
-            names = [self.string(m[1]) for m in members]
-            targets = [self.type_of(m[2]) if m[2] is not None else None for m in members]
+            names = [self.string(member[1]) for member in members]
+            targets = [self.type_of(member[2]) if member[2] is not None else None for member in members]
             stride = gr.member_stride(self.p)
             at = self.alloc(stride * (len(members) + 1))
             for k, (kind, _name, _target, width) in enumerate(members):
@@ -139,30 +139,30 @@ class _Writer:
         return self._types[id(members)][1]
 
     def size(self, members: _T) -> int:
-        return sum(self._member_size(m) * max(m[3], 1) for m in members)
+        return sum(self._member_size(member) * max(member[3], 1) for member in members)
 
-    def _member_size(self, m: tuple) -> int:
-        return gr.field_size(m[0], self.p, self.size(m[2]) if m[0] == gr.INLINE else 0)
+    def _member_size(self, member: tuple) -> int:
+        return gr.field_size(member[0], self.p, self.size(member[2]) if member[0] == gr.INLINE else 0)
 
-    def record(self, rec: Rec | None) -> int | None:
-        if rec is None:
+    def record(self, record: SRec | None) -> int | None:
+        if record is None:
             return None
-        if id(rec) not in self._records:
-            at = self.alloc(self.size(rec.type))
-            self._records[id(rec)] = (rec, at)
-            self.fill(rec.type, rec.values, at)
-        return self._records[id(rec)][1]
+        if id(record) not in self._records:
+            at = self.alloc(self.size(record.type))
+            self._records[id(record)] = (record, at)
+            self.fill(record.type, record.values, at)
+        return self._records[id(record)][1]
 
     def fill(self, members: _T, values: dict, at: int) -> None:
         """Write a record's members at ``at`` (its space taken), what they point to after the end."""
-        for m in members:
-            value = values.get(m[1], {} if m[0] == gr.TRANSFORM else None)  # a transform: identity
+        for member in members:
+            value = values.get(member[1], {} if member[0] == gr.TRANSFORM else None)  # a transform: identity
             if value is not None:
-                self._member(m, value, at)
-            at += self._member_size(m) * max(m[3], 1)
+                self._member(member, value, at)
+            at += self._member_size(member) * max(member[3], 1)
 
-    def _member(self, m: tuple, value, at: int) -> None:
-        kind, _name, target, width = m
+    def _member(self, member: tuple, value, at: int) -> None:
+        kind, _name, target, width = member
         if kind in gr.SCALARS:
             items = tuple(value) if width > 1 else (value,)
             struct.pack_into(f"<{len(items)}{gr.SCALARS[kind]}", self.data, at, *items)
@@ -171,7 +171,7 @@ class _Writer:
         elif kind == gr.STRING:
             self.point(at, self.string(value))
         elif kind == gr.REFERENCE:
-            self.point(at, self.record(value if isinstance(value, Rec) else Rec(target, value)))
+            self.point(at, self.record(value if isinstance(value, SRec) else SRec(target, value)))
         elif kind == gr.REFERENCE_TO_ARRAY:
             struct.pack_into("<i", self.data, at, len(value))
             self.point(at + 4, self._array(target, value) if len(value) else None)
@@ -179,8 +179,8 @@ class _Writer:
             struct.pack_into("<i", self.data, at, len(value))
             table = self.alloc(self.p * len(value)) if value else None
             self.point(at + 4, table)
-            for k, rec in enumerate(value):
-                self.point(table + k * self.p, self.record(rec))
+            for k, record in enumerate(value):
+                self.point(table + k * self.p, self.record(record))
         elif kind == gr.VARIANT_REFERENCE:
             self.point(at, self.type_of(value.type))
             self.point(at + self.p, self.record(value))
@@ -189,20 +189,30 @@ class _Writer:
             struct.pack_into("<i", self.data, at + self.p, len(value.rows))
             self.point(at + self.p + 4, self._array(value.type, value.rows) if value.rows else None)
         elif kind == gr.TRANSFORM:
-            t = {**IDENTITY_TRANSFORM, **value}
-            struct.pack_into("<I16f", self.data, at, t["flags"], *t["position"], *t["orientation"], *t["scale_shear"])
+            transform = {**IDENTITY_TRANSFORM, **value}
+            struct.pack_into(
+                "<I16f",
+                self.data,
+                at,
+                transform["flags"],
+                *transform["position"],
+                *transform["orientation"],
+                *transform["scale_shear"],
+            )
 
     def _array(self, members: _T, rows) -> int:
         """Records in a row: a type of plain numbers takes tuples (or numbers), any other dicts of values."""
-        size = self.size(members)
-        at = self.alloc(size * len(rows))
-        plain = all(m[0] in gr.SCALARS for m in members)
-        fmt = "<" + "".join(f"{max(m[3], 1)}{gr.SCALARS[m[0]]}" for m in members) if plain else ""
+        size_bytes = self.size(members)
+        at = self.alloc(size_bytes * len(rows))
+        plain = all(member[0] in gr.SCALARS for member in members)
+        fmt = "<" + "".join(f"{max(member[3], 1)}{gr.SCALARS[member[0]]}" for member in members) if plain else ""
         for k, row in enumerate(rows):
             if plain and not isinstance(row, dict):
-                struct.pack_into(fmt, self.data, at + k * size, *(row if isinstance(row, tuple | list) else (row,)))
+                struct.pack_into(
+                    fmt, self.data, at + k * size_bytes, *(row if isinstance(row, tuple | list) else (row,))
+                )
             else:
-                self.fill(members, row, at + k * size)
+                self.fill(members, row, at + k * size_bytes)
         return at
 
 
@@ -210,28 +220,28 @@ IDENTITY_TRANSFORM = {"flags": 7, "position": (0.0, 0.0, 0.0), "orientation": (0
                       "scale_shear": (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)}  # fmt: skip
 
 
-def write_file(root: Rec) -> bytes:
+def write_file(root: SRec) -> bytes:
     """The ``.gr2`` of a root record (``ROOT``): one stored section with everything, seven empty ones; 64-bit
     pointers (the games' runtime failed on a 32-bit file of ours, granny.md "Writing")."""
     pointer = POINTER
-    w = _Writer(pointer)
-    root_type = w.type_of(root.type)
-    root_at = w.record(root)
-    data = bytes(w.data) + bytes(-len(w.data) % 4)
+    writer = _CWriter(pointer)
+    root_type = writer.type_of(root.type)
+    root_at = writer.record(root)
+    data = bytes(writer.data) + bytes(-len(writer.data) % 4)
     data_at = HEADER_SIZE
     fixups_at = data_at + len(data)
-    total = fixups_at + 12 * len(w.fixups)
-    magic = next(m for m, p in gr.MAGICS.items() if p == pointer)
+    total = fixups_at + 12 * len(writer.fixups)
+    magic = next(magic_bytes for magic_bytes, candidate in gr.MAGICS.items() if candidate == pointer)
     head = bytearray(magic + struct.pack("<II8x", HEADER_SIZE, 0))
     head += struct.pack("<5I", 7, total, 0, 72, SECTIONS) + struct.pack("<4I", 0, root_type, 0, root_at)
     head += struct.pack("<I", TAG)
     head += bytes(gr.INFO_AT + 72 - len(head))
     for k in range(SECTIONS):
-        size = len(data) if k == 0 else 0
+        size_bytes = len(data) if k == 0 else 0
         where = data_at if k == 0 else fixups_at
-        fix = (fixups_at, len(w.fixups)) if k == 0 else (total, 0)
-        head += struct.pack("<11I", gr.NONE, where, size, size, 4, size, size, *fix, total, 0)
-    out = bytearray(head) + data + b"".join(struct.pack("<3I", *f) for f in w.fixups)
+        fix = (fixups_at, len(writer.fixups)) if k == 0 else (total, 0)
+        head += struct.pack("<11I", gr.NONE, where, size_bytes, size_bytes, 4, size_bytes, size_bytes, *fix, total, 0)
+    out = bytearray(head) + data + b"".join(struct.pack("<3I", *fixup) for fixup in writer.fixups)
     struct.pack_into("<I", out, 40, zlib.crc32(out[CRC_FROM:]))
     return bytes(out)
 
@@ -252,7 +262,7 @@ def vertex_type(skinned: bool, colours: bool = False, frames: bool = False) -> _
 
 
 @dataclass
-class MeshSpec:
+class SMeshSpec:
     """A mesh to write: per vertex position, normal, UV (and a skin's bone numbers into ``bones``, weights 0-255,
     tangent and binormal, colours 0-1); per material group its material and triangle indices."""
 
@@ -269,14 +279,14 @@ class MeshSpec:
     binormals: list | None = None
 
 
-def mesh_record(spec: MeshSpec) -> Rec:
+def mesh_record(spec: SMeshSpec) -> SRec:
     """A ``Mesh`` record with its vertex data, topology (32-bit indices beyond 65535 vertices) and bindings."""
     skinned = spec.bone_indices is not None
     frames = spec.tangents is not None and spec.binormals is not None
     vtype = vertex_type(skinned, spec.colours is not None, frames)
     rows = []
-    for k, p in enumerate(spec.positions):
-        row = [*p]
+    for k, position in enumerate(spec.positions):
+        row = [*position]
         if skinned:
             row += [*spec.bone_weights[k], *spec.bone_indices[k]]
         row += [*spec.normals[k], *((*spec.tangents[k], *spec.binormals[k]) if frames else ())]
@@ -290,60 +300,64 @@ def mesh_record(spec: MeshSpec) -> Rec:
                        "TriCount": len(tris) // 3})  # fmt: skip
         indices += tris
     wide = len(spec.positions) > 0xFFFF
-    topology = Rec(TOPOLOGY, {"Groups": groups, "Indices" if wide else "Indices16": [(i,) for i in indices]})
-    bones = [{"BoneName": b, "OBBMin": _bound(spec, min), "OBBMax": _bound(spec, max)} for b in spec.bones]
-    return Rec(MESH, {"Name": spec.name, "PrimaryVertexData": Rec(VERTEX_DATA, {"Vertices": VariantArray(vtype, rows)}),
-                      "PrimaryTopology": topology, "MaterialBindings": [{"Material": m} for m in materials],
+    if not wide:  # Indices16 is a signed member: an index above 32767 is stored as its 16 bits (the readers mask them)
+        indices = [i - 0x10000 if i > 0x7FFF else i for i in indices]
+    topology = SRec(TOPOLOGY, {"Groups": groups, "Indices" if wide else "Indices16": [(i,) for i in indices]})
+    bones = [{"BoneName": bone, "OBBMin": _bound(spec, min), "OBBMax": _bound(spec, max)} for bone in spec.bones]
+    return SRec(MESH, {"Name": spec.name, "PrimaryVertexData": SRec(VERTEX_DATA, {"Vertices": SVariantArray(vtype, rows)}),
+                      "PrimaryTopology": topology, "MaterialBindings": [{"Material": material_name} for material_name in materials],
                       "BoneBindings": bones})  # fmt: skip
 
 
-def _bound(spec: MeshSpec, pick) -> tuple:
-    return tuple(pick(p[k] for p in spec.positions) for k in range(3)) if spec.positions else (0.0, 0.0, 0.0)
+def _bound(spec: SMeshSpec, pick) -> tuple:
+    return (
+        tuple(pick(position[k] for position in spec.positions) for k in range(3)) if spec.positions else (0.0, 0.0, 0.0)
+    )
 
 
-def skeleton_record(name: str, bones: list[dict]) -> Rec:
+def skeleton_record(name: str, bones: list[dict]) -> SRec:
     """A ``Skeleton``: per bone ``Name``, ``ParentIndex`` (-1 a root), ``Transform`` (rest in the parent: a dict of
     position, orientation, scale_shear) and ``InverseWorldTransform`` (16 floats, the move in the last row)."""
-    return Rec(SKELETON, {"Name": name, "Bones": bones, "LODType": 0})
+    return SRec(SKELETON, {"Name": name, "Bones": bones, "LODType": 0})
 
 
-def model_record(name: str, skeleton: Rec | None, meshes: list[Rec]) -> Rec:
-    return Rec(MODEL, {"Name": name, "Skeleton": skeleton, "MeshBindings": [{"Mesh": m} for m in meshes]})
+def model_record(name: str, skeleton: SRec | None, meshes: list[SRec]) -> SRec:
+    return SRec(MODEL, {"Name": name, "Skeleton": skeleton, "MeshBindings": [{"Mesh": mesh} for mesh in meshes]})
 
 
-def curve(knots: list[float], controls: list[tuple], degree: int = 1, dimension: int = 3) -> Rec:
+def curve(knots: list[float], controls: list[tuple], degree: int = 1, dimension: int = 3) -> SRec:
     """A ``Curve2``'s data: knots and controls as plain floats (``DaK32fC32f``), the identity for no controls."""
     if not controls:
-        return Rec(CURVE_IDENTITY, {"CurveDataHeader_DaIdentity": {"Format": FORMAT_IDENTITY}, "Dimension": dimension})
+        return SRec(CURVE_IDENTITY, {"CurveDataHeader_DaIdentity": {"Format": FORMAT_IDENTITY}, "Dimension": dimension})
     if len(controls) == 1:  # one key: a knot-less constant reads as the control alone
         knots, degree = [0.0], 0
-    return Rec(CURVE_KNOTS, {"CurveDataHeader_DaK32fC32f": {"Format": FORMAT_KNOTS, "Degree": degree},
-                             "Knots": [(float(k),) for k in knots], "Controls": [(c,) for v in controls for c in v]})  # fmt: skip
+    return SRec(CURVE_KNOTS, {"CurveDataHeader_DaK32fC32f": {"Format": FORMAT_KNOTS, "Degree": degree},
+                             "Knots": [(float(k),) for k in knots], "Controls": [(component,) for control in controls for component in control]})  # fmt: skip
 
 
-def animation_record(name: str, duration: float, step: float, groups: list[tuple[str, list[dict]]]) -> Rec:
+def animation_record(name: str, duration_s: float, step: float, groups: list[tuple[str, list[dict]]]) -> SRec:
     """An ``Animation``: per track group (named after its model) its tracks, each ``{"Name": bone,
     "PositionCurve": curve, "OrientationCurve": curve, "ScaleShearCurve": curve}``."""
     made = []
     for group, tracks in groups:
-        rows = [{"Name": t["Name"], "Flags": 0,
-                 **{k: {"CurveData": t.get(k) or curve([], [], dimension=d)} for k, d in CURVE_DIMENSIONS.items()}}
-                for t in tracks]  # fmt: skip
-        made.append(Rec(TRACK_GROUP, {"Name": group, "TransformTracks": rows}))
-    values = {"Name": name, "Duration": duration, "TimeStep": step, "Oversampling": 1.0, "TrackGroups": made}
-    return Rec(ANIMATION, values)
+        rows = [{"Name": track["Name"], "Flags": 0,
+                 **{k: {"CurveData": track.get(k) or curve([], [], dimension=dimension)} for k, dimension in CURVE_DIMENSIONS.items()}}
+                for track in tracks]  # fmt: skip
+        made.append(SRec(TRACK_GROUP, {"Name": group, "TransformTracks": rows}))
+    values = {"Name": name, "Duration": duration_s, "TimeStep": step, "Oversampling": 1.0, "TrackGroups": made}
+    return SRec(ANIMATION, values)
 
 
 CURVE_DIMENSIONS = {"OrientationCurve": 4, "PositionCurve": 3, "ScaleShearCurve": 9}
 
 
-def root_record(name: str, units_per_meter: float = 1.0, **lists) -> Rec:
+def root_record(name: str, units_per_meter: float = 1.0, **lists) -> SRec:
     """The file info: art tool info (y up, back = -z, as the games' files), the exporter, and the lists
-    (``Materials``, ``Skeletons``, ``Meshes``, ``Models``, ``Animations``, ...) of record ``Rec``s."""
+    (``Materials``, ``Skeletons``, ``Meshes``, ``Models``, ``Animations``, ...) of record ``SRec``s."""
     art = {"FromArtToolName": "glTF", "ArtToolPointerSize": 64, "UnitsPerMeter": units_per_meter,
            "RightVector": (1.0, 0.0, 0.0), "UpVector": (0.0, 1.0, 0.0), "BackVector": (0.0, 0.0, -1.0)}  # fmt: skip
     meshes = lists.get("Meshes", [])
-    lists.setdefault("VertexDatas", [m.values["PrimaryVertexData"] for m in meshes])
-    lists.setdefault("TriTopologies", [m.values["PrimaryTopology"] for m in meshes])
-    return Rec(ROOT, {"ArtToolInfo": art, "ExporterInfo": {"ExporterName": "glTF import"}, "FromFileName": name,
+    lists.setdefault("VertexDatas", [mesh.values["PrimaryVertexData"] for mesh in meshes])
+    lists.setdefault("TriTopologies", [mesh.values["PrimaryTopology"] for mesh in meshes])
+    return SRec(ROOT, {"ArtToolInfo": art, "ExporterInfo": {"ExporterName": "glTF import"}, "FromFileName": name,
                       **lists})  # fmt: skip

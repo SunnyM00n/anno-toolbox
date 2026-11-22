@@ -1,4 +1,4 @@
-"""The ground and the water of the PC renderer's frame (a mixin of ``desktoprender.Renderer``): the ground's
+"""The ground and the water of the PC renderer's frame (a mixin of ``desktoprender.CRenderer``): the ground's
 material layers and blend weights as textures (``_sync_ground``, ``_bind_ground``), the sea, rivers and lakes as
 plain surfaces (``_draw_water``: where the look's own shaders do not draw them). Needs the renderer's context,
 programs, loader and session (island-editor-view "The 3D view")."""
@@ -13,12 +13,12 @@ import numpy as np
 from ...infra.i18n import tr
 from ...render.camera import gl
 from ...render.light import srgb_hex
-from ..editchange import Change
+from ..editchange import SChange
 from ..editsession import game_of
 from .desktopgeometry import ribbon, triangulate
 
 if TYPE_CHECKING:
-    from .desktoprender import ViewOptions
+    from .desktoprender import SViewOptions
 
 GROUND_TEXTURE_MAX = 512  # 2070's own size (117's are 1024; archived 1024 in island-editor-view)
 # the islands whose own look is the game's: the editor's ground there is each material's flat colour (the fallback;
@@ -28,254 +28,297 @@ PLAIN_SIZE = 4  # a plain layer's side: one colour
 DEEP = (0.004, 0.018, 0.03)  # the sea bed beyond the island's grid, linear
 
 
-class GroundDraw:
-    """The renderer's ground and water methods; ``Renderer`` brings the state they use."""
+class CGroundDraw:
+    """The renderer's ground and water methods; ``CRenderer`` brings the state they use."""
 
     # background loads
     def _albedo(self):
         from PIL import Image
 
-        img = Image.open(io.BytesIO(self.editor.albedo_png())).convert("RGB")
-        return img.size, img.tobytes()
+        image = Image.open(io.BytesIO(self.m_editor.albedo_png())).convert("RGB")
+        return image.size, image.tobytes()
 
     def _ground_info(self):
-        info = self.editor.ground()
-        n, m = info["width"], len(info["materials"])
-        return info, np.frombuffer(self.editor.ground_weights(), np.uint8).reshape(m, n, n).copy()
+        ground_meta = self.m_editor.ground()
+        side, layer_count = ground_meta["width"], len(ground_meta["materials"])
+        return ground_meta, np.frombuffer(self.m_editor.ground_weights(), np.uint8).reshape(
+            layer_count, side, side
+        ).copy()
 
-    def _layer_pixels(self, m: dict, size: int):
+    def _layer_pixels(self, material: dict, size_px: int):
         """One ground material as the texture arrays take it: diffuse with its blend mask as alpha, normal."""
         from PIL import Image
 
-        def img(path, **kw):
+        def open_image(path, **options):
             if not path:
                 return None
             try:
-                return Image.open(io.BytesIO(self.editor.texture_png(path, **kw)))
+                return Image.open(io.BytesIO(self.m_editor.texture_png(path, **options)))
             except Exception:
                 return None
 
-        d, a, n = (
-            img(m.get("diffuse"), opaque=True),
-            img(m.get("diffuse"), alpha=True),
-            img(m.get("normal"), normal=True),
+        diffuse_image, alpha_image, normal_image = (
+            open_image(material.get("diffuse"), is_opaque=True),
+            open_image(material.get("diffuse"), use_alpha=True),
+            open_image(material.get("normal"), is_normal=True),
         )
-        rgb = d.convert("RGB").resize((size, size)) if d else Image.new("RGB", (size, size), (128, 128, 128))
-        mask = a.convert("L").resize((size, size)) if a else Image.new("L", (size, size), 255)
+        rgb = (
+            diffuse_image.convert("RGB").resize((size_px, size_px))
+            if diffuse_image
+            else Image.new("RGB", (size_px, size_px), (128, 128, 128))
+        )
+        mask = (
+            alpha_image.convert("L").resize((size_px, size_px))
+            if alpha_image
+            else Image.new("L", (size_px, size_px), 255)
+        )
         rgba = Image.merge("RGBA", (*rgb.split(), mask))
-        nrm = n.convert("RGB").resize((size, size)) if n else Image.new("RGB", (size, size), (128, 128, 255))
-        return rgba.tobytes(), nrm.tobytes()
+        normal_rgb = (
+            normal_image.convert("RGB").resize((size_px, size_px))
+            if normal_image
+            else Image.new("RGB", (size_px, size_px), (128, 128, 255))
+        )
+        return rgba.tobytes(), normal_rgb.tobytes()
 
     def _texture_size(self, materials: list[dict]) -> int:
         from PIL import Image
 
         best = 256
-        for m in materials[:4]:
+        for material in materials[:4]:
             try:
-                best = max(best, Image.open(io.BytesIO(self.editor.texture_png(m["diffuse"], opaque=True))).width)
+                best = max(
+                    best, Image.open(io.BytesIO(self.m_editor.texture_png(material["diffuse"], is_opaque=True))).width
+                )
             except Exception:
                 continue
         return min(GROUND_TEXTURE_MAX, best)
 
     def _layers(self, ids: tuple):
-        mats = self.session.paint_materials
+        mats = self.m_session.m_paint_materials
         materials = [mats.get(i, {"id": i, "diffuse": None, "normal": None, "repetition": 4}) for i in ids]
-        if game_of(self.session.island) in PLAIN_GROUND:
+        if game_of(self.m_session.m_island) in PLAIN_GROUND:
             return PLAIN_SIZE, [self._plain_pixels(m) for m in materials]
         size = self._texture_size(materials)
         return size, [self._layer_pixels(m, size) for m in materials]
 
-    def _plain_pixels(self, m: dict):
+    def _plain_pixels(self, material: dict):
         """One ground material as its flat colour: the mean of its diffuse map (grey without one), no blend mask, a
         flat normal."""
         from PIL import Image
 
         colour = (128, 128, 128)
         try:
-            img = (
-                Image.open(io.BytesIO(self.editor.texture_png(m["diffuse"], opaque=True))) if m.get("diffuse") else None
+            image = (
+                Image.open(io.BytesIO(self.m_editor.texture_png(material["diffuse"], is_opaque=True)))
+                if material.get("diffuse")
+                else None
             )
-            if img is not None:
-                colour = img.convert("RGB").resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+            if image is not None:
+                colour = image.convert("RGB").resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
         except Exception:  # a map that does not read: grey, as a layer without one
             pass
-        n = PLAIN_SIZE * PLAIN_SIZE
-        return bytes([*colour, 255]) * n, bytes([128, 128, 255]) * n
+        pixel_count = PLAIN_SIZE * PLAIN_SIZE
+        return bytes([*colour, 255]) * pixel_count, bytes([128, 128, 255]) * pixel_count
 
     # the ground's textures
-    def _sync_ground(self, change: Change, opts: ViewOptions) -> None:
-        s = self.session
-        info = self.loader.get("ground", self._ground_info) if self.editor is not None else None
-        if isinstance(info, tuple) and s.weights is None:
-            meta, weights = info
-            s.attach_ground([m["id"] for m in meta["materials"]], weights, self._materials(meta))
+    def _sync_ground(self, change: SChange, opts: SViewOptions) -> None:
+        session = self.m_session
+        ground_meta = self.m_loader.get("ground", self._ground_info) if self.m_editor is not None else None
+        if isinstance(ground_meta, tuple) and session.m_weights is None:
+            meta, weights = ground_meta
+            session.attach_ground([layer["id"] for layer in meta["materials"]], weights, self._materials(meta))
             change.weights = (0, 0, weights.shape[1] - 1, weights.shape[1] - 1)
-        if s.weights is None:
+        if session.m_weights is None:
             return
         self._sync_layers(change)
         self._sync_weights(change)
-        if opts.look2070 and self.ground["alpha2070"] is None and self.editor is not None:
+        if opts.look2070 and self.m_ground["alpha2070"] is None and self.m_editor is not None:
             self._sync_look2070()
 
-    def _sync_layers(self, change: Change) -> None:
+    def _sync_layers(self, change: SChange) -> None:
         """The ground's material layers as texture arrays, made again when the layers or their looks changed."""
-        s, g, ctx = self.session, self.ground, self.ctx
-        ids = tuple(s.ground_ids)
-        known = frozenset(i for i in ids if i in s.paint_materials)  # a layer drawn plain gets its look once known
-        if g["ids"] == ids and g["known"] == known:
+        session, ground, ctx = self.m_session, self.m_ground, self.m_ctx
+        ids = tuple(session.m_ground_ids)
+        known = frozenset(
+            i for i in ids if i in session.m_paint_materials
+        )  # a layer drawn plain gets its look once known
+        if ground["ids"] == ids and ground["known"] == known:
             return
-        if g["asked"] != (ids, known):
-            self.loader.forget(("layers", ids))
-            g["asked"] = (ids, known)
-        layers = self.loader.get(("layers", ids), lambda: self._layers(ids))
+        if ground["asked"] != (ids, known):
+            self.m_loader.forget(("layers", ids))
+            ground["asked"] = (ids, known)
+        layers = self.m_loader.get(("layers", ids), lambda: self._layers(ids))
         if not isinstance(layers, tuple):
             return
-        size, pix = layers
+        size, pixels = layers
         for k in ("diffuse", "normals"):
-            if g.get(k) is not None:
-                g[k].release()
-        g["diffuse"] = ctx.texture_array((size, size, len(ids)), 4, b"".join(p[0] for p in pix))
-        g["normals"] = ctx.texture_array((size, size, len(ids)), 3, b"".join(p[1] for p in pix))
-        for t in (g["diffuse"], g["normals"]):
-            t.build_mipmaps()
-            t.anisotropy = 8.0
-            t.repeat_x = t.repeat_y = True
-        g["ids"], g["size"], g["known"] = ids, size, known
-        change.weights = (0, 0, s.weights.shape[1] - 1, s.weights.shape[1] - 1)
+            if ground.get(k) is not None:
+                ground[k].release()
+        ground["diffuse"] = ctx.texture_array(
+            (size, size, len(ids)), 4, b"".join(layer_pixels[0] for layer_pixels in pixels)
+        )
+        ground["normals"] = ctx.texture_array(
+            (size, size, len(ids)), 3, b"".join(layer_pixels[1] for layer_pixels in pixels)
+        )
+        for layer_texture in (ground["diffuse"], ground["normals"]):
+            layer_texture.build_mipmaps()
+            layer_texture.anisotropy = 8.0
+            layer_texture.repeat_x = layer_texture.repeat_y = True
+        ground["ids"], ground["size"], ground["known"] = ids, size, known
+        change.weights = (0, 0, session.m_weights.shape[1] - 1, session.m_weights.shape[1] - 1)
 
-    def _sync_weights(self, change: Change) -> None:
+    def _sync_weights(self, change: SChange) -> None:
         """The paint weights as a texture array: made when the size or the layers changed, else the changed block."""
-        s, ctx = self.session, self.ctx
-        n = s.weights.shape[1]
-        if self._weights_tex is None or self._weights_tex.size != (n, n, len(s.ground_ids)):
-            if self._weights_tex is not None:
-                self._weights_tex.release()
-            self._weights_tex = ctx.texture_array((n, n, len(s.ground_ids)), 1, s.weights.tobytes())
-            self._weights_tex.repeat_x = self._weights_tex.repeat_y = False
+        session, ctx = self.m_session, self.m_ctx
+        side = session.m_weights.shape[1]
+        if self._m_weights_tex is None or self._m_weights_tex.size != (side, side, len(session.m_ground_ids)):
+            if self._m_weights_tex is not None:
+                self._m_weights_tex.release()
+            self._m_weights_tex = ctx.texture_array(
+                (side, side, len(session.m_ground_ids)), 1, session.m_weights.tobytes()
+            )
+            self._m_weights_tex.repeat_x = self._m_weights_tex.repeat_y = False
         elif change.weights is not None:
             x0, z0, x1, z1 = change.weights
-            block = np.ascontiguousarray(s.weights[:, z0 : z1 + 1, x0 : x1 + 1])
-            self._weights_tex.write(block.tobytes(), viewport=(x0, z0, 0, x1 - x0 + 1, z1 - z0 + 1, len(s.ground_ids)))
+            block = np.ascontiguousarray(session.m_weights[:, z0 : z1 + 1, x0 : x1 + 1])
+            self._m_weights_tex.write(
+                block.tobytes(), viewport=(x0, z0, 0, x1 - x0 + 1, z1 - z0 + 1, len(session.m_ground_ids))
+            )
 
     def _sync_look2070(self) -> None:
         """2070's ground look: its alpha layers and the slot table of its chunks."""
-        g = self.ground
-        got = self.loader.get("ground2070", self.editor.ground2070)
+        ground = self.m_ground
+        got = self.m_loader.get("ground2070", self.m_editor.ground2070)
         if isinstance(got, tuple):
             info70, alpha = got
             side, depth = info70["side"], info70["layers"]
-            g["alpha2070"] = self.ctx.texture_array((side * 17, side * 17, depth), 1, alpha)
-            g["alpha2070"].repeat_x = g["alpha2070"].repeat_y = False
+            ground["alpha2070"] = self.m_ctx.texture_array((side * 17, side * 17, depth), 1, alpha)
+            ground["alpha2070"].repeat_x = ground["alpha2070"].repeat_y = False
             slots = np.asarray(info70["slots"], np.uint8).reshape(side, side * depth)
-            tex = self.ctx.texture((side * depth, side), 1, slots.tobytes(), dtype="u1")
-            tex.filter = (0x2600, 0x2600)  # NEAREST
-            g["slots2070"], g["side2070"], g["per2070"] = tex, side, info70["per"]
+            texture = self.m_ctx.texture((side * depth, side), 1, slots.tobytes(), dtype="u1")
+            texture.m_filter = (0x2600, 0x2600)  # NEAREST
+            ground["slots2070"], ground["side2070"], ground["per2070"] = texture, side, info70["per"]
         elif isinstance(got, Exception):
             self._message(tr("islands.no_2070_look", reason=got))
 
     def _materials(self, meta: dict) -> list[dict]:
         mats = {}
         try:
-            mats = {m["id"]: m for m in self.editor.materials()}
+            mats = {material["id"]: material for material in self.m_editor.materials()}
         except Exception:  # the set does not read: the island's own list stands (the gallery says why)
             pass
-        return [{**m, **mats.get(m["id"], {})} for m in meta["materials"]] + [
-            m for i, m in mats.items() if i not in {x["id"] for x in meta["materials"]}
+        return [{**material, **mats.get(material["id"], {})} for material in meta["materials"]] + [
+            material for i, material in mats.items() if i not in {x["id"] for x in meta["materials"]}
         ]
 
     # water
     def _water(self):
-        if self._water_meshes is None:
-            ctx, size = self.ctx, self.size
-            a, b = -6 * size, 7 * size  # out to where the fog has the horizon
-            sea = np.array([[a, 0, a], [b, 0, a], [a, 0, b], [b, 0, b]], "f4")
+        if self._m_water_meshes is None:
+            ctx, size = self.m_ctx, self.m_size_tiles
+            low, high = -6 * size, 7 * size  # out to where the fog has the horizon
+            sea = np.array([[low, 0, low], [high, 0, low], [low, 0, high], [high, 0, high]], "f4")
             sea_vbo = ctx.buffer(sea.tobytes())
             rivers, lakes = [], []
-            for sp in self.session.island.get("splines", []):
-                if sp["kind"] not in ("River", "Lake") or len(sp["points"]) < 2:
+            for spline in self.m_session.m_island.get("splines", []):
+                if spline["kind"] not in ("River", "Lake") or len(spline["points"]) < 2:
                     continue
-                pts = [[size - p[0], p[1], p[2]] for p in sp["points"]]
-                if sp["kind"] == "Lake":
-                    tris = triangulate([(p[0], p[2]) for p in pts])
-                    if tris:
-                        y = pts[0][1]
-                        verts = np.array([[p[0], y, p[2]] for p in pts], "f4")
-                        lakes.append((verts, np.asarray(tris, "u4").ravel()))
+                points = [[size - point[0], point[1], point[2]] for point in spline["points"]]
+                if spline["kind"] == "Lake":
+                    triangles = triangulate([(point[0], point[2]) for point in points])
+                    if triangles:
+                        y = points[0][1]
+                        vertices = np.array([[point[0], y, point[2]] for point in points], "f4")
+                        lakes.append((vertices, np.asarray(triangles, "u4").ravel()))
                 else:
-                    rivers.append(ribbon(pts, sp.get("widths", [])))
+                    rivers.append(ribbon(points, spline.get("widths", [])))
             meshes = []
             for kind, items in (("river", rivers), ("lake", lakes)):
-                for verts, idx in items:
-                    if len(idx):
-                        meshes.append((kind, ctx.buffer(verts.tobytes()), ctx.buffer(idx.tobytes())))
-            floor = float(self.session.base_heights.min()) - 0.5  # past the island's grid: a sea bed to look into
+                for vertices, indices in items:
+                    if len(indices):
+                        meshes.append((kind, ctx.buffer(vertices.tobytes()), ctx.buffer(indices.tobytes())))
+            floor = float(self.m_session.m_base_heights.min()) - 0.5  # past the island's grid: a sea bed to look into
             bed = np.array(
-                [[a, floor, a, *DEEP], [b, floor, a, *DEEP], [a, floor, b, *DEEP], [b, floor, b, *DEEP]], "f4"
+                [
+                    [low, floor, low, *DEEP],
+                    [high, floor, low, *DEEP],
+                    [low, floor, high, *DEEP],
+                    [high, floor, high, *DEEP],
+                ],
+                "f4",
             )
-            bed_vao = ctx.vertex_array(self.prog["flat"], [(ctx.buffer(bed.tobytes()), "3f 3f", "pos", "rgb")])
-            self._water_meshes = {"sea": sea_vbo, "bed": bed_vao, "inner": meshes, "vaos": {}}
-        return self._water_meshes
+            bed_vao = ctx.vertex_array(self.m_prog["flat"], [(ctx.buffer(bed.tobytes()), "3f 3f", "pos", "rgb")])
+            self._m_water_meshes = {"sea": sea_vbo, "bed": bed_vao, "inner": meshes, "vaos": {}}
+        return self._m_water_meshes
 
     def _water_vao(self, vbo, ibo=None):
         """The water program's vertex array of a surface's buffers, made once."""
-        cache = self._water_meshes["vaos"]
+        cache = self._m_water_meshes["vaos"]
         if id(vbo) not in cache:
-            cache[id(vbo)] = self.ctx.vertex_array(
-                self.prog["water"], [(vbo, "3f", "pos")], index_buffer=ibo, index_element_size=4, skip_errors=True
+            cache[id(vbo)] = self.m_ctx.vertex_array(
+                self.m_prog["water"], [(vbo, "3f", "pos")], index_buffer=ibo, index_element_size=4, skip_errors=True
             )
         return cache[id(vbo)]
 
-    def _bind_ground(self, prog, opts: ViewOptions) -> None:
-        g, s = self.ground, self.session
-        albedo = self.loader.get("albedo", self._albedo) if self.editor is not None else None
-        if isinstance(albedo, tuple) and "albedo" not in self.textures:
-            (aw, ah), raw = albedo
-            tex = self.ctx.texture((aw, ah), 3, raw, internal_format=0x8C41)
-            tex.build_mipmaps()
-            tex.anisotropy = 8.0
-            self.textures["albedo"] = tex
-        tex = self.textures.get("albedo")
-        prog["islandSize"].value = self.size
-        prog["hasAlbedo"].value = tex is not None
-        (tex or self._dummy).use(0)
+    def _bind_ground(self, prog, opts: SViewOptions) -> None:
+        ground, session = self.m_ground, self.m_session
+        albedo = self.m_loader.get("albedo", self._albedo) if self.m_editor is not None else None
+        if isinstance(albedo, tuple) and "albedo" not in self.m_textures:
+            (albedo_width_px, albedo_height_px), raw = albedo
+            texture = self.m_ctx.texture((albedo_width_px, albedo_height_px), 3, raw, internal_format=0x8C41)
+            texture.build_mipmaps()
+            texture.anisotropy = 8.0
+            self.m_textures["albedo"] = texture
+        texture = self.m_textures.get("albedo")
+        prog["islandSize"].value = self.m_size_tiles
+        prog["hasAlbedo"].value = texture is not None
+        (texture or self._m_dummy).use(0)
         prog["albedo"].value = 0
-        ready = g["ids"] is not None and tuple(s.ground_ids) == g["ids"] and self._weights_tex is not None
+        ready = (
+            ground["ids"] is not None
+            and tuple(session.m_ground_ids) == ground["ids"]
+            and self._m_weights_tex is not None
+        )
         mode = 0  # the baked image; 1 the weights; 3 2070's layers
         if ready:
-            mode = 3 if opts.look2070 and g["alpha2070"] is not None else 1
+            mode = 3 if opts.look2070 and ground["alpha2070"] is not None else 1
         prog["groundMode"].value = mode
-        for unit, name, t in (
-            (1, "weights", self._weights_tex if ready else None),
-            (3, "diffuse", g.get("diffuse") if ready else None),
-            (4, "normals", g.get("normals") if ready else None),
-            (5, "alpha2070", g["alpha2070"]),
+        for unit, name, layer_texture in (
+            (1, "weights", self._m_weights_tex if ready else None),
+            (3, "diffuse", ground.get("diffuse") if ready else None),
+            (4, "normals", ground.get("normals") if ready else None),
+            (5, "alpha2070", ground["alpha2070"]),
         ):
-            (t or self._dummy_array).use(unit)
+            (layer_texture or self._m_dummy_array).use(unit)
             if name in prog:
                 prog[name].value = unit
-        (g.get("slots2070") or self._dummy_u).use(6)
+        (ground.get("slots2070") or self._m_dummy_u).use(6)
         if "slots2070" in prog:
             prog["slots2070"].value = 6
         if not ready:
             return
-        mats = s.paint_materials
-        rep = [float(mats.get(i, {}).get("repetition") or 4) for i in s.ground_ids] + [4.0] * (32 - len(s.ground_ids))
-        orders = [mats.get(i, {}).get("order", i) for i in s.ground_ids]
+        mats = session.m_paint_materials
+        repetitions = [float(mats.get(i, {}).get("repetition") or 4) for i in session.m_ground_ids] + [4.0] * (
+            32 - len(session.m_ground_ids)
+        )
+        orders = [mats.get(i, {}).get("order", i) for i in session.m_ground_ids]
         rank = sorted(range(len(orders)), key=lambda k: orders[k]) + [0] * (32 - len(orders))
-        sharp = [float(mats.get(i, {}).get("sharpness", 1.0)) for i in s.ground_ids] + [1.0] * (32 - len(orders))
-        prog["layers"].value = len(s.ground_ids)
-        prog["repeat_"].write(np.asarray(rep[:32], "f4").tobytes())
-        prog["rank"].write(np.asarray(rank[:32], "i4").tobytes())
-        prog["sharp"].write(np.asarray(sharp[:32], "f4").tobytes())
+        sharp = [float(mats.get(i, {}).get("sharpness", 1.0)) for i in session.m_ground_ids] + [1.0] * (
+            32 - len(orders)
+        )
+        for name, kind, values in (("repeat_", "f4", repetitions), ("rank", "i4", rank), ("sharp", "f4", sharp)):
+            if name in prog:  # a driver drops a uniform the shader never reads
+                prog[name].write(np.asarray(values[:32], kind).tobytes())
+        if "layers" in prog:
+            prog["layers"].value = len(session.m_ground_ids)
         if "side2070" in prog:
-            prog["side2070"].value = float(g.get("side2070", 1))
-            prog["per2070"].value = float(g.get("per2070", 16))
+            prog["side2070"].value = float(ground.get("side2070", 1))
+            prog["per2070"].value = float(ground.get("per2070", 16))
 
     def _draw_water(self, view_proj, lt, eye, shadow, sea: bool = True, inland: bool = True) -> None:
         """The sea (without ``sea``: rivers and lakes only), rivers and lakes (without ``inland``: the sea only) as
         plain surfaces: the view's own look, the fallback where the game's own shaders do not draw the water."""
-        ctx, wm, fbo = self.ctx, self._water(), self.targets["msaa"]
-        prog = self.prog["water"]
+        ctx, wm, fbo = self.m_ctx, self._water(), self.m_targets["msaa"]
+        prog = self.m_prog["water"]
         prog["viewProj"].write(gl(view_proj))
         self._set_light(prog, lt, eye, shadow)
         ctx.enable(ctx.BLEND)
@@ -293,7 +336,7 @@ class GroundDraw:
     def _inner_once(self) -> None:
         """Rivers and lakes each pixel once (the nearest surface): a depth pass, then colour where the depth
         is equal; two see-through surfaces doubled into a light band (2026-10-16)."""
-        ctx, wm, fbo = self.ctx, self._water_meshes, self.targets["msaa"]
+        ctx, wm, fbo = self.m_ctx, self._m_water_meshes, self.m_targets["msaa"]
         items = wm["inner"]
         if not items:
             return

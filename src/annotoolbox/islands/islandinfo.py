@@ -2,7 +2,7 @@
 generator takes for the island and the grid of 8-tile cells that are drawn (also in rd3d ``Terrain/ActiveMap``).
 ``read`` gives plain numbers, ``check`` names what the game would not take, ``apply`` writes the edit file's ``meta``
 (``start_coast`` degrees, ``active_rect``) and ``active`` (``"cx,cz"`` -> 1 or 0, only the cells that differ) into an
-opened island (``IslandFile``). Format: island-editor-tools "The edit file".
+opened island (``CIslandFile``). Format: island-editor-tools "The edit file".
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import struct
 
 from ..formats import filedb
 from ..infra.i18n import tr
-from .islandgrid import read_bits, write_bits
+from .islandgrid import cell_key, read_bits, write_bits
 
 CELL = 8  # tiles a cell of the active map covers
 RECT = "ActiveMapRect"
@@ -20,14 +20,14 @@ GRID = "ActiveMapGrid"
 COAST = "StartCoastDirection"
 
 
-def read(info: filedb.Tag) -> dict:
+def read(info_tag: filedb.STag) -> dict:
     """The island's numbers: ``grid`` (tiles), ``start_coast`` (degrees, None when the island sets none),
     ``active_rect`` (x0, z0, x1, z1 tiles, None when it has none) and ``cells`` (cells a side of the active grid)."""
-    size = info.find("MapSize")
+    size = info_tag.find("MapSize")
     grid = max(struct.unpack_from("<2i", size.data)) if size is not None else 0
-    coast = info.path(f"ObjectMetaInfo/{COAST}/value")
-    rect = info.find(RECT)
-    cells = info.find(GRID)
+    coast = info_tag.path(f"ObjectMetaInfo/{COAST}/value")
+    rect = info_tag.find(RECT)
+    cells = info_tag.find(GRID)
     return {
         "grid": grid,
         "start_coast": round(math.degrees(struct.unpack_from("<f", coast.data)[0]), 2) if coast is not None else None,
@@ -53,7 +53,7 @@ def check(meta: dict, grid: int) -> list[str]:
                     grid=grid,
                 )
             )
-        elif any(v % CELL for v in rect):
+        elif any(value % CELL for value in rect):
             out.append(
                 tr(
                     "islands.active_rectangle_cut_along_tile",
@@ -64,62 +64,62 @@ def check(meta: dict, grid: int) -> list[str]:
     return out
 
 
-def apply_meta(info: filedb.Tag, meta: dict) -> int:
+def apply_meta(info_tag: filedb.STag, meta: dict) -> int:
     """Write ``meta`` into the island's ``.a7minfo``; returns how many values were set."""
     done = 0
     if meta.get("start_coast") is not None:
-        holder = info.path(f"ObjectMetaInfo/{COAST}")
+        holder = info_tag.path(f"ObjectMetaInfo/{COAST}")
         if holder is not None:
             value = struct.pack("<f", math.radians(float(meta["start_coast"])))
-            attr = holder.find("value")
-            if attr is None:
-                holder.children.append(filedb.Attrib("value", value))
+            value_tag = holder.find("value")
+            if value_tag is None:
+                holder.children.append(filedb.SAttrib("value", value))
             else:
-                attr.data = value
+                value_tag.data = value
             done += 1
-    if meta.get("active_rect") is not None and info.find(RECT) is not None:
-        info.find(RECT).data = struct.pack("<4i", *map(int, meta["active_rect"]))
+    if meta.get("active_rect") is not None and info_tag.find(RECT) is not None:
+        info_tag.find(RECT).data = struct.pack("<4i", *map(int, meta["active_rect"]))
         done += 1
     return done
 
 
-def apply_active(isl, changes: dict) -> int:
-    """Set the cells ``changes`` (``"cx,cz"`` -> 1 or 0) in both active maps of the opened island ``isl`` (rd3d's, and
+def apply_active(island, changes: dict) -> int:
+    """Set the cells ``changes`` (``"cx,cz"`` -> 1 or 0) in both active maps of the opened island ``island`` (rd3d's, and
     the ``.a7minfo``'s when it has the same grid), and cut the ``.a7minfo`` rectangle round the drawn cells. Returns
     the cells set; a cell off the grid is left out."""
-    am = isl.rd.path("Terrain/ActiveMap")
-    if am is None or not changes:
+    active_map = island.rd3d.path("Terrain/ActiveMap")
+    if active_map is None or not changes:
         return 0
-    cells = read_bits(am)
-    n, done = len(cells), 0
+    cells = read_bits(active_map)
+    cell_count, done = len(cells), 0
     for key, value in changes.items():
-        cx, cz = map(int, key.split(","))
-        if 0 <= cx < n and 0 <= cz < n:
-            cells[cz][cx] = 1 if value else 0
+        cell = cell_key(key, cell_count)
+        if cell is not None:  # a malformed key or a cell off the grid is left out
+            cells[cell[1]][cell[0]] = 1 if value else 0
             done += 1
-    write_bits(am, cells)
-    grid = isl.info.find(GRID)
-    if grid is not None and grid.find("x").u32() == n:
+    write_bits(active_map, cells)
+    grid = island.a7minfo.find(GRID)
+    if grid is not None and grid.find("x").u32() == cell_count:
         write_bits(grid, cells)
-    drawn = [(x, z) for z in range(n) for x in range(n) if cells[z][x]]
-    if drawn and isl.info.find(RECT) is not None:
-        step = isl.size // n
+    drawn = [(x, z) for z in range(cell_count) for x in range(cell_count) if cells[z][x]]
+    if drawn and island.a7minfo.find(RECT) is not None:
+        step = island.size // cell_count
         rect = (
             min(x for x, _ in drawn) * step,
             min(z for _, z in drawn) * step,
             (max(x for x, _ in drawn) + 1) * step,
             (max(z for _, z in drawn) + 1) * step,
         )
-        isl.info.find(RECT).data = struct.pack("<4i", *rect)
+        island.a7minfo.find(RECT).data = struct.pack("<4i", *rect)
     return done
 
 
-def apply(isl, edits: dict) -> dict:
+def apply(island, edits: dict) -> dict:
     """The edit file's ``active`` cells, then its ``meta`` (so a rectangle set by hand wins over the one cut round
     the cells), into the opened island; what was set, for the build's report."""
     report = {}
     if edits.get("active"):
-        report["active cells"] = apply_active(isl, edits["active"])
+        report["active cells"] = apply_active(island, edits["active"])
     if edits.get("meta"):
-        report["meta"] = apply_meta(isl.info, edits["meta"])
-    return {k: v for k, v in report.items() if v}
+        report["meta"] = apply_meta(island.a7minfo, edits["meta"])
+    return {k: value for k, value in report.items() if value}

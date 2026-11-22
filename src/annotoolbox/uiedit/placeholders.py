@@ -56,20 +56,20 @@ def is_locked(ctx, key: str | None = None) -> bool:
     """Whether the preview shows what is locked as locked: the preview's defaults decide (all unlocked by default,
     ``previewdefaults``); under the game object ``key`` a GUID given there that the defaults lock shows its lock.
     ``ctx`` is the ``layout.Context``."""
-    d = previewdefaults.current(ctx)
-    if key and d.locked and ctx is not None:
-        samples = ctx.samples
+    defaults = previewdefaults.current(ctx)
+    if key and defaults.locked and ctx is not None:
+        samples = ctx.m_samples
         for k in samples.given_under(key + "/"):
-            v = samples.values.get(k)
-            if isinstance(v, int) and not isinstance(v, bool) and d.is_locked(v):
+            value = samples.m_values.get(k)
+            if isinstance(value, int) and not isinstance(value, bool) and defaults.is_locked(value):
                 return True
-    return d.is_locked()
+    return defaults.is_locked()
 
 
 def named(binding, index: int, describe: Callable[[object], tuple[str, str]], defaults):
     """What the preview's defaults give a source whose name, or its target's, names a value of the player's game
     (a character's name, money, a gamepad or multiplayer flag: ``previewdefaults``); None for any other."""
-    names = [describe(binding.sources[index])[1], *(describe(t)[1] for t in binding.targets)]
+    names = [describe(binding.sources[index])[1], *(describe(end)[1] for end in binding.targets)]
     for target in binding.targets:
         text = target.kind == "path" and target.ids and target.ids[-1] in TEXT_IDS
         vtype = "string" if text else describe(target)[0]
@@ -91,9 +91,9 @@ def state_for(name: str, locked: bool = False) -> bool | None:
         return not locked
     if "lock" in low:
         return locked
-    if any(w in low for w in EXCEPTIONS):
+    if any(word in low for word in EXCEPTIONS):
         return False
-    if any(w in low for w in USUAL):
+    if any(word in low for word in USUAL):
         return True
     return None
 
@@ -106,10 +106,10 @@ def selection_for(name: str, key: str, first_of: Callable[[int], bool | None] = 
     child objects of one class side by side (``first_of(field id)``, the data classes' order: a menu's first access
     button); none: off. None where the name says nothing (layout.md "Values the game gives at run time")."""
     low = name.lower().replace("_", "")
-    if not any(w in low for w in SELECTED):
+    if not any(word in low for word in SELECTED):
         return None
     parts = key.split("/")
-    ids = [(i, int(p, 16)) for i, p in enumerate(parts) if i and len(p) == 8]
+    ids = [(i, int(part, 16)) for i, part in enumerate(parts) if i and len(part) == 8]
     for at, uid in reversed(ids[:-1]):
         if uid >= ELEMENT:
             chosen = index_of("/".join(parts[:at]))
@@ -146,8 +146,8 @@ def flag_for(binding, index: int, describe: Callable[[object], tuple[str, str]],
     what the names say at the other bindings reading the same game value (``readers``: (binding, index) pairs; one
     value, one state: an edit mode's flag hides its info panel too), else the flag a target stores (a layer the file
     keeps hidden, shown by the game at times: a drag hint), through the binding's operator, else true."""
-    for b, i in ((binding, index), *readers):
-        found = _named_state(b, i, describe, locked)
+    for reader, i in ((binding, index), *readers):
+        found = _named_state(reader, i, describe, locked)
         if found is not None:
             return found
     for target in binding.targets if stored is not None else ():
@@ -159,12 +159,12 @@ def flag_for(binding, index: int, describe: Callable[[object], tuple[str, str]],
 def text_for(name: str) -> str:
     """A filler text whose length suits a property of this name (a header short, a description long)."""
     low = name.lower()
-    if any(w in low for w in ("header", "title", "name", "caption", "button", "label")):
+    if any(word in low for word in ("header", "title", "name", "caption", "button", "label")):
         return TEXTS["short"]
-    if any(w in low for w in ("desc", "info", "tooltip", "hint", "body", "paragraph")):  # a bare "Text": medium
+    if any(word in low for word in ("desc", "info", "tooltip", "hint", "body", "paragraph")):  # a bare "Text": medium
         return TEXTS["long"]
     if low in ID_NAMES or any(
-        w in low for w in COUNT_WORDS
+        word in low for word in COUNT_WORDS
     ):  # a number shown as text: the value the game counts at run time
         return str(number_for(name))
     return TEXTS["medium"]
@@ -172,14 +172,14 @@ def text_for(name: str) -> str:
 
 def number_for(name: str):
     low = name.lower()
-    return next((v for word, v in NUMBERS if word in low), 42)
+    return next((number for word, number in NUMBERS if word in low), 42)
 
 
 def is_picture_name(name: str) -> bool:
     """Whether a text property of this name holds a picture's name (``Icon``, ``Model2D``), not the text shown with
     one (``IconText``)."""
     low = name.lower()
-    return any(w in low for w in PICTURE_WORDS) and not any(w in low for w in PICTURE_TEXT_WORDS)
+    return any(word in low for word in PICTURE_WORDS) and not any(word in low for word in PICTURE_TEXT_WORDS)
 
 
 def _by_type(vtype: str, name: str):
@@ -198,8 +198,8 @@ def _by_type(vtype: str, name: str):
 
 def target_kind(uid: int) -> tuple[str, str]:
     """(value type, name) of a built-in property a binding writes (``fields.BUILTINS``)."""
-    b = fields.BUILTIN_BY_ID.get(uid)
-    return (b.vtype, b.name) if b is not None else ("value", "")
+    builtin = fields.BUILTIN_BY_ID.get(uid)
+    return (builtin.vtype, builtin.name) if builtin is not None else ("value", "")
 
 
 def guess(binding, index: int, describe: Callable[[object], tuple[str, str]], locked: bool = False, defaults=None,
@@ -216,15 +216,15 @@ def guess(binding, index: int, describe: Callable[[object], tuple[str, str]], lo
     source_name = describe(binding.sources[index])[1]
     if op is not None and op.name == "IfTrueFalseAssign" and index == 2:  # the condition: names only
         state = state_for(source_name, locked)
-        others = (_named_state(b, i, describe, locked) for b, i in readers)
-        return next((s for s in (state, *others) if s is not None), True)
+        others = (_named_state(reader, i, describe, locked) for reader, i in readers)
+        return next((candidate for candidate in (state, *others) if candidate is not None), True)
     if family in BOOL_FAMILIES:
         return flag_for(binding, index, describe, locked, stored, readers)
     if op is not None and op.name in ("NumberToString", "NumberToBool"):
         return number_for(source_name)
     if op is not None and op.name.startswith("EnumTo"):
         return None  # an enum's values are UniqueIds; the first one is the template's
-    if any(t.kind == "path" and t.ids and t.ids[-1] in PLANE_IDS for t in binding.targets):
+    if any(end.kind == "path" and end.ids and end.ids[-1] in PLANE_IDS for end in binding.targets):
         return 0.0
     for target in binding.targets:
         if target.kind == "path" and target.ids and target.ids[-1] in PICTURE_IDS:

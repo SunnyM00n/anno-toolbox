@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ..infra import binkdll, tools
-from .run import Job, Made
+from .run import SJob, SMade
 
 ARGS = {
     "mp4": ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:a", "aac"],
@@ -33,15 +33,15 @@ def missing() -> list[str]:
     return [] if tools.find_tool("ffmpeg") else [f"mp4 and webm need {FFMPEG_HELP}"]
 
 
-def export(job: Job) -> Made:
+def export(job: SJob) -> SMade:
     """The video forms of a movie file; the stored file is exported by the caller."""
-    made = Made()
+    made = SMade()
     wanted = [k for k in ("mp4", "webm") if k in job.formats]
     ffmpeg = tools.find_tool("ffmpeg")
     if not wanted:
         return made
     if ffmpeg is None:
-        return Made(notes=[FFMPEG_HELP], status="tool-missing")
+        return SMade(notes=[FFMPEG_HELP], status="tool-missing")
     suffix = Path(job.path).suffix.lower()
     for key in wanted:
         if suffix == "." + key:
@@ -64,10 +64,10 @@ def _rad_hint() -> str:
     )
 
 
-def _roots(job: Job) -> list[Path]:
+def _roots(job: SJob) -> list[Path]:
     """The install a Bink DLL may come from: the folder of an opened game (``ANNO_BINK_DLLS`` besides). A folder of
     loose files is data, not an install: native code is never loaded from it."""
-    folder = getattr(job.source, "folder", None)
+    folder = getattr(job.source, "m_folder", None)
     return [Path(folder)] if folder else []
 
 
@@ -76,7 +76,7 @@ def _run_dll(ffmpeg: Path, data: bytes, key: str, roots: Sequence[Path], target:
     try:
         with binkdll.open_movie(data, roots) as movie:
             binkdll.feed_ffmpeg(movie, ffmpeg, ARGS[key], target)
-    except binkdll.BinkError as exc:
+    except binkdll.CBinkError as exc:
         raise RuntimeError(str(exc)) from exc
     return target.read_bytes()
 
@@ -84,12 +84,14 @@ def _run_dll(ffmpeg: Path, data: bytes, key: str, roots: Sequence[Path], target:
 def _run(ffmpeg: Path, data: bytes, suffix: str, key: str, roots: Sequence[Path] = ()) -> bytes:
     """ffmpeg over a temporary copy of the movie; the output's bytes, or a RuntimeError with ffmpeg's last line.
     A Bink 2 movie goes through the game's Bink DLL when one is found (ffmpeg cannot read it)."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="export-movie-") as tmp:
-        source, target = Path(tmp) / f"in{suffix}", Path(tmp) / f"out.{key}"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="export-movie-") as temp_dir:
+        source, target = Path(temp_dir) / f"in{suffix}", Path(temp_dir) / f"out.{key}"
         if suffix == ".bk2" and binkdll.available(data, roots):
             return _run_dll(ffmpeg, data, key, roots, target)
         source.write_bytes(data)
-        result = tools.run_tool(ffmpeg, ["-y", "-v", "error", "-i", str(source), *ARGS[key], str(target)], timeout=3600)
+        result = tools.run_tool(
+            ffmpeg, ["-y", "-v", "error", "-i", str(source), *ARGS[key], str(target)], timeout_s=3600
+        )
         if not result.ok or not target.is_file():
             last = (result.stderr.strip().splitlines() or ["no output"])[-1]
             raise RuntimeError(f"ffmpeg could not make the {key}: {last}")

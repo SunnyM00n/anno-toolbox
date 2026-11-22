@@ -3,7 +3,7 @@ compiler (``models.shaderview``), drawn into the engine's G-buffer and lit by th
 (``render.gamedraw``, ``gameframe``, ``gamelight``), on Direct3D 12; a material whose effect has no G-buffer pass, or
 that does not compile, is drawn by our plain look (viewer.md "Looks").
 
-``GamePass(renderer)`` (an ``ownpass.OwnPass``) is the entry, one per ``modelrender.ModelRenderer``: ``draw(drawn, target, size, camera,
+``CGamePass(renderer)`` (an ``ownpass.COwnPass``) is the entry, one per ``modelrender.CModelRenderer``: ``draw(drawn, target, size_px, camera,
 light)`` per frame returns what it left to the renderer (None while the shaders compile: the renderer draws its game
 look). ``why_not`` says when it cannot draw at all. docs/viewer.md "The renderer"; docs/tool-suite.md section 21.
 """
@@ -35,55 +35,55 @@ from ..render import (
     shadowfit,
 )
 from ..render.camera import MIRROR
-from ..render.gameframe import GameFrame, Light, Passes
+from ..render.gameframe import CGameFrame, SLight, SPasses
 from ..sources.assetdb import number
 from .forwardpass import drawn_size
-from .ownpass import OwnPass
+from .ownpass import COwnPass
 
 GAME = "anno117"
 
 
 def make_pass(renderer):
     """The own-shader pass of the renderer's game: ``pass_class`` of its ``nativelook.GAMES`` record ("module:Class",
-    each with GamePass's interface); 117's ``GamePass`` for a game without one."""
-    native = nativelook.GAMES.get(getattr(renderer.files.files, "game", ""))
+    each with CGamePass's interface); 117's ``CGamePass`` for a game without one."""
+    native = nativelook.GAMES.get(getattr(renderer.m_files.m_files, "m_game", ""))
     module, _, name = (native.pass_class if native else "").partition(":")
     if not name:
-        return GamePass(renderer)
+        return CGamePass(renderer)
     from importlib import import_module
 
     return getattr(import_module(f"{__package__.partition('.')[0]}.{module}"), name)(renderer)
 
 
-class GamePass(OwnPass):
+class CGamePass(COwnPass):
     """The parts of one scene as the game's shaders draw them (module docstring)."""
 
     GAME = GAME
     PREFIX = "gs"
-    SOURCE = shaderview.ShaderSource
-    NOT_OURS = shaderview.NoGBufferPass
+    SOURCE = shaderview.CShaderSource
+    NOT_OURS = shaderview.CNoGBufferPass
 
     def __init__(self, renderer) -> None:
         super().__init__(renderer)
-        self.frame: GameFrame | None = None
-        self.casters: dict[tuple, gamedraw.GameModel] = {}  # the same keys: the group's shadow technique
-        self.programs: dict[tuple, gamedraw.Program] = {}
-        self.shading: gamelight.DeferredShading | None = None
-        self.fit: shadowfit.ShadowFit | None = None
-        self.sky: gamesky.SkyPasses | None = None
-        self.post: gamepost.GamePost | None = None
-        self.eye: eyeadapt.EyeAdaptation | None = None
-        self.water: gamewater.SceneCopies | None = None
-        self.atmosphere: gameatmosphere.Atmosphere | None = None
-        self.clouds: gameclouds.Clouds | None = None
-        self.ocean: gameocean.OceanSimulation | None = None
-        self.ground: gamedraw.GameModel | None | bool = None  # False: it does not compile
-        self._last_frame: float | None = None  # when the eye adaptation last ran (its easing's time step)
-        self.transparent: set[tuple] = set()  # the keys of groups drawn by their effect's Transparent technique
-        self._bound: tuple = ()  # the view size and copies the transparent draws were bound with
+        self.m_frame: CGameFrame | None = None
+        self.m_casters: dict[tuple, gamedraw.CGameModel] = {}  # the same keys: the group's shadow technique
+        self.m_programs: dict[tuple, gamedraw.CProgram] = {}
+        self.m_shading: gamelight.CDeferredShading | None = None
+        self.m_fit: shadowfit.CShadowFit | None = None
+        self.m_sky: gamesky.CSkyPasses | None = None
+        self.m_post: gamepost.CGamePost | None = None
+        self.m_eye: eyeadapt.CEyeAdaptation | None = None
+        self.m_water: gamewater.CSceneCopies | None = None
+        self.m_atmosphere: gameatmosphere.CAtmosphere | None = None
+        self.m_clouds: gameclouds.CClouds | None = None
+        self.m_ocean: gameocean.COceanSimulation | None = None
+        self.m_ground: gamedraw.CGameModel | None | bool = None  # False: it does not compile
+        self._m_last_frame: float | None = None  # when the eye adaptation last ran (its easing's time step)
+        self.m_transparent: set[tuple] = set()  # the keys of groups drawn by their effect's Transparent technique
+        self._m_bound: tuple = ()  # the view size and copies the transparent draws were bound with
 
-    def _make_source(self, tree) -> shaderview.ShaderSource:
-        return shaderview.ShaderSource(tree, dxc.Dxc.find(anno117=getattr(tree, "folder", None)))
+    def _make_source(self, tree) -> shaderview.CShaderSource:
+        return shaderview.CShaderSource(tree, dxc.CDxc.find(anno117=getattr(tree, "m_folder", None)))
 
     def _work(self, source, part, item):
         """In the background: the group's two stages, material and mesh as stored."""
@@ -91,133 +91,144 @@ class GamePass(OwnPass):
         stem = shaderview.effect_of(number(values.get("ShaderID"), -1))
         stored = getattr(item.get("data"), "stored", None)
         if stem is None or stored is None or not values:
-            raise shaderview.NoGBufferPass("not a model of the game's shaders")
+            raise shaderview.CNoGBufferPass("not a model of the game's shaders")
         got = source.draw_stages(stem, values)
-        mesh = gamedraw.Mesh.of_rdm(stored, item["idx"])
-        return got.vs, got.ps, source.material(got.refs, values), mesh, got.shadow, got.transparent
+        mesh = gamedraw.CMesh.of_rdm(stored, item["idx"])
+        return (
+            got.vertex_stage,
+            got.pixel_stage,
+            source.material(got.refs, values),
+            mesh,
+            got.shadow,
+            got.is_transparent,
+        )
 
-    def _build(self, key: tuple, got) -> gamedraw.GameModel:
-        vs, ps, material, mesh, shadow, transparent = got
-        state = renderstates.pass_state(ps.state) if transparent else renderstates.GBUFFER_STATE
-        model = self.models[key] = gamedraw.GameModel(self.r.ctx.rhi, self._program(vs, ps), mesh, material,
+    def _build(self, key: tuple, got) -> gamedraw.CGameModel:
+        vertex_shader, pixel_shader, material, mesh, shadow, transparent = got
+        state = renderstates.pass_state(pixel_shader.state) if transparent else renderstates.GBUFFER_STATE
+        model = self.m_models[key] = gamedraw.CGameModel(self.m_renderer.m_ctx.m_rhi, self._program(vertex_shader, pixel_shader), mesh, material,
                                                       state=state)  # fmt: skip
         if transparent:
-            self.transparent.add(key)
+            self.m_transparent.add(key)
         if shadow is not None:
-            self.casters[key] = gamedraw.GameModel(self.r.ctx.rhi, self._program(*shadow), mesh, material, model)
+            self.m_casters[key] = gamedraw.CGameModel(
+                self.m_renderer.m_ctx.m_rhi, self._program(*shadow), mesh, material, model
+            )
         return model
 
     def _pieces(self, key: tuple, model) -> tuple:
-        return (*super()._pieces(key, model), self.casters.get(key))
+        return (*super()._pieces(key, model), self.m_casters.get(key))
 
     def _fall_back(self, key: tuple, error: str) -> None:
-        caster = self.casters.pop(key, None)
+        caster = self.m_casters.pop(key, None)
         if caster is not None:
             caster.release()
-        self.transparent.discard(key)
+        self.m_transparent.discard(key)
         super()._fall_back(key, error)
 
     def _unowned(self, model, error: str) -> None:
-        if model is self.ground:  # the view draws its own ground instead
+        if model is self.m_ground:  # the view draws its own ground instead
             model.release()
-            self.ground = False
+            self.m_ground = False
         super()._unowned(model, error)
 
-    def _program(self, vs, ps) -> gamedraw.Program:
-        program = self.programs.get((id(vs), id(ps)))
+    def _program(self, vertex_shader, pixel_shader) -> gamedraw.CProgram:
+        # a program holds its stages, so their ids stay theirs for as long as the entry lives
+        key = (id(vertex_shader), id(pixel_shader))  # pattern: ok (the program holds both)
+        program = self.m_programs.get(key)
         if program is None:
-            program = self.programs[(id(vs), id(ps))] = gamedraw.Program(vs, ps)
+            program = self.m_programs[key] = gamedraw.CProgram(vertex_shader, pixel_shader)
         return program
 
     def _shading(self):
         """The deferred shading of this device (None while it compiles, or when it does not: our light then)."""
-        if self.shading is None:
-            self.shading = self._part(
+        if self.m_shading is None:
+            self.m_shading = self._part(
                 "shading",
                 self.SOURCE.shading,
-                lambda got: gamelight.DeferredShading(self.r.ctx.rhi, *got),
+                lambda got: gamelight.CDeferredShading(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.games_deferred_shading"),
                 N_("viewer.our_light_instead"),
             )
-        return self.shading
+        return self.m_shading
 
     def _fit(self):
         """The game's cascade analysis of this device (None while it compiles, or when it does not: the CPU's fit)."""
-        if self.fit is None:
-            self.fit = self._part(
+        if self.m_fit is None:
+            self.m_fit = self._part(
                 "shadowfit",
                 self.SOURCE.shadow_fit,
-                lambda got: shadowfit.ShadowFit(self.r.ctx.rhi, got),
+                lambda got: shadowfit.CShadowFit(self.m_renderer.m_ctx.m_rhi, got),
                 N_("viewer.games_shadow_analysis"),
                 N_("viewer.fitted_on_cpu"),
             )
-        return self.fit
+        return self.m_fit
 
-    def finish(self, source, size: tuple[int, int], lut):
+    def finish(self, source, size_px: tuple[int, int], lut):
         """The game's grade and tone map over the view's resolved HDR colour (``source``, a device texture; ``lut``
         the ambient's grade cube or None): the tone-mapped texture, or None when the post chain is switched off or
         not ready (the view's own finish then)."""
-        if not self.switches.get("post", True) or self.shading is None:
+        if not self.m_switches.get("post", True) or self.m_shading is None:
             return None
-        if self.post is None:
-            self.post = self._part(
+        if self.m_post is None:
+            self.m_post = self._part(
                 "post",
                 self.SOURCE.post_stages,
-                lambda got: gamepost.GamePost(self.r.ctx.rhi, got),
+                lambda got: gamepost.CGamePost(self.m_renderer.m_ctx.m_rhi, got),
                 N_("viewer.games_post_chain"),
                 N_("viewer.our_finish"),
             )
-        if self.post is None or self.post.error:
+        if self.m_post is None or self.m_post.m_error:
             return None
         inputs = {
-            k: v
-            for k, v in (
-                ("cBlueNoiseTex", self.shading.fixed.get("cBlueNoiseTex")),
+            k: value
+            for k, value in (
+                ("cBlueNoiseTex", self.m_shading.m_fixed.get("cBlueNoiseTex")),
                 ("cLUTTexture0", lut.native if lut is not None else None),
             )
-            if v is not None
+            if value is not None
         }
-        return self.post.render(self.r.ctx, source, size, inputs, self._exposure(source, size))
+        return self.m_post.render(self.m_renderer.m_ctx, source, size_px, inputs, self._exposure(source, size_px))
 
-    def _exposure(self, source, size: tuple[int, int]):
+    def _exposure(self, source, size_px: tuple[int, int]):
         """The game's eye adaptation over ``source`` (frame-117-viewer.md 6): its exposure buffer, or None when it is
         switched off or not ready (the tone map then without it)."""
-        if not self.switches.get("eye", True):
-            self._last_frame = None
+        if not self.m_switches.get("eye", True):
+            self._m_last_frame = None
             return None
-        if self.eye is None:
-            self.eye = self._part(
+        if self.m_eye is None:
+            self.m_eye = self._part(
                 "eye",
                 lambda source: source.stage_set(eyeadapt.STAGES),
-                lambda got: eyeadapt.EyeAdaptation(self.r.ctx.rhi, got),
+                lambda got: eyeadapt.CEyeAdaptation(self.m_renderer.m_ctx.m_rhi, got),
                 N_("viewer.games_eye_adaptation"),
                 N_("viewer.tone_map_without_it"),
             )
-        if self.eye is None or self.eye.error:
+        if self.m_eye is None or self.m_eye.m_error:
             return None
         now = time.monotonic()
-        step = None if self._last_frame is None else now - self._last_frame
+        step = None if self._m_last_frame is None else now - self._m_last_frame
         if step is None or step > eyeadapt.SETTLE:
-            self.eye.restart()
-        self._last_frame = now
-        self.eye.run(self.r.ctx, source, size, step)
-        return self.eye.exposure
+            self.m_eye.restart()
+        self._m_last_frame = now
+        self.m_eye.run(self.m_renderer.m_ctx, source, size_px, step)
+        return self.m_eye.m_exposure
 
     def _sky(self):
         """The game's sky passes of this device (None while they compile, or when they do not: the look's light)."""
-        if self.sky is None:
-            self.sky = self._part(
+        if self.m_sky is None:
+            self.m_sky = self._part(
                 "sky",
                 self.SOURCE.sky_passes,
-                lambda got: gamesky.SkyPasses(self.r.ctx.rhi, *got),
+                lambda got: gamesky.CSkyPasses(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.games_sky_passes"),
                 N_("viewer.looks_sky_light"),
             )
-        return self.sky
+        return self.m_sky
 
-    def draw(self, drawn: list, target, size: tuple[int, int], camera, light: Light, sky=None,
+    def draw(self, drawn: list, target, size_px: tuple[int, int], camera, light: SLight, sky=None,
              ground=None) -> list | None:  # fmt: skip
-        """The G-buffer pass of every group the game's shaders draw, lit (``sky``: a ``gamelight.Sky`` for the
+        """The G-buffer pass of every group the game's shaders draw, lit (``sky``: a ``gamelight.SSky`` for the
         game's deferred shading, else ``light``, ours) into ``target`` with its depth, the groups' shadow techniques
         into the sun's cascades, the groups without a G-buffer pass by their transparent technique over the lit
         colour (``switches``); the rest of ``drawn`` is returned for the renderer, or None while a shader still
@@ -225,161 +236,163 @@ class GamePass(OwnPass):
         shader (``render.gameground``)."""
         ready, rest, waiting = self._split(drawn)
         found, casters, see_through = [], [], []
-        transparent_on = self.switches.get("transparent", True)
+        transparent_on = self.m_switches.get("transparent", True)
         for key, part, item, place, model in ready:
-            if key in self.transparent and not transparent_on:
+            if key in self.m_transparent and not transparent_on:
                 rest.append((part, item, place))
                 continue
-            caster = self.casters.get(key)
+            caster = self.m_casters.get(key)
             palette = _palette(item, model)
-            for m in (model, caster) if caster is not None else (model,):
-                m.world = MIRROR @ np.asarray(place, float)
-                m.palette = palette
-            (see_through if key in self.transparent else found).append(model)
-            if caster is not None and self.switches.get("shadows", True):
+            for drawn_model in (model, caster) if caster is not None else (model,):
+                drawn_model.m_world = MIRROR @ np.asarray(place, float)
+                drawn_model.m_palette = palette
+            (see_through if key in self.m_transparent else found).append(model)
+            if caster is not None and self.m_switches.get("shadows", True):
                 casters.append(caster)
         plane = self._ground(ground)
         if plane is not None:
             found.append(plane)
         shading = self._shading() if sky is not None else None
-        if waiting or (sky is not None and shading is None and self.sources.pending()):
+        if waiting or (sky is not None and shading is None and self.m_sources.pending()):
             return None
-        if self.frame is None:
-            self.frame = GameFrame(self.r.ctx)
-        quality = getattr(self, "quality", None)  # the menu's (``modelrender``): 117's scale, shadow map, cascades
-        self.frame.set_quality(quality)
-        size = drawn_size(size, quality)  # the frame's composite stretches it over the view
-        both = (shading, sky) if shading is not None and not shading.error else None
-        box = self.r.box
-        lights = self._lights() if self.switches.get("lights", True) else []
+        if self.m_frame is None:
+            self.m_frame = CGameFrame(self.m_renderer.m_ctx)
+        quality = getattr(self, "m_quality", None)  # the menu's (``modelrender``): 117's scale, shadow map, cascades
+        self.m_frame.set_quality(quality)
+        size_px = drawn_size(size_px, quality)  # the frame's composite stretches it over the view
+        both = (shading, sky) if shading is not None and not shading.m_error else None
+        box = self.m_renderer.m_box
+        lights = self._lights() if self.m_switches.get("lights", True) else []
         fit = self._fit() if casters else None
-        sky_passes = self._sky() if both is not None and self.switches.get("sky", True) else None
+        sky_passes = self._sky() if both is not None and self.m_switches.get("sky", True) else None
         water = self._water() if see_through else None
         waves = self._waves(water)
-        atmosphere = self._atmosphere() if sky_passes is not None and self.switches.get("atmosphere", True) else None
-        clouds = self._clouds() if atmosphere is not None and not atmosphere.error else None
+        atmosphere = self._atmosphere() if sky_passes is not None and self.m_switches.get("atmosphere", True) else None
+        clouds = self._clouds() if atmosphere is not None and not atmosphere.m_error else None
         if clouds is not None:  # the weather and the noise drift with the wind over the view's time
-            clouds.seconds = float(self.r.state.time)
+            clouds.m_seconds = float(self.m_renderer.m_state.time)
         near, far = camera.planes()  # with clouds the rays reach the engine's far plane (frame-117-viewer.md 12)
-        cam = self.frame.camera(size, camera.eye(), camera.target, camera.fov, near, far,
-                                clouds.maps.far if clouds is not None else 0.0)  # fmt: skip
-        self._rebind_see_through((size, water is not None and not water.error, waves))
-        look = gameatmosphere.Look()
-        passes = Passes(casters, (box[0], box[1]) if box is not None else None, lights, fit, see_through, sky_passes,
+        cam = self.m_frame.camera(size_px, camera.eye(), camera.m_target, camera.m_fov_rad, near, far,
+                                clouds.m_maps.far if clouds is not None else 0.0)  # fmt: skip
+        self._rebind_see_through((size_px, water is not None and not water.m_error, waves))
+        look = gameatmosphere.SLook()
+        passes = SPasses(casters, (box[0], box[1]) if box is not None else None, lights, fit, see_through, sky_passes,
                         water, atmosphere, look, clouds)  # fmt: skip
-        self.frame.render(target, size, found, cam, light, finish=False, shading=both, passes=passes)
+        self.m_frame.render(target, size_px, found, cam, light, finish=False, shading=both, passes=passes)
         for part in (shading, fit, sky_passes, water, atmosphere, clouds):
-            if part is not None and part.error:
-                self.r.say(part.error)
+            if part is not None and part.m_error:
+                self.m_renderer.say(part.m_error)
         return rest
 
     def _ground(self, place):
         """The ground's model in the G-buffer at ``place`` (None: no ground, or while it compiles)."""
         if place is None:
             return None
-        if self.ground is None:
-            self.ground = (
+        if self.m_ground is None:
+            self.m_ground = (
                 self._part(
                     "ground",
                     gameground.compile_ground,
-                    lambda got: gamedraw.GameModel(self.r.ctx.rhi, self._program(*got[:2]), gameground.mesh(), got[2]),
+                    lambda got: gamedraw.CGameModel(
+                        self.m_renderer.m_ctx.m_rhi, self._program(*got[:2]), gameground.mesh(), got[2]
+                    ),
                     N_("viewer.ground_by_games_model_shader"),
                     N_("viewer.none_in_games_frame"),
-                    lambda: self.__setattr__("ground", False),
+                    lambda: setattr(self, "m_ground", False),
                 )
-                or self.ground
+                or self.m_ground
             )  # False after an error stays
-        if not self.ground:
+        if not self.m_ground:
             return None
-        self.ground.world = MIRROR @ np.asarray(place, float)
-        return self.ground
+        self.m_ground.m_world = MIRROR @ np.asarray(place, float)
+        return self.m_ground
 
     def _rebind_see_through(self, key: tuple) -> None:
         """The transparent draws made again (on their next prepare) when the scene's copies they bind by name were
         made anew: another view size, or the copies ready after they compiled."""
-        if key == self._bound:
+        if key == self._m_bound:
             return
-        self._bound = key
-        for k in self.transparent:
-            for m in (self.models.get(k), self.casters.get(k)):
-                if isinstance(m, gamedraw.GameModel):
-                    m.release()
+        self._m_bound = key
+        for k in self.m_transparent:
+            for model in (self.m_models.get(k), self.m_casters.get(k)):
+                if isinstance(model, gamedraw.CGameModel):
+                    model.release()
 
     def _atmosphere(self):
         """The visible sky and haze by the game's environment shaders (frame-117-viewer.md 8); None while they
         compile, or when they do not (the view's own sky then)."""
-        if self.atmosphere is None:
-            self.atmosphere = self._part(
+        if self.m_atmosphere is None:
+            self.m_atmosphere = self._part(
                 "atmosphere",
                 lambda source: (source.stage_set(gameatmosphere.STAGES), source.sky_passes()[1]),
-                lambda got: gameatmosphere.Atmosphere(self.r.ctx.rhi, *got),
+                lambda got: gameatmosphere.CAtmosphere(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.games_visible_sky_haze"),
                 N_("viewer.our_sky"),
             )
-        return self.atmosphere
+        return self.m_atmosphere
 
     def _clouds(self):
         """The clouds by the game's environment shaders (frame-117-viewer.md 12); None while they compile, when
         they do not, or when switched off."""
-        if not self.switches.get("clouds", True):
+        if not self.m_switches.get("clouds", True):
             return None
-        if self.clouds is None:
-            self.clouds = self._part(
+        if self.m_clouds is None:
+            self.m_clouds = self._part(
                 "clouds",
                 lambda source: (
                     source.stage_set(gameclouds.STAGES),
-                    gameclouds.read_maps(source.files, source.ambient_text()),
+                    gameclouds.read_maps(source.m_files, source.ambient_text()),
                 ),
-                lambda got: gameclouds.Clouds(self.r.ctx.rhi, *got),
+                lambda got: gameclouds.CClouds(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.games_clouds"),
                 N_("viewer.no_clouds"),
             )
-        return self.clouds if self.clouds is not None and not self.clouds.error else None
+        return self.m_clouds if self.m_clouds is not None and not self.m_clouds.m_error else None
 
     def _waves(self, water) -> bool:
         """The ocean's wave simulation for this frame into ``water``'s inputs (frame-117-viewer.md 10); False while
         it compiles, when it does not or when switched off (the water's flat surface then)."""
-        if water is None or water.error:
+        if water is None or water.m_error:
             return False
         ocean = None
-        if self.switches.get("waves", True):
-            if self.ocean is None:
-                self.ocean = self._part(
+        if self.m_switches.get("waves", True):
+            if self.m_ocean is None:
+                self.m_ocean = self._part(
                     "ocean",
                     lambda source: (source.stage_set(gameocean.STAGES), gameocean.read_water(source.ambient_text())),
-                    lambda got: gameocean.OceanSimulation(self.r.ctx.rhi, *got),
+                    lambda got: gameocean.COceanSimulation(self.m_renderer.m_ctx.m_rhi, *got),
                     N_("viewer.games_ocean_simulation"),
                     N_("viewer.flat_water"),
                 )
-            ocean = self.ocean if self.ocean is not None and not self.ocean.error else None
+            ocean = self.m_ocean if self.m_ocean is not None and not self.m_ocean.m_error else None
         if ocean is None:
-            water.waves, water.constants = {}, dict(gamewater.CONSTANTS)
+            water.m_waves, water.m_constants = {}, dict(gamewater.CONSTANTS)
             return False
-        ocean.run(self.r.ctx, float(self.r.state.time))
-        water.waves, water.constants = ocean.inputs(), dict(gameocean.CONSTANTS)
+        ocean.run(self.m_renderer.m_ctx, float(self.m_renderer.m_state.time))
+        water.m_waves, water.m_constants = ocean.inputs(), dict(gameocean.CONSTANTS)
         return True
 
     def _water(self):
         """The scene's copies the water reads (frame-117-viewer.md 7); None while they compile, or when they do not
         (the water then reads zeros)."""
-        if self.water is None:
-            self.water = self._part(
+        if self.m_water is None:
+            self.m_water = self._part(
                 "water",
                 lambda source: (source.stage_set(gamewater.STAGES), source.float_maps(gamewater.MAPS)),
-                lambda got: gamewater.SceneCopies(self.r.ctx.rhi, *got),
+                lambda got: gamewater.CSceneCopies(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.scenes_copies_for_water"),
                 N_("viewer.water_without_them"),
             )
-        return self.water
+        return self.m_water
 
     def _lights(self) -> list:
         """The config's lights where they stand this frame, in the view's axes (as the renderer's own look takes
         them, ``modelrender._light_set``): point, spot and area lights by their ``Type``, those with
         ``ClusteredShading`` 0 left out (docs/rendering/frame-117-viewer.md 1)."""
-        r, out = self.r, []
-        state = r.state
-        for lamp in r.scene.lights if r.scene is not None else []:
-            place = r.place(lamp, state) if state.shows(lamp) else None
+        renderer, out = self.m_renderer, []
+        state = renderer.m_state
+        for lamp in renderer.m_scene.m_lights if renderer.m_scene is not None else []:
+            place = renderer.place(lamp, state) if state.shows(lamp) else None
             if place is None or not lamp.clustered:
                 continue
             light = lightclusters.from_config(lamp, MIRROR @ np.asarray(place, float), state.light_color(lamp))
@@ -388,46 +401,46 @@ class GamePass(OwnPass):
         return out
 
     def release_scene(self) -> None:
-        for m in self.casters.values():
-            m.release()
-        self.casters, self.transparent = {}, set()
-        self._last_frame = None  # a new model: the eye adaptation starts at its target
+        for model in self.m_casters.values():
+            model.release()
+        self.m_casters, self.m_transparent = {}, set()
+        self._m_last_frame = None  # a new model: the eye adaptation starts at its target
         super().release_scene()
 
     def _release_frame(self) -> None:
-        if self.ocean is not None:
-            self.ocean.release()
-            self.ocean = None
-        if self.atmosphere is not None:
-            self.atmosphere.release()
-            self.atmosphere = None
-        if self.clouds is not None:
-            self.clouds.release()
-            self.clouds = None
-        if self.ground:
-            self.ground.release()
-        self.ground = None
-        if self.water is not None:
-            self.water.release()
-            self.water = None
-        if self.eye is not None:
-            self.eye.release()
-            self.eye = None
-        if self.post is not None:
-            self.post.release()
-            self.post = None
-        if self.sky is not None:
-            self.sky.release()
-            self.sky = None
-        if self.fit is not None:
-            self.fit.release()
-            self.fit = None
-        if self.shading is not None:
-            self.shading.release()
-            self.shading = None
-        if self.frame is not None:
-            self.frame.release()
-            self.frame = None
+        if self.m_ocean is not None:
+            self.m_ocean.release()
+            self.m_ocean = None
+        if self.m_atmosphere is not None:
+            self.m_atmosphere.release()
+            self.m_atmosphere = None
+        if self.m_clouds is not None:
+            self.m_clouds.release()
+            self.m_clouds = None
+        if self.m_ground:
+            self.m_ground.release()
+        self.m_ground = None
+        if self.m_water is not None:
+            self.m_water.release()
+            self.m_water = None
+        if self.m_eye is not None:
+            self.m_eye.release()
+            self.m_eye = None
+        if self.m_post is not None:
+            self.m_post.release()
+            self.m_post = None
+        if self.m_sky is not None:
+            self.m_sky.release()
+            self.m_sky = None
+        if self.m_fit is not None:
+            self.m_fit.release()
+            self.m_fit = None
+        if self.m_shading is not None:
+            self.m_shading.release()
+            self.m_shading = None
+        if self.m_frame is not None:
+            self.m_frame.release()
+            self.m_frame = None
 
 
 def _palette(item: dict, model) -> np.ndarray | None:
@@ -438,5 +451,5 @@ def _palette(item: dict, model) -> np.ndarray | None:
         return None
     if item.get("matrices") is not None:
         return item["matrices"]
-    joints = max(1, min(gameshader.LENGTHS["float4x3"], model.mesh.bone_count(4)))
+    joints = max(1, min(gameshader.LENGTHS["float4x3"], model.m_mesh.bone_count(4)))
     return np.broadcast_to(np.identity(4), (joints, 4, 4))

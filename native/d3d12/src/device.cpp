@@ -96,6 +96,7 @@ void Held::release() {
 }
 
 uint64_t Buffer::gpu_address() const {
+    if (!handle) throw Error("the buffer was released");
     auto* res = static_cast<ID3D12Resource*>(get()->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource).pointer);
     return res ? res->GetGPUVirtualAddress() : 0;
 }
@@ -158,6 +159,10 @@ Device* Device::create(bool debug, int adapter) {
             chosen = a;
             break;
         }
+    }
+    if (!chosen && (adapter >= 0 || adapter == WARP)) {  // an index past the adapters, or no software adapter: not the default one in its place
+        delete d;
+        throw Error(adapter == WARP ? "no software adapter" : "no adapter " + std::to_string(adapter));
     }
     HRESULT hr = D3D12CreateDevice(chosen.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&d->d3d));
     if (FAILED(hr)) {
@@ -233,6 +238,19 @@ std::string Device::adapter_name() const {
     std::string out;
     for (wchar_t c : w) out.push_back(c < 128 ? char(c) : '?');
     return out;
+}
+
+std::pair<uint64_t, uint64_t> Device::video_memory() const {
+    // this process's use of the adapter's own memory and the budget Windows gives it (native-backend.md 15)
+    LUID luid = d3d->GetAdapterLuid();
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter3> adapter;
+    DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) ||
+        FAILED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+        return {0, 0};
+    return {info.CurrentUsage, info.Budget};
 }
 
 int Device::shader_model() const {

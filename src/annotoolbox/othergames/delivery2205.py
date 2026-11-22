@@ -13,10 +13,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from ..formats.rda import RdaArchive
+from ..formats.rda import CRdaArchive
 from ..infra.buildcache import copy_atomic, write_atomic
 from . import gamebackups
-from .index2205 import FILE_DB, ArchiveIndex
+from .index2205 import FILE_DB, CArchiveIndex
 
 SESSIONS = "maindata/anno-toolbox-sessions.rda"  # the island editor's (and a project's) archive
 UI = "maindata/flash-ui.rda"  # the UI editor's archive
@@ -32,8 +32,8 @@ def backup_file(game: Path) -> Path:
 
 def listed(index_raw: bytes) -> list[str]:
     """The archives of ours an index points at."""
-    names = ArchiveIndex(index_raw).archive_names()
-    return [a for a in ARCHIVES if a in names]
+    names = CArchiveIndex(index_raw).archive_names()
+    return [archive for archive in ARCHIVES if archive in names]
 
 
 def is_ours(index_raw: bytes) -> bool:
@@ -67,9 +67,9 @@ def _kept(game: Path, old_backups: tuple[Path, ...]) -> bytes:
 
 def compose(own: bytes, game: Path, archives: list[str]) -> bytes:
     """The game's own index pointed at every member of ``archives`` (archives of ours as they lie in ``game``)."""
-    index = ArchiveIndex(own)
-    for name in (a for a in ARCHIVES if a in archives):
-        for path, entry in RdaArchive(game / name).entries.items():
+    index = CArchiveIndex(own)
+    for name in (archive for archive in ARCHIVES if archive in archives):
+        for path, entry in CRdaArchive(game / name).entries.items():
             if index.entry(path) is None:
                 raise ValueError(f"the game's archive index has no entry {path}: not a file of this install")
             index.point(path, name, entry)
@@ -89,7 +89,7 @@ def install(game: Path, name: str, built: Path, log: Log = print, old_backups: t
         gamebackups.keep(game / FILE_DB, backup_file(game))
         log(f"kept the game's {FILE_DB} in {backup_file(game)}")
     own = _kept(game, old_backups) if installed else current
-    others = [a for a in installed if a != name and (game / a).is_file()]
+    others = [archive for archive in installed if archive != name and (game / archive).is_file()]
     copy_atomic(built, game / name)
     write_atomic(game / FILE_DB, compose(own, game, [*others, name]))
     log(f"installed {name} and {FILE_DB} into {game}")
@@ -107,7 +107,7 @@ def uninstall(game: Path, name: str, log: Log = print, old_backups: tuple[Path, 
         log(f"{name} is not installed in {game}: nothing to undo")
         return False
     own = _kept(game, old_backups)
-    rest = [a for a in installed if a != name and (game / a).is_file()]
+    rest = [archive for archive in installed if archive != name and (game / archive).is_file()]
     write_atomic(game / FILE_DB, compose(own, game, rest) if rest else own)
     (game / name).unlink(missing_ok=True)
     if not rest:

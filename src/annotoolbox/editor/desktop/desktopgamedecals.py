@@ -2,7 +2,7 @@
 shader (``render.gamedecals``) into the G-buffer after the terrain, laid on the session's heights by the shader, one
 draw per look and shape of up to 204 decals; while a look compiles, or when one fails, the view's own decals.
 
-``GameDecals(island)`` is the entry (one per ``desktopgame.GameIsland``): ``frame(opts, textures)`` the draws of a
+``CGameDecals(island)`` is the entry (one per ``desktopgame.CGameIsland``): ``frame(opts, textures)`` the draws of a
 frame, ``take_failures`` and ``release``. docs/rendering/island-117-view.md "Config decals".
 """
 
@@ -18,105 +18,123 @@ from ...render import gamedecals, gamedraw
 JOB = "game-decal"
 
 
-class Look:
+class CLook:
     """One material of the island's decals: its loader job, its decals by shape, its draws and their maps."""
 
     def __init__(self, job: tuple, values: dict, shapes: dict) -> None:
-        self.job, self.values, self.shapes = job, values, shapes
-        self.draws: list = []
-        self.maps: list = []  # the look's texture arrays (``gamedecals.decal_draws``)
+        self.m_job, self.m_values, self.m_shapes = job, values, shapes
+        self.m_draws: list = []
+        self.m_maps: list = []  # the look's texture arrays (``gamedecals.decal_draws``)
 
     def release(self) -> None:
-        for d in self.draws:
-            d.release()
-        gamedecals.release_maps(self.maps)
-        self.draws = []
+        for draw in self.m_draws:
+            draw.release()
+        gamedecals.release_maps(self.m_maps)
+        self.m_draws = []
 
 
-class GameDecals:
+class CGameDecals:
     """The decals of the island's shown models by the game's decal shader (module docstring)."""
 
     def __init__(self, island) -> None:
-        self.island, self.r = island, island.r
-        self.looks: dict[tuple, Look] = {}
-        self.programs: dict = {}
-        self.waiting = 0  # looks still compiling
-        self.error = ""  # why the game's decals do not draw (said once): the view's own from then on
-        self._key: tuple | None = None
+        self.m_island, self.m_renderer = island, island.m_renderer
+        self.m_looks: dict[tuple, CLook] = {}
+        self.m_programs: dict = {}
+        self.m_waiting = 0  # looks still compiling
+        self.m_error = ""  # why the game's decals do not draw (said once): the view's own from then on
+        self._m_key: tuple | None = None
 
-    def frame(self, opts, textures) -> list:
+    def frame(self, options, textures) -> list:
         """This frame's decal draws (``textures``: the session maps the terrain stands in for), [] while any look
         compiles or after a failure (the view then draws its own: ``Renderer.game_decals`` False)."""
-        r = self.r
-        source = getattr(self.island, "source", None)
-        if self.error or source is None or r.library is None or r.editor is None:
+        renderer = self.m_renderer
+        source = getattr(self.m_island, "m_source", None)
+        if self.m_error or source is None or renderer.m_library is None or renderer.m_editor is None:
             return []
-        shown = [b for b in r._all_batches() if b.count and b.parts and r._layer_on(b, opts) and b.mats is not None]
-        placed = [(b.mats, b.key[1]) for b in shown if b.key[0] != "markers"] + _decal_objects(shown)
-        r.library.request({cfg for _mats, cfg in placed})
-        key = tuple((b.key, b.version) for b in shown), tuple(r.library.parts(cfg) is None for _m, cfg in placed)
-        if key != self._key:  # the objects moved, came or went: the decals grouped again, their draws made again
-            self._key = key
-            self._regroup(gamedecals.decal_looks([(mats, r.library.decals(cfg)) for mats, cfg in placed]))
-        self.waiting, out = sum(r.library.parts(cfg) is None for _mats, cfg in placed), []  # configs resolving
-        for look in self.looks.values():
-            got = r.loader.get(look.job, lambda v=look.values: _compile(source, r.editor.files, v))
+        shown = [
+            batch
+            for batch in renderer._all_batches()
+            if batch.m_count and batch.m_parts and renderer._layer_on(batch, options) and batch.m_mats is not None
+        ]
+        placed = [(batch.m_mats, batch.m_key[1]) for batch in shown if batch.m_key[0] != "markers"] + _decal_objects(
+            shown
+        )
+        renderer.m_library.request({cfg for _mats, cfg in placed})
+        key = (
+            tuple((batch.m_key, batch.m_version) for batch in shown),
+            tuple(renderer.m_library.parts(cfg) is None for _m, cfg in placed),
+        )
+        if key != self._m_key:  # the objects moved, came or went: the decals grouped again, their draws made again
+            self._m_key = key
+            self._regroup(
+                gamedecals.decal_looks([(materials, renderer.m_library.decals(cfg)) for materials, cfg in placed])
+            )
+        self.m_waiting, out = (
+            sum(renderer.m_library.parts(cfg) is None for _mats, cfg in placed),
+            [],
+        )  # configs resolving
+        for look in self.m_looks.values():
+            got = renderer.m_loader.get(
+                look.m_job, lambda value=look.m_values: _compile(source, renderer.m_editor.m_files, value)
+            )
             if got is None:
-                self.waiting += 1
+                self.m_waiting += 1
             elif isinstance(got, Exception):
                 self._fail(f"{type(got).__name__}: {got}")
                 return []
-            elif not look.draws:
-                look.draws = self._draws(got, look, textures)
-            out += look.draws
-        return [] if self.waiting else out
+            elif not look.m_draws:
+                look.m_draws = self._draws(got, look, textures)
+            out += look.m_draws
+        return [] if self.m_waiting else out
 
     def _regroup(self, found: dict) -> None:
-        for look in self.looks.values():
+        for look in self.m_looks.values():
             look.release()
-        self.looks = {}
+        self.m_looks = {}
         for k, shapes in found.items():
-            self.looks[k] = Look((JOB, k), dict(k), shapes)
+            self.m_looks[k] = CLook((JOB, k), dict(k), shapes)
 
-    def _draws(self, got: tuple, look: Look, textures) -> list:
+    def _draws(self, got: tuple, look: CLook, textures) -> list:
         stages, material = got
-        key = (stages.vs.entry, stages.vs.blob, stages.ps.entry, stages.ps.blob)
-        program = self.programs.get(key)
+        key = (stages.vertex_stage.entry, stages.vertex_stage.blob, stages.pixel_stage.entry, stages.pixel_stage.blob)
+        program = self.m_programs.get(key)
         if program is None:
-            program = self.programs[key] = gamedraw.Program(stages.vs, stages.ps)
-        state = gamedecals.decal_state(stages.ps.state)
-        return gamedecals.decal_draws(self.r.ctx.rhi, program, material, state, look.shapes, look.maps, textures)
+            program = self.m_programs[key] = gamedraw.CProgram(stages.vertex_stage, stages.pixel_stage)
+        state = gamedecals.decal_state(stages.pixel_stage.state)
+        return gamedecals.decal_draws(
+            self.m_renderer.m_ctx.m_rhi, program, material, state, look.m_shapes, look.m_maps, textures
+        )
 
     def _fail(self, why: str) -> None:
-        self.error = why
-        self.r._message(tr("islands.games_decals_reason", reason=why[:300]))
+        self.m_error = why
+        self.m_renderer._message(tr("islands.games_decals_reason", reason=why[:300]))
         self.release()
 
     def take_failures(self, failed: list) -> None:
         """A decal draw that failed in the last frame (taken out of ``failed``): the view's own decals from now on."""
-        mine = {id(d) for look in self.looks.values() for d in look.draws}
+        mine = {id(draw) for look in self.m_looks.values() for draw in look.m_draws}
         found = [x for x in failed if id(x[0]) in mine]
         if found:
             failed[:] = [x for x in failed if id(x[0]) not in mine]
             self._fail(found[0][1])
 
     def release(self) -> None:
-        for look in self.looks.values():
+        for look in self.m_looks.values():
             look.release()
-        self.looks, self.programs, self._key = {}, {}, None
+        self.m_looks, self.m_programs, self._m_key = {}, {}, None
 
 
 def _decal_objects(batches: list) -> list[tuple]:
     """(matrices, config) of the objects that draw nothing but decals (the island's beach, crack and cave decals:
-    pins in the view, ``assetmodels.Reason.EMPTY``), per config, from the marker batches among ``batches``."""
+    pins in the view, ``assetmodels.CReason.EMPTY``), per config, from the marker batches among ``batches``."""
     found: dict[str, list] = {}
-    for b in batches:
-        if b.key[0] != "markers":
+    for batch in batches:
+        if batch.m_key[0] != "markers":
             continue
-        for k, e in enumerate(b.entries):
-            if e.cfg and e.marker == "NoModel" and k < len(b.mats):
-                found.setdefault(e.cfg, []).append(b.mats[k])
-    return [(np.asarray(mats), cfg) for cfg, mats in found.items()]
+        for k, entry in enumerate(batch.m_entries):
+            if entry.cfg and entry.marker == "NoModel" and k < len(batch.m_mats):
+                found.setdefault(entry.cfg, []).append(batch.m_mats[k])
+    return [(np.asarray(materials), cfg) for cfg, materials in found.items()]
 
 
 def _compile(source, files, values: dict) -> tuple:

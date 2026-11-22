@@ -29,12 +29,12 @@ def files_signature(files: Iterable[Path | str], *extra: object) -> str:
     """What changes when any of ``files`` does or one is added or removed: each one's path, size and time, then
     ``extra`` (the reader's version, the game build, the language). A file that cannot be read counts as missing."""
     parts: list[object] = list(extra)
-    for f in sorted(str(p) for p in files):
+    for path_text in sorted(str(path) for path in files):
         try:
-            st = os.stat(f)
-            parts.append(f"{f}:{st.st_size}:{st.st_mtime_ns}")
+            st = os.stat(path_text)
+            parts.append(f"{path_text}:{st.st_size}:{st.st_mtime_ns}")
         except OSError:
-            parts.append(f"{f}:-")
+            parts.append(f"{path_text}:-")
     return buildcache.digest(*parts)
 
 
@@ -48,12 +48,12 @@ def folder_signature(root: Path | str, *extra: object, suffixes: tuple[str, ...]
         here = stack.pop()
         try:
             with os.scandir(here) as entries:
-                for e in entries:
-                    if e.is_dir(follow_symlinks=False):
-                        stack.append(e.path)
-                    elif not suffixes or e.name.lower().endswith(suffixes):
-                        st = e.stat()
-                        found.append(f"{e.path}:{st.st_size}:{st.st_mtime_ns}")
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                    elif not suffixes or entry.name.lower().endswith(suffixes):
+                        st = entry.stat()
+                        found.append(f"{entry.path}:{st.st_size}:{st.st_mtime_ns}")
         except OSError:
             found.append(f"{here}:-")
     return buildcache.digest(*parts, *sorted(found))
@@ -69,10 +69,10 @@ def load(name: str, scope: str, signature: str):
     if not buildcache.enabled():
         return None
     try:
-        with _path(name, scope).open("rb") as f:
-            if f.readline() != MAGIC or f.readline().decode("ascii").strip() != signature:
+        with _path(name, scope).open("rb") as file:
+            if file.readline() != MAGIC or file.readline().decode("ascii").strip() != signature:
                 return None
-            return pickle.load(f)
+            return pickle.load(file)
     except Exception:  # torn, truncated or from another version of a class: all the same, a rebuild
         return None
 
@@ -83,7 +83,7 @@ def store(name: str, scope: str, signature: str, payload: object) -> None:
         return
     try:
         body = MAGIC + signature.encode("ascii") + b"\n" + pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
-        buildcache.write_atomic(_path(name, scope), body, sync=False)
+        buildcache.write_atomic(_path(name, scope), body, is_synchronous=False)
     except (OSError, pickle.PicklingError):
         pass
 

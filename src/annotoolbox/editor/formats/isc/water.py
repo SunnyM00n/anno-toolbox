@@ -15,9 +15,9 @@ import struct
 
 import numpy as np
 
-from ....formats.isd2070 import Node
+from ....formats.isd2070 import SNode
 from ....infra.i18n import tr
-from ....othergames.isd1701 import TILE, Island1701, list_items
+from ....othergames.isd1701 import TILE, CIsland1701, list_items
 from ... import groundedit
 from . import blockings as isc_blockings
 
@@ -25,132 +25,141 @@ LISTS = ("Rivers", "Coastlines")
 BLOCKINGS = ("RiverBlockings", "RiverPathBlockings")
 
 
-def line_items(header: Node | None, name: str) -> list[Node]:
+def line_items(header: SNode | None, name: str) -> list[SNode]:
     """The lines of a list that have a polygon of two points or more, in file order (what an edit's index counts)."""
     node = header.find(name) if header is not None else None
-    out = []
+    items = []
     for item in list_items(node) if node is not None else []:
-        poly = item.find("m_Polygon")
-        if poly is not None and sum(1 for p in list_items(poly) if p.find("position") is not None) >= 2:
-            out.append(item)
-    return out
+        polygon = item.find("m_Polygon")
+        if polygon is not None and sum(1 for point in list_items(polygon) if point.find("position") is not None) >= 2:
+            items.append(item)
+    return items
 
 
-def _points(item: Node) -> list[Node]:
-    return [p for p in list_items(item.find("m_Polygon")) if p.find("position") is not None]
+def _points(item: SNode) -> list[SNode]:
+    return [point for point in list_items(item.find("m_Polygon")) if point.find("position") is not None]
 
 
-def _position(point: Node) -> tuple[float, float, float]:
-    pos = point.find("position")
-    data = pos.find("data")
+def _position(point: SNode) -> tuple[float, float, float]:
+    position_node = point.find("position")
+    data = position_node.find("data")
     if data is not None and data.data is not None and len(data.data) == 12:
         return struct.unpack("<3f", data.data)
-    return tuple(float(pos.value(n, 0)) for n in "xyz")
+    return tuple(float(position_node.value(axis, 0)) for axis in "xyz")
 
 
-def _set_position(point: Node, xyz: tuple[float, float, float]) -> None:
-    pos = point.find("position")
-    data = pos.find("data")
+def _set_position(point: SNode, xyz: tuple[float, float, float]) -> None:
+    position_node = point.find("position")
+    data = position_node.find("data")
     if data is not None and data.data is not None and len(data.data) == 12:
         data.data = struct.pack("<3f", *xyz)
         return
     for name, value in zip("xyz", xyz, strict=True):
-        node = pos.find(name)
+        node = position_node.find(name)
         if node is not None:
             node.text = f"{value:.6f}"
 
 
-def _set_text(point: Node, name: str, value: float) -> None:
+def _set_text(point: SNode, name: str, value: float) -> None:
     node = point.find(name)
     if node is not None:
         node.text = f"{value:.6f}"
 
 
-def network(isl: Island1701) -> dict:
-    """The water as the edit session takes it (``EditSession.water_net``): rivers (points x, height, z in tiles and
+def network(island: CIsland1701) -> dict:
+    """The water as the edit session takes it (``CEditSession.water_net``): rivers (points x, height, z in tiles and
     the width at each) and coast lines (x, z in tiles); 1701 has no lakes."""
     rivers = []
-    for item in line_items(isl.header, "Rivers"):
-        pts = [_position(p) for p in _points(item)]
+    for item in line_items(island.m_header, "Rivers"):
+        positions = [_position(point) for point in _points(item)]
         rivers.append(
             {
-                "points": [[x / TILE, y / TILE, z / TILE] for x, y, z in pts],
-                "widths": [_points(item)[k].float("width") / TILE for k in range(len(pts))],
+                "points": [[x / TILE, y / TILE, z / TILE] for x, y, z in positions],
+                "widths": [_points(item)[k].float("width") / TILE for k in range(len(positions))],
             }
         )
     coasts = [
         {"points": [[x / TILE, z / TILE] for x, _y, z in map(_position, _points(item))]}
-        for item in line_items(isl.header, "Coastlines")
+        for item in line_items(island.m_header, "Coastlines")
     ]
     return {"rivers": rivers, "lakes": [], "coasts": coasts}
 
 
-def ribbon(item: Node) -> tuple[np.ndarray, np.ndarray]:
+def ribbon(item: SNode) -> tuple[np.ndarray, np.ndarray]:
     """A river's points (x, z) and widths in world units, as ``formats.isc.blockings`` takes them."""
-    pts = _points(item)
+    points = _points(item)
     return (
-        np.array([[p[0], p[2]] for p in map(_position, pts)], np.float64),
-        np.array([p.float("width") for p in pts], np.float64),
+        np.array([[position[0], position[2]] for position in map(_position, points)], np.float64),
+        np.array([position.float("width") for position in points], np.float64),
     )
 
 
-def _rewrite(item: Node, xyz: list[tuple[float, float, float]], widths: list[float] | None) -> None:
+def _rewrite(item: SNode, xyz: list[tuple[float, float, float]], widths: list[float] | None) -> None:
     """Give the line the points ``xyz`` (world units): each a copy of the old point nearest to it with its place,
     width and length along the line set."""
     old = _points(item)
-    before = [_position(p) for p in old]
-    run, rows = 0.0, []
-    has_length = any(p_.float("distance") for p_ in old)  # the newer files carry the length; the older ones 0
-    for k, p in enumerate(xyz):
-        near = min(range(len(old)), key=lambda i: (before[i][0] - p[0]) ** 2 + (before[i][2] - p[2]) ** 2)
-        node = copy.deepcopy(old[near])
-        _set_position(node, p)
+    before = [_position(position) for position in old]
+    length_along, new_points = 0.0, []
+    has_length = any(
+        old_point.float("distance") for old_point in old
+    )  # the newer files carry the length; the older ones 0
+    for k, position in enumerate(xyz):
+        nearest = min(
+            range(len(old)), key=lambda i: (before[i][0] - position[0]) ** 2 + (before[i][2] - position[2]) ** 2
+        )
+        node = copy.deepcopy(old[nearest])
+        _set_position(node, position)
         if widths is not None:
             _set_text(node, "width", widths[k])
         if k:
-            run += math.hypot(p[0] - xyz[k - 1][0], p[2] - xyz[k - 1][2])
+            length_along += math.hypot(position[0] - xyz[k - 1][0], position[2] - xyz[k - 1][2])
         if has_length:
-            _set_text(node, "distance", run)
-        rows.append(node)
-    isc_blockings.set_list(item.find("m_Polygon"), rows)  # a numbered list counts and names its points
+            _set_text(node, "distance", length_along)
+        new_points.append(node)
+    isc_blockings.set_list(item.find("m_Polygon"), new_points)  # a numbered list counts and names its points
 
 
-def apply(isl: Island1701, edits: dict) -> tuple[dict, list[str]]:
+def apply(island: CIsland1701, edits: dict) -> tuple[dict, list[str]]:
     """Put the edited rivers (``"k"`` -> ``points`` x, height, z in tiles, ``widths``) and coast lines (``"k"`` ->
     ``points`` x, z) on the header; returns what was written and the edits that match no line."""
     report, stale = {"rivers": 0, "coasts": 0}, []
-    rivers, coasts = line_items(isl.header, "Rivers"), line_items(isl.header, "Coastlines")
-    for k, change in sorted(edits.get("rivers", {}).items(), key=lambda kv: str(kv[0])):
-        if not str(k).isdigit() or int(k) >= len(rivers) or not groundedit.river_edit_ok(change):
-            stale.append(tr("islands.river_k", k=k))
+    rivers, coasts = line_items(island.m_header, "Rivers"), line_items(island.m_header, "Coastlines")
+    for line_key, change in sorted(edits.get("rivers", {}).items(), key=lambda entry: str(entry[0])):
+        if not str(line_key).isdigit() or int(line_key) >= len(rivers) or not groundedit.river_edit_ok(change):
+            stale.append(tr("islands.river_k", k=line_key))
             continue
-        xyz = [tuple(float(v) * TILE for v in p) for p in change["points"]]
-        before, others = ribbon(rivers[int(k)]), [ribbon(r) for i, r in enumerate(rivers) if i != int(k)]
-        _rewrite(rivers[int(k)], xyz, [float(w) * TILE for w in change["widths"]])
-        redrawn = isc_blockings.redraw(isl.header, max(isl.width, isl.height), before, ribbon(rivers[int(k)]), others)
+        xyz = [tuple(float(coordinate) * TILE for coordinate in point) for point in change["points"]]
+        before, others = (
+            ribbon(rivers[int(line_key)]),
+            [ribbon(river) for i, river in enumerate(rivers) if i != int(line_key)],
+        )
+        _rewrite(rivers[int(line_key)], xyz, [float(width) * TILE for width in change["widths"]])
+        redrawn = isc_blockings.redraw(
+            island.m_header, max(island.m_width, island.m_height), before, ribbon(rivers[int(line_key)]), others
+        )
         for name, counts in redrawn.items():
-            for what, n in counts.items():
-                report[f"{name} {what}"] = report.get(f"{name} {what}", 0) + n
+            for what, count in counts.items():
+                report[f"{name} {what}"] = report.get(f"{name} {what}", 0) + count
         report["rivers"] += 1
-    for k, change in sorted(edits.get("coast", {}).items(), key=lambda kv: str(kv[0])):
-        if not str(k).isdigit() or int(k) >= len(coasts) or len(change["points"]) < 2:
-            stale.append(tr("islands.coast_line_k", k=k))
+    for line_key, change in sorted(edits.get("coast", {}).items(), key=lambda entry: str(entry[0])):
+        if not str(line_key).isdigit() or int(line_key) >= len(coasts) or len(change.get("points") or ()) < 2:
+            stale.append(tr("islands.coast_line_k", k=line_key))
             continue
-        old = [_position(p) for p in _points(coasts[int(k)])]
-        level = sum(p[1] for p in old) / len(old)
-        _rewrite(coasts[int(k)], [(float(x) * TILE, level, float(z) * TILE) for x, z in change["points"]], None)
+        old = [_position(point) for point in _points(coasts[int(line_key)])]
+        level = sum(point[1] for point in old) / len(old)
+        _rewrite(coasts[int(line_key)], [(float(x) * TILE, level, float(z) * TILE) for x, z in change["points"]], None)
         report["coasts"] += 1
     return report, stale
 
 
-def clear(isl: Island1701) -> int:
+def clear(island: CIsland1701) -> int:
     """A blank island has no river: the header's rivers and their blocking lists are emptied. Returns the rivers."""
-    if isl.header is None:
+    if island.m_header is None:
         return 0
-    rivers = isl.header.find("Rivers")
+    rivers = island.m_header.find("Rivers")
     count = len(list_items(rivers)) if rivers is not None else 0
     for name in ("Rivers", *BLOCKINGS):
-        node = isl.header.find(name)
+        node = island.m_header.find(name)
         if node is not None:
             isc_blockings.set_list(node, [])
     return count

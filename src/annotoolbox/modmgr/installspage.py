@@ -37,14 +37,19 @@ STATES = {
 }
 
 
-class InstallsPage(QWidget):
-    def __init__(self, settings, background, say=lambda _t: None, sync: bool = False) -> None:
+class CInstallsPage(QWidget):
+    def __init__(self, settings, background, say=lambda _t: None, is_synchronous: bool = False) -> None:
         super().__init__()
-        self.settings, self.background, self.say, self.sync = settings, background, say, sync
-        self.busy = False
-        self.loose_why = self.switch_why = ""  # why the loose-file buttons are off (show_loose)
-        self.installs = QTreeWidget()
-        self.installs.setHeaderLabels(
+        self.m_settings, self.m_background, self.m_say, self.m_is_synchronous = (
+            settings,
+            background,
+            say,
+            is_synchronous,
+        )
+        self.m_busy = False
+        self.m_loose_why = self.m_switch_why = ""  # why the loose-file buttons are off (show_loose)
+        self.m_installs = QTreeWidget()
+        self.m_installs.setHeaderLabels(
             [
                 tr("common.game"),
                 tr("common.state"),
@@ -53,81 +58,77 @@ class InstallsPage(QWidget):
                 tr("common.games_own_kept"),
             ]
         )
-        self.installs.setRootIsDecorated(False)
-        self.restore_button = QPushButton(tr("common.restore_games_own_files"))
-        self.restore_button.clicked.connect(self.restore_selected)
+        self.m_installs.setRootIsDecorated(False)
+        self.m_restore_button = QPushButton(tr("common.restore_games_own_files"))
+        self.m_restore_button.clicked.connect(self.restore_selected)
         refresh = QPushButton(tr("common.refresh"))
         refresh.clicked.connect(self.refresh)
         bar = QHBoxLayout()
-        bar.addWidget(self.restore_button)
+        bar.addWidget(self.m_restore_button)
         bar.addWidget(refresh)
         bar.addStretch()
 
-        self.loose_box = QGroupBox(tr("common.loose_files_preferlocalfiles"))
-        self.game_box = QComboBox()
+        self.m_loose_box = QGroupBox(tr("common.loose_files_preferlocalfiles"))
+        self.m_game_box = QComboBox()
         for key in ag.GAMES:
-            self.game_box.addItem(GAME_NAMES[key], key)
-        self.loose_state = QLabel(wordWrap=True)
-        self.mods = QTreeWidget()
-        self.mods.setHeaderLabels(
+            self.m_game_box.addItem(GAME_NAMES[key], key)
+        self.m_loose_state = QLabel(wordWrap=True)
+        self.m_mods = QTreeWidget()
+        self.m_mods.setHeaderLabels(
             [tr("common.loose_mod"), tr("common.installed"), tr("common.files"), tr("common.files_replaced")]
         )
-        self.mods.setRootIsDecorated(False)
-        self.switch_button = QPushButton()
-        self.add_button = QPushButton(tr("common.install_folder_loose_files"))
-        self.remove_button = QPushButton(tr("common.remove_selected_loose_mod"))
-        self.switch_button.clicked.connect(self.toggle_switch)
-        self.add_button.clicked.connect(self.install_loose)
-        self.remove_button.clicked.connect(self.remove_loose)
+        self.m_mods.setRootIsDecorated(False)
+        self.m_switch_button = QPushButton()
+        self.m_add_button = QPushButton(tr("common.install_folder_loose_files"))
+        self.m_remove_button = QPushButton(tr("common.remove_selected_loose_mod"))
+        self.m_switch_button.clicked.connect(self.toggle_switch)
+        self.m_add_button.clicked.connect(self.install_loose)
+        self.m_remove_button.clicked.connect(self.remove_loose)
         row = QHBoxLayout()
-        for w in (self.switch_button, self.add_button, self.remove_button):
-            row.addWidget(w)
+        for button in (self.m_switch_button, self.m_add_button, self.m_remove_button):
+            row.addWidget(button)
         row.addStretch()
-        lay = QVBoxLayout(self.loose_box)
+        layout = QVBoxLayout(self.m_loose_box)
         top = QHBoxLayout()
         top.addWidget(QLabel(tr("common.game") + " "))
-        top.addWidget(self.game_box)
+        top.addWidget(self.m_game_box)
         top.addStretch()
-        lay.addLayout(top)
-        lay.addWidget(self.loose_state)
-        lay.addWidget(self.mods)
-        lay.addLayout(row)
+        layout.addLayout(top)
+        layout.addWidget(self.m_loose_state)
+        layout.addWidget(self.m_mods)
+        layout.addLayout(row)
 
         box = QVBoxLayout(self)
         box.addWidget(QLabel(tr("common.what_toolbox_installed_games_load")))
-        box.addWidget(self.installs, 1)
+        box.addWidget(self.m_installs, 1)
         box.addLayout(bar)
-        box.addWidget(self.loose_box, 2)
-        self.game_box.currentIndexChanged.connect(lambda _n: self.show_loose())
-        self.installs.itemSelectionChanged.connect(self._selection)
-        self.mods.itemSelectionChanged.connect(self._buttons)
+        box.addWidget(self.m_loose_box, 2)
+        self.m_game_box.currentIndexChanged.connect(lambda _n: self.show_loose())
+        self.m_installs.itemSelectionChanged.connect(self._buttons)
+        self.m_mods.itemSelectionChanged.connect(self._buttons)
         self.refresh()
 
     # what is installed
 
     def refresh(self) -> None:
-        self.rows = {r.key: r for r in ag.rows(self.settings)}
-        self.installs.clear()
-        for key, r in self.rows.items():
-            files = ", ".join(f.name for f in r.files)
-            kept = ", ".join(f.name for f in r.kept)
-            item = QTreeWidgetItem([GAME_NAMES[key], tr(STATES[r.state]), r.what, files, kept])
+        self.m_rows = {row.key: row for row in ag.rows(self.m_settings)}
+        self.m_installs.clear()
+        for key, row in self.m_rows.items():
+            files = ", ".join(file.name for file in row.files)
+            kept = ", ".join(file.name for file in row.kept)
+            item = QTreeWidgetItem([GAME_NAMES[key], tr(STATES[row.state]), row.what, files, kept])
             item.setData(0, KEY, key)
-            self.installs.addTopLevelItem(item)
-        self._selection()
-        self.show_loose()
+            self.m_installs.addTopLevelItem(item)
+        self.show_loose()  # which ends with the buttons
 
     def _chosen(self) -> str:
-        item = self.installs.currentItem()
+        item = self.m_installs.currentItem()
         return item.data(0, KEY) if item is not None else ""
-
-    def _selection(self) -> None:
-        self._buttons()
 
     def _buttons(self) -> None:
         """Each button is on only when it can act, and its tool tip says why it is not."""
-        busy = tr("common.another_change_still_running") if self.busy else ""
-        row = self.rows.get(self._chosen())
+        busy = tr("common.another_change_still_running") if self.m_busy else ""
+        row = self.m_rows.get(self._chosen())
         if row is None:
             restore = tr("mods.tip.installs_pick_game")
         elif row.installed:
@@ -136,32 +137,32 @@ class InstallsPage(QWidget):
             restore = tr("mods.tip.installs_no_folder")
         else:
             restore = tr("mods.tip.installs_nothing_ours")
-        widgets.enable_unless(self.restore_button, busy or restore)
-        widgets.enable_unless(self.add_button, busy or self.loose_why)
-        widgets.enable_unless(self.switch_button, busy or self.loose_why or self.switch_why)
-        picked = "" if self.mods.currentItem() is not None else tr("mods.tip.loose_pick_mod")
-        widgets.enable_unless(self.remove_button, busy or self.loose_why or picked)
+        widgets.enable_unless(self.m_restore_button, busy or restore)
+        widgets.enable_unless(self.m_add_button, busy or self.m_loose_why)
+        widgets.enable_unless(self.m_switch_button, busy or self.m_loose_why or self.m_switch_why)
+        picked = "" if self.m_mods.currentItem() is not None else tr("mods.tip.loose_pick_mod")
+        widgets.enable_unless(self.m_remove_button, busy or self.m_loose_why or picked)
 
     def _run(self, work, done_text: str) -> None:
-        if self.busy:
-            self.say(tr("common.another_change_still_running"))
+        if self.m_busy:
+            self.m_say(tr("common.another_change_still_running"))
             return
-        self.busy = True
+        self.m_busy = True
         self._buttons()
-        self.background.run(work, lambda result: self._done(result, done_text), wait=self.sync)
+        self.m_background.run(work, lambda result: self._done(result, done_text), is_waiting=self.m_is_synchronous)
 
     def _done(self, result, done_text: str) -> None:
-        self.busy = False
+        self.m_busy = False
         if isinstance(result, Exception):
             QMessageBox.warning(self, tr("common.installs"), str(result))
-            self.say(str(result))
+            self.m_say(str(result))
         else:
-            self.say(done_text)
+            self.m_say(done_text)
         self.refresh()
 
     def restore_selected(self) -> None:
         key = self._chosen()
-        row = self.rows.get(key)
+        row = self.m_rows.get(key)
         if not row or not row.installed:
             return
         ask = QMessageBox.question(
@@ -170,21 +171,21 @@ class InstallsPage(QWidget):
             tr("common.put_games_own_files_back", game=GAME_NAMES[key]),
         )
         if ask == QMessageBox.StandardButton.Yes:
-            settings = self.settings
+            settings = self.m_settings
 
             def work() -> None:
                 if not ag.restore(settings, key):
-                    raise ag.LooseError(tr("common.nothing_toolboxs_installed", game=GAME_NAMES[key]))
+                    raise ag.CLooseError(tr("common.nothing_toolboxs_installed", game=GAME_NAMES[key]))
 
             self._run(work, tr("common.restored_files_game", game=GAME_NAMES[key]))
 
     # loose files
 
-    def _game(self) -> ag.LooseGame:
-        return ag.loose_for(self.settings, self.game_box.currentData())
+    def _game(self) -> ag.CLooseGame:
+        return ag.loose_for(self.m_settings, self.m_game_box.currentData())
 
     def show_loose(self) -> None:
-        key = self.game_box.currentData()
+        key = self.m_game_box.currentData()
         game = self._game()
         ini = game.ini
         switch = game.switch_state()
@@ -199,27 +200,29 @@ class InstallsPage(QWidget):
         )
         if not game.confirmed:
             lines.append(tr("common.not_confirmed_game_yet_actions"))
-        self.loose_state.setText("\n".join(lines))
-        self.mods.clear()
-        for m in game.mods():
-            self.mods.addTopLevelItem(QTreeWidgetItem([m.name, m.installed, str(len(m.files)), str(m.replaced)]))
-        folder = str(getattr(self.settings, key, "") or "").strip()  # none set is not "the folder we stand in"
+        self.m_loose_state.setText("\n".join(lines))
+        self.m_mods.clear()
+        for mod in game.mods():
+            self.m_mods.addTopLevelItem(
+                QTreeWidgetItem([mod.name, mod.installed, str(len(mod.files)), str(mod.replaced)])
+            )
+        folder = str(getattr(self.m_settings, key, "") or "").strip()  # none set is not "the folder we stand in"
         if not folder or not Path(folder).is_dir():
-            self.loose_why = tr("mods.tip.loose_no_folder")
+            self.m_loose_why = tr("mods.tip.loose_no_folder")
         else:
-            self.loose_why = "" if game.confirmed else tr("common.not_confirmed_game_yet_actions")
-        self.switch_why = "" if ini is not None and switch is not None else tr("mods.tip.loose_no_ini")
-        self.switch_button.setText(
+            self.m_loose_why = "" if game.confirmed else tr("common.not_confirmed_game_yet_actions")
+        self.m_switch_why = "" if ini is not None and switch is not None else tr("mods.tip.loose_no_ini")
+        self.m_switch_button.setText(
             tr("common.turn_preferlocalfiles_off") if switch else tr("common.turn_preferlocalfiles")
         )
         self._buttons()
 
     def toggle_switch(self) -> None:
         game = self._game()
-        on = not game.switch_state()
+        is_on = not game.switch_state()
         self._run(
-            lambda: game.set_switch(on),
-            tr("common.preferlocalfiles_now_state", state=tr("mods.on") if on else tr("mods.off")),
+            lambda: game.set_switch(is_on),
+            tr("common.preferlocalfiles_now_state", state=tr("mods.on") if is_on else tr("mods.off")),
         )
 
     def install_loose(self) -> None:
@@ -229,7 +232,7 @@ class InstallsPage(QWidget):
             self._run(lambda: game.install_mod(Path(folder)), tr("common.installed_name", name=Path(folder).name))
 
     def remove_loose(self) -> None:
-        item = self.mods.currentItem()
+        item = self.m_mods.currentItem()
         if item is None:
             return
         game, name = self._game(), item.text(0)

@@ -2,8 +2,9 @@
 bar and the dialog with the release notes.
 
 ``attach(window)`` adds ``Help > Check for updates...`` and ``Check for updates at start`` to a suite window and returns the
-``UpdateChecker``; ``checker.check_at_start()`` is the quiet check of a program start (at most once a day). Nothing is
-downloaded before the person presses "Download and install"; a new link helper is only announced, with the link
+``CUpdateChecker``; ``checker.check_at_start()`` is the quiet check of a program start (at most once a day). Nothing is
+downloaded before the person presses "Download and install"; the doing of the update is in the launcher window
+(``updaterun``), not here; a new link helper is only announced, with the link
 to the release page. ``docs/installer.md`` "Updates".
 """
 
@@ -18,6 +19,7 @@ from datetime import date
 from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -29,17 +31,17 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..infra.i18n import tr
-from . import updates
-from .updates import Release, UpdateError
+from . import centralmenu, updaterun, updates
+from .updates import SRelease
 
 log = logging.getLogger(__name__)
 
 
-class UpdateDialog(QDialog):
+class CUpdateDialog(QDialog):
     """The version and the release notes; "Download and install" (the installed program), else the release page (the
     Toolbox ships through its installer only)."""
 
-    def __init__(self, parent, release: Release) -> None:
+    def __init__(self, parent, release: SRelease) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("common.title.update_available"))
         self.resize(560, 420)
@@ -47,9 +49,9 @@ class UpdateDialog(QDialog):
         layout.addWidget(QLabel(tr("common.version_available_sentence", version=release.version)))
         notes = QPlainTextEdit(release.notes or tr("common.no_release_notes"), readOnly=True)
         layout.addWidget(notes)
-        self.install = updates.can_self_update()
-        self.page = False
-        if self.install:
+        self.m_install = updates.can_self_update()
+        self.m_page = False
+        if self.m_install:
             buttons = QDialogButtonBox()
             go = buttons.addButton(tr("common.download_install"), QDialogButtonBox.ButtonRole.AcceptRole)
             go.setDefault(True)
@@ -63,59 +65,58 @@ class UpdateDialog(QDialog):
             buttons = QDialogButtonBox()
             buttons.addButton(tr("common.open_release_page"), QDialogButtonBox.ButtonRole.AcceptRole)
             buttons.addButton(tr("common.close"), QDialogButtonBox.ButtonRole.RejectRole)
-            self.page = True
+            self.m_page = True
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
 
-class UpdateChecker(QObject):
+class CUpdateChecker(QObject):
     """Checks on a background thread and tells the window what it found."""
 
     checked = Signal(object, bool, str)  # the release or None, asked by hand, the error ("" when it worked)
-    downloaded = Signal(object, str)  # the downloaded update (``updates.stage``) or None, the error
-    progress = Signal(int)  # the download's percent
-    helper = Signal(object)  # the release's link helper check (``updates.HelperCheck``) or None
+    helper = Signal(object)  # the release's link helper check (``updates.SHelperCheck``) or None
 
-    def __init__(self, window, net: updates.Net = updates.NET, today: Callable[[], date] = date.today) -> None:
+    def __init__(self, window, net: updates.SNet = updates.NET, today: Callable[[], date] = date.today) -> None:
         super().__init__(window)
-        self.window, self.net, self.today = window, net, today
-        self.release: Release | None = None
-        self.busy = False
-        self._thread: threading.Thread | None = None  # the check or download that runs (a test waits for it)
-        self.notice = QPushButton(flat=True)
-        self.notice.clicked.connect(lambda _c=False: self.show_release())
-        self.notice.hide()
-        window.statusBar().addPermanentWidget(self.notice)
-        self.helper_notice = QPushButton(flat=True)
-        self.helper_notice.clicked.connect(lambda _c=False: self.open_release_page())
-        self.helper_notice.hide()
-        window.statusBar().addPermanentWidget(self.helper_notice)
-        self.page_url = ""
+        self.m_window, self.m_net, self.m_today = window, net, today
+        self.m_release: SRelease | None = None
+        self.m_busy = False
+        self.m_run = None  # the update in the launcher window, once started
+        self._m_thread: threading.Thread | None = None  # the check or download that runs (a test waits for it)
+        self.m_notice = QPushButton(flat=True)
+        self.m_notice.clicked.connect(lambda _c=False: self.show_release())
+        self.m_notice.hide()
+        window.statusBar().addPermanentWidget(self.m_notice)
+        self.m_helper_notice = QPushButton(flat=True)
+        self.m_helper_notice.clicked.connect(lambda _c=False: self.open_release_page())
+        self.m_helper_notice.hide()
+        window.statusBar().addPermanentWidget(self.m_helper_notice)
+        self.m_page_url = ""
         self.helper.connect(self._helper)
         self.checked.connect(self._checked)
-        self.downloaded.connect(self._downloaded)
-        self.progress.connect(self._progress)
 
     def check_at_start(self) -> bool:
         """The quiet check of a program start: only when the setting is on, a day has passed and this build has a
         release page. Returns whether a check was started."""
-        s = self.window.settings
-        if not (updates.enabled() and s.check_updates and updates.due(s.last_update_check, self.today())):
+        settings = self.m_window.m_settings
+        if not (
+            updates.enabled() and settings.check_updates and updates.due(settings.last_update_check, self.m_today())
+        ):
             return False
         self.start(False)
         return True
 
     def start(self, by_hand: bool) -> None:
-        if self.busy:
+        if self.m_busy:
             return
-        self.busy = True
-        s = self.window.settings
-        game, seen = getattr(s, "anno117", ""), getattr(s, "helper_seen", "")
+        self.m_busy = True
+        settings = self.m_window.m_settings
+        game, seen = getattr(settings, "anno117", ""), getattr(settings, "helper_seen", "")
 
         def work() -> None:
             try:
-                latest = updates.latest(self.net)
+                latest = updates.latest(self.m_net)
                 newer = latest is not None and updates.is_newer(latest.version, __version__)
             except Exception as exc:  # whatever went wrong, the window hears of it: a silent end would leave it busy
                 self._tell(self.checked, None, by_hand, str(exc) or type(exc).__name__)
@@ -124,12 +125,12 @@ class UpdateChecker(QObject):
             if latest is None:
                 return
             try:
-                self._tell(self.helper, (latest, updates.helper_check(latest, game, seen, self.net)))
+                self._tell(self.helper, (latest, updates.helper_check(latest, game, seen, self.m_net)))
             except Exception as exc:  # the helper's notice is a side question: one log line
                 log.info("link helper check failed: %s", exc)
 
-        self._thread = threading.Thread(target=work, name="update-check", daemon=True)
-        self._thread.start()
+        self._m_thread = threading.Thread(target=work, name="update-check", daemon=True)
+        self._m_thread.start()
 
     @staticmethod
     def _tell(signal, *values) -> None:
@@ -140,24 +141,24 @@ class UpdateChecker(QObject):
             log.info("the update check ended after its window closed")
 
     def _checked(self, release, by_hand: bool, error: str) -> None:
-        self.busy = False
+        self.m_busy = False
         if error:
             log.info("update check failed: %s", error)
             if by_hand:
                 QMessageBox.information(
-                    self.window, tr("common.check_updates"), tr("common.could_not_check", error=error)
+                    self.m_window, tr("common.check_updates"), tr("common.could_not_check", error=error)
                 )
             return
-        s = self.window.settings
-        s.last_update_check = self.today().isoformat()
+        settings = self.m_window.m_settings
+        settings.last_update_check = self.m_today().isoformat()
         if release is None:
             if by_hand:
-                QMessageBox.information(self.window, tr("common.check_updates"), tr("common.version_up_to_date"))
+                QMessageBox.information(self.m_window, tr("common.check_updates"), tr("common.version_up_to_date"))
             return
-        self.release = release
-        self.notice.setText(tr("common.version_available", version=release.version))
-        self.notice.setToolTip(tr("common.tip.click_release_notes"))
-        self.notice.show()
+        self.m_release = release
+        self.m_notice.setText(tr("common.version_available", version=release.version))
+        self.m_notice.setToolTip(tr("common.tip.click_release_notes"))
+        self.m_notice.show()
         if by_hand:
             self.show_release()
 
@@ -167,89 +168,69 @@ class UpdateChecker(QObject):
         release, found = result
         if found is None:
             return
-        self.window.settings.helper_seen = found.sha256
+        self.m_window.m_settings.helper_seen = found.sha256
         if not found.changed:
             return
-        self.page_url = release.page_url
-        self.helper_notice.setText(tr("common.new_link_helper_available"))
-        self.helper_notice.setToolTip(tr("common.tip.click_open_release_page_download"))
-        self.helper_notice.setVisible(bool(self.page_url))
+        self.m_page_url = release.page_url
+        self.m_helper_notice.setText(tr("common.new_link_helper_available"))
+        self.m_helper_notice.setToolTip(tr("common.tip.click_open_release_page_download"))
+        self.m_helper_notice.setVisible(bool(self.m_page_url))
 
     def open_release_page(self) -> None:
-        if self.page_url.startswith("https://"):
-            QDesktopServices.openUrl(QUrl(self.page_url))
+        if self.m_page_url.startswith("https://"):
+            QDesktopServices.openUrl(QUrl(self.m_page_url))
 
     def show_release(self) -> None:
-        if self.release is None:
+        if self.m_release is None:
             return
-        dialog = UpdateDialog(self.window, self.release)
+        dialog = CUpdateDialog(self.m_window, self.m_release)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        if dialog.install:
-            self.fetch(self.release)
-        elif dialog.page:
-            self.page_url = self.release.page_url
+        if dialog.m_install:
+            self.fetch(self.m_release)
+        elif dialog.m_page:
+            self.m_page_url = self.m_release.page_url
             self.open_release_page()
 
-    def fetch(self, release: Release) -> None:
-        """Check and download the update (on a thread; the installer's updater fetches only what changed), then hand over."""
-        if self.busy:
-            return
-        self.busy = True
-        self.notice.setText(tr("common.downloading_version", version=release.version))
-        self.notice.setEnabled(False)
-
-        def work() -> None:
-            try:
-                info = updates.stage(release, net=self.net, progress=self.progress.emit)
-            except Exception as exc:  # as in ``start``: the window always hears back
-                self._tell(self.downloaded, None, str(exc) or type(exc).__name__)
-                return
-            self._tell(self.downloaded, info, "")
-
-        self._thread = threading.Thread(target=work, name="update-download", daemon=True)
-        self._thread.start()
-
-    def _progress(self, percent: int) -> None:
-        self.notice.setText(tr("common.downloading_version_percent", version=self.release.version, percent=percent))
-
-    def _downloaded(self, info, error: str) -> None:
-        self.busy = False
-        self.notice.setEnabled(True)
-        if error or info is None:
-            self.notice.setText(tr("common.version_available", version=self.release.version))
-            QMessageBox.warning(self.window, tr("common.update"), tr("common.download_failed_error", error=error))
-            return
-        self.install(info)
-
-    def install(self, info) -> bool:
-        """Close the window the usual way (its own questions about unsaved work run), then hand over to the installer's
-        updater, which restarts the program. False, and nothing started, when the person cancels one of the questions."""
-        if not self.window.close():
-            self.notice.setText(tr("common.version_downloaded", version=self.release.version))
+    def fetch(self, release: SRelease) -> bool:
+        """Hand the update to the launcher window (``updaterun``): the window closes the usual way first (its own
+        questions about unsaved work run), then the launcher window checks, downloads and installs, and the installer's
+        updater restarts the program. False, and nothing started, when the person cancels one of the questions."""
+        if self.m_busy:
             return False
+        qt = QApplication.instance()
+        if qt is not None:
+            qt.setQuitOnLastWindowClosed(False)  # the launcher window takes over; it ends the program itself
+        if not self.m_window.close():
+            if qt is not None:
+                qt.setQuitOnLastWindowClosed(True)
+            return False
+        self.m_busy = True
         try:
-            updates.apply(info)
-        except (UpdateError, OSError) as exc:
-            QMessageBox.warning(self.window, tr("common.update"), tr("common.update_could_not_started", error=exc))
+            self.m_run = updaterun.begin(release, self.m_net)
+        except Exception:  # the window is closed already: end the program rather than leave it running unseen
+            log.exception("the update could not be started")
+            self.m_busy = False
+            if qt is not None:
+                qt.quit()
             return False
         return True
 
 
-def attach(window) -> UpdateChecker | None:
-    """The Help menu entries and the checker of ``window`` (a suite window); None when this build has no release page."""
+def attach(window) -> CUpdateChecker | None:
+    """The checker of ``window`` and its Help menu entries of ``window`` (a suite window); None when this build has no release page."""
     if not updates.enabled():
         return None
-    checker = UpdateChecker(window)
-    menu = window.menuBar().addMenu(tr("islands.help"))
+    checker = CUpdateChecker(window)
+    menu = centralmenu.menu_of(window, centralmenu.HELP)
     now = QAction(tr("common.check_updates_dots"), window)
     now.triggered.connect(lambda _c=False: checker.start(True))
     menu.addAction(now)
     auto = QAction(tr("common.check_updates_start"), window, checkable=True)
-    auto.setChecked(window.settings.check_updates)
+    auto.setChecked(window.m_settings.check_updates)
 
     def toggled(on: bool) -> None:
-        window.settings.check_updates = on
+        window.m_settings.check_updates = on
         window.save_settings()
 
     auto.toggled.connect(toggled)

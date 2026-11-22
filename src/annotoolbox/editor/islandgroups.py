@@ -41,12 +41,12 @@ def humanize(key: str) -> str:
 def island_groups(game: str, names: list[str], tree=None) -> dict[str, str]:
     """``{name: group}`` for a game's island paths (``names``); ``tree``: its archives, for 1800's assets."""
     if game == "anno117":
-        return {n: _province(game, n) for n in names}
+        return {name: _province(game, name) for name in names}
     if game == "anno1800":
         return groups_1800(names, _read_assets(tree))
     if game == "anno2205":
-        return {n: _session(n) for n in names}
-    return {n: _folders(game, n) for n in names}
+        return {name: _session(name) for name in names}
+    return {name: _folders(game, name) for name in names}
 
 
 def _province(game: str, path: str) -> str:
@@ -60,11 +60,11 @@ def _folders(game: str, path: str) -> str:
     parts = path.replace("\\", "/").lower().split("/")
     if "islands" not in parts:
         return OTHER
-    sets = [p for p in parts[parts.index("islands") + 1 : -1] if not re.fullmatch(r"addon\d*", p)]
+    sets = [part for part in parts[parts.index("islands") + 1 : -1] if not re.fullmatch(r"addon\d*", part)]
     if not sets:
         return OTHER
     first = LABELS.get(game, {}).get(sets[0], humanize(sets[0]))
-    return " · ".join([first, *(humanize(p) for p in sets[1:2])])
+    return " · ".join([first, *(humanize(part) for part in sets[1:2])])
 
 
 def _session(path: str) -> str:
@@ -89,14 +89,14 @@ def groups_1800(paths: list[str], assets_xml: bytes | None) -> dict[str, str]:
         path, region = path.decode("utf-8", "replace"), region.decode("utf-8", "replace")
         by_path[path] = region
         by_prefix.setdefault(path.rsplit("/", 1)[-1].split("_")[0], Counter())[region] += 1
-    prefixes = {k: c.most_common(1)[0][0] for k, c in by_prefix.items()}
+    prefixes = {k: counter.most_common(1)[0][0] for k, counter in by_prefix.items()}
     labels = LABELS["anno1800"]
     out = {}
     for path in paths:
         region = by_path.get(path)
         if region is None:
             parts = path.rsplit("/", 1)[-1].removesuffix(".a7m").split("_") + path.split("/")[-2::-1]
-            region = next((prefixes[p] for p in parts if p in prefixes), None)
+            region = next((prefixes[part] for part in parts if part in prefixes), None)
         if region is not None:
             out[path] = labels.get(region, humanize(region))
             continue

@@ -38,11 +38,11 @@ def references(log: list[str]) -> list[tuple[str, str, str]]:
     """(field, type hash, guid) of every asset reference in a decoded file's log."""
     out = []
     for line in log:
-        if m := SINGLE.search(line):
-            field, _flags, hash_, guid = m.groups()
+        if match := SINGLE.search(line):
+            field, _flags, hash_, guid = match.groups()
             out.append((field, hash_, guid))
-        elif (m := LISTED.search(line)) and ITEM.search(m.group(2)):
-            out += [(m.group(1), h, g) for h, g in ITEM.findall(m.group(2))]
+        elif (match := LISTED.search(line)) and ITEM.search(match.group(2)):
+            out += [(match.group(1), type_hash, asset) for type_hash, asset in ITEM.findall(match.group(2))]
     return out
 
 
@@ -53,7 +53,7 @@ def _has_glyph_data(mod: Path, localized: str, schema: dict) -> bool:
     path = mod / phoenix.GENERATED / localized
     if not path.is_file():
         return False  # a shipped font without glyph data (the Meta and Salford ones), or none at all
-    return any(line.strip().startswith(OWN_DESCRIPTOR) for line in phoenixread.load(path.read_bytes(), schema).log)
+    return any(line.strip().startswith(OWN_DESCRIPTOR) for line in phoenixread.load(path.read_bytes(), schema).m_log)
 
 
 def _glyphless(mod: Path, data: bytes, refs: list[tuple[str, str, str]], schema: dict) -> list[str]:
@@ -74,11 +74,11 @@ def missing_refs(mod: Path, has_base: Callable[[str], bool], schema: dict | None
         return []
     schema = schema or phoenix.load_schema()
     found = []
-    for path in sorted(p for p in folder.iterdir() if p.is_file()):
+    for path in sorted(entry for entry in folder.iterdir() if entry.is_file()):
         data = path.read_bytes()
         try:
-            refs = references(phoenixread.load(data, schema).log)
-            found += [(f"{phoenix.GENERATED}{path.name}", m) for m in _glyphless(mod, data, refs, schema)]
+            refs = references(phoenixread.load(data, schema).m_log)
+            found += [(f"{phoenix.GENERATED}{path.name}", finding) for finding in _glyphless(mod, data, refs, schema)]
         except (ValueError, EOFError, KeyError, struct.error) as exc:
             found.append((path.name, f"unreadable ({exc})"))
             continue

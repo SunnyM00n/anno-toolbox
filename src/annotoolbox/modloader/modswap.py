@@ -23,7 +23,7 @@ from pathlib import Path
 STAGING = ".modmgr-"  # the prefix of the folders in progress: a dot, so the loader skips them
 REMOVED = ".removed"  # where a mod goes when the system has no recycle bin
 ASIDE = "old"  # the old copy's name inside the staging folder
-RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"{d}{i}" for d in ("com", "lpt") for i in range(1, 10))})
+RESERVED = frozenset({"con", "prn", "aux", "nul", *(f"{device}{i}" for device in ("com", "lpt") for i in range(1, 10))})
 BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # SHFileOperationW flags: FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI and FOF_WANTNUKEWARNING, which
@@ -33,13 +33,13 @@ FOF_RECYCLE = 0x4 | 0x10 | 0x40 | 0x400 | 0x4000
 Trash = Callable[[Path], object]
 
 
-class InstallError(ValueError):
+class CInstallError(ValueError):
     """An install or removal that cannot be done; the message says why."""
 
 
 def check_folder_name(name: str) -> str:
     """``name`` when it is one folder name the loader would read (no path, no device name, not parked), else an
-    ``InstallError`` saying why."""
+    ``CInstallError`` saying why."""
     bad = (
         not name
         or name in (".", "..")
@@ -49,7 +49,7 @@ def check_folder_name(name: str) -> str:
         or name.startswith(("-", "."))
     )
     if bad:
-        raise InstallError(f"{name!r} is not a folder name the mods folder can take: not installed")
+        raise CInstallError(f"{name!r} is not a folder name the mods folder can take: not installed")
     return name
 
 
@@ -62,7 +62,7 @@ def _recycle_windows(path: Path) -> None:
     import ctypes
     from ctypes import wintypes
 
-    class FileOp(ctypes.Structure):
+    class SFileOp(ctypes.Structure):
         _pack_ = 1 if ctypes.sizeof(ctypes.c_void_p) == 4 else 8
         _fields_ = [
             ("hwnd", wintypes.HWND),
@@ -76,9 +76,9 @@ def _recycle_windows(path: Path) -> None:
         ]
 
     delete = 3
-    op = FileOp(None, delete, f"{os.path.abspath(path)}\0", None, FOF_RECYCLE, False, None, None)
-    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))  # type: ignore[attr-defined]
-    if code or op.aborted:
+    file_op = SFileOp(None, delete, f"{os.path.abspath(path)}\0", None, FOF_RECYCLE, False, None, None)
+    code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(file_op))  # type: ignore[attr-defined]
+    if code or file_op.aborted:
         raise OSError(f"the recycle bin refused {path.name} (code {code})")
 
 
@@ -120,7 +120,7 @@ def swap_in(staged: Path, dest: Path, trash: Trash = recycle) -> list[str]:
                 os.replace(aside, dest)
             raise
     except OSError as exc:
-        raise InstallError(f"{dest.name} could not be installed: {exc.strerror or exc}") from exc
+        raise CInstallError(f"{dest.name} could not be installed: {exc.strerror or exc}") from exc
     if not had_old:
         return []
     try:
@@ -132,8 +132,8 @@ def swap_in(staged: Path, dest: Path, trash: Trash = recycle) -> list[str]:
         return [f"the old copy could not go to the recycle bin ({exc.strerror or exc}): it is kept as {parked.name}"]
 
 
-def place_folder(source: Path, dest: Path, trash: Trash = recycle, *, move: bool = False, ignore=None) -> list[str]:
-    """Copy (``move``: move) the folder ``source`` to ``dest`` through a staging folder beside it, so a copy that fails
+def place_folder(source: Path, dest: Path, trash: Trash = recycle, *, is_move: bool = False, ignore=None) -> list[str]:
+    """Copy (``is_move``: move) the folder ``source`` to ``dest`` through a staging folder beside it, so a copy that fails
     half way leaves ``dest`` as it was; then ``swap_in``. ``ignore``: as ``shutil.copytree`` takes it. Returns its
     notes."""
     source, dest = Path(source), Path(dest)
@@ -141,29 +141,31 @@ def place_folder(source: Path, dest: Path, trash: Trash = recycle, *, move: bool
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=dest.parent) as stage:
         staged = Path(stage) / dest.name
         try:
-            if move:
+            if is_move:
                 shutil.move(str(source), str(staged))
             else:
                 shutil.copytree(source, staged, ignore=ignore)
         except OSError as exc:
-            raise InstallError(f"{dest.name} could not be copied: {exc.strerror or exc}") from exc
+            raise CInstallError(f"{dest.name} could not be copied: {exc.strerror or exc}") from exc
         return swap_in(staged, dest, trash)
 
 
 def check_holds(folder: Path, mod_id: str) -> None:
-    """An ``InstallError`` unless the mod ``mod_id`` may replace ``folder`` whole: it is not there, empty, or a mod
+    """An ``CInstallError`` unless the mod ``mod_id`` may replace ``folder`` whole: it is not there, empty, or a mod
     folder whose ``modinfo.json`` names that id (a game's user folder, a save folder or another mod never is)."""
     folder = Path(folder)
     if not os.path.lexists(folder) or (folder.is_dir() and not any(folder.iterdir())):
         return
-    info = folder / "modinfo.json"
+    modinfo_path = folder / "modinfo.json"
     try:
-        found = json.loads(info.read_text(encoding="utf-8-sig")).get("ModID") if info.is_file() else None
+        found = (
+            json.loads(modinfo_path.read_text(encoding="utf-8-sig")).get("ModID") if modinfo_path.is_file() else None
+        )
     except (OSError, ValueError, AttributeError):  # AttributeError: not a JSON object
         found = None
     if found != mod_id:
         held = f"the mod {found!r}" if found else "no mod of this id"
-        raise InstallError(f"{folder} holds {held}: it is not replaced by {mod_id!r}")
+        raise CInstallError(f"{folder} holds {held}: it is not replaced by {mod_id!r}")
 
 
 @contextmanager
@@ -173,7 +175,7 @@ def staged(dest: Path, mod_id: str, trash: Trash = recycle, log: Callable[[str],
     ``mod_id`` and hold that mod or nothing (``check_holds``); the old copy goes to ``trash``."""
     dest = Path(dest)
     if not dest.is_absolute() or dest.name != check_folder_name(mod_id):
-        raise InstallError(f"refusing to write {dest}: not an absolute path ending in the mod id {mod_id!r}")
+        raise CInstallError(f"refusing to write {dest}: not an absolute path ending in the mod id {mod_id!r}")
     check_holds(dest, mod_id)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=dest.parent) as stage:
@@ -181,4 +183,4 @@ def staged(dest: Path, mod_id: str, trash: Trash = recycle, log: Callable[[str],
         folder.mkdir()
         yield folder
         for note in swap_in(folder, dest, trash):
-            (log or (lambda _n: None))(note)
+            (log or (lambda _note: None))(note)

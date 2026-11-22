@@ -76,7 +76,7 @@ keeps the original value. The multiplayer checksums of a save are computed for a
 
 ### Reading and writing
 
-- Read: `rda.RdaArchive`, inflate each file with `zlib.decompress`, parse with `filedb.read`. To read as the game
+- Read: `rda.CRdaArchive`, inflate each file with `zlib.decompress`, parse with `filedb.read`. To read as the game
   does, check the tail: the bytes before the last four inflate completely, and the last four equal the inflated size.
 - Write: each part is `zlib.compress(doc, 9) + 78 DA 03 00 00 00 00 01 + u32 len(doc)` (`savegame117.pack_part`). The
   archive is written with flags 0 (`rda.write_v22_stored`; `rda.write_v22` is the island layout, which compresses the
@@ -200,7 +200,7 @@ None of it involves the player fields.
 
 ## Verified
 
-- Read side: pinned against the seven saves; `tests/test_savegame117.py` builds its own saves with the synthetic
+- Read side: pinned against the seven saves; `tests/formats/test_savegame117.py` builds its own saves with the synthetic
   FileDB documents.
 - Write side: every sample repacks byte for byte, and the three edited saves the game accepted are reproduced byte
   for byte.

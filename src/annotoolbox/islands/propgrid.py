@@ -61,29 +61,29 @@ def append_props(builder, items) -> int:
     its scale - one number, or (x, y, z) where a prop is stretched along one axis only, as a
     waterfall is to reach from its lip to the pool - and, optionally, its tint (r, g, b, a; white by default).
     A waterfall, a rainbow, a fire or a light is a prop like any other."""
-    pg = builder.rd.path("PropGrid")
-    names = pg.find("FileNames") if pg is not None else None
-    inst = pg.find("Instances") if pg is not None else None
-    if names is None or inst is None or not items:
+    prop_grid = builder.rd3d.path("PropGrid")
+    names = prop_grid.find("FileNames") if prop_grid is not None else None
+    instances = prop_grid.find("Instances") if prop_grid is not None else None
+    if names is None or instances is None or not items:
         return 0
-    known = [c.data.decode("utf-16-le") for c in names.children]
+    known = [child.data.decode("utf-16-le") for child in names.children]
     for cfg, (x, y, z), yaw, scale, *tint in items:
-        sx, sy, sz = scale if isinstance(scale, tuple) else (scale, scale, scale)
+        scale_x, scale_y, scale_z = scale if isinstance(scale, tuple) else (scale, scale, scale)
         path = cfg.replace("/", "\\")
         if path not in known:
             known.append(path)
-            names.children.append(filedb.Attrib("#32768", path.encode("utf-16-le")))
-        inst.children.append(
-            filedb.Tag(
+            names.children.append(filedb.SAttrib("#32768", path.encode("utf-16-le")))
+        instances.children.append(
+            filedb.STag(
                 "#1",
                 [
-                    filedb.Attrib("Index", struct.pack("<I", known.index(path))),
-                    filedb.Attrib("Position", struct.pack("<3f", float(x), float(y), float(z))),
+                    filedb.SAttrib("Index", struct.pack("<I", known.index(path))),
+                    filedb.SAttrib("Position", struct.pack("<3f", float(x), float(y), float(z))),
                     # ``yaw`` is the quaternion's own angle (objects2070.prop_turn for a 2070 object), or
                     # a whole quaternion (x, y, z, w) where a prop also leans (a waterfall)
-                    filedb.Attrib("Rotation", struct.pack("<4f", *_quaternion(yaw))),
-                    filedb.Attrib("Scale", struct.pack("<3f", float(sx), float(sy), float(sz))),
-                    filedb.Attrib(
+                    filedb.SAttrib("Rotation", struct.pack("<4f", *_quaternion(yaw))),
+                    filedb.SAttrib("Scale", struct.pack("<3f", float(scale_x), float(scale_y), float(scale_z))),
+                    filedb.SAttrib(
                         "Color", struct.pack("<4f", *(tint[0] if tint and tint[0] else (1.0, 1.0, 1.0, 1.0)))
                     ),
                 ],

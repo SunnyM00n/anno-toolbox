@@ -1,9 +1,9 @@
 """The backend setting and the QRhi view: which device a 3D view draws with, and a ``QRhiWidget`` that hands each
-frame to a renderer through ``rhidevice.RhiContext``.
+frame to a renderer through ``rhidevice.CRhiContext``.
 
 ``chosen(setting)`` is the backend in use (``ANNO_RENDERER`` over the setting over Direct3D 12 where there is one,
 else ``DEFAULT``: ``gl`` on Linux, QRhi's OpenGL under Wayland); ``gl`` is the OpenGL device (moderngl, the views'
-own ``QOpenGLWidget``), the others are QRhi's. ``RhiView`` is the widget: a subclass draws in ``draw(ctx, screen,
+own ``QOpenGLWidget``), the others are QRhi's. ``CRhiView`` is the widget: a subclass draws in ``draw(ctx, screen,
 size)``; ``picture()`` draws a frame unshown. docs/tool-suite.md section 21; docs/viewer.md; docs/linux.md.
 """
 
@@ -16,13 +16,13 @@ import traceback
 
 import shiboken6
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QOpenGLContext, QRhi, QRhiGles2InitParams, QSurfaceFormat
+from PySide6.QtGui import QGuiApplication, QOpenGLContext, QRhi, QRhiGles2InitParams, QSurfaceFormat
 from PySide6.QtWidgets import QRhiWidget
 
 from ..infra.i18n import tr
 from . import vulkanprobe
 from .nativelook import direct3d_here
-from .rhidevice import RhiContext
+from .rhidevice import CRhiContext
 from .shaderbake import TARGETS
 
 ENV = "ANNO_RENDERER"
@@ -58,15 +58,13 @@ def _default() -> str:
 
 def _moderngl_attaches() -> bool:
     """False where Qt's OpenGL contexts are EGL (Wayland): moderngl's detector looks for GLX ones and failed there."""
-    from PySide6.QtGui import QGuiApplication
-
     return not (sys.platform.startswith("linux") and QGuiApplication.platformName().startswith(EGL_PLATFORMS))
 
 
 def _opengl_fits() -> bool:
     try:
         return available("opengl")
-    except Exception:  # no QRhi device at all
+    except Exception:  # pattern: ok (a boundary: no QRhi device at all means no OpenGL here)
         return False
 
 
@@ -96,7 +94,7 @@ def _has_d3d12() -> bool:
     """Whether a Direct3D 12 device can be made (probed once a session)."""
     try:
         return available("d3d12")
-    except Exception:  # no QRhi device at all: the default
+    except Exception:  # pattern: ok (a boundary: no QRhi device at all means the default backend)
         return False
 
 
@@ -110,10 +108,10 @@ def api_of(name: str) -> str:
     return "opengl" if name in ("gl", "opengl") else name
 
 
-def composable(name: str, hosts_gl: bool) -> str:
+def composable(name: str, is_gl_host: bool) -> str:
     """The backend a view can use in its window: one that also holds OpenGL views (the island editor's) composes
     only OpenGL, so Direct3D and Vulkan become QRhi's OpenGL backend there."""
-    return "opengl" if hosts_gl and name in ("d3d12", "d3d11", "vulkan") else name
+    return "opengl" if is_gl_host and name in ("d3d12", "d3d11", "vulkan") else name
 
 
 def available(name: str) -> bool:
@@ -146,70 +144,76 @@ def _opengl_runs_our_glsl() -> bool:
     return not ctx.isOpenGLES() and (fmt.majorVersion(), fmt.minorVersion()) >= divmod(version // 10, 10)
 
 
-class RhiView(QRhiWidget):
+class CRhiView(QRhiWidget):
     """A 3D view on a QRhi backend; ``draw`` is the subclass's frame, ``failed`` the first error a frame raised."""
 
     def __init__(self, backend: str = "d3d12", parent=None) -> None:
         super().__init__(parent)
-        self.backend = backend
+        self.m_backend = backend
         self.setApi(_API[backend])
         if os.environ.get(DEBUG_ENV, "") == "1":  # the native backend's checks (native-backend.md 8.2)
             self.setDebugLayerEnabled(True)
-        self.ctx: RhiContext | None = None
-        self.failed = ""
-        self._device = None
+        self.m_ctx: CRhiContext | None = None
+        self.m_failed = ""
+        self._m_device = None
 
-    def initialize(self, cb) -> None:
+    def initialize(self, command_buffer) -> None:
         device = shiboken6.getCppPointer(self.rhi())[0]
-        if self.ctx is None or device != self._device:
-            self.ctx, self._device = RhiContext(self.rhi()), device
-            self.ready(self.ctx)
+        if self.m_ctx is None or device != self._m_device:
+            self.m_ctx, self._m_device = CRhiContext(self.rhi()), device
+            self.ready(self.m_ctx)
 
-    def ready(self, ctx: RhiContext) -> None:
+    def ready(self, ctx: CRhiContext) -> None:
         """The device is made (again, after the widget moved to another window): the subclass makes its renderer."""
 
     def releaseResources(self) -> None:  # QRhiWidget's: its QRhi goes away, every resource of it is destroyed now
-        ctx, self.ctx, self._device = self.ctx, None, None
+        ctx, self.m_ctx, self._m_device = self.m_ctx, None, None
         if ctx is None:
             return
         try:
             self.released(ctx)
-        except Exception as exc:  # an error inside Qt's call would vanish, and the device's own must still go
-            self.failed = self.failed or f"{type(exc).__name__}: {exc}"
+        except Exception as exc:  # pattern: ok (a boundary: an error inside Qt's call would vanish; kept in ``failed``)
+            self.m_failed = self.m_failed or f"{type(exc).__name__}: {exc}"
             traceback.print_exc()
         finally:
+            if getattr(ctx, "m_rhi", None) is not None:  # the native backend's hold on the device (it would keep the
+                from . import nativegpu  # device alive) goes first; imported here: it is Windows only
+
+                nativegpu.detach(ctx.m_rhi)
             ctx.release()
 
-    def released(self, ctx: RhiContext) -> None:
+    def released(self, ctx: CRhiContext) -> None:
         """The device goes away (the widget moved to another window, its window closes; ``ready`` follows when it
         draws again): the subclass releases its renderer here, whose resources are this device's."""
 
-    def render(self, cb) -> None:
-        if self.ctx is None:
+    def render(self, command_buffer) -> None:
+        if self.m_ctx is None:
             return
-        screen = self.ctx.begin(cb, self.colorTexture())
+        screen = self.m_ctx.begin(command_buffer, self.colorTexture())
         size = self.colorTexture().pixelSize()
-        for step in (lambda: self.draw(self.ctx, screen, (size.width(), size.height())), self.ctx.end):
+        for step in (lambda: self.draw(self.m_ctx, screen, (size.width(), size.height())), self.m_ctx.end):
             try:
                 step()
-            except Exception as exc:  # an error inside Qt's call would vanish: keep it for the view to show
-                if not self.failed:
-                    self.failed = f"{type(exc).__name__}: {exc}"
+            except (
+                Exception
+            ) as exc:  # pattern: ok (a boundary: an error inside Qt's call would vanish; kept for the view)
+                if not self.m_failed:
+                    self.m_failed = f"{type(exc).__name__}: {exc}"
                     traceback.print_exc()
 
-    def draw(self, ctx: RhiContext, screen, size: tuple[int, int]) -> None:
-        """One frame into ``screen`` (``size`` pixels)."""
+    def draw(self, ctx: CRhiContext, screen, size_px: tuple[int, int]) -> None:
+        """One frame into ``screen`` (``size_px``)."""
 
-    def picture(self, width: int, height: int):
-        """One frame at ``width`` x ``height`` as a ``QImage``: a standalone view is drawn off screen; a view hidden
+    def picture(self, width_px: int, height_px: int):
+        """One frame at ``width_px`` x ``height_px`` as a ``QImage``: a standalone view is drawn off screen; a view hidden
         inside a window (another app's page in front) gives None and keeps its place and size."""
         if not self.isVisible():
             if self.parentWidget() is not None:
                 return None
             self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)  # never shown: one device for every grab
-            self.resize(width, height)
+            self.resize(width_px, height_px)
             self.show()
-        self.setFixedColorBufferSize(width, height)
+        self.setFixedColorBufferSize(width_px, height_px)
         try:
             return self.grabFramebuffer()
         finally:

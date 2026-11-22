@@ -18,86 +18,114 @@ Matrix = tuple[tuple[float, float, float, float], ...]
 IDENTITY: Matrix = ((1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
 
 
-def from_rotation_translation(q: Quat, t: Vec3, scale: Vec3 = (1.0, 1.0, 1.0)) -> Matrix:
+def from_rotation_translation(rotation: Quat, translation: Vec3, scale: Vec3 = (1.0, 1.0, 1.0)) -> Matrix:
     """The matrix that scales, then turns by ``q`` (normalized), then moves by ``t``."""
-    x, y, z, w = qnormalize(q)
-    r = (
+    x, y, z, w = qnormalize(rotation)
+    rotation_rows = (
         (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
         (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
         (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
     )
-    rows = tuple((r[i][0] * scale[0], r[i][1] * scale[1], r[i][2] * scale[2], t[i]) for i in range(3))
+    rows = tuple(
+        (rotation_rows[i][0] * scale[0], rotation_rows[i][1] * scale[1], rotation_rows[i][2] * scale[2], translation[i])
+        for i in range(3)
+    )
     return (*rows, (0.0, 0.0, 0.0, 1.0))
 
 
-def multiply(a: Matrix, b: Matrix) -> Matrix:
+def multiply(left: Matrix, right: Matrix) -> Matrix:
     """``a`` after ``b``."""
-    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)) for i in range(4))
+    return tuple(tuple(sum(left[i][k] * right[k][j] for k in range(4)) for j in range(4)) for i in range(4))
 
 
-def inverse(m: Matrix) -> Matrix:
+def inverse(matrix: Matrix) -> Matrix:
     """The inverse of an affine matrix (its 3x3 part by the cofactors)."""
-    a = [row[:3] for row in m[:3]]
+    linear = [row[:3] for row in matrix[:3]]
     det = (
-        a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-        - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+        linear[0][0] * (linear[1][1] * linear[2][2] - linear[1][2] * linear[2][1])
+        - linear[0][1] * (linear[1][0] * linear[2][2] - linear[1][2] * linear[2][0])
+        + linear[0][2] * (linear[1][0] * linear[2][1] - linear[1][1] * linear[2][0])
     )
     if abs(det) < 1e-12:
         raise ValueError("a transform that flattens space has no inverse")
-    inv = [[0.0] * 3 for _ in range(3)]
+    inverse_linear = [[0.0] * 3 for _ in range(3)]
     for i in range(3):
         for j in range(3):
-            r = [k for k in range(3) if k != j]
-            c = [k for k in range(3) if k != i]
-            minor = a[r[0]][c[0]] * a[r[1]][c[1]] - a[r[0]][c[1]] * a[r[1]][c[0]]
-            inv[i][j] = (-1) ** (i + j) * minor / det
-    t = [m[k][3] for k in range(3)]
-    moved = [-sum(inv[i][k] * t[k] for k in range(3)) for i in range(3)]
-    return (*(tuple(inv[i]) + (moved[i],) for i in range(3)), (0.0, 0.0, 0.0, 1.0))
+            row_indices = [k for k in range(3) if k != j]
+            column_indices = [k for k in range(3) if k != i]
+            minor = (
+                linear[row_indices[0]][column_indices[0]] * linear[row_indices[1]][column_indices[1]]
+                - linear[row_indices[0]][column_indices[1]] * linear[row_indices[1]][column_indices[0]]
+            )
+            inverse_linear[i][j] = (-1) ** (i + j) * minor / det
+    move = [matrix[k][3] for k in range(3)]
+    moved = [-sum(inverse_linear[i][k] * move[k] for k in range(3)) for i in range(3)]
+    return (*(tuple(inverse_linear[i]) + (moved[i],) for i in range(3)), (0.0, 0.0, 0.0, 1.0))
 
 
-def decompose(m: Matrix) -> tuple[Quat, Vec3, Vec3]:
+def decompose(matrix: Matrix) -> tuple[Quat, Vec3, Vec3]:
     """``(rotation, translation, scale)`` of an affine matrix without shear (a mirror is a negative x scale)."""
-    cols = [tuple(m[i][j] for i in range(3)) for j in range(3)]
-    scale = [math.sqrt(sum(c * c for c in col)) for col in cols]
+    columns = [tuple(matrix[i][j] for i in range(3)) for j in range(3)]
+    scale = [math.sqrt(sum(component * component for component in column)) for column in columns]
     det = sum(
-        m[0][i] * (m[1][(i + 1) % 3] * m[2][(i + 2) % 3] - m[1][(i + 2) % 3] * m[2][(i + 1) % 3]) for i in range(3)
+        matrix[0][i]
+        * (matrix[1][(i + 1) % 3] * matrix[2][(i + 2) % 3] - matrix[1][(i + 2) % 3] * matrix[2][(i + 1) % 3])
+        for i in range(3)
     )
     if det < 0:
         scale[0] = -scale[0]
-    r = [[m[i][j] / scale[j] if scale[j] else 0.0 for j in range(3)] for i in range(3)]
-    return quaternion(r), (m[0][3], m[1][3], m[2][3]), (scale[0], scale[1], scale[2])
+    rotation_rows = [[matrix[i][j] / scale[j] if scale[j] else 0.0 for j in range(3)] for i in range(3)]
+    return quaternion(rotation_rows), (matrix[0][3], matrix[1][3], matrix[2][3]), (scale[0], scale[1], scale[2])
 
 
-def quaternion(r: list[list[float]]) -> Quat:
+def quaternion(rotation_rows: list[list[float]]) -> Quat:
     """The unit quaternion of a rotation matrix (the largest-diagonal method), with w >= 0."""
-    trace = r[0][0] + r[1][1] + r[2][2]
+    trace = rotation_rows[0][0] + rotation_rows[1][1] + rotation_rows[2][2]
     if trace > 0:
-        s = math.sqrt(trace + 1.0) * 2
-        q = ((r[2][1] - r[1][2]) / s, (r[0][2] - r[2][0]) / s, (r[1][0] - r[0][1]) / s, 0.25 * s)
-    elif r[0][0] > r[1][1] and r[0][0] > r[2][2]:
-        s = math.sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2
-        q = (0.25 * s, (r[0][1] + r[1][0]) / s, (r[0][2] + r[2][0]) / s, (r[2][1] - r[1][2]) / s)
-    elif r[1][1] > r[2][2]:
-        s = math.sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2
-        q = ((r[0][1] + r[1][0]) / s, 0.25 * s, (r[1][2] + r[2][1]) / s, (r[0][2] - r[2][0]) / s)
+        divisor = math.sqrt(trace + 1.0) * 2
+        result = (
+            (rotation_rows[2][1] - rotation_rows[1][2]) / divisor,
+            (rotation_rows[0][2] - rotation_rows[2][0]) / divisor,
+            (rotation_rows[1][0] - rotation_rows[0][1]) / divisor,
+            0.25 * divisor,
+        )
+    elif rotation_rows[0][0] > rotation_rows[1][1] and rotation_rows[0][0] > rotation_rows[2][2]:
+        divisor = math.sqrt(1.0 + rotation_rows[0][0] - rotation_rows[1][1] - rotation_rows[2][2]) * 2
+        result = (
+            0.25 * divisor,
+            (rotation_rows[0][1] + rotation_rows[1][0]) / divisor,
+            (rotation_rows[0][2] + rotation_rows[2][0]) / divisor,
+            (rotation_rows[2][1] - rotation_rows[1][2]) / divisor,
+        )
+    elif rotation_rows[1][1] > rotation_rows[2][2]:
+        divisor = math.sqrt(1.0 + rotation_rows[1][1] - rotation_rows[0][0] - rotation_rows[2][2]) * 2
+        result = (
+            (rotation_rows[0][1] + rotation_rows[1][0]) / divisor,
+            0.25 * divisor,
+            (rotation_rows[1][2] + rotation_rows[2][1]) / divisor,
+            (rotation_rows[0][2] - rotation_rows[2][0]) / divisor,
+        )
     else:
-        s = math.sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2
-        q = ((r[0][2] + r[2][0]) / s, (r[1][2] + r[2][1]) / s, 0.25 * s, (r[1][0] - r[0][1]) / s)
-    n = math.sqrt(sum(c * c for c in q)) or 1.0
-    q = tuple(c / n for c in q)
-    return q if q[3] >= 0 else tuple(-c for c in q)
+        divisor = math.sqrt(1.0 + rotation_rows[2][2] - rotation_rows[0][0] - rotation_rows[1][1]) * 2
+        result = (
+            (rotation_rows[0][2] + rotation_rows[2][0]) / divisor,
+            (rotation_rows[1][2] + rotation_rows[2][1]) / divisor,
+            0.25 * divisor,
+            (rotation_rows[1][0] - rotation_rows[0][1]) / divisor,
+        )
+    length = math.sqrt(sum(component * component for component in result)) or 1.0
+    result = tuple(component / length for component in result)
+    return result if result[3] >= 0 else tuple(-component for component in result)
 
 
-def to_columns(m: Matrix) -> tuple[float, ...]:
+def to_columns(matrix: Matrix) -> tuple[float, ...]:
     """The 16 numbers of ``m`` in glTF's column-major order."""
-    return tuple(m[i][j] for j in range(4) for i in range(4))
+    return tuple(matrix[i][j] for j in range(4) for i in range(4))
 
 
 def from_columns(values) -> Matrix:
-    v = list(values)
-    return tuple(tuple(float(v[j * 4 + i]) for j in range(4)) for i in range(4))
+    flat = list(values)
+    return tuple(tuple(float(flat[j * 4 + i]) for j in range(4)) for i in range(4))
 
 
 def from_node(node: dict) -> Matrix:
@@ -111,26 +139,28 @@ def from_node(node: dict) -> Matrix:
     )
 
 
-def apply(m: Matrix, p: Vec3) -> Vec3:
-    return tuple(m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + m[i][3] for i in range(3))
+def apply(matrix: Matrix, point: Vec3) -> Vec3:
+    return tuple(
+        matrix[i][0] * point[0] + matrix[i][1] * point[1] + matrix[i][2] * point[2] + matrix[i][3] for i in range(3)
+    )
 
 
-def is_identity(m: Matrix, tolerance: float = 1e-6) -> bool:
-    return all(abs(m[i][j] - IDENTITY[i][j]) <= tolerance for i in range(4) for j in range(4))
+def is_identity(matrix: Matrix, tolerance: float = 1e-6) -> bool:
+    return all(abs(matrix[i][j] - IDENTITY[i][j]) <= tolerance for i in range(4) for j in range(4))
 
 
 MIRROR_X: Matrix = ((-1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
 
 
-def mirrored(m: Matrix) -> Matrix:
+def mirrored(matrix: Matrix) -> Matrix:
     """``m`` seen in the space mirrored on x (``S m S``): what a joint's transform becomes when the mesh is."""
-    return multiply(MIRROR_X, multiply(m, MIRROR_X))
+    return multiply(MIRROR_X, multiply(matrix, MIRROR_X))
 
 
-def mirrored_rotation(q: Quat) -> Quat:
+def mirrored_rotation(rotation: Quat) -> Quat:
     """A rotation seen in the space mirrored on x: exact, a sign change of y and z."""
-    return (q[0], -q[1], -q[2], q[3])
+    return (rotation[0], -rotation[1], -rotation[2], rotation[3])
 
 
-def mirrored_point(p: Vec3) -> Vec3:
-    return (-p[0], p[1], p[2])
+def mirrored_point(point: Vec3) -> Vec3:
+    return (-point[0], point[1], point[2])

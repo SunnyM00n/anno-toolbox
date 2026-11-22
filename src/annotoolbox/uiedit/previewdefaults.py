@@ -3,8 +3,8 @@ Lucius, Tarragon, Athr, Concordia, Caeso, Voada, Kandis), the progression, input
 region and the values no one decided (docs/ui-editor.md, "What the preview assumes about the player").
 
 ``current(ctx)`` is the one place every reader takes them from (the preview's bindings, the game data resolver, the
-settings panel): a ``Defaults``. ``Store`` keeps a user's changes per game in the Toolbox settings and per project
-(the project's win). Live values and recordings win over all of it (``layout.Placer.own``).
+settings panel): a ``SDefaults``. ``CStore`` keeps a user's changes per game in the Toolbox settings and per project
+(the project's win). Live values and recordings win over all of it (``layout.CPlacer.own``).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ ROLES = ("player", "emperor", "rival", "pirate")
 
 
 @dataclass(frozen=True)
-class Character:
+class SCharacter:
     """A participant as the preview shows it: name, portrait, emblem (its logo), colour and its standing."""
 
     role: str
@@ -40,39 +40,39 @@ class Character:
 
 # Read from the 117 assets of the 2026-11 build (participants, their Portrait, PlayerLogo and ParticipantColor) and
 # the campaign's setup (Difficulty Preset Campaign 41206); the player's values confirmed by a campaign save's slot 0.
-PLAYER = Character("player", 41, "Marcia", 38962, "data/ui/fhd/base/icon_content/portraits/portrait_marcia.png",
+PARTICIPANT = SCharacter("player", 41, "Marcia", 38962, "data/ui/fhd/base/icon_content/portraits/portrait_marcia.png",
                    125990, "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_campaign_marcia_128.png",
                    91304, (38, 97, 156))  # fmt: skip
-EMPEROR = Character("emperor", 31721, "Emperor Lucius Augustus", 33070,
+EMPEROR = SCharacter("emperor", 31721, "Emperor Lucius Augustus", 33070,
                     "data/ui/fhd/base/icon_content/portraits/portrait_emperor_lucius.png", 77590,
                     "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_emperor_lucius_128.png", 91314,
                     (114, 47, 55), relation="Peace", reputation=0)  # fmt: skip
 RIVALS = (
-    Character("rival", 31100, "Tarragon", 31123, "data/ui/fhd/base/icon_content/portraits/portrait_rival_tarragon.png",
+    SCharacter("rival", 31100, "Tarragon", 31123, "data/ui/fhd/base/icon_content/portraits/portrait_rival_tarragon.png",
               77796, "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_rival_tarragon_128.png", 91304,
               (38, 97, 156), relation="Peace"),
-    Character("rival", 31102, "Athr Iorgwyn", 31125, "data/ui/fhd/base/icon_content/portraits/portrait_rival_athr.png",
+    SCharacter("rival", 31102, "Athr Iorgwyn", 31125, "data/ui/fhd/base/icon_content/portraits/portrait_rival_athr.png",
               77798, "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_rival_athr_128.png", 91310,
               (210, 105, 30), "Celtic", relation="Peace"),
-    Character("rival", 31104, "Concordia", 31127, "data/ui/fhd/base/icon_content/portraits/portrait_rival_concordia.png",
+    SCharacter("rival", 31104, "Concordia", 31127, "data/ui/fhd/base/icon_content/portraits/portrait_rival_concordia.png",
               77800, "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_rival_concordia_128.png", 91309,
               (248, 131, 121), relation="Peace"),
 )  # fmt: skip
 PIRATES = (
-    Character("pirate", 37495, "Caeso Regulus Syracus", 38935,
+    SCharacter("pirate", 37495, "Caeso Regulus Syracus", 38935,
               "data/ui/fhd/base/icon_content/portraits/portrait_pirate_caeso.png", 77591,
               "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_pirate_caeso_128.png", 129650,
               (150, 25, 25), relation="War"),
-    Character("pirate", 37494, "Voada Of The Scathach", 38934,
+    SCharacter("pirate", 37494, "Voada Of The Scathach", 38934,
               "data/ui/fhd/base/icon_content/portraits/portrait_pirate_voada.png", 77802,
               "data/ui/fhd/base/icon_content/logos/characters/icon_2d_logo_pirate_voada_128.png", 129808,
               (150, 25, 25), "Celtic", relation="War"),
-    Character("pirate", 153069, "Kandis Of Kashta", 153091,
+    SCharacter("pirate", 153069, "Kandis Of Kashta", 153091,
               "data/ui/fhd/base/icon_content/portraits/portrait_dlc03_pirate_kandis.png", 153101,
               "data/ui/fhd/dlc03/icon_content/logo/icon_2d_logo_pirate_kandis_512.png", 158239,
               (150, 25, 25), "Egyptian", relation="War"),
 )  # fmt: skip
-CAMPAIGN = {"player": (PLAYER,), "emperor": (EMPEROR,), "rival": RIVALS, "pirate": PIRATES}
+CAMPAIGN = {"player": (PARTICIPANT,), "emperor": (EMPEROR,), "rival": RIVALS, "pirate": PIRATES}
 
 LATIUM, ALBION, AEGYPTUS = 3245, 6627, 149679  # the provinces (SessionModerate): the campaign starts in Latium
 PROVINCE_NAMES = {LATIUM: "Latium", ALBION: "Albion", AEGYPTUS: "Aegyptus"}  # as the game names the provinces
@@ -101,11 +101,11 @@ SETUP = (("SetupConstructionCostRefund", 0), ("SetupRelocateBuildings", 0), ("Se
          ("SetupTraderPassiveTradeStock", 1), ("SetupTraderPassiveTradeBudget", 1), ("SetupTraderTraderPrices", 1))  # fmt: skip
 CAMPAIGN_OPTIONS: dict[str, object] = {
     "setup.DifficultyPreset": 41206, "setup.SetupMapTemplateType": 43182, "setup.SetupStartEmperor": 31721,
-    "setup.DefaultStartProvince": LATIUM, "setup.GameSeed": 211, **{f"setup.{k}": v for k, v in SETUP},
+    "setup.DefaultStartProvince": LATIUM, "setup.GameSeed": 211, **{f"setup.{name}": value for name, value in SETUP},
     "banner.LogoColor": 91307, "banner.BannerShape": 92736, "banner.BannerPattern": 92738,
     "banner.BannerBackgroundPattern": 92740, "banner.BannerStripes": 92742,
 }  # fmt: skip
-PLAY = "play."  # the options Play mode keeps: ``play.<field's path of names>`` (``Store.set(..., play=True)``)
+PLAY = "play."  # the options Play mode keeps: ``play.<field's path of names>`` (``CStore.set(..., play=True)``)
 
 # components the game fills from the player's state: (component GUID prefix, property id) -> what it reads
 REGION_INFO = ("30427a23", 0x78FDE9F4)  # PlayerRegionInfo.CurrentRegion
@@ -115,7 +115,7 @@ PORTRAIT_GUID, PORTRAIT_IMAGE = ("cd9c2b59", 0x7AF1EF2F), ("cd9c2b59", 0x7552C60
 
 
 @dataclass
-class Defaults:
+class SDefaults:
     """Every value the preview assumes; ``CAMPAIGN_DEFAULTS`` is the campaign's, a user's changes go on top."""
 
     progression: str = "all"  # all, start (the campaign's start), or tier:<PopulationLevel GUID>
@@ -131,16 +131,16 @@ class Defaults:
     production: int = PRODUCTION
     money: int = 250_000  # [I]
     goods: int = 500  # the stock of each good [I]
-    player_name: str = ""  # the player's own look; empty: the player character's
-    player_portrait: int = 0
-    player_emblem: int = 0
-    player_colour: int = 0
+    participant_name: str = ""  # the player's own look; empty: the player character's
+    participant_portrait: int = 0
+    participant_emblem: int = 0
+    participant_color: int = 0
     characters: dict[str, list[int]] = field(default_factory=dict)  # role -> participants; empty: the campaign's
     language: str = ""  # the game texts' language; empty: the editor's
     research: str = "all"  # all (repeatables once), none, or tier:<n>; ``options`` "research.<GUID>" per node
     options: dict[str, object] = field(default_factory=dict)  # setup.*, banner.*, title.*, research.*: the user's
     # what the game's data adds (``previewcatalogue``): characters by participant, pictures and colours by asset
-    known: dict[int, Character] = field(default_factory=dict, repr=False, compare=False)
+    known: dict[int, SCharacter] = field(default_factory=dict, repr=False, compare=False)
     pictures: dict[int, str] = field(default_factory=dict, repr=False, compare=False)  # Portrait, PlayerLogo -> icon
     colours: dict[int, tuple[int, int, int]] = field(default_factory=dict, repr=False, compare=False)
 
@@ -148,7 +148,7 @@ class Defaults:
         """What the kept results depend on (``layout.Context.conditions``); not Play mode's choices, whose readers are
         dropped one by one (``playstate.chosen``)."""
         found = changes(self)
-        rest = {k: v for k, v in found.get("options", {}).items() if not k.startswith(PLAY)}
+        rest = {name: value for name, value in found.get("options", {}).items() if not name.startswith(PLAY)}
         found.pop("options", None)
         return json.dumps({**found, **({"options": rest} if rest else {})}, sort_keys=True)
 
@@ -170,30 +170,42 @@ class Defaults:
 
     # what the bindings read
 
-    def cast(self, role: str) -> tuple[Character, ...]:
+    def cast(self, role: str) -> tuple[SCharacter, ...]:
         """The characters of a role: the chosen ones (looked up in ``known``), else the campaign's."""
-        chosen = [self.known.get(g) for g in self.characters.get(role, [])]
-        found = tuple(c for c in chosen if c is not None)
+        chosen = [self.known.get(participant) for participant in self.characters.get(role, [])]
+        found = tuple(character for character in chosen if character is not None)
         if role == "player":
-            return (self.player(),)
+            return (self.participant(),)
         if found:
             return found
         if role != "pirate":
             return CAMPAIGN[role]
-        mine = [c for c in CAMPAIGN[role] if c.region == self.region_name()]  # the region's pirate first
-        return (*mine, *(c for c in CAMPAIGN[role] if c not in mine))
+        mine = [
+            character for character in CAMPAIGN[role] if character.region == self.region_name()
+        ]  # the region's pirate first
+        return (*mine, *(character for character in CAMPAIGN[role] if character not in mine))
 
-    def player(self) -> Character:
+    def participant(self) -> SCharacter:
         """The player with the look the user gave him (name, portrait, emblem, colour) over the chosen character."""
-        base = next((self.known[g] for g in self.characters.get("player", []) if g in self.known), None) or PLAYER
+        base = (
+            next(
+                (
+                    self.known[participant]
+                    for participant in self.characters.get("player", [])
+                    if participant in self.known
+                ),
+                None,
+            )
+            or PARTICIPANT
+        )
         look = {}
-        if self.player_portrait and self.player_portrait in self.pictures:
-            look.update(portrait=self.player_portrait, portrait_icon=self.pictures[self.player_portrait])
-        if self.player_emblem and self.player_emblem in self.pictures:
-            look.update(emblem=self.player_emblem, emblem_icon=self.pictures[self.player_emblem])
-        if self.player_colour and self.player_colour in self.colours:
-            look.update(colour=self.player_colour, rgb=self.colours[self.player_colour])
-        return replace(base, role="player", name=self.player_name or base.name, **look)
+        if self.participant_portrait and self.participant_portrait in self.pictures:
+            look.update(portrait=self.participant_portrait, portrait_icon=self.pictures[self.participant_portrait])
+        if self.participant_emblem and self.participant_emblem in self.pictures:
+            look.update(emblem=self.participant_emblem, emblem_icon=self.pictures[self.participant_emblem])
+        if self.participant_color and self.participant_color in self.colours:
+            look.update(colour=self.participant_color, rgb=self.colours[self.participant_color])
+        return replace(base, role="player", name=self.participant_name or base.name, **look)
 
     def region_name(self) -> str:
         return REGION_OF_SESSION.get(self.region, "Roman")
@@ -202,13 +214,22 @@ class Defaults:
         """The tiers reached, with their residents: the user's, else what the progression gives."""
         if self.tiers:
             return dict(self.tiers)
-        order = [t for region in TIERS.values() for t in region]
+        order = [level for region in TIERS.values() for level in region]
         if self.progression == "start":
             return {order[0][0]: 0}
         if self.progression.startswith("tier:"):
             last = int(self.progression[5:])
-            region = next((r for r in TIERS.values() if any(g == last for g, _ in r)), ())
-            upto = list(region[: [g for g, _ in region].index(last) + 1]) if region else []
+            region = next(
+                (
+                    candidate_region
+                    for candidate_region in TIERS.values()
+                    if any(population_level == last for population_level, _ in candidate_region)
+                ),
+                (),
+            )
+            upto = (
+                list(region[: [population_level for population_level, _ in region].index(last) + 1]) if region else []
+            )
             return dict(upto)
         return dict(order)
 
@@ -223,13 +244,17 @@ class Defaults:
         """The picture of a Portrait asset the cast or ``known`` holds, "" for one the preview does not know."""
         if guid in self.pictures:
             return self.pictures[guid]
-        for c in (*self.known.values(), self.player(), *(c for r in ROLES for c in CAMPAIGN[r])):
-            if c.portrait == guid:
-                return c.portrait_icon
+        for character in (
+            *self.known.values(),
+            self.participant(),
+            *(character for role in ROLES for character in CAMPAIGN[role]),
+        ):
+            if character.portrait == guid:
+                return character.portrait_icon
         return ""
 
 
-CAMPAIGN_DEFAULTS = Defaults()
+CAMPAIGN_DEFAULTS = SDefaults()
 # a picture slot's name -> (role, what of the character), first match; the game (seen 2026-11-16) drew other
 # participants in the bare "Portrait" slots (the governors' bar, diplomacy's "Portrait_Encounter") and the
 # player's emblem in the title's "logo"
@@ -241,207 +266,225 @@ WORDS_PICTURE = (
 )  # fmt: skip
 
 
-def current(ctx) -> Defaults:
+def current(context) -> SDefaults:
     """The defaults the preview of ``ctx`` (a ``layout.Context``, or None) assumes: the one place to read them."""
-    found = getattr(ctx, "defaults", None)
-    return found if isinstance(found, Defaults) else CAMPAIGN_DEFAULTS
+    found = getattr(context, "m_defaults", None)
+    return found if isinstance(found, SDefaults) else CAMPAIGN_DEFAULTS
 
 
 def _words(name: str) -> str:
-    return "".join(ch for ch in name.lower() if ch.isalnum())
+    return "".join(character for character in name.lower() if character.isalnum())
 
 
-def picture_for(slot: str, d: Defaults) -> str | None:
+def picture_for(slot: str, defaults: SDefaults) -> str | None:
     """The picture a run-time picture slot shows when its name names a character: a portrait or an emblem."""
     low = _words(slot)
     for words, role, what in WORDS_PICTURE:
-        if any(w in low for w in words) and "2d" not in low[:2] and "3d" not in low[:2]:  # 2dPortrait: an icon
-            who = d.cast(role)[0]
-            return who.emblem_icon if what == "emblem" or "logo" in low or "emblem" in low else who.portrait_icon
+        if any(word in low for word in words) and "2d" not in low[:2] and "3d" not in low[:2]:  # 2dPortrait: an icon
+            character = defaults.cast(role)[0]
+            return (
+                character.emblem_icon
+                if what == "emblem" or "logo" in low or "emblem" in low
+                else character.portrait_icon
+            )
     return None
 
 
-def text_for(name: str, d: Defaults) -> str | None:
+def text_for(name: str, defaults: SDefaults) -> str | None:
     """A text whose property's name names a character's name (the player's, the emperor's, a rival's or a
     pirate's); None for any other."""
     low = _words(name)
     if low in TYPED_NAMES:  # what the player types into a name field (the company's, the profile's)
-        return d.player().name
+        return defaults.participant().name
     if "name" not in low:
         return None
     for words, role, _ in WORDS_PICTURE:
-        if role != "player" and any(w in low for w in words if w not in ("portrait", "encounter")):
-            return d.cast(role)[0].name
-    if any(w in low for w in ("player", "profile", "company", "governor", "user", "character", "nickname")):
-        return d.player().name
-    if any(w in low for w in ("province", "session", "region")):
-        return PROVINCE_NAMES.get(d.region)
+        if role != "player" and any(word in low for word in words if word not in ("portrait", "encounter")):
+            return defaults.cast(role)[0].name
+    if any(word in low for word in ("player", "profile", "company", "governor", "user", "character", "nickname")):
+        return defaults.participant().name
+    if any(word in low for word in ("province", "session", "region")):
+        return PROVINCE_NAMES.get(defaults.region)
     return None
 
 
-def bool_for(name: str, d: Defaults) -> bool | None:
+def bool_for(name: str, defaults: SDefaults) -> bool | None:
     """A flag whose property's name says what it decides: a gamepad, multiplayer, a DLC's store lock (a lock is
     ``placeholders.state_for``'s, through ``is_locked``)."""
     low = _words(name)
-    if any(w in low for w in ("gamepad", "controller", "console")):
-        return d.input != "mouse"
-    if any(w in low for w in ("multiplayer", "coop", "online", "ismp", "mponly")):
-        return d.session == "multi"
-    if "dlc" in low and any(w in low for w in ("owned", "active", "available")):
+    if any(word in low for word in ("gamepad", "controller", "console")):
+        return defaults.input != "mouse"
+    if any(word in low for word in ("multiplayer", "coop", "online", "ismp", "mponly")):
+        return defaults.session == "multi"
+    if "dlc" in low and any(word in low for word in ("owned", "active", "available")):
         return True
     return None
 
 
-def number_for(name: str, d: Defaults) -> int | None:
+def number_for(name: str, defaults: SDefaults) -> int | None:
     low = _words(name)
     if low == "playercount":  # the session's players: the player alone, or the player and one more [I]
-        return 1 if d.session == "single" else 2
-    if any(w in low for w in ("money", "coins", "denarii", "gold", "balance")):
-        return d.money
-    if any(w in low for w in ("stock", "storage", "goodsamount")):
-        return d.goods
+        return 1 if defaults.session == "single" else 2
+    if any(word in low for word in ("money", "coins", "denarii", "gold", "balance")):
+        return defaults.money
+    if any(word in low for word in ("stock", "storage", "goodsamount")):
+        return defaults.goods
     if "reputation" in low:
-        return d.cast("emperor")[0].reputation or 0
+        return defaults.cast("emperor")[0].reputation or 0
     return None
 
 
-def component_values(comps: dict[str, int], d: Defaults) -> dict[tuple[int, int], object]:
+def component_values(components: dict[str, int], defaults: SDefaults) -> dict[tuple[int, int], object]:
     """The values the game gives the components it fills from the player's state, by (instance uid, property id):
     the player's region, the input device, the portrait a resolver turns a GUID into."""
-    out: dict[tuple[int, int], object] = {}
-    if REGION_INFO[0] in comps:
-        out[(comps[REGION_INFO[0]], REGION_INFO[1])] = PROVINCE[d.region_name()]
-    if GAMEPAD[0] in comps:
-        out[(comps[GAMEPAD[0]], GAMEPAD[1])] = d.input != "mouse"
-        out[(comps[PLATFORM_ID[0]], PLATFORM_ID[1])] = PLATFORM.get(d.input, PLATFORM["mouse"])
-    return out
+    values: dict[tuple[int, int], object] = {}
+    if REGION_INFO[0] in components:
+        values[(components[REGION_INFO[0]], REGION_INFO[1])] = PROVINCE[defaults.region_name()]
+    if GAMEPAD[0] in components:
+        values[(components[GAMEPAD[0]], GAMEPAD[1])] = defaults.input != "mouse"
+        values[(components[PLATFORM_ID[0]], PLATFORM_ID[1])] = PLATFORM.get(defaults.input, PLATFORM["mouse"])
+    return values
 
 
-def resolve_portrait(values: dict, comps: dict[str, int], d: Defaults) -> None:
+def resolve_portrait(values: dict, components: dict[str, int], defaults: SDefaults) -> None:
     """A PortraitResolver's picture: the portrait of the GUID it holds, else the player's (``values`` in place)."""
-    uid = comps.get(PORTRAIT_GUID[0])
+    uid = components.get(PORTRAIT_GUID[0])
     if uid is None:
         return
     guid = values.get((uid, PORTRAIT_GUID[1]))
-    icon = d.portrait_of(int(guid)) if isinstance(guid, int) and guid else ""
-    values[(uid, PORTRAIT_IMAGE[1])] = icon or d.player().portrait_icon
+    icon = defaults.portrait_of(int(guid)) if isinstance(guid, int) and guid else ""
+    values[(uid, PORTRAIT_IMAGE[1])] = icon or defaults.participant().portrait_icon
 
 
 # what is kept: only what differs from the campaign's defaults
 
 
-SAVED = tuple(f for f in Defaults.__dataclass_fields__ if f not in ("known", "pictures", "colours"))
+SAVED = tuple(
+    field_name for field_name in SDefaults.__dataclass_fields__ if field_name not in ("known", "pictures", "colours")
+)
+# the keys the released Toolbox (v0.2) wrote for the fields renamed since: settings and project files keep them
+STORED_KEYS = {
+    "player_name": "participant_name",
+    "player_portrait": "participant_portrait",
+    "player_emblem": "participant_emblem",
+    "player_colour": "participant_color",
+}
 
 
-def changes(d: Defaults) -> dict:
+def changes(defaults: SDefaults) -> dict:
     """The values of ``d`` that differ from the campaign's, as JSON."""
-    base, mine = asdict(CAMPAIGN_DEFAULTS), asdict(replace(d, known={}, pictures={}, colours={}))
-    return {k: mine[k] for k in SAVED if mine[k] != base[k]}
+    base, mine = asdict(CAMPAIGN_DEFAULTS), asdict(replace(defaults, known={}, pictures={}, colours={}))
+    return {field_name: mine[field_name] for field_name in SAVED if mine[field_name] != base[field_name]}
 
 
-def play_choices(d: Defaults) -> dict[str, object]:
+def play_choices(defaults: SDefaults) -> dict[str, object]:
     """Play mode's choices: the field's path of names -> the value chosen (the options ``PLAY`` names)."""
-    return {k[len(PLAY) :]: v for k, v in d.options.items() if k.startswith(PLAY)}
+    return {name[len(PLAY) :]: value for name, value in defaults.options.items() if name.startswith(PLAY)}
 
 
-def with_changes(data: dict, base: Defaults | None = None) -> Defaults:
+def with_changes(data: dict, base: SDefaults | None = None) -> SDefaults:
     """The campaign's defaults with ``data`` (``changes``) on top, keeping what ``base`` knows of the game's data;
     what does not read is left at the default."""
-    d = Defaults()
+    defaults = SDefaults()
     if base is not None:
-        d.known, d.pictures, d.colours = base.known, base.pictures, base.colours
-    for k, v in (data or {}).items():
-        if k not in SAVED:
+        defaults.known, defaults.pictures, defaults.colours = base.known, base.pictures, base.colours
+    for stored, value in (data or {}).items():
+        name = STORED_KEYS.get(stored, stored)
+        if name not in SAVED:
             continue
         try:
-            if k == "tiers" and isinstance(v, dict):
-                v = {int(t): int(n) for t, n in v.items()}
-            elif k == "characters" and isinstance(v, dict):
-                v = {str(r): [int(g) for g in gs] for r, gs in v.items() if r in ROLES}
-            elif k in ("locked", "dlcs") and v is not None:
-                v = [int(g) for g in v]
+            if name == "tiers" and isinstance(value, dict):
+                value = {int(level): int(residents) for level, residents in value.items()}
+            elif name == "characters" and isinstance(value, dict):
+                value = {str(role): [int(guid) for guid in guids] for role, guids in value.items() if role in ROLES}
+            elif name in ("locked", "dlcs") and value is not None:
+                value = [int(guid) for guid in value]
         except (TypeError, ValueError):  # a file edited by hand, a project's from someone else
             continue
-        default = getattr(CAMPAIGN_DEFAULTS, k)
-        if default is None or isinstance(v, type(default)):
-            setattr(d, k, v)
-    return d
+        default = getattr(CAMPAIGN_DEFAULTS, name)
+        if default is None or isinstance(value, type(default)):
+            setattr(defaults, name, value)
+    return defaults
 
 
-class Store:
+class CStore:
     """The user's changes for one game: in the Toolbox settings (``apps["ui"]["preview"][game]``) and, when the
     project keeps its own, in ``ui-edits/<game>-preview.json`` of the project, which wins. ``set`` and ``reset`` are
-    the write API (the panel, a scene's play mode); every change calls the ``listeners`` with the new ``Defaults``."""
+    the write API (the panel, a scene's play mode); every change calls the ``listeners`` with the new ``SDefaults``."""
 
-    def __init__(self, apps: dict, game: str, project_file: Path | None = None, base: Defaults | None = None) -> None:
-        self.apps, self.game, self.project_file = apps, game, project_file
-        self.per_project = bool(project_file and project_file.is_file())
-        self.listeners: list = []
-        self.played: set[str] = set()  # the names a scene's play mode set (``reset(played=True)`` undoes those)
-        self.last: frozenset[str] = frozenset()  # the names the last change set (empty: any may have changed)
-        self.defaults = self.load(base)
+    def __init__(self, apps: dict, game: str, project_file: Path | None = None, base: SDefaults | None = None) -> None:
+        self.m_apps, self.m_game, self.m_project_file = apps, game, project_file
+        self.m_per_project = bool(project_file and project_file.is_file())
+        self.m_listeners: list = []
+        self.m_played: set[str] = set()  # the names a scene's play mode set (``reset(played=True)`` undoes those)
+        self.m_last: frozenset[str] = frozenset()  # the names the last change set (empty: any may have changed)
+        self.m_defaults = self.load(base)
 
     def play_names(self) -> list[str]:
         """What ``reset(played=True)`` puts back: the names set in play mode, and Play mode's kept choices."""
-        return sorted(self.played | {f"options.{k}" for k in self.defaults.options if k.startswith(PLAY)})
+        return sorted(self.m_played | {f"options.{k}" for k in self.m_defaults.options if k.startswith(PLAY)})
 
     def only_play(self) -> bool:
         """Whether the last change set Play mode's choices only (their readers follow without a new layout)."""
-        return bool(self.last) and all(n.startswith(f"options.{PLAY}") for n in self.last)
+        return bool(self.m_last) and all(name.startswith(f"options.{PLAY}") for name in self.m_last)
 
     def _settings(self) -> dict:
-        return self.apps.setdefault("ui", {}).setdefault("preview", {}).setdefault(self.game, {})
+        return self.m_apps.setdefault("ui", {}).setdefault("preview", {}).setdefault(self.m_game, {})
 
-    def load(self, base: Defaults | None = None) -> Defaults:
-        data = dict(self.apps.get("ui", {}).get("preview", {}).get(self.game, {}))
-        if self.per_project:
+    def load(self, base: SDefaults | None = None) -> SDefaults:
+        data = dict(self.m_apps.get("ui", {}).get("preview", {}).get(self.m_game, {}))
+        if self.m_per_project:
             try:
-                data = json.loads(self.project_file.read_text(encoding="utf-8")).get("values", {})
+                data = json.loads(self.m_project_file.read_text(encoding="utf-8")).get("values", {})
             except (OSError, ValueError, AttributeError):
                 data = {}
-        return with_changes(data, base)
+        return with_changes(data if isinstance(data, dict) else {}, base)
 
-    def learn(self, base: Defaults) -> None:
+    def learn(self, base: SDefaults) -> None:
         """What the game's data adds (characters, pictures, colours) to the values kept."""
-        self.defaults.known, self.defaults.pictures, self.defaults.colours = base.known, base.pictures, base.colours
-        self.last = frozenset()
+        self.m_defaults.known, self.m_defaults.pictures, self.m_defaults.colours = (
+            base.known,
+            base.pictures,
+            base.colours,
+        )
+        self.m_last = frozenset()
         self._changed()
 
     def _apply(self, name: str, value) -> None:
-        d = self.defaults
+        defaults = self.m_defaults
         if name.startswith("options."):
             key = name[len("options.") :]
             if value is None:
-                d.options.pop(key, None)
+                defaults.options.pop(key, None)
             else:
-                d.options[key] = value
+                defaults.options[key] = value
         elif name in SAVED:
-            setattr(d, name, copy.deepcopy(getattr(CAMPAIGN_DEFAULTS, name)) if value is None else value)
+            setattr(defaults, name, copy.deepcopy(getattr(CAMPAIGN_DEFAULTS, name)) if value is None else value)
         else:
             raise KeyError(name)
 
     def set(self, name: str, value, play: bool = False) -> None:
-        """One value: a field of ``Defaults`` or ``options.<name>`` (a setup, banner, title or research option);
+        """One value: a field of ``SDefaults`` or ``options.<name>`` (a setup, banner, title or research option);
         None puts it back to the campaign's; ``play``: a choice made inside a scene in play mode."""
         self._apply(name, value)
-        (self.played.add if play and value is not None else self.played.discard)(name)
-        self.last = frozenset({name})
+        (self.m_played.add if play and value is not None else self.m_played.discard)(name)
+        self.m_last = frozenset({name})
         self.save()
 
     def set_many(self, values: dict[str, object]) -> None:
         """Several values as ``set`` takes them, kept and told once (a preset that sets a node each)."""
         for name, value in values.items():
             self._apply(name, value)
-            self.played.discard(name)
-        self.last = frozenset(values)
+            self.m_played.discard(name)
+        self.m_last = frozenset(values)
         self.save()
 
     def reset(self, name: str | None = None, played: bool = False) -> None:
         """Back to the campaign's defaults: one value, the play mode's changes (``played``), or every value."""
         if name is None and not played:
-            self.defaults = with_changes({}, self.defaults)
-            self.played.clear()
-            self.last = frozenset()
+            self.m_defaults = with_changes({}, self.m_defaults)
+            self.m_played.clear()
+            self.m_last = frozenset()
             self.save()
             return
         if name:
@@ -451,63 +494,68 @@ class Store:
 
     def save(self) -> None:
         """Keep the changes where they are kept now (the project's file, else the settings), then tell."""
-        d = self.defaults
-        if self.per_project and self.project_file is not None:
-            text = json.dumps({"format": 1, "values": changes(d)}, indent=1, sort_keys=True) + "\n"
-            write_atomic(self.project_file, text.encode("utf-8"))
+        defaults = self.m_defaults
+        if self.m_per_project and self.m_project_file is not None:
+            text = json.dumps({"format": 1, "values": changes(defaults)}, indent=1, sort_keys=True) + "\n"
+            write_atomic(self.m_project_file, text.encode("utf-8"))
         else:
             self._settings().clear()
-            self._settings().update(changes(d))
+            self._settings().update(changes(defaults))
         self._changed()
 
     def _changed(self) -> None:
-        for listener in list(self.listeners):
-            listener(self.defaults)
+        for listener in list(self.m_listeners):
+            listener(self.m_defaults)
 
-    def keep_in_project(self, on: bool) -> None:
+    def keep_in_project(self, is_enabled: bool) -> None:
         """Start (or stop) keeping the values in the project; stopping removes the project's file."""
-        if self.project_file is None:
+        if self.m_project_file is None:
             return
-        self.per_project = on
-        if on:
+        self.m_per_project = is_enabled
+        if is_enabled:
             self.save()
-        elif self.project_file.is_file():
-            self.project_file.unlink()
+        else:
+            self._settings().clear()  # the values go back to the Toolbox settings: the project's file held them
+            self._settings().update(changes(self.m_defaults))
+            if self.m_project_file.is_file():
+                self.m_project_file.unlink()
 
 
 def drop_made(samples) -> None:
-    """Forget the placeholders made under the old defaults (``viewmodels.Samples``): they are made again."""
-    for key in list(samples.generated):
+    """Forget the placeholders made under the old defaults (``viewmodels.CSamples``): they are made again."""
+    for key in list(samples.m_generated):
         samples.set(key, None)
 
 
-def attach(window, game: str) -> Store:
-    """Give a UI window (``uiwindow.UiWindow``, a game just opened) its store: the preview reads its defaults, a
+def attach(window, game: str) -> CStore:
+    """Give a UI window (``uiwindow.CUiWindow``, a game just opened) its store: the preview reads its defaults, a
     change lays the preview out again with fresh placeholders; 117's assets add the choices off the window's thread
     (``window.preview_catalogue``, ``previewcatalogue``)."""
     from . import previewpanel, projectpart
 
     project = window.project()
-    store = Store(window.settings.apps, game, projectpart.sidecar(project, game, "preview") if project else None)
+    store = CStore(window.settings.apps, game, projectpart.sidecar(project, game, "preview") if project else None)
     window.preview_store, window.preview_catalogue = store, None
 
-    def changed(d: Defaults) -> None:
-        if window.ctx is None or getattr(window, "preview_store", None) is not store or store.only_play():
+    def changed(defaults: SDefaults) -> None:
+        if window.m_ctx is None or getattr(window, "preview_store", None) is not store or store.only_play():
             return  # Play mode's choices: its controller drops what read them (``playmode``)
-        window.ctx.defaults = d
-        if window.pictures is not None:
-            window.pictures.defaults = d
-        drop_made(window.samples)
+        window.m_ctx.m_defaults = defaults
+        if window.m_pictures is not None:
+            window.m_pictures.m_defaults = defaults
+        drop_made(window.m_samples)
         window._redraw()
 
-    store.listeners.append(changed)
+    store.m_listeners.append(changed)
     if getattr(window, "play", None) is not None:
         window.play.store_opened(store)  # Play mode reads and writes its choices through it
-    window.ctx.defaults = store.defaults
-    if window.pictures is not None:
-        window.pictures.defaults = store.defaults
+    window.m_ctx.m_defaults = store.m_defaults
+    if window.m_pictures is not None:
+        window.m_pictures.m_defaults = store.m_defaults
     if game == "anno117":
-        window.background.run(lambda: _catalogue(window.settings), lambda cat: _learned(window, store, cat))
+        window.m_background.run(
+            lambda: _catalogue(window.settings), lambda catalogue: _learned(window, store, catalogue)
+        )
     panel = getattr(window, "preview_panel", None)
     if panel is not None:
         previewpanel.open_game(window, store, loading=game == "anno117")  # its choices come with the catalogue
@@ -521,16 +569,18 @@ def _catalogue(settings):
     return previewcatalogue.read(assetgame.open_installed(settings, "anno117"), assetgame.interface_language())
 
 
-def _learned(window, store: Store, cat) -> None:
+def _learned(window, store: CStore, catalogue) -> None:
     """The catalogue read: kept on the window, and what it knows of pictures and colours given to the store."""
     if getattr(window, "preview_store", None) is not store:
         return
     panel = getattr(window, "preview_panel", None)
-    if isinstance(cat, Exception):  # no 117 assets (no install folder or workspace set): the campaign's own table stays
+    if isinstance(
+        catalogue, Exception
+    ):  # no 117 assets (no install folder or workspace set): the campaign's own table stays
         if panel is not None:
             panel.set_catalogue(None)
         return
-    window.preview_catalogue = cat
-    store.learn(cat.defaults(Defaults()))
+    window.preview_catalogue = catalogue
+    store.learn(catalogue.defaults(SDefaults()))
     if panel is not None:
-        panel.set_catalogue(cat)
+        panel.set_catalogue(catalogue)

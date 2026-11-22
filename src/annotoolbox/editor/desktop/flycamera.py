@@ -1,5 +1,5 @@
 """A free-fly camera for the 3D view, beside the orbit camera: the camera turns about its own eye, the wheel and the
-keys fly it. ``FlyCamera`` answers what the renderer and the tools ask of an ``OrbitCamera`` (``eye``, ``view``,
+keys fly it. ``CFlyCamera`` answers what the renderer and the tools ask of an ``COrbitCamera`` (``eye``, ``view``,
 ``proj``, ``matrix``, ``ray``, ``target``, ``distance``, ``turn``, ``pan``, ``zoom``, ``look``), so it replaces the
 orbit camera as it is; ``switch`` changes one into the other and keeps the picture where it is.
 """
@@ -11,7 +11,7 @@ import math
 import numpy as np
 
 from ...infra.i18n import N_
-from ...render.camera import OrbitCamera
+from ...render.camera import COrbitCamera
 
 MODES = ("orbit", "fly")
 LABELS = {"orbit": N_("islands.orbit"), "fly": N_("islands.free_fly")}
@@ -23,81 +23,93 @@ STEP = 0.12  # the share of the look range one wheel step or key press flies
 MIN_RANGE = 20.0  # world units: the least a step counts the look range as
 
 
-class FlyCamera(OrbitCamera):
+class CFlyCamera(COrbitCamera):
     """Looks from ``position`` along the turn (yaw, pitch); ``distance`` is how far ahead ``target`` lies (what the
     renderer centres its shadows on and picks detail by), so it is a look range, not a distance to keep."""
 
-    def __init__(self, position, yaw: float, pitch: float, distance: float, fov: float, speed: float = 1.0) -> None:
-        self.position = np.asarray(position, "f4")
-        self.yaw, self.pitch, self._range = float(yaw), float(pitch), float(distance)
-        self.fov, self.speed = float(fov), float(speed)
+    def __init__(
+        self, position, yaw_rad: float, pitch_rad: float, distance_m: float, fov_rad: float, speed: float = 1.0
+    ) -> None:
+        self.m_position = np.asarray(position, "f4")
+        self.m_yaw_rad, self.m_pitch_rad, self._m_range = float(yaw_rad), float(pitch_rad), float(distance_m)
+        self.m_fov_rad, self.m_speed = float(fov_rad), float(speed)
 
     @classmethod
-    def from_orbit(cls, cam: OrbitCamera) -> FlyCamera:
-        return cls(cam.eye(), cam.yaw, cam.pitch, cam.distance, cam.fov, cam.speed)
+    def from_orbit(cls, camera: COrbitCamera) -> CFlyCamera:
+        return cls(
+            camera.eye(), camera.m_yaw_rad, camera.m_pitch_rad, camera.m_distance_m, camera.m_fov_rad, camera.m_speed
+        )
 
     def forward(self) -> np.ndarray:
-        cp = math.cos(self.pitch)
-        return -np.array([cp * math.sin(self.yaw), math.sin(self.pitch), cp * math.cos(self.yaw)], "f4")
+        cos_pitch = math.cos(self.m_pitch_rad)
+        return -np.array(
+            [cos_pitch * math.sin(self.m_yaw_rad), math.sin(self.m_pitch_rad), cos_pitch * math.cos(self.m_yaw_rad)],
+            "f4",
+        )
 
     def eye(self) -> np.ndarray:
-        return self.position
+        return self.m_position
 
     @property
-    def target(self) -> np.ndarray:
-        return self.position + self.forward() * self._range
+    def m_target(self) -> np.ndarray:
+        return self.m_position + self.forward() * self._m_range
 
-    @target.setter
-    def target(self, point) -> None:
-        self.position = np.asarray(point, "f4") - self.forward() * self._range
+    @m_target.setter
+    def m_target(self, point) -> None:
+        self.m_position = np.asarray(point, "f4") - self.forward() * self._m_range
 
     @property
-    def distance(self) -> float:
-        return self._range
+    def m_distance_m(self) -> float:
+        return self._m_range
 
-    @distance.setter
-    def distance(self, value: float) -> None:
+    @m_distance_m.setter
+    def m_distance_m(self, value: float) -> None:
         """A new look range keeps the point looked at: the camera moves back or forward to it."""
-        pivot = self.target
-        self._range = max(1.0, float(value))
-        self.position = pivot - self.forward() * self._range
+        pivot = self.m_target
+        self._m_range = max(1.0, float(value))
+        self.m_position = pivot - self.forward() * self._m_range
 
-    def turn(self, dx: float, dy: float) -> None:
-        self.yaw -= dx * 0.008
-        self.pitch = min(PITCH[1], max(PITCH[0], self.pitch + dy * 0.008))
+    def turn(self, delta_x: float, delta_y: float) -> None:
+        self.m_yaw_rad -= delta_x * 0.008
+        self.m_pitch_rad = min(PITCH[1], max(PITCH[0], self.m_pitch_rad + delta_y * 0.008))
 
-    def pan(self, dx: float, dy: float) -> None:
+    def pan(self, delta_x: float, delta_y: float) -> None:
         """Slide sideways and along the ground (the arrow keys and the middle button)."""
-        right = np.array([math.cos(self.yaw), 0, -math.sin(self.yaw)], "f4")
-        ahead = np.array([math.sin(self.yaw), 0, math.cos(self.yaw)], "f4")
-        k = self.speed * max(self._range, MIN_RANGE) * 0.0015
-        self.position = self.position - right * dx * k - ahead * dy * k
+        right = np.array([math.cos(self.m_yaw_rad), 0, -math.sin(self.m_yaw_rad)], "f4")
+        ahead = np.array([math.sin(self.m_yaw_rad), 0, math.cos(self.m_yaw_rad)], "f4")
+        k = self.m_speed * max(self._m_range, MIN_RANGE) * 0.0015
+        self.m_position = self.m_position - right * delta_x * k - ahead * delta_y * k
 
     def zoom(self, steps: float, towards=None) -> None:
         """The wheel flies forward (a step towards the viewer flies back)."""
-        self.position = self.position + self.forward() * steps * STEP * self.speed * max(self._range, MIN_RANGE)
+        self.m_position = self.m_position + self.forward() * steps * STEP * self.m_speed * max(self._m_range, MIN_RANGE)
 
     def lift(self, steps: float) -> None:
         """Up (positive) or down along the vertical axis (Page Up, Page Down)."""
-        self.position = self.position + np.array([0, steps * STEP * self.speed * max(self._range, MIN_RANGE), 0], "f4")
+        self.m_position = self.m_position + np.array(
+            [0, steps * STEP * self.m_speed * max(self._m_range, MIN_RANGE), 0], "f4"
+        )
 
-    def look(self, point, distance: float, yaw_deg: float = 0.0) -> None:
-        orbit = OrbitCamera(point, max(OrbitCamera.MIN_DISTANCE, distance))
-        orbit.look(point, distance, yaw_deg)
-        self.yaw, self.pitch, self._range = orbit.yaw, orbit.pitch, orbit.distance
-        self.position = orbit.eye()
+    def look(self, point, distance_m: float, yaw_deg: float = 0.0) -> None:
+        orbit = COrbitCamera(point, max(COrbitCamera.MIN_DISTANCE, distance_m))
+        orbit.look(point, distance_m, yaw_deg)
+        self.m_yaw_rad, self.m_pitch_rad, self._m_range = orbit.m_yaw_rad, orbit.m_pitch_rad, orbit.m_distance_m
+        self.m_position = orbit.eye()
 
 
-def switch(cam: OrbitCamera, mode: str) -> OrbitCamera:
+def switch(camera: COrbitCamera, mode: str) -> COrbitCamera:
     """The camera of ``mode`` ("orbit" or "fly") looking where ``cam`` looks, from where it looks; ``cam`` itself
     when it already is one."""
     if mode not in MODES:
         raise ValueError(f"no camera mode {mode!r}: one of {', '.join(MODES)}")
     if mode == "fly":
-        return cam if isinstance(cam, FlyCamera) else FlyCamera.from_orbit(cam)
-    if not isinstance(cam, FlyCamera):
-        return cam
-    orbit = OrbitCamera(cam.target, max(OrbitCamera.MIN_DISTANCE, cam.distance))
-    orbit.yaw, orbit.pitch = cam.yaw, min(math.radians(88), max(math.radians(3), cam.pitch))
-    orbit.fov, orbit.speed = cam.fov, cam.speed
+        return camera if isinstance(camera, CFlyCamera) else CFlyCamera.from_orbit(camera)
+    if not isinstance(camera, CFlyCamera):
+        return camera
+    orbit = COrbitCamera(camera.m_target, max(COrbitCamera.MIN_DISTANCE, camera.m_distance_m))
+    orbit.m_yaw_rad, orbit.m_pitch_rad = (
+        camera.m_yaw_rad,
+        min(math.radians(88), max(math.radians(3), camera.m_pitch_rad)),
+    )
+    orbit.m_fov_rad, orbit.m_speed = camera.m_fov_rad, camera.m_speed
     return orbit

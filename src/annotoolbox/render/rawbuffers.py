@@ -19,7 +19,7 @@ _TYPE = re.compile(r"^(float|int|uint|bool|dword|half|min16float)(\d)?(?:x(\d))?
 
 
 @dataclass(frozen=True)
-class Member:
+class SMember:
     offset: int
     type: str
     size: int  # one element's
@@ -27,79 +27,77 @@ class Member:
 
 
 def _body(hlsl: str, struct: str) -> str | None:
-    m = re.search(rf"\bstruct\s+{re.escape(struct)}\s*\{{", hlsl)
-    return hlsl[m.end() : fxeffect.matching(hlsl, m.end() - 1, "{}")] if m else None
+    match = re.search(rf"\bstruct\s+{re.escape(struct)}\s*\{{", hlsl)
+    return hlsl[match.end() : fxeffect.matching(hlsl, match.end() - 1, "{}")] if match else None
 
 
 def structured_size(hlsl: str, type_name: str) -> int:
     """A type's bytes in a structured buffer: scalars, vectors and matrices of 4-byte components, a structure the sum
     of its members (no 16-byte rows in this packing)."""
-    m = _TYPE.match(type_name)
-    if m:
-        return SCALARS[m.group(1)] * int(m.group(2) or 1) * int(m.group(3) or 1)
+    match = _TYPE.match(type_name)
+    if match:
+        return SCALARS[match.group(1)] * int(match.group(2) or 1) * int(match.group(3) or 1)
     return layout(hlsl, type_name)[0]
 
 
-def layout(hlsl: str, struct: str) -> tuple[int, dict[str, Member]]:
+def layout(hlsl: str, struct: str) -> tuple[int, dict[str, SMember]]:
     """(size, members by name) of ``struct`` as a structured buffer packs it."""
     body = _body(hlsl, struct)
     if body is None:
         raise ValueError(f"no struct {struct}")
     body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S)
-    members, at = {}, 0
+    members, offset = {}, 0
     for kind, name, count in re.findall(r"(?:\b(?:row_major|column_major|precise)\s+)*(\w+)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;", body):  # fmt: skip
         one = structured_size(hlsl, kind)
-        members[name] = Member(at, kind, one, int(count or 1))
-        at += one * int(count or 1)
-    return at, members
+        members[name] = SMember(offset, kind, one, int(count or 1))
+        offset += one * int(count or 1)
+    return offset, members
 
 
-def _chain(hlsl: str, text: str, at: int, element: str) -> tuple[int, str, str]:
-    """Reads ``.Member[expr].Sub`` from ``at``: (its end, the byte offset as an expression, the last member's type)."""
+def _chain(hlsl: str, text: str, position: int, element: str) -> tuple[int, str, str]:
+    """Reads ``.Member[expr].Sub`` from ``position``: (its end, the byte offset as an expression, the last member's type)."""
     offset, kind = "0", element
-    while at < len(text):
-        m = re.match(r"\s*\.\s*(\w+)", text[at:])
-        if not m or _TYPE.match(kind):
+    while position < len(text):
+        match = re.match(r"\s*\.\s*(\w+)", text[position:])
+        if not match or _TYPE.match(kind):
             break
-        member = layout(hlsl, kind)[1][m.group(1)]
-        offset, kind, at = f"{offset} + {member.offset}", member.type, at + m.end()
-        if text[at : at + 1] == "[":
-            close = fxeffect.matching(text, at)
-            offset = f"{offset} + ({text[at + 1 : close]}) * {member.size}"
-            at = close + 1
-    return at, offset, kind
+        member = layout(hlsl, kind)[1][match.group(1)]
+        offset, kind, position = f"{offset} + {member.offset}", member.type, position + match.end()
+        if text[position : position + 1] == "[":
+            close = fxeffect.matching(text, position)
+            offset = f"{offset} + ({text[position + 1 : close]}) * {member.size}"
+            position = close + 1
+    return position, offset, kind
 
 
 def _uses(text: str, name: str):
     """The places ``name[`` is indexed, from the last (so earlier rewrites keep their offsets)."""
-    return [m.start() for m in re.finditer(rf"\b{name}\s*\[", text)][::-1]
+    return [match.start() for match in re.finditer(rf"\b{name}\s*\[", text)][::-1]
 
 
 def matrix_loader(kind: str) -> str:
     """The function that reads a matrix of ``kind`` (``float4x3``) from a raw buffer as a structured buffer stores it,
     column by column (the shaders are compiled ``-Zpc``), whatever the compiler's templated load makes of a matrix."""
-    m = _TYPE.match(kind)
-    rows, cols = int(m.group(2)), int(m.group(3))
-    loads = ", ".join(f"b.Load<{m.group(1)}{rows}>(a + {4 * rows * k})" for k in range(cols))
-    return (
-        f"{kind} rb_{kind}(RWByteAddressBuffer b, uint a) {{ return transpose({m.group(1)}{cols}x{rows}({loads})); }}\n"
-    )
+    match = _TYPE.match(kind)
+    rows, cols = int(match.group(2)), int(match.group(3))
+    loads = ", ".join(f"b.Load<{match.group(1)}{rows}>(a + {4 * rows * k})" for k in range(cols))
+    return f"{kind} rb_{kind}(RWByteAddressBuffer b, uint a) {{ return transpose({match.group(1)}{cols}x{rows}({loads})); }}\n"
 
 
 def _is_matrix(kind: str) -> bool:
-    m = _TYPE.match(kind)
-    return bool(m and m.group(3))
+    match = _TYPE.match(kind)
+    return bool(match and match.group(3))
 
 
 def _rewrite_one(hlsl: str, name: str, element: str) -> str:
     stride = structured_size(hlsl, element)
     text = hlsl
-    for at in _uses(text, name):
-        bracket = text.index("[", at)
+    for position in _uses(text, name):
+        bracket = text.index("[", position)
         close = fxeffect.matching(text, bracket)
         base = f"(uint)({text[bracket + 1 : close]}) * {stride}"
         end, offset, _kind = _chain(hlsl, text, close + 1, element)
-        call = re.search(r"\b(Interlocked\w+)\s*\(\s*$", text[:at])
+        call = re.search(r"\b(Interlocked\w+)\s*\(\s*$", text[:position])
         assign = re.match(r"\s*=(?!=)", text[end:])
         if call:  # InterlockedMin(name[i].Member, value...) -> name.InterlockedMin(address, value...)
             start = call.start()
@@ -109,12 +107,12 @@ def _rewrite_one(hlsl: str, name: str, element: str) -> str:
             stop = text.index(";", end)
             value = text[end + assign.end() : stop].strip()
             path = text[close + 1 : end]
-            text = (text[:at] + f"{{ {element} rw_ = {name}.Load<{element}>({base}); rw_{path} = {value}; "
+            text = (text[:position] + f"{{ {element} rw_ = {name}.Load<{element}>({base}); rw_{path} = {value}; "
                     f"{name}.Store<{element}>({base}, rw_); }}" + text[stop + 1 :])  # fmt: skip
         elif _is_matrix(element):
-            text = text[:at] + f"rb_{element}({name}, {base})" + text[close + 1 :]
+            text = text[:position] + f"rb_{element}({name}, {base})" + text[close + 1 :]
         else:
-            text = text[:at] + f"{name}.Load<{element}>({base})" + text[close + 1 :]
+            text = text[:position] + f"{name}.Load<{element}>({base})" + text[close + 1 :]
     return text
 
 
@@ -125,11 +123,11 @@ def _parameters(hlsl: str, found: list[tuple[str, str]]) -> tuple[str, list[tupl
     kept = set(re.findall(r"(?m)^\s*(?:RW)?StructuredBuffer\s*<\s*(\w+)\s*>\s*\w+\s*;", hlsl))
     params = []
 
-    def param(m: re.Match) -> str:
-        if m.group(1) not in raw or m.group(1) in kept:
-            return m.group(0)
-        params.append((m.group(1), m.group(2)))
-        return f"RWByteAddressBuffer {m.group(2)}"
+    def param(match: re.Match) -> str:
+        if match.group(1) not in raw or match.group(1) in kept:
+            return match.group(0)
+        params.append((match.group(1), match.group(2)))
+        return f"RWByteAddressBuffer {match.group(2)}"
 
     hlsl = re.sub(r"\bStructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)(?=\s*[,)])", param, hlsl)
     return hlsl, params
@@ -141,7 +139,10 @@ def rewrite(hlsl: str, names: tuple[str, ...] = ()) -> str:
     read-only raw buffer made the pipeline fail), their uses rewritten (module docstring)."""
     found = re.findall(r"(?m)^\s*(?:globallycoherent\s+)?RWStructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)\s*;", hlsl)
     for name in names:
-        found += [(t, name) for t in re.findall(rf"(?m)^\s*StructuredBuffer\s*<\s*(\w+)\s*>\s*{name}\s*;", hlsl)]
+        found += [
+            (type_name, name)
+            for type_name in re.findall(rf"(?m)^\s*StructuredBuffer\s*<\s*(\w+)\s*>\s*{name}\s*;", hlsl)
+        ]
     for _element, name in found:
         hlsl = re.sub(rf"(?m)^(\s*(?:globallycoherent\s+)?)(?:RW)?StructuredBuffer\s*<\s*\w+\s*>\s*{name}\s*;",
                       rf"\1RWByteAddressBuffer {name};", hlsl)  # fmt: skip

@@ -1,6 +1,6 @@
 """The loops every island format shares when it applies an edit file to its objects: ``apply_changes`` matches the
 ``objects`` by key and deletes or moves them, ``add_each`` places the ``added_objects`` one by one. Each format brings
-its ``ObjectOps`` (how an object moves, how deleted ones go, what still names them) and its own placing of a new one
+its ``SObjectOps`` (how an object moves, how deleted ones go, what still names them) and its own placing of a new one
 (``editor/island*edit``; docs/island-editor.md "Placed objects")."""
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class ObjectOps:
+class SObjectOps:
     """What a format does with an object an edit names: ``move(handle, change)`` sets its place, turn and scale,
     ``remove(handles)`` takes the deleted ones out (after all were matched), ``referenced(handle)`` says whether
     something still names it (2205's labels and groups: the report lists it)."""
@@ -20,7 +20,9 @@ class ObjectOps:
     referenced: Callable[[object], bool] = field(default=lambda _h: False)
 
 
-def apply_changes(objects: Iterable[tuple[str, object]], changes: dict, ops: ObjectOps, report: dict) -> None:
+def apply_changes(
+    objects: Iterable[tuple[str, object]], changes: dict, object_operations: SObjectOps, report: dict
+) -> None:
     """Apply an edit file's ``objects``: each ``(key, handle)`` of ``objects`` the edits name is deleted or moved;
     counts into ``report`` (``objects changed`` / ``objects deleted``, ``still referenced``), a key nothing matched into
     ``unmatched`` (sorted)."""
@@ -31,12 +33,12 @@ def apply_changes(objects: Iterable[tuple[str, object]], changes: dict, ops: Obj
             continue
         if change.get("deleted"):
             gone.append(handle)
-            if ops.referenced(handle):
+            if object_operations.referenced(handle):
                 report["still referenced"].append(key)
         else:
-            ops.move(handle, change)
+            object_operations.move(handle, change)
             report["objects changed"] += 1
-    ops.remove(gone)
+    object_operations.remove(gone)
     report["objects deleted"] += len(gone)
     report["unmatched"] += sorted(wanted)
 

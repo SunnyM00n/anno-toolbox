@@ -1,7 +1,7 @@
 """A template's animations as a timeline: each animation's tracks (the binding end a track drives, its keys with
 their interpolators) and the value of every track at a time, for the preview and the sequence editor.
 
-``read(root)`` lists the animations; ``Animation.values_at(seconds)`` gives (end index, value) for each track that has
+``read(root)`` lists the animations; ``SAnimation.values_at(seconds)`` gives (end index, value) for each track that has
 a value then. A track drives the end of the template's one index space (``bindings``) by its
 ``AnimatedPropertyIndex``; between two keys the earlier key's ``InterpolatorType`` shapes the curve (``ease``; the
 numbering is inferred, docs/ui-editor.md "The sequence editor").
@@ -30,18 +30,18 @@ EASES = ("Linear Sine_In Sine_Out Sine_InOut Quad_In Quad_Out Quad_InOut Cubic_I
 INTERPOLATORS = ("Constant", *EASES)
 
 
-def _bounce_out(f: float) -> float:
-    n, d = 7.5625, 2.75
-    if f < 1 / d:
-        return n * f * f
-    if f < 2 / d:
-        f -= 1.5 / d
-        return n * f * f + 0.75
-    if f < 2.5 / d:
-        f -= 2.25 / d
-        return n * f * f + 0.9375
-    f -= 2.625 / d
-    return n * f * f + 0.984375
+def _bounce_out(fraction: float) -> float:
+    amplitude, divisor = 7.5625, 2.75
+    if fraction < 1 / divisor:
+        return amplitude * fraction * fraction
+    if fraction < 2 / divisor:
+        fraction -= 1.5 / divisor
+        return amplitude * fraction * fraction + 0.75
+    if fraction < 2.5 / divisor:
+        fraction -= 2.25 / divisor
+        return amplitude * fraction * fraction + 0.9375
+    fraction -= 2.625 / divisor
+    return amplitude * fraction * fraction + 0.984375
 
 
 _IN = {
@@ -59,16 +59,16 @@ _IN = {
 }
 
 
-def ease(name: str, f: float) -> float:
+def ease(name: str, fraction: float) -> float:
     """The eased fraction of ``f`` (0..1) by an EaseType name (``Quad_InOut``); an unknown name is linear."""
-    f = min(1.0, max(0.0, f))
+    fraction = min(1.0, max(0.0, fraction))
     family, _, way = name.partition("_")
     curve = _IN.get(family, _IN["Linear"])
     if way == "Out":
-        return 1 - curve(1 - f)
+        return 1 - curve(1 - fraction)
     if way == "InOut":
-        return curve(2 * f) / 2 if f < 0.5 else 1 - curve(2 - 2 * f) / 2
-    return curve(f)
+        return curve(2 * fraction) / 2 if fraction < 0.5 else 1 - curve(2 - 2 * fraction) / 2
+    return curve(fraction)
 
 
 def interpolator_name(kind: int) -> str:
@@ -76,7 +76,7 @@ def interpolator_name(kind: int) -> str:
 
 
 @dataclass
-class Key:
+class SKey:
     time: float
     value: object
     interpolator: int = 1
@@ -84,55 +84,59 @@ class Key:
 
 
 @dataclass
-class Track:
+class STrack:
     end: int
     kind: str  # the track's type hash
-    keys: list[Key] = field(default_factory=list)
+    keys: list[SKey] = field(default_factory=list)
     node: dict | None = None
 
     @property
     def is_event(self) -> bool:
         return self.kind in EVENT_TRACKS
 
-    def value_at(self, t: float):
+    def value_at(self, time_s: float):
         """The track's value at ``t`` seconds: the first key's before it, the last's after it, eased between."""
         if not self.keys or self.is_event:
             return None
-        if t <= self.keys[0].time:
-            return self.keys[0].value
-        for k0, k1 in zip(self.keys, self.keys[1:], strict=False):
-            if k0.time <= t <= k1.time:
-                if self.kind in STEPPED or k1.time <= k0.time or k0.interpolator == 0:
-                    return k0.value if t < k1.time else k1.value
-                f = ease(interpolator_name(k0.interpolator), (t - k0.time) / (k1.time - k0.time))
-                return lerp(k0.value, k1.value, f)
-        return self.keys[-1].value
+        keys = sorted(self.keys, key=lambda k: k.time)  # a key dragged past its neighbour keeps its stored place
+        if time_s <= keys[0].time:
+            return keys[0].value
+        for previous_key, next_key in zip(keys, keys[1:], strict=False):
+            if previous_key.time <= time_s <= next_key.time:
+                if self.kind in STEPPED or next_key.time <= previous_key.time or previous_key.interpolator == 0:
+                    return previous_key.value if time_s < next_key.time else next_key.value
+                eased = ease(
+                    interpolator_name(previous_key.interpolator),
+                    (time_s - previous_key.time) / (next_key.time - previous_key.time),
+                )
+                return lerp(previous_key.value, next_key.value, eased)
+        return keys[-1].value
 
 
-def lerp(a, b, f: float):
+def lerp(start, end, fraction: float):
     """``a`` to ``b`` by ``f``: numbers and vectors blend, anything else switches at the middle."""
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
-        return a + (b - a) * f
-    if isinstance(a, tuple) and isinstance(b, tuple) and len(a) == len(b):
-        return tuple(lerp(x, y, f) for x, y in zip(a, b, strict=True))
-    return a if f < 0.5 else b
+    if isinstance(start, (int, float)) and isinstance(end, (int, float)) and not isinstance(start, bool):
+        return start + (end - start) * fraction
+    if isinstance(start, tuple) and isinstance(end, tuple) and len(start) == len(end):
+        return tuple(lerp(x, y, fraction) for x, y in zip(start, end, strict=True))
+    return start if fraction < 0.5 else end
 
 
 @dataclass
-class Animation:
+class SAnimation:
     node: dict
     name: str
     guid: str | None
     frames: int
     rate: int
-    tracks: list[Track]
+    tracks: list[STrack]
 
     @property
     def seconds(self) -> float:
         return self.frames / self.rate if self.rate else 0.0
 
-    def values_at(self, t: float) -> list[tuple[int, object]]:
-        return [(track.end, v) for track in self.tracks if (v := track.value_at(t)) is not None]
+    def values_at(self, time_s: float) -> list[tuple[int, object]]:
+        return [(track.end, value) for track in self.tracks if (value := track.value_at(time_s)) is not None]
 
 
 def key_value(key: dict):
@@ -144,21 +148,21 @@ def key_value(key: dict):
     return fields.get(key, "Value")
 
 
-def read_key(k: dict) -> Key:
-    return Key(float(fields.get(k, "Time", 0.0) or 0.0), key_value(k), int(fields.get(k, INTERPOLATOR, 1) or 0), k)
+def read_key(k: dict) -> SKey:
+    return SKey(float(fields.get(k, "Time", 0.0) or 0.0), key_value(k), int(fields.get(k, INTERPOLATOR, 1) or 0), k)
 
 
-def read(root: dict) -> list[Animation]:
+def read(root: dict) -> list[SAnimation]:
     """The animations of a template, each with its tracks."""
     out = []
-    for a in phoenixedit.objects(root, "AnimationInstances"):
+    for animation in phoenixedit.objects(root, "AnimationInstances"):
         tracks = []
-        for node in phoenixedit.objects(a, "Tracks"):
+        for node in phoenixedit.objects(animation, "Tracks"):
             keys = [read_key(k) for k in phoenixedit.objects(node, "Track")]
             tracks.append(
-                Track(int(fields.get(node, "AnimatedPropertyIndex", 0) or 0), f"{node['type']:08x}", keys, node)
+                STrack(int(fields.get(node, "AnimatedPropertyIndex", 0) or 0), f"{node['type']:08x}", keys, node)
             )
-        guid = str(uuid.UUID(bytes_le=a["guid"])) if a.get("guid") else None
-        out.append(Animation(a, phoenixedit.object_name(a) or tr("ui.animation"), guid,
-                             int(fields.get(a, "Duration", 0) or 0), int(fields.get(a, "FrameRate", 60) or 60), tracks))  # fmt: skip
+        guid = str(uuid.UUID(bytes_le=animation["guid"])) if animation.get("guid") else None
+        out.append(SAnimation(animation, phoenixedit.object_name(animation) or tr("ui.animation"), guid,
+                             int(fields.get(animation, "Duration", 0) or 0), int(fields.get(animation, "FrameRate", 60) or 60), tracks))  # fmt: skip
     return out

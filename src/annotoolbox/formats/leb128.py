@@ -8,6 +8,8 @@ from __future__ import annotations
 
 def encode(value: int) -> bytes:
     """``value`` (0 or more) as LEB128 bytes."""
+    if value < 0:
+        raise ValueError("LEB128 here is unsigned")
     out = bytearray()
     while True:
         byte = value & 0x7F
@@ -17,14 +19,14 @@ def encode(value: int) -> bytes:
             return bytes(out)
 
 
-def decode(data: bytes, pos: int = 0, most: int = 0) -> tuple[int, int]:
-    """``(value, position after it)`` of the number at ``pos``; ``most`` ends it after that many bytes whatever the
+def decode(data: bytes, offset_bytes: int = 0, most: int = 0) -> tuple[int, int]:
+    """``(value, position after it)`` of the number at ``offset_bytes``; ``most`` ends it after that many bytes whatever the
     last one says (the byte code's ``u30`` is five at most)."""
     value = shift = 0
     while True:
-        byte = data[pos]
-        pos += 1
+        byte = data[offset_bytes]
+        offset_bytes += 1
         value |= (byte & 0x7F) << shift
         shift += 7
         if byte < 0x80 or shift == 7 * most:
-            return value, pos
+            return value, offset_bytes

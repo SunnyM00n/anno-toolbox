@@ -11,40 +11,40 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..assetedit.gamefiles import GameFiles, Layout
+from ..assetedit.gamefiles import CGameFiles, SLayout
 from ..assetedit.modops import text_ops
 from ..infra.i18n import tr
 from ..mod.modxml import modops
 from . import textfiles, texttable
-from .editfile import EditFile
+from .editfile import CEditFile
 
 COMMENT = "written by the Texts app"
 
 
-def reference_language(languages: dict[str, str], edits: EditFile) -> str:
+def reference_language(languages: dict[str, str], edits: CEditFile) -> str:
     """The language whose table says which ids are the game's (the source language of the edits, else English)."""
-    for name in (edits.source, "english"):
+    for name in (edits.m_source, "english"):
         if name in languages:
             return name
     return next(iter(languages), "")
 
 
-def texts_per_language(files: GameFiles, layout: Layout, edits: EditFile) -> dict[str, dict[str, str]]:
+def texts_per_language(files: CGameFiles, layout: SLayout, edits: CEditFile) -> dict[str, dict[str, str]]:
     """Language -> id -> text to write: the edits, and for every id the game does not have, a text in every language the
     install holds (the edit of that language, else the source language's, else any)."""
     languages = texttable.languages(files, layout)
     reference = reference_language(languages, edits)
-    known = texttable.read_language(files, layout, reference).table if reference else texttable.Table()
-    new = {k for edit in edits.texts.values() for k in edit if k not in known}
+    known = texttable.read_language(files, layout, reference).table if reference else texttable.STable()
+    new = {k for edit in edits.m_texts.values() for k in edit if k not in known}
     out: dict[str, dict[str, str]] = {
-        lang: {k: e.text for k, e in found.items()} for lang, found in edits.texts.items()
+        lang: {key: edit.text for key, edit in found.items()} for lang, found in edits.m_texts.items()
     }
     for key in sorted(new):
         fallback = next(
             (
-                e[key].text
-                for lang in (edits.source, "english", *edits.texts)
-                if (e := edits.texts.get(lang, {})) and key in e
+                language_edits[key].text
+                for lang in (edits.m_source, "english", *edits.m_texts)
+                if (language_edits := edits.m_texts.get(lang, {})) and key in language_edits
             ),
             "",
         )
@@ -54,7 +54,7 @@ def texts_per_language(files: GameFiles, layout: Layout, edits: EditFile) -> dic
 
 
 def render(
-    files: GameFiles, layout: Layout, edits: EditFile, mod_id: str, log: Callable[[str], None] = print
+    files: CGameFiles, layout: SLayout, edits: CEditFile, mod_id: str, log: Callable[[str], None] = print
 ) -> dict[str, bytes]:
     out: dict[str, bytes] = {}
     languages = texttable.languages(files, layout)
@@ -78,19 +78,19 @@ def render(
     return out
 
 
-def whole_files(loaded: texttable.Loaded, layout: Layout, texts: dict[str, str], mod_id: str) -> dict[str, bytes]:
+def whole_files(loaded: texttable.SLoaded, layout: SLayout, texts: dict[str, str], mod_id: str) -> dict[str, bytes]:
     """The language's files that hold an edited text, whole with those texts replaced in place; the ids no file holds in
     the one XML file, or in ``<mod id>.txt`` beside the line files."""
     out, table = {}, loaded.table
-    new = {k: v for k, v in texts.items() if k not in table}
+    new = {k: new_text for k, new_text in texts.items() if k not in table}
     for path, parsed in loaded.files.items():
-        mine = {k: v for k, v in texts.items() if k in table and table.by_id[k].file == path}
+        mine = {k: new_text for k, new_text in texts.items() if k in table and table.by_id[k].file == path}
         xml_new = new if parsed.style == textfiles.XML else {}
         data = parsed.render(mine, xml_new)
         if data != parsed.raw:
             out[path] = data
     if new and texttable.style_of(layout) == textfiles.LINES:
         code = layout.language_code(loaded.language)
-        text = "".join(f"{k}={textfiles.one_line(v)}\r\n" for k, v in new.items())
+        text = "".join(f"{k}={textfiles.one_line(new_text)}\r\n" for k, new_text in new.items())
         out[f"data/loca/{code}/txt/{mod_id}.txt"] = textfiles.encode(text, "utf-16")
     return out

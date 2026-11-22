@@ -11,14 +11,14 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from .isd2070 import FIXED, Node, parse
+from .isd2070 import FIXED, SNode, parse
 
 OBJECT, STREET, MULTI = 0, 1, 2  # an object's Type
 ANGLE = 4096.0  # Direction: degrees x 4096
 
 
 @dataclass(frozen=True)
-class RecordObject:
+class SRecordObject:
     kind: int  # OBJECT, STREET or MULTI
     guid: int
     x: float = 0.0  # tiles from the record's origin (an object's own; streets and multi-objects use their parts)
@@ -32,55 +32,64 @@ class RecordObject:
 
 
 @dataclass(frozen=True)
-class RecordNode:
+class SRecordNode:
     name: str
     main: bool
     after: tuple[str, ...]  # DependencyList: the nodes that must be finished first
-    rect: tuple[int, int, int, int]  # left, top, right, bottom in tiles (999 / 0: only harbour pieces)
-    objects: tuple[RecordObject, ...] = ()
+    rect: tuple[int, int, int, int]  # left, top, right, bottom in tiles (999 / 0: only harbor pieces)
+    objects: tuple[SRecordObject, ...] = ()
 
 
 @dataclass
-class RecordSet:
+class SRecordSet:
     anchor: tuple[float, float]  # VillageCenter: the record's centre building, in tiles
-    nodes: list[RecordNode] = field(default_factory=list)
-    root: Node | None = None  # the tree as read, for writing back
+    nodes: list[SRecordNode] = field(default_factory=list)
+    root: SNode | None = None  # the tree as read, for writing back
 
 
-def _point(node: Node | None, count: int) -> tuple[float, ...]:
+def _point(node: SNode | None, count: int) -> tuple[float, ...]:
     if node is None or node.data is None or len(node.data) < 8 * count:
         return (0.0,) * count
-    return tuple(v / FIXED for v in struct.unpack_from(f"<{count}q", node.data))
+    return tuple(value / FIXED for value in struct.unpack_from(f"<{count}q", node.data))
 
 
-def _object(o: Node) -> RecordObject:
-    kind = o.int("Type")
-    name = o.value("Name") or ""
+def _object(object_node: SNode) -> SRecordObject:
+    kind = object_node.int("Type")
+    name = object_node.value("Name") or ""
     if kind == STREET:  # Position .. Variation are not set for streets and multi-objects
-        tiles = tuple((p.int("x"), p.int("y")) for p in (o.find("Positions") or Node("")).children)
-        return RecordObject(kind, o.int("GUID"), name=name, tiles=tiles)
+        tiles = tuple(
+            (child.int("x"), child.int("y")) for child in (object_node.find("Positions") or SNode("")).children
+        )
+        return SRecordObject(kind, object_node.int("GUID"), name=name, tiles=tiles)
     if kind == MULTI:
         parts = []
-        for p in (o.find("MultiObject") or Node("")).children:
-            x, z, _y = _point(p.find("Position"), 3)
-            parts.append((p.int("GUID"), x, z, p.int("Direction") / ANGLE, p.int("Variation")))
-        return RecordObject(kind, 0, name=name, parts=tuple(parts))
-    x, z, _y = _point(o.find("Position"), 3)
-    return RecordObject(
-        kind, o.int("GUID"), x, z, o.int("Direction") / ANGLE, o.int("Variation"), name, o.int("m_bSetOnWater") == 1
+        for child in (object_node.find("MultiObject") or SNode("")).children:
+            x, z, _y = _point(child.find("Position"), 3)
+            parts.append((child.int("GUID"), x, z, child.int("Direction") / ANGLE, child.int("Variation")))
+        return SRecordObject(kind, 0, name=name, parts=tuple(parts))
+    x, z, _y = _point(object_node.find("Position"), 3)
+    return SRecordObject(
+        kind,
+        object_node.int("GUID"),
+        x,
+        z,
+        object_node.int("Direction") / ANGLE,
+        object_node.int("Variation"),
+        name,
+        object_node.int("m_bSetOnWater") == 1,
     )
 
 
-def _node(n: Node) -> RecordNode:
-    after = tuple(c.text for c in (n.find("DependencyList") or Node("")).children if c.text)
-    rect = tuple(n.int(f"Rect/{side}") for side in ("left", "top", "right", "bottom"))
-    objects = tuple(_object(o) for o in (n.find("BuildList") or Node("")).children)
-    return RecordNode(n.value("Name") or "", n.int("IsMainNode") == 1, after, rect, objects)  # type: ignore[arg-type]
+def _node(node: SNode) -> SRecordNode:
+    after = tuple(child.text for child in (node.find("DependencyList") or SNode("")).children if child.text)
+    rect = tuple(node.int(f"Rect/{side}") for side in ("left", "top", "right", "bottom"))
+    objects = tuple(_object(object_node) for object_node in (node.find("BuildList") or SNode("")).children)
+    return SRecordNode(node.value("Name") or "", node.int("IsMainNode") == 1, after, rect, objects)  # type: ignore[arg-type]
 
 
-def read(data: bytes) -> RecordSet:
+def read(data: bytes) -> SRecordSet:
     """A record set from the file's bytes."""
     root = parse(data)
     anchor = _point(root.find("VillageCenter"), 2)
-    nodes = [_node(n) for n in (root.find("RecordSet") or Node("")).children]
-    return RecordSet((anchor[0], anchor[1]), nodes, root)
+    nodes = [_node(node) for node in (root.find("RecordSet") or SNode("")).children]
+    return SRecordSet((anchor[0], anchor[1]), nodes, root)

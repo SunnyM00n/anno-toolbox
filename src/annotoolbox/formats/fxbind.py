@@ -1,7 +1,7 @@
 """Where Anno 117's engine binds each resource of a pass: its descriptor tables and their registers, so that a shader
 compiled from our reading binds what the game's binds (docs/rendering/shader-compile.md, "Bindings").
 
-``bind(resources)`` takes the resources one pass reaches (``fxlink.Program.resources``) and returns each one's
+``bind(resources)`` takes the resources one pass reaches (``fxlink.CProgram.resources``) and returns each one's
 register: the global table's fixed slots, the bindless tables' fixed places, the effect's own tables in kind and
 name order, root constants in space 1024; spaces are numbered in the order of the tables the pass has.
 """
@@ -49,7 +49,7 @@ ROOT_SPACE = 1024
 
 
 @dataclass(frozen=True)
-class Resource:
+class SResource:
     """A resource declaration of the effect's HLSL."""
 
     name: str
@@ -63,43 +63,43 @@ class Resource:
 
 def kind_of(type_name: str) -> str | None:
     """The descriptor kind of an HLSL resource type, None for anything else (a sampler is the engine's own)."""
-    t = type_name.strip()
-    rw = t.startswith(("RW", "Append", "Consume", "RasterizerOrdered"))
-    base = re.sub(r"^(RW|Append|Consume|RasterizerOrdered)", "", t)
-    if t in ("cbuffer", "tbuffer") or t.startswith("ConstantBuffer"):
+    stripped = type_name.strip()
+    is_read_write = stripped.startswith(("RW", "Append", "Consume", "RasterizerOrdered"))
+    base = re.sub(r"^(RW|Append|Consume|RasterizerOrdered)", "", stripped)
+    if stripped in ("cbuffer", "tbuffer") or stripped.startswith("ConstantBuffer"):
         return "CB"
     if base.startswith("Texture"):
-        return "TX_UAV" if rw else "TX_SRV"
+        return "TX_UAV" if is_read_write else "TX_SRV"
     if base.startswith("StructuredBuffer"):
-        return "SB_UAV" if rw else "SB_SRV"
+        return "SB_UAV" if is_read_write else "SB_SRV"
     if base.startswith("ByteAddressBuffer"):
-        return "BA_UAV" if rw else "BA_SRV"
+        return "BA_UAV" if is_read_write else "BA_SRV"
     if base.startswith("Buffer"):
-        return "BF_UAV" if rw else "BF_SRV"
-    if t.startswith("RaytracingAccelerationStructure"):
+        return "BF_UAV" if is_read_write else "BF_SRV"
+    if stripped.startswith("RaytracingAccelerationStructure"):
         return "AS_SRV"
     return None
 
 
-def _global_register(r: Resource) -> int:
+def _global_register(resource: SResource) -> int:
     start = 0
     for kind in KINDS:
-        if kind == r.kind:
-            return start + (r.slot or 0)
+        if kind == resource.kind:
+            return start + (resource.slot or 0)
         start += GLOBAL_TABLE[kind]
-    raise ValueError(r.kind)
+    raise ValueError(resource.kind)
 
 
-def _table_of(r: Resource) -> str:
-    if r.slot is not None and "global_table" in r.words:
+def _table_of(resource: SResource) -> str:
+    if resource.slot is not None and "global_table" in resource.words:
         return "global"
-    if "bindless" in r.words:
-        if r.name in BINDLESS_TEXTURES:
+    if "bindless" in resource.words:
+        if resource.name in BINDLESS_TEXTURES:
             return "bindless textures"
-        return "bindless " + (BINDLESS_TABLES[r.name][0] if r.name in BINDLESS_TABLES else r.file)
-    if "root_constant" in r.words:
+        return "bindless " + (BINDLESS_TABLES[resource.name][0] if resource.name in BINDLESS_TABLES else resource.file)
+    if "root_constant" in resource.words:
         return "root"
-    return "often changed" if "often_changed" in r.words else "effect"
+    return "often changed" if "often_changed" in resource.words else "effect"
 
 
 def _order(table: str) -> tuple[int, str]:
@@ -110,51 +110,56 @@ def _order(table: str) -> tuple[int, str]:
     return (5, "") if table == "effect" else (6, "") if table == "often changed" else (4, table)
 
 
-def bind(resources: list[Resource], declared: list[Resource] | None = None) -> dict[str, str]:
+def bind(resources: list[SResource], declared: list[SResource] | None = None) -> dict[str, str]:
     """Each resource's register clause (``register(t3, space1)``) for one pass's resources (``declared``: every
     resource of the effect, whose order places a bindless table the engine's lists do not name)."""
-    tables: dict[str, list[Resource]] = {}
-    for r in resources:  # a register the source names is the engine's to replace, its space too
-        tables.setdefault(_table_of(r), []).append(r)
+    tables: dict[str, list[SResource]] = {}
+    for resource in resources:  # a register the source names is the engine's to replace, its space too
+        tables.setdefault(_table_of(resource), []).append(resource)
     out, space = {}, 0
-    for name in sorted((t for t in tables if t != "root"), key=_order):
+    for name in sorted((table_name for table_name in tables if table_name != "root"), key=_order):
         members = tables[name]
         if name == "global":
-            out |= {r.name: _clause(r.kind, _global_register(r), space) for r in members}
+            out |= {resource.name: _clause(resource.kind, _global_register(resource), space) for resource in members}
         elif name == "bindless textures":
-            out |= {r.name: _clause(r.kind, BINDLESS_TEXTURES.index(r.name), space) for r in members}
+            out |= {
+                resource.name: _clause(resource.kind, BINDLESS_TEXTURES.index(resource.name), space)
+                for resource in members
+            }
         elif name.startswith("bindless"):
             out |= _bindless(members, declared or members, space)
         else:
             out |= _effect_table(members, space)
         space += 1
-    roots = sorted(tables.get("root", ()), key=lambda r: r.name)
-    out |= {r.name: _clause(r.kind, i, ROOT_SPACE) for i, r in enumerate(roots)}
+    roots = sorted(tables.get("root", ()), key=lambda resource: resource.name)
+    out |= {resource.name: _clause(resource.kind, i, ROOT_SPACE) for i, resource in enumerate(roots)}
     return out
 
 
-def _bindless(members: list[Resource], declared: list[Resource], space: int) -> dict[str, str]:
+def _bindless(members: list[SResource], declared: list[SResource], space: int) -> dict[str, str]:
     """A bindless table: the engine's places where its lists name them, else the order its file declares its
     bindless resources in (an array takes its length)."""
-    places, at = {}, {}
-    for r in declared:
-        if "bindless" in r.words and r.name not in BINDLESS_TABLES and r.name not in places:
-            places[r.name] = at.get(r.file, 0)
-            at[r.file] = places[r.name] + max(r.count, 1)
+    places, offset_by_file = {}, {}
+    for resource in declared:
+        if "bindless" in resource.words and resource.name not in BINDLESS_TABLES and resource.name not in places:
+            places[resource.name] = offset_by_file.get(resource.file, 0)
+            offset_by_file[resource.file] = places[resource.name] + max(resource.count, 1)
     return {
-        r.name: _clause(
-            r.kind, BINDLESS_TABLES[r.name][1] if r.name in BINDLESS_TABLES else places.get(r.name, 0), space
+        resource.name: _clause(
+            resource.kind,
+            BINDLESS_TABLES[resource.name][1] if resource.name in BINDLESS_TABLES else places.get(resource.name, 0),
+            space,
         )
-        for r in members
+        for resource in members
     }
 
 
-def _effect_table(members: list[Resource], space: int) -> dict[str, str]:
+def _effect_table(members: list[SResource], space: int) -> dict[str, str]:
     """An effect's own table: its resources by kind, then by name, each array its length."""
-    out, at = {}, 0
-    for r in sorted(members, key=lambda r: (KINDS.index(r.kind), r.name)):
-        out[r.name] = _clause(r.kind, at, space)
-        at += max(r.count, 1)
+    out, offset = {}, 0
+    for resource in sorted(members, key=lambda resource: (KINDS.index(resource.kind), resource.name)):
+        out[resource.name] = _clause(resource.kind, offset, space)
+        offset += max(resource.count, 1)
     return out
 
 

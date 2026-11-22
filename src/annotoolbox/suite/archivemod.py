@@ -21,7 +21,7 @@ from ..modloader.mods import walk_sizes
 from ..sources.overlay import normalize
 from . import appfolders, archiverecord, buildout, importmeta
 from . import project as projects
-from .projectimport import ImportRefused, ImportReport, _check_target, _counts, _size, _sort, clear
+from .projectimport import CImportRefused, SImportReport, _check_target, _counts, _size, _sort, clear
 
 CHUNK = 500  # members written between two chances to stop
 SHOWN = 6  # left-out paths named in the report
@@ -55,8 +55,8 @@ REASONS = {
 
 
 @dataclass
-class ArchiveReport(ImportReport):
-    """``ImportReport`` plus what is known about the archive; ``lines()`` is the text for the window and the command
+class SArchiveReport(SImportReport):
+    """``SImportReport`` plus what is known about the archive; ``lines()`` is the text for the window and the command
     line. ``identical`` is None for a folder of files (no archive to compare the rebuild with)."""
 
     archive: str = ""
@@ -71,7 +71,7 @@ class ArchiveReport(ImportReport):
     def lines(self) -> list[str]:
         name = self.name or self.mod_id
         out = [tr("common.import_summary", name=name, version=self.version, game=self.game, files=number(self.files),
-                  size=_size(self.size), folder=self.folder)]  # fmt: skip
+                  size=_size(self.size_bytes), folder=self.folder)]  # fmt: skip
         if self.identical is None:
             out.append(
                 tr("common.archive_mod_folder", archive=self.archive, version=self.format, flags=self.default_flags)
@@ -82,10 +82,10 @@ class ArchiveReport(ImportReport):
             if self.identical:
                 out.append(tr("common.archive_mod_identical"))
             else:
-                what = ", ".join(tr(DIFFERENCES[d]) for d in self.differences)
+                what = ", ".join(tr(DIFFERENCES[difference]) for difference in self.differences)
                 out.append(tr("common.archive_mod_differs", what=what))
         if self.left_out:
-            shown = ", ".join(f"{p} ({tr(REASONS[why])})" for p, why in self.left_out[:SHOWN])
+            shown = ", ".join(f"{path} ({tr(REASONS[reason])})" for path, reason in self.left_out[:SHOWN])
             more = f" ... {number(len(self.left_out) - SHOWN)}" if len(self.left_out) > SHOWN else ""
             out.append(tr("common.archive_mod_left_out", n=number(len(self.left_out)), list=shown + more))
         for text, counter in (
@@ -100,9 +100,9 @@ class ArchiveReport(ImportReport):
 
 
 @dataclass
-class _Member:
+class _SMember:
     stored: str  # the path as the source has it
-    size: int
+    size_bytes: int
     read: Callable[[], bytes]
     path: str = ""  # the project's path: lower case, forward slashes
 
@@ -111,100 +111,109 @@ def guess_game(archive: Path) -> list[str]:
     """The games that read the archive's version: one when it is certain (1701's V1.1, 2205's V2.2), else the candidates
     (V2.0: 1404 and 2070); empty when the file is no archive."""
     try:
-        version = rda.RdaArchive(archive).version.name
-    except (rda.RdaError, OSError):
+        version = rda.CRdaArchive(archive).version.name
+    except (rda.CRdaError, OSError):
         return []
-    return [g for g, versions in GAME_VERSIONS.items() if version in versions]
+    return [game for game, versions in GAME_VERSIONS.items() if version in versions]
 
 
-def _archive_members(archive: rda.RdaArchive) -> list[_Member]:
-    return [_Member(e.path, e.size, lambda e=e: archive.read_entry(e)) for e in archive.entries.values()]
+def _archive_members(archive: rda.CRdaArchive) -> list[_SMember]:
+    return [
+        _SMember(entry.path, entry.size, lambda stored=entry: archive.read_entry(stored))
+        for entry in archive.entries.values()
+    ]
 
 
-def _folder_members(root: Path) -> list[_Member]:
+def _folder_members(root: Path) -> list[_SMember]:
     out = []
     for _here, base, _dirs, names in walk_sizes(root):
         prefix = "" if base == "." else f"{base}/"
-        out += [_Member(f"{prefix}{n}", size, lambda p=root / f"{prefix}{n}": p.read_bytes()) for n, size in names]
+        out += [
+            _SMember(f"{prefix}{name}", size, lambda file=root / f"{prefix}{name}": file.read_bytes())
+            for name, size in names
+        ]
     return out
 
 
-def _sift(members: list[_Member]) -> tuple[list[_Member], list[tuple[str, str]]]:
+def _sift(members: list[_SMember]) -> tuple[list[_SMember], list[tuple[str, str]]]:
     """The members the project takes, in the source's order, and ``(path, reason)`` of those it cannot: a path that
     leaves the folder or that the game cannot find, or one that names the same file as an earlier member."""
     kept, left, seen = [], [], set()
-    for m in members:
-        m.path = normalize(m.stored)
-        parts = m.path.split("/")
-        if not m.path or ".." in parts or any(":" in p for p in parts):
-            left.append((m.stored, "reason_path"))
-        elif m.path in seen:
-            left.append((m.stored, "reason_twice"))
+    for member in members:
+        member.path = normalize(member.stored)
+        parts = member.path.split("/")
+        if not member.path or ".." in parts or any(":" in part for part in parts):
+            left.append((member.stored, "reason_path"))
+        elif member.path in seen:
+            left.append((member.stored, "reason_twice"))
         else:
             try:
-                rda.archive_path(m.path)
-            except rda.RdaError:
-                left.append((m.stored, "reason_path"))
+                rda.archive_path(member.path)
+            except rda.CRdaError:
+                left.append((member.stored, "reason_path"))
                 continue
-            seen.add(m.path)
-            kept.append(m)
+            seen.add(member.path)
+            kept.append(member)
     return kept, left
 
 
 def _write_members(
-    folder: Path, game: str, members: list[_Member], say: Say, report: ArchiveReport
+    folder: Path, game: str, members: list[_SMember], say: Say, report: SArchiveReport
 ) -> list[tuple[str, int, str]]:
     """Every member into its owner's folder of the project, as a file; ``(path, size, sha256)`` of each, in order."""
     made: set[str] = set()
     rows = []
     for start in range(0, len(members), CHUNK):
-        for m in members[start : start + CHUNK]:
-            root = appfolders.root_for(folder, game, appfolders.owner_of(game, m.path))
-            target = root / m.path
-            buildout.make_parents(str(root), [m.path], made)
-            data = m.read()
+        for member in members[start : start + CHUNK]:
+            root = appfolders.root_for(folder, game, appfolders.owner_of(game, member.path))
+            target = root / member.path
+            buildout.make_parents(str(root), [member.path], made)
+            data = member.read()
             target.write_bytes(data)
-            rows.append((m.path, len(data), hashlib.sha256(data).hexdigest()))
+            rows.append((member.path, len(data), hashlib.sha256(data).hexdigest()))
         say(tr("common.import_progress", done=number(min(start + CHUNK, len(members))), total=number(len(members))))
     report.copied = len(rows)
     return rows
 
 
-def _project_for(source: Path, game: str, folder: Path) -> projects.Project:
+def _project_for(source: Path, game: str, folder: Path) -> projects.CProject:
     stem = source.stem if source.is_file() else source.name
     mod_id = projects._slug(stem) or projects._slug(folder.name) or "archive-mod"
-    return projects.Project(folder, mod_id=mod_id, name=stem, version="0.1.0", game=game, category="Modding")
+    return projects.CProject(folder, mod_id=mod_id, name=stem, version="0.1.0", game=game, category="Modding")
 
 
-def _identity(folder: Path, record: archiverecord.Record, source: Path, rows: list, report: ArchiveReport) -> None:
+def _identity(folder: Path, record: archiverecord.SRecord, source: Path, rows: list, report: SArchiveReport) -> None:
     """Rebuild the archive from the files just written and say whether it is the imported one: the same bytes, or
     what differs (``rdalayout.differences`` and bytes that no reader keeps)."""
     files = {}
     for path, _bytes, _digest in rows:
         owner = appfolders.owner_of(report.game, path)
-        files[path] = buildout.FileRef(appfolders.root_for(folder, report.game, owner) / path)
+        files[path] = buildout.CFileRef(appfolders.root_for(folder, report.game, owner) / path)
     scratch = folder / CHECK_FILE
     try:
         original = archiverecord.original_of(folder, record)
         archiverecord.pack(folder, record, files, scratch, original)
-        with open(source, "rb") as a, open(scratch, "rb") as b:
-            same = hashlib.file_digest(a, "sha256").hexdigest() == hashlib.file_digest(b, "sha256").hexdigest()
+        with open(source, "rb") as source_file, open(scratch, "rb") as scratch_file:
+            same = (
+                hashlib.file_digest(source_file, "sha256").hexdigest()
+                == hashlib.file_digest(scratch_file, "sha256").hexdigest()
+            )
         record.identical = same
         if not same:
             found = rdalayout.differences(
-                archiverecord.layout_of(record), rdalayout.read_layout(rda.RdaArchive(scratch))
+                archiverecord.layout_of(record), rdalayout.read_layout(rda.CRdaArchive(scratch))
             )
-            record.differences = (["files"] if record.left_out else []) + [d for d in found if d != "files"] or [
-                "bytes"
-            ]
+            record.differences = (["files"] if record.left_out else []) + [
+                difference for difference in found if difference != "files"
+            ] or ["bytes"]
     finally:
         scratch.unlink(missing_ok=True)
 
 
-def _layout_of_archive(archive: rda.RdaArchive, kept: list[_Member], notes: dict) -> rdalayout.Layout:
+def _layout_of_archive(archive: rda.CRdaArchive, kept: list[_SMember], notes: dict) -> rdalayout.SLayout:
     """The archive's layout with the members' project paths (``notes``: the ones that differ from the stored path); a
     deleted path keeps its place under its normalized name."""
-    keep = {m.stored: m.path for m in kept}
+    keep = {member.stored: member.path for member in kept}
     for stored in archive.deleted:
         keep.setdefault(stored, normalize(stored))
     notes.update({new: old for old, new in keep.items() if new != old})
@@ -212,25 +221,30 @@ def _layout_of_archive(archive: rda.RdaArchive, kept: list[_Member], notes: dict
 
 
 def import_archive_mod(
-    source: Path, folder: Path, game: str | None = None, settings=None, say: Say = lambda _t: None, link: bool = True
-) -> ArchiveReport:
+    source: Path,
+    folder: Path,
+    game: str | None = None,
+    settings=None,
+    say: Say = lambda _t: None,
+    use_links: bool = True,
+) -> SArchiveReport:
     """Import the archive (a ``.rda``) or the folder of files at ``source`` as a new project in ``folder`` for
     ``game`` (when the archive's version leaves one game, it may be left out). The source is never changed. Raises
-    ``ImportRefused`` with a sentence; nothing stays after a failure or a stop (``say`` may raise to stop)."""
+    ``CImportRefused`` with a sentence; nothing stays after a failure or a stop (``say`` may raise to stop)."""
     source, folder = Path(source), Path(folder)
     if not source.exists():
-        raise ImportRefused(tr("common.import_source_missing", path=source))
+        raise CImportRefused(tr("common.import_source_missing", path=source))
     _check_target(source, folder)
     existed = folder.is_dir()
     folder.mkdir(parents=True, exist_ok=True)
     try:
-        return _import(source, folder, game, settings, say, link)
+        return _import(source, folder, game, settings, say, use_links)
     except BaseException:
         clear(folder, remove=not existed)
         raise
 
 
-def _import(source: Path, folder: Path, game: str | None, settings, say: Say, link: bool) -> ArchiveReport:
+def _import(source: Path, folder: Path, game: str | None, settings, say: Say, use_links: bool) -> SArchiveReport:
     started = time.monotonic()
     say(tr("common.import_reading", name=source.name))
     archive = _open(source) if source.is_file() else None
@@ -238,7 +252,7 @@ def _import(source: Path, folder: Path, game: str | None, settings, say: Say, li
     members = _archive_members(archive) if archive else _folder_members(source)
     kept, left = _sift(members)
     project = _project_for(source, game, folder)
-    report = ArchiveReport(folder, str(source), project.mod_id, project.name, project.version, game, left_out=left)
+    report = SArchiveReport(folder, str(source), project.mod_id, project.name, project.version, game, left_out=left)
     if archive is not None:
         report.archive, report.format = source.name, archive.version.name
         renamed: dict = {}
@@ -250,12 +264,14 @@ def _import(source: Path, folder: Path, game: str | None, settings, say: Say, li
         report.format, report.default_flags, renamed = version, flags, {}
         layout = rdalayout.default_layout(rda.version_named(version), flags)
     rows = _write_members(folder, game, kept, say, report)
-    _sort(game, [(p, s) for p, s, _d in rows], report)
-    record = archiverecord.Record(report.archive, layout.to_json(), renamed, left_out=[[p, w] for p, w in left[:200]])
+    _sort(game, [(path, size) for path, size, _d in rows], report)
+    record = archiverecord.SRecord(
+        report.archive, layout.to_json(), renamed, left_out=[[path, reason] for path, reason in left[:200]]
+    )
     if archive is not None:
         target = archiverecord.original_path(folder, record)
         target.parent.mkdir(parents=True, exist_ok=True)
-        buildout.Placer(link).put(str(source), str(target))
+        buildout.CPlacer(use_links).put(str(source), str(target))
         record.original = True
         _write_manifest(folder, rows)  # the rebuild takes what is still the imported bytes from the archive
         say(tr("common.archive_mod_checking"))
@@ -271,33 +287,33 @@ def _import(source: Path, folder: Path, game: str | None, settings, say: Say, li
     return report
 
 
-def _open(source: Path) -> rda.RdaArchive:
+def _open(source: Path) -> rda.CRdaArchive:
     try:
-        archive = rda.RdaArchive(source)
+        archive = rda.CRdaArchive(source)
         len(archive)  # reads the index
-    except (rda.RdaError, OSError, ValueError) as exc:
-        raise ImportRefused(tr("common.archive_mod_not_archive", path=source, error=exc)) from exc
+    except (rda.CRdaError, OSError, ValueError) as exc:
+        raise CImportRefused(tr("common.archive_mod_not_archive", path=source, error=exc)) from exc
     return archive
 
 
-def _game_of(source: Path, archive: rda.RdaArchive | None, game: str | None) -> str:
+def _game_of(source: Path, archive: rda.CRdaArchive | None, game: str | None) -> str:
     """The game the project is for: the one asked for, else the one the archive's version leaves; refuses when the
     archive's version is not one the game reads, or when it leaves two games and none was asked for."""
     if game is not None and game not in GAME_VERSIONS:
-        raise ImportRefused(tr("common.archive_mod_unknown_game", game=game, games=", ".join(GAME_VERSIONS)))
+        raise CImportRefused(tr("common.archive_mod_unknown_game", game=game, games=", ".join(GAME_VERSIONS)))
     if archive is None:
         if game is None:
-            raise ImportRefused(tr("common.archive_mod_folder_needs_game", name=source.name))
+            raise CImportRefused(tr("common.archive_mod_folder_needs_game", name=source.name))
         return game
     version = archive.version.name
-    candidates = [g for g, versions in GAME_VERSIONS.items() if version in versions]
+    candidates = [candidate for candidate, versions in GAME_VERSIONS.items() if version in versions]
     if game is None:
         if len(candidates) != 1:
-            raise ImportRefused(tr("common.archive_mod_game_ambiguous", name=source.name, version=version,
+            raise CImportRefused(tr("common.archive_mod_game_ambiguous", name=source.name, version=version,
                                    games=", ".join(candidates)))  # fmt: skip
         return candidates[0]
     if game not in candidates:
-        raise ImportRefused(tr("common.archive_mod_game_version", game=game, version=version))
+        raise CImportRefused(tr("common.archive_mod_game_version", game=game, version=version))
     return game
 
 
@@ -307,14 +323,14 @@ def _write_manifest(folder: Path, rows: list[tuple[str, int, str]]) -> None:
             fh.write(json.dumps(list(row), ensure_ascii=False) + "\n")
 
 
-def _meta(source: Path, project: projects.Project, report: ArchiveReport) -> importmeta.Meta:
-    return importmeta.Meta(
+def _meta(source: Path, project: projects.CProject, report: SArchiveReport) -> importmeta.SMeta:
+    return importmeta.SMeta(
         source=str(source),
         game=project.game,
         modinfo="",
         identity=importmeta.identity_of(project),
         files=report.files,
-        size=report.size,
+        size=report.size_bytes,
         linked=0,
         copied=report.copied,
         owners=dict(report.owners),

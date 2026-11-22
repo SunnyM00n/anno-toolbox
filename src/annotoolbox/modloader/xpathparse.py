@@ -1,7 +1,7 @@
 """XPath 1.0 expressions as the mod loader reads them in ``Path``, ``Condition``, ``Content`` and ``ModValue Insert``:
 tokens, then a tree of tuples that ``xpath.evaluate`` walks. Stdlib only.
 
-``parse(text)`` returns the tree or raises ``XPathError``. The tree's nodes: ``("lit", str)``, ``("num", float)``,
+``parse(text)`` returns the tree or raises ``CXPathError``. The tree's nodes: ``("lit", str)``, ``("num", float)``,
 ``("fn", name, args)``, ``("bin", op, a, b)``, ``("neg", a)``, ``("union", a, b)``, ``("path", absolute, steps)``,
 ``("filter", primary, predicates, steps)``; a step is ``(axis, test, predicates)``. The grammar is the W3C's
 (``docs/tool-suite.md`` section 17).
@@ -29,23 +29,25 @@ DESCEND = ("descendant-or-self", ("type", "node"), ())  # what "//" stands for
 AFTER_THESE = frozenset({"@", "::", "(", "[", ",", "/", "//", "|", "+", "-", "=", "!=", "<", "<=", ">", ">=", "$"})
 
 
-class XPathError(ValueError):
+class CXPathError(ValueError):
     """An expression the evaluator cannot read."""
 
 
 def tokens(text: str) -> list[tuple[str, str]]:
     """(kind, text) pairs: num, str, op, name; ``*`` and the operator names marked as operators where the grammar says."""
     out: list[tuple[str, str]] = []
-    pos, end = 0, len(text.rstrip())
-    while pos < end:
-        m = TOKEN.match(text, pos)
-        if not m or m.end() == pos:
-            raise XPathError(f"cannot read {text[pos : pos + 20]!r} in {text!r}")
-        pos = m.end()
-        kind = m.lastgroup
-        value = m.group(kind)
-        prev = out[-1] if out else None
-        operand_before = prev is not None and prev[0] != "oper" and not (prev[0] == "op" and prev[1] in AFTER_THESE)
+    position, end = 0, len(text.rstrip())
+    while position < end:
+        match = TOKEN.match(text, position)
+        if not match or match.end() == position:
+            raise CXPathError(f"cannot read {text[position : position + 20]!r} in {text!r}")
+        position = match.end()
+        kind = match.lastgroup
+        value = match.group(kind)
+        previous = out[-1] if out else None
+        operand_before = (
+            previous is not None and previous[0] != "oper" and not (previous[0] == "op" and previous[1] in AFTER_THESE)
+        )
         if kind == "op" and value == "*" and operand_before:
             kind = "oper"
         elif kind == "name" and value in OPERATOR_NAMES and operand_before:
@@ -54,7 +56,7 @@ def tokens(text: str) -> list[tuple[str, str]]:
     return out
 
 
-class _Parser:
+class _CParser:
     def __init__(self, text: str) -> None:
         self.text = text
         self.toks = tokens(text)
@@ -67,7 +69,7 @@ class _Parser:
     def take(self) -> tuple[str, str]:
         tok = self.peek()
         if tok is None:
-            raise XPathError(f"unexpected end of {self.text!r}")
+            raise CXPathError(f"unexpected end of {self.text!r}")
         self.i += 1
         return tok
 
@@ -80,7 +82,7 @@ class _Parser:
 
     def expect(self, kind: str, value: str) -> None:
         if not self.accept(kind, value):
-            raise XPathError(f"expected {value!r} at token {self.i} of {self.text!r}")
+            raise CXPathError(f"expected {value!r} at token {self.i} of {self.text!r}")
 
     # expressions, lowest precedence first
     def expr(self):
@@ -110,7 +112,7 @@ class _Parser:
     def path_expr(self):
         tok = self.peek()
         if tok is None:
-            raise XPathError(f"unexpected end of {self.text!r}")
+            raise CXPathError(f"unexpected end of {self.text!r}")
         if self._starts_filter(tok):
             primary = self.primary()
             preds = self.predicates()
@@ -118,8 +120,8 @@ class _Parser:
             return ("filter", primary, preds, steps) if preds or steps else primary
         if tok == ("op", "/"):
             self.i += 1
-            nxt = self.peek()
-            starts_step = nxt is not None and (nxt[0] == "name" or nxt[1] in ("*", "@", ".", ".."))
+            next_token = self.peek()
+            starts_step = next_token is not None and (next_token[0] == "name" or next_token[1] in ("*", "@", ".", ".."))
             return ("path", True, self.relative() if starts_step else ())
         if tok == ("op", "//"):
             self.i += 1
@@ -129,8 +131,8 @@ class _Parser:
     def _starts_filter(self, tok) -> bool:
         if tok[0] in ("num", "str") or tok == ("op", "(") or tok == ("op", "$"):
             return True
-        nxt = self.peek(1)
-        return tok[0] == "name" and nxt == ("op", "(") and tok[1] not in NODE_TYPES
+        next_token = self.peek(1)
+        return tok[0] == "name" and next_token == ("op", "(") and tok[1] not in NODE_TYPES
 
     def rest_steps(self) -> tuple:
         steps: list = []
@@ -154,7 +156,7 @@ class _Parser:
             axis = "attribute"
         elif (tok := self.peek()) is not None and tok[0] == "name" and self.peek(1) == ("op", "::"):
             if tok[1] not in AXES:
-                raise XPathError(f"unknown axis {tok[1]!r} in {self.text!r}")
+                raise CXPathError(f"unknown axis {tok[1]!r} in {self.text!r}")
             axis = tok[1]
             self.i += 2
         return (axis, self.node_test(), self.predicates())
@@ -164,7 +166,7 @@ class _Parser:
         if tok == ("op", "*"):
             return ("name", "*")
         if tok[0] not in ("name", "oper") or tok[1] == "*":
-            raise XPathError(f"expected a name in {self.text!r}, found {tok[1]!r}")
+            raise CXPathError(f"expected a name in {self.text!r}, found {tok[1]!r}")
         if tok[1] in NODE_TYPES and self.accept("op", "("):
             self.accept("str")
             self.expect("op", ")")
@@ -189,24 +191,27 @@ class _Parser:
             self.expect("op", ")")
             return node
         if (kind, value) == ("op", "$"):
-            raise XPathError(f"variable {self.peek()} left in {self.text!r} (the loader replaces them first)")
+            raise CXPathError(f"variable {self.peek()} left in {self.text!r} (the loader replaces them first)")
         self.expect("op", "(")
-        args = []
+        arguments = []
         if not self.accept("op", ")"):
-            args.append(self.expr())
+            arguments.append(self.expr())
             while self.accept("op", ","):
-                args.append(self.expr())
+                arguments.append(self.expr())
             self.expect("op", ")")
-        return ("fn", value, tuple(args))
+        return ("fn", value, tuple(arguments))
 
 
 @lru_cache(maxsize=4096)
 def parse(text: str):
     """The tree of an expression (cached: a mod repeats its paths)."""
-    p = _Parser(text)
-    if not p.toks:
-        raise XPathError("an empty expression")
-    node = p.expr()
-    if p.peek() is not None:
-        raise XPathError(f"unexpected {p.peek()[1]!r} in {text!r}")
+    parser = _CParser(text)
+    if not parser.toks:
+        raise CXPathError("an empty expression")
+    try:
+        node = parser.expr()
+    except RecursionError:
+        raise CXPathError(f"{text[:40]!r}: nested too deeply") from None
+    if parser.peek() is not None:
+        raise CXPathError(f"unexpected {parser.peek()[1]!r} in {text!r}")
     return node

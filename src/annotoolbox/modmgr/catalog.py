@@ -1,4 +1,4 @@
-"""The mods the loader would find: the folders it searches and one ``ModCard`` per folder, with the ``modinfo`` fields a
+"""The mods the loader would find: the folders it searches and one ``SModCard`` per folder, with the ``modinfo`` fields a
 person wants to read and the mods nested inside. Stdlib only.
 
 ``scan`` reads the folders of a game (``mods.loader_roots``: the install's ``mods/.ubi`` and ``mods``, the Documents
@@ -20,14 +20,14 @@ from ..modloader.mods import (
     ROOT_EXAMPLES,
     ROOT_EXTRA,
     ROOT_GAME,
-    Mod,
-    Root,
+    CMod,
+    SRoot,
     find_mods,
     localized,
     parked,
     read_mod,
 )
-from ..modloader.profilefile import ProfileText
+from ..modloader.profilefile import CProfileText
 
 NOT_MODS = frozenset({"profiles"})  # folders of a mods folder that are no mods
 SETUP_DEFAULTS = {"RequiresNewGame": False, "SafeToRemove": False, "Multiplayer": True, "Campaign": True}
@@ -42,7 +42,7 @@ ROOT_LABELS = {
 }
 
 
-def root_label(root: Root) -> str:
+def root_label(root: SRoot) -> str:
     """Which of the loader's folders ``root`` is, as the interface says it (mod.io's is a name and stays)."""
     return tr(ROOT_LABELS[root.label]) if root.label in ROOT_LABELS else root.label
 
@@ -54,17 +54,17 @@ def public_folder() -> Path | None:
 
 
 @dataclass
-class ModCard:
+class SModCard:
     """A folder of a mods folder: a mod (``mod``), or why the loader would not take it (``problem``, ``parked``,
     ``duplicate_of``); ``children`` are the mods nested inside."""
 
     folder: Path
-    root: Root
-    mod: Mod | None = None
+    root: SRoot
+    mod: CMod | None = None
     problem: str = ""  # the loader's reason for skipping the folder
     parked: bool = False  # the folder's name starts with ``-`` or ``.``
     duplicate_of: str = ""  # the folder of the same ModID the loader keeps instead
-    children: list[ModCard] = field(default_factory=list)
+    children: list[SModCard] = field(default_factory=list)
 
     @property
     def usable(self) -> bool:
@@ -73,36 +73,36 @@ class ModCard:
 
     @property
     def mod_id(self) -> str:
-        return self.mod.mod_id if self.mod else ""
+        return self.mod.m_mod_id if self.mod else ""
 
     @property
     def name(self) -> str:
-        return (localized(self.mod.info.get("ModName")) if self.mod else "") or self.folder.name
+        return (localized(self.mod.m_info.get("ModName")) if self.mod else "") or self.folder.name
 
     @property
-    def info(self) -> dict:
-        return self.mod.info if self.mod else {}
+    def mod_info(self) -> dict:
+        return self.mod.m_info if self.mod else {}
 
     @property
     def version(self) -> str:
-        return self.mod.version if self.mod else ""
+        return self.mod.m_version if self.mod else ""
 
     @property
     def category(self) -> str:
-        return self.mod.category if self.mod else ""
+        return self.mod.m_category if self.mod else ""
 
     @property
     def description(self) -> str:
-        return localized(self.info.get("Description"))
+        return localized(self.mod_info.get("Description"))
 
     @property
     def difficulty(self) -> str:
-        return str(self.info.get("Difficulty") or "")
+        return str(self.mod_info.get("Difficulty") or "")
 
     @property
     def setup(self) -> dict[str, bool]:
         """The four ``GameSetup`` flags with the loader's defaults for the missing ones."""
-        given = self.info.get("GameSetup") if isinstance(self.info.get("GameSetup"), dict) else {}
+        given = self.mod_info.get("GameSetup") if isinstance(self.mod_info.get("GameSetup"), dict) else {}
         return {k: bool(given.get(k, default)) for k, default in SETUP_DEFAULTS.items()}
 
     @property
@@ -111,11 +111,11 @@ class ModCard:
         if self.mod is None:
             return {}
         have = {
-            "Require": self.mod.require,
-            "Optional": self.mod.optional,
-            "LoadAfter": self.mod.load_after,
-            "Incompatible": self.mod.incompatible,
-            "Deprecate": self.mod.deprecate,
+            "Require": self.mod.m_require,
+            "Optional": self.mod.m_optional,
+            "LoadAfter": self.mod.m_load_after,
+            "Incompatible": self.mod.m_incompatible,
+            "Deprecate": self.mod.m_deprecate,
         }
         return {k: have[k] for k in DEPENDENCY_KINDS if have[k]}
 
@@ -127,22 +127,22 @@ class ModCard:
 
 
 @dataclass
-class Catalog:
-    roots: list[Root]
-    cards: list[ModCard] = field(default_factory=list)
+class SCatalog:
+    roots: list[SRoot]
+    cards: list[SModCard] = field(default_factory=list)
 
     @property
-    def mods(self) -> list[Mod]:
+    def mods(self) -> list[CMod]:
         """The mods a profile can name (top mods the loader keeps), in the loader's search order."""
-        return [c.mod for c in self.cards if c.usable and c.mod is not None]
+        return [card.mod for card in self.cards if card.usable and card.mod is not None]
 
-    def by_id(self, mod_id: str) -> ModCard | None:
-        return next((c for c in self.cards if c.usable and c.mod_id == mod_id), None)
+    def by_id(self, mod_id: str) -> SModCard | None:
+        return next((card for card in self.cards if card.usable and card.mod_id == mod_id), None)
 
     def installed_ids(self) -> set[str]:
-        return {c.mod_id for c in self.cards if c.usable}
+        return {card.mod_id for card in self.cards if card.usable}
 
-    def card_of(self, mod: Mod) -> ModCard | None:
+    def card_of(self, mod: CMod) -> SModCard | None:
         """The card of a mod (a nested one too)."""
         for top in self.cards:
             for card in top.walk():
@@ -151,24 +151,24 @@ class Catalog:
         return None
 
 
-def _nest(card: ModCard) -> list[ModCard]:
+def _nest(card: SModCard) -> list[SModCard]:
     out = []
-    for m in card.mod.nested if card.mod else []:
-        child = ModCard(m.folder, card.root, m)
+    for nested in card.mod.nested if card.mod else []:
+        child = SModCard(nested.m_folder, card.root, nested)
         child.children = _nest(child)
         out.append(child)
     return out
 
 
-def scan(roots: list[Root], anno: int | None = None) -> Catalog:
+def scan(roots: list[SRoot], anno: int | None = None) -> SCatalog:
     """Every folder of ``roots`` as a card. A ModID found twice stays with its higher version (``find_mods``); the
     other folder is a card with ``duplicate_of``."""
-    kept, _ = find_mods([r.path for r in roots], anno)
-    keep = {m.folder.resolve(): m for m in kept}
-    holder = {m.mod_id: m.folder for m in kept}
-    catalog = Catalog(list(roots))
+    kept, _ = find_mods([scan_root.path for scan_root in roots], anno)
+    keep = {known.m_folder.resolve(): known for known in kept}
+    holder = {known.m_mod_id: known.m_folder for known in kept}
+    catalog = SCatalog(list(roots))
     for root in roots:
-        folders = sorted(p for p in root.path.iterdir() if p.is_dir()) if root.path.is_dir() else []
+        folders = sorted(child for child in root.path.iterdir() if child.is_dir()) if root.path.is_dir() else []
         for folder in folders:
             card = _card(folder, root, anno, keep, holder)
             if card is not None:
@@ -176,27 +176,27 @@ def scan(roots: list[Root], anno: int | None = None) -> Catalog:
     return catalog
 
 
-def _card(folder: Path, root: Root, anno: int | None, keep: dict, holder: dict) -> ModCard | None:
+def _card(folder: Path, root: SRoot, anno: int | None, keep: dict, holder: dict) -> SModCard | None:
     is_parked = parked(folder.name)
     if folder.name in NOT_MODS:
         return None
     mod = keep.get(folder.resolve())
     if mod is not None:
-        card = ModCard(folder, root, mod)
+        card = SModCard(folder, root, mod)
     else:
-        has_info = any((folder / n).is_file() for n in MODINFO_NAMES)
+        has_info = any((folder / name).is_file() for name in MODINFO_NAMES)
         if is_parked and not has_info:
             return None  # a staging folder or any folder the loader never looks at
         mod, why = read_mod(folder, anno)
         if mod is None:
-            return ModCard(folder, root, problem=why, parked=is_parked)
-        kept = holder.get(mod.mod_id)
-        card = ModCard(folder, root, mod, parked=is_parked, duplicate_of=str(kept) if kept and not is_parked else "")
+            return SModCard(folder, root, problem=why, parked=is_parked)
+        kept = holder.get(mod.m_mod_id)
+        card = SModCard(folder, root, mod, parked=is_parked, duplicate_of=str(kept) if kept and not is_parked else "")
     card.children = _nest(card)
     return card
 
 
-def state_of(card: ModCard, text: ProfileText | None) -> tuple[str, str]:
+def state_of(card: SModCard, text: CProfileText | None) -> tuple[str, str]:
     """(``ON`` or ``OFF``, how the profile decides it: ``LISTED``, ``NEW`` for an unlisted mod ``EnableNewMods``
     switched on, ``UNLISTED``). ``text`` None: no profile, nothing on. Unusable cards are off."""
     if not card.usable or text is None:

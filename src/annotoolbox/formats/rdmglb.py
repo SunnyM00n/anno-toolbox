@@ -12,55 +12,65 @@ import math
 import struct
 
 from .rdmlayout import direction
-from .rdmread import Mesh, RdmReadError, read_rdm
+from .rdmread import CRdmReadError, SMesh, read_rdm
 
 FLOAT, USHORT, UINT = 5126, 5123, 5125
 ARRAY_BUFFER, ELEMENT_BUFFER = 34962, 34963
 
 
-def unit(v: tuple) -> tuple[float, float, float]:
-    """``v`` at length 1; up for a vector without a length."""
-    n = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
-    return (v[0] / n, v[1] / n, v[2] / n) if n > 1e-9 else (0.0, 1.0, 0.0)
+def unit(vector: tuple) -> tuple[float, float, float]:
+    """``vector`` at length 1; up for a vector without a length."""
+    length = math.sqrt(vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2)
+    return (vector[0] / length, vector[1] / length, vector[2] / length) if length > 1e-9 else (0.0, 1.0, 0.0)
 
 
-def normals_of(m: Mesh) -> list[tuple[float, float, float]]:
+def normals_of(mesh: SMesh) -> list[tuple[float, float, float]]:
     """The mesh's unit vertex normals (up for a mesh without any)."""
-    i = m.element_at(1)
+    i = mesh.element_at(1)
     if i is None:
-        return [(0.0, 1.0, 0.0)] * m.vertex_count
-    if m.elements[i].type == 5:  # a packed direction: bytes x * 2 - 1
-        return [unit(direction(b)) for b in m.element(i)]
-    return [unit((v[0], v[1], v[2])) for v in m.element(i)]
+        return [(0.0, 1.0, 0.0)] * mesh.vertex_count
+    if mesh.elements[i].type == 5:  # a packed direction: bytes x * 2 - 1
+        return [unit(direction(packed)) for packed in mesh.element(i)]
+    return [unit((vector[0], vector[1], vector[2])) for vector in mesh.element(i)]
 
 
-def uvs_of(m: Mesh) -> list[tuple[float, float]]:
+def uvs_of(mesh: SMesh) -> list[tuple[float, float]]:
     """The mesh's first UV set per vertex (zeros for a mesh without one)."""
-    i = next((i for i, e in enumerate(m.elements) if e.usage == 4 and e.type in (6, 7) and e.count >= 2), None)
-    return [(0.0, 0.0)] * m.vertex_count if i is None else [(v[0], v[1]) for v in m.element(i)]
+    i = next(
+        (
+            i
+            for i, element in enumerate(mesh.elements)
+            if element.usage == 4 and element.type in (6, 7) and element.count >= 2
+        ),
+        None,
+    )
+    return [(0.0, 0.0)] * mesh.vertex_count if i is None else [(vector[0], vector[1]) for vector in mesh.element(i)]
 
 
 def rdm_to_glb(data: bytes, material: int | None = None) -> bytes:
     """The binary glTF of every mesh of the file, or only of the submeshes drawn with ``material`` (an index into
-    the model's materials); raises ``RdmReadError`` for a file with none."""
-    meshes = [m for m in read_rdm(data).meshes if m.indices and m.vertex_count and m.positions()]
-    out = [(m.name, m.positions(), normals_of(m), uvs_of(m), material_indices(m, material)) for m in meshes]
-    out = [m for m in out if m[4]]
+    the model's materials); raises ``CRdmReadError`` for a file with none."""
+    meshes = [mesh for mesh in read_rdm(data).meshes if mesh.indices and mesh.vertex_count and mesh.positions()]
+    out = [
+        (mesh.name, mesh.positions(), normals_of(mesh), uvs_of(mesh), material_indices(mesh, material))
+        for mesh in meshes
+    ]
+    out = [mesh for mesh in out if mesh[4]]
     if not out:
-        raise RdmReadError("no mesh with geometry in the file")
+        raise CRdmReadError("no mesh with geometry in the file")
     return write_glb(out)
 
 
-def material_indices(m: Mesh, material: int | None) -> list[int]:
+def material_indices(mesh: SMesh, material: int | None) -> list[int]:
     """The mesh's triangles, or those of its submeshes drawn with ``material`` (all of them for a mesh without
     submeshes, which draws with the first)."""
-    if material is None or (not m.submeshes and material == 0):
-        return m.indices
+    if material is None or (not mesh.submeshes and material == 0):
+        return mesh.indices
     return [
         i
-        for s in m.submeshes
-        if s.material == material
-        for i in m.indices[s.first_index : s.first_index + s.index_count]
+        for submesh in mesh.submeshes
+        if submesh.material == material
+        for i in mesh.indices[submesh.first_index : submesh.first_index + submesh.index_count]
     ]
 
 
@@ -80,42 +90,46 @@ def write_glb(meshes: list[tuple[str, list, list, list, list]]) -> bytes:
         return len(accessors) - 1
 
     gltf_meshes, nodes = [], []
-    for name, pos, normals, uvs, indices in meshes:
-        n = len(pos)
-        flat = [c for p in pos for c in p]
-        lo = [min(p[k] for p in pos) for k in range(3)]
-        hi = [max(p[k] for p in pos) for k in range(3)]
+    for name, positions, normals, uvs, indices in meshes:
+        vertex_count = len(positions)
+        flat = [component for position in positions for component in position]
+        minimum = [min(position[k] for position in positions) for k in range(3)]
+        maximum = [max(position[k] for position in positions) for k in range(3)]
         attributes = {
             "POSITION": add(
-                struct.pack(f"<{3 * n}f", *flat),
+                struct.pack(f"<{3 * vertex_count}f", *flat),
                 ARRAY_BUFFER,
                 componentType=FLOAT,
-                count=n,
+                count=vertex_count,
                 type="VEC3",
-                min=lo,
-                max=hi,
+                min=minimum,
+                max=maximum,
             ),
             "NORMAL": add(
-                struct.pack(f"<{3 * n}f", *(c for v in normals for c in v)),
+                struct.pack(f"<{3 * vertex_count}f", *(component for vector in normals for component in vector)),
                 ARRAY_BUFFER,
                 componentType=FLOAT,
-                count=n,
+                count=vertex_count,
                 type="VEC3",
             ),
             "TEXCOORD_0": add(
-                struct.pack(f"<{2 * n}f", *(c for v in uvs for c in v)),
+                struct.pack(f"<{2 * vertex_count}f", *(component for vector in uvs for component in vector)),
                 ARRAY_BUFFER,
                 componentType=FLOAT,
-                count=n,
+                count=vertex_count,
                 type="VEC2",
             ),
         }
         wide = max(indices) > 0xFFFF
-        idx = struct.pack(f"<{len(indices)}{'I' if wide else 'H'}", *indices)
-        at = add(idx, ELEMENT_BUFFER, componentType=UINT if wide else USHORT, count=len(indices), type="SCALAR")
-        gltf_meshes.append({"name": name, "primitives": [{"attributes": attributes, "indices": at, "mode": 4}]})
+        index_bytes = struct.pack(f"<{len(indices)}{'I' if wide else 'H'}", *indices)
+        index_accessor = add(
+            index_bytes, ELEMENT_BUFFER, componentType=UINT if wide else USHORT, count=len(indices), type="SCALAR"
+        )
+        gltf_meshes.append(
+            {"name": name, "primitives": [{"attributes": attributes, "indices": index_accessor, "mode": 4}]}
+        )
         nodes.append({"name": name, "mesh": len(gltf_meshes) - 1})
-    doc = {
+    document = {
         "asset": {"version": "2.0", "generator": "anno-toolbox"},
         "scene": 0,
         "scenes": [{"nodes": list(range(len(nodes)))}],
@@ -125,7 +139,7 @@ def write_glb(meshes: list[tuple[str, list, list, list, list]]) -> bytes:
         "bufferViews": views,
         "buffers": [{"byteLength": len(blob)}],
     }
-    text = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+    text = json.dumps(document, separators=(",", ":")).encode("utf-8")
     text += b" " * (-len(text) % 4)
     blob.extend(bytes(-len(blob) % 4))
     body = struct.pack("<I4s", len(text), b"JSON") + text + struct.pack("<I4s", len(blob), b"BIN\x00") + bytes(blob)

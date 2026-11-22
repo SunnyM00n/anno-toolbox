@@ -22,37 +22,39 @@ ZONES = (  # (number, name): the zones of the game's EnvironmentType the grid ho
 )  # fmt: skip
 
 
-def parse_cells(cells: dict, size: int, bit: bool = True) -> tuple[list[tuple[int, int, int]], list[str]]:
+def parse_cells(cells: dict, size_cells: int, is_bit: bool = True) -> tuple[list[tuple[int, int, int]], list[str]]:
     """The (x, z, value) of the edit's cells that lie on the island and the keys of those that do not; ``bit``: the
     value is on or off (1 / 0), else a byte (a value off 0 to 255 is off too)."""
-    ok, off = [], []
+    kept, off = [], []
     for key, value in sorted(cells.items()):
-        cell = cell_key(key, size)
+        cell = cell_key(key, size_cells)
         try:
-            value = (1 if value else 0) if bit else int(value)
+            value = (1 if value else 0) if is_bit else int(value)
         except (TypeError, ValueError):
             cell = None
         if cell is not None and 0 <= value <= 255:
-            ok.append((*cell, value))
+            kept.append((*cell, value))
         else:
             off.append(str(key))
-    return ok, off
+    return kept, off
 
 
-def apply_ford(isl, cells: dict) -> dict:
+def apply_ford(island, cells: dict) -> dict:
     """Set the ford cells (``"x,z"`` -> 1 or 0) in the island's ``FordGrid``; only a tile of the ``RiverGrid`` can be a
     ford. Returns the cells changed and the ones left out (``unmatched``)."""
-    wm = isl.gm.path("WorldManager")
-    ford, river = (wm.find("FordGrid"), wm.find("RiverGrid")) if wm is not None else (None, None)
+    world_manager = island.game_session_manager.path("WorldManager")
+    ford, river = (
+        (world_manager.find("FordGrid"), world_manager.find("RiverGrid")) if world_manager is not None else (None, None)
+    )
     report = {"cells": 0, "unmatched": []}
     if ford is None or river is None:
         report["unmatched"].append(tr("islands.no_ford_grid_island"))
         return report
     grid = np.asarray(read_bits(ford), np.int64)
     on_river = np.asarray(read_bits(river), bool)
-    ok, off = parse_cells(cells, grid.shape[0])
-    report["unmatched"] += [tr("islands.ford_key", key=k) for k in off]
-    for x, z, value in ok:
+    kept, off = parse_cells(cells, grid.shape[0])
+    report["unmatched"] += [tr("islands.ford_key", key=key) for key in off]
+    for x, z, value in kept:
         if value and not on_river[z, x]:
             report["unmatched"].append(tr("islands.ford_key", key=f"{x},{z}"))
         elif grid[z, x] != value:
@@ -63,21 +65,21 @@ def apply_ford(isl, cells: dict) -> dict:
     return report
 
 
-def apply_environment(isl, cells: dict) -> dict:
+def apply_environment(island, cells: dict) -> dict:
     """Set the zone cells (``"x,z"`` -> a number 0 to 255) in the island's ``EnvironmentGrid``. Returns the cells
     changed and the ones left out (``unmatched``)."""
-    grid = isl.gm.path("WorldManager/EnvironmentGrid/EnvironmentGRid")
+    grid = island.game_session_manager.path("WorldManager/EnvironmentGrid/EnvironmentGRid")
     report = {"cells": 0, "unmatched": []}
     if grid is None:
         report["unmatched"].append(tr("islands.no_environment_grid_island"))
         return report
-    n = grid.find("x").u32()
+    grid_size = grid.find("x").u32()
     zones = bytearray(grid.find("val").data)
-    ok, off = parse_cells(cells, n, bit=False)
-    report["unmatched"] += [tr("islands.environment_key", key=k) for k in off]
-    for x, z, value in ok:
-        if zones[z * n + x] != value:
-            zones[z * n + x] = value
+    kept, off = parse_cells(cells, grid_size, is_bit=False)
+    report["unmatched"] += [tr("islands.environment_key", key=key) for key in off]
+    for x, z, value in kept:
+        if zones[z * grid_size + x] != value:
+            zones[z * grid_size + x] = value
             report["cells"] += 1
     if report["cells"]:
         grid.find("val").data = bytes(zones)

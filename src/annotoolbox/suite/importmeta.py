@@ -24,7 +24,7 @@ IDENTITY = ("mod_id", "name", "version", "category", "description", "dependencie
 
 
 @dataclass
-class Meta:
+class SMeta:
     """The record ``import.json``. ``identity``: the project's fields as the import set them, so a later edit is the
     difference to it. ``owners``: the files per owning app (recorded; phase 1 keeps them all in ``mod-files``)."""
 
@@ -49,7 +49,7 @@ def meta_path(folder: Path) -> Path:
     return Path(folder) / META_FILE
 
 
-def read_meta(folder: Path) -> Meta | None:
+def read_meta(folder: Path) -> SMeta | None:
     """The record of an imported project, None for a project that was not made by an import."""
     try:
         data = json.loads(meta_path(folder).read_text(encoding="utf-8"))
@@ -57,10 +57,12 @@ def read_meta(folder: Path) -> Meta | None:
         return None
     if not isinstance(data, dict) or data.get("format", FORMAT) > FORMAT:
         return None
-    return Meta(**{k: v for k, v in data.items() if k in Meta.__dataclass_fields__})
+    return SMeta(
+        **{field_name: value for field_name, value in data.items() if field_name in SMeta.__dataclass_fields__}
+    )
 
 
-def write_meta(folder: Path, meta: Meta) -> None:
+def write_meta(folder: Path, meta: SMeta) -> None:
     write_atomic(meta_path(folder), (json.dumps(asdict(meta), indent=1, ensure_ascii=False) + "\n").encode("utf-8"))
 
 
@@ -69,11 +71,11 @@ def read_manifest(folder: Path) -> Iterator[tuple[str, int, str]]:
     path = Path(folder) / FILES_FILE
     if not path.is_file():
         return
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
+    with path.open(encoding="utf-8") as file:
+        for line in file:
             if line.strip():
-                rel, size, digest = json.loads(line)
-                yield rel, size, digest
+                relative_path, size, digest = json.loads(line)
+                yield relative_path, size, digest
 
 
 def identity_of(project) -> dict:
@@ -81,7 +83,7 @@ def identity_of(project) -> dict:
     return {k: getattr(project, k) for k in IDENTITY}
 
 
-def changes_of(project, meta: Meta) -> dict[str, object]:
+def changes_of(project, meta: SMeta) -> dict[str, object]:
     """The ``modinfo`` fields the person edited since the import: ``modinfokeep.FIELDS`` -> new value."""
     base, now = meta.identity, identity_of(project)
     out: dict[str, object] = {}

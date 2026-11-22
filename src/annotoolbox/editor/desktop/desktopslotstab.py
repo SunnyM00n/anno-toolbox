@@ -24,69 +24,70 @@ from PySide6.QtWidgets import (
 from ...infra.i18n import tr
 from .. import slotkinds
 from . import desktopslotlinks
+from .desktopview import fly_to
 
 if TYPE_CHECKING:
-    from .desktopeditor import IslandDoc
+    from .desktopeditor import CIslandDoc
 
 SLOT_GAMES = ("anno117", "anno1800")  # the games whose islands the tab lists (their slot assets: ``slotkinds``)
 
 
-class SlotsPanel(QWidget):
+class CSlotsPanel(QWidget):
     """The slot objects of the open island; ``fill`` reads them again (the objects list calls it when it refills)."""
 
-    def __init__(self, doc: IslandDoc) -> None:
+    def __init__(self, doc: CIslandDoc) -> None:
         super().__init__()
-        self.doc = doc
-        self.rows: list[slotkinds.SlotRow] = []
+        self.m_doc = doc
+        self.m_rows: list[slotkinds.SSlotRow] = []
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
-        self.search = QLineEdit(placeholderText=tr("islands.search_name_guid_template"), clearButtonEnabled=True)
-        self.kinds = QComboBox()
-        self.links = QPushButton(tr("islands.slot_links"))
-        bar.addWidget(self.search, 1)
-        bar.addWidget(self.kinds)
+        self.m_search = QLineEdit(placeholderText=tr("islands.search_name_guid_template"), clearButtonEnabled=True)
+        self.m_kinds = QComboBox()
+        self.m_links = QPushButton(tr("islands.slot_links"))
+        bar.addWidget(self.m_search, 1)
+        bar.addWidget(self.m_kinds)
         layout.addLayout(bar)
-        self.note = QLabel(wordWrap=True)
-        layout.addWidget(self.note)
-        self.tree = QTreeWidget()
-        self.tree.setRootIsDecorated(False)
-        self.tree.setHeaderLabels(
+        self.m_note = QLabel(wordWrap=True)
+        layout.addWidget(self.m_note)
+        self.m_tree = QTreeWidget()
+        self.m_tree.setRootIsDecorated(False)
+        self.m_tree.setHeaderLabels(
             [tr("islands.slot_kind"), tr("common.name"), tr("islands.slot_guid"), tr("islands.slot_position")]
         )
-        layout.addWidget(self.tree, 1)
-        layout.addWidget(self.links)
-        self.search.textChanged.connect(self.show_rows)
-        self.kinds.currentIndexChanged.connect(self.show_rows)
-        self.tree.itemClicked.connect(self._click)
-        self.links.clicked.connect(lambda _c=False: desktopslotlinks.show(self.doc))
+        layout.addWidget(self.m_tree, 1)
+        layout.addWidget(self.m_links)
+        self.m_search.textChanged.connect(self.show_rows)
+        self.m_kinds.currentIndexChanged.connect(self.show_rows)
+        self.m_tree.itemClicked.connect(self._click)
+        self.m_links.clicked.connect(lambda _c=False: desktopslotlinks.show(self.m_doc))
 
     def fill(self) -> None:
         """The slots again; a game whose islands list none says so."""
-        game = self.doc.game_key()
-        self.links.setVisible(game in desktopslotlinks.OTHER_GAME)
-        self.rows = []
+        game = self.m_doc.game_key()
+        self.m_links.setVisible(game in desktopslotlinks.OTHER_GAME)
+        self.m_rows = []
         note = tr("islands.no_slots_game")
         if game in SLOT_GAMES:
             try:
-                self.rows = slotkinds.rows(self.doc.session.entries, self.doc.editor.slot_assets())
-                note = "" if self.rows else tr("islands.no_slots_island")
+                self.m_rows = slotkinds.rows(self.m_doc.m_session.m_entries, self.m_doc.m_editor.slot_assets())
+                note = "" if self.m_rows else tr("islands.no_slots_island")
             except Exception as exc:  # a game without its assets: no slots to list, not a crash
                 note = tr("islands.no_game_assets_buildings_draw", error=exc)
-        self.note.setText(note)
-        kept = self.kinds.currentData()
-        self.kinds.blockSignals(True)
-        self.kinds.clear()
-        self.kinds.addItem(tr("islands.all_kinds"), "")
-        for kind in sorted({r.asset.kind for r in self.rows}):
-            self.kinds.addItem(kind, kind)
-        self.kinds.setCurrentIndex(max(0, self.kinds.findData(kept)))
-        self.kinds.blockSignals(False)
+        self.m_note.setText(note)
+        kept = self.m_kinds.currentData()
+        self.m_kinds.blockSignals(True)
+        self.m_kinds.clear()
+        self.m_kinds.addItem(tr("islands.all_kinds"), "")
+        for kind in sorted({row.asset.kind for row in self.m_rows}):
+            self.m_kinds.addItem(kind, kind)
+        self.m_kinds.setCurrentIndex(max(0, self.m_kinds.findData(kept)))
+        self.m_kinds.blockSignals(False)
         self.show_rows()
 
     def show_rows(self) -> None:
-        text, kind = self.search.text(), self.kinds.currentData() or ""
-        self.tree.clear()
-        for row in self.rows:
+        text, kind = self.m_search.text(), self.m_kinds.currentData() or ""
+        self.m_tree.clear()
+        for row in self.m_rows:
             if not slotkinds.matches(row, text, kind):
                 continue
             x, _y, z = row.position
@@ -94,16 +95,12 @@ class SlotsPanel(QWidget):
                 [row.asset.kind, row.asset.name, str(row.asset.guid), f"x {x:.1f}  z {z:.1f}"]  # i18n: ok (axis names)
             )
             item.setData(0, Qt.ItemDataRole.UserRole, row.entry)
-            self.tree.addTopLevelItem(item)
-        for column in range(self.tree.columnCount()):
-            self.tree.resizeColumnToContents(column)
+            self.m_tree.addTopLevelItem(item)
+        for column in range(self.m_tree.columnCount()):
+            self.m_tree.resizeColumnToContents(column)
 
     def _click(self, item) -> None:
         entry = item.data(0, Qt.ItemDataRole.UserRole)
-        view = self.doc.view
         if entry is None or not entry.alive:
             return
-        if view.tool != "select":
-            view.set_tool("select")
-        view.select(entry)
-        view.focus_on([entry])
+        fly_to(self.m_doc.m_view, [entry])

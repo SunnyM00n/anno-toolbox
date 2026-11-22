@@ -1,7 +1,7 @@
 """Writing a built mod's files into its folder without holding them in memory, and only what changed
 (docs/mod-import.md, section 3.2). Stdlib only.
 
-A part gives each file as bytes, or as ``FileRef`` (a path to take the file from: hard-linked where the disk allows,
+A part gives each file as bytes, or as ``CFileRef`` (a path to take the file from: hard-linked where the disk allows,
 else copied). ``sync(out, files)`` makes the folder hold exactly ``files``: a file that is already the same one
 (the same inode, or the same size and time) stays, a stale one goes, the rest is linked, copied or written. A file is
 never written in place - the old one is removed first - so a hard link never carries an edit back to its source.
@@ -27,41 +27,43 @@ LINK_GIVE_UP = 3  # failed links in a row after which the rest is copied
 LONG_PATH = "\\\\?\\"  # the prefix that lifts Windows' 260 character limit
 
 
-class FileRef(str):
+class CFileRef(str):
     """A file to take a part's content from, by path: a ``str`` so that half a million of them stay small."""
 
 
-def read(data: bytes | FileRef | Path) -> bytes:
-    return Path(data).read_bytes() if isinstance(data, FileRef | Path) else data
+def read(data: bytes | CFileRef | Path) -> bytes:
+    return Path(data).read_bytes() if isinstance(data, CFileRef | Path) else data
 
 
-def read_all(files: dict[str, bytes | FileRef | Path]) -> dict[str, bytes]:
+def read_all(files: dict[str, bytes | CFileRef | Path]) -> dict[str, bytes]:
     """A part's files with every content read (only for a small set: a test, a delivery)."""
     return {path: read(data) for path, data in files.items()}
 
 
-def same(a: bytes | FileRef | Path, b: bytes | FileRef | Path) -> bool:
+def same(first: bytes | CFileRef | Path, second: bytes | CFileRef | Path) -> bool:
     """Whether two files' content is equal (bytes, or files read in chunks)."""
-    if isinstance(a, bytes) and isinstance(b, bytes):
-        return a == b
-    if isinstance(a, bytes) or isinstance(b, bytes):
-        return read(a) == read(b)
+    if isinstance(first, bytes) and isinstance(second, bytes):
+        return first == second
+    if isinstance(first, bytes) or isinstance(second, bytes):
+        return read(first) == read(second)
     try:
-        if os.path.samestat(os.stat(a), os.stat(b)):
+        if os.path.samestat(os.stat(first), os.stat(second)):
             return True
     except OSError:
         return False
-    return filecmp.cmp(a, b, shallow=False)
+    return filecmp.cmp(first, second, shallow=False)
 
 
-def _current(src: str, dest: str) -> bool:
-    """Whether ``dest`` is already ``src`` for this purpose: one inode, or the same size and modification time (a copy
-    made with ``copy2`` keeps both)."""
+def _current(source: str, destination: str) -> bool:
+    """Whether ``destination`` is already ``source`` for this purpose: one inode, or the same size and modification
+    time (a copy made with ``copy2`` keeps both)."""
     try:
-        a, b = os.stat(src), os.stat(dest)
+        source_stat, destination_stat = os.stat(source), os.stat(destination)
     except OSError:
         return False
-    return os.path.samestat(a, b) or (a.st_size == b.st_size and a.st_mtime_ns == b.st_mtime_ns)
+    return os.path.samestat(source_stat, destination_stat) or (
+        source_stat.st_size == destination_stat.st_size and source_stat.st_mtime_ns == destination_stat.st_mtime_ns
+    )
 
 
 def remove(path: str | Path) -> None:
@@ -98,32 +100,32 @@ def _delete_read_only(path: str) -> bool:
         kernel.CloseHandle(handle)
 
 
-class Placer:
+class CPlacer:
     """Puts one file at its place: link, else copy; remembers when linking does not work here."""
 
-    def __init__(self, link: bool = True) -> None:
-        self.link = link
-        self.failed = 0
+    def __init__(self, use_links: bool = True) -> None:
+        self.m_use_links = use_links
+        self.m_failed = 0
 
-    def put(self, src: str, dest: str) -> bool:
-        """``src`` at ``dest``, where no file is yet; whether it is a hard link (else a copy)."""
-        if self.link and self.failed < LINK_GIVE_UP:
+    def put(self, source: str, destination: str) -> bool:
+        """``source`` at ``destination``, where no file is yet; whether it is a hard link (else a copy)."""
+        if self.m_use_links and self.m_failed < LINK_GIVE_UP:
             try:
-                os.link(src, dest)
-                self.failed = 0
+                os.link(source, destination)
+                self.m_failed = 0
                 return True
             except OSError:
-                self.failed += 1
-        shutil.copy2(src, dest)
+                self.m_failed += 1
+        shutil.copy2(source, destination)
         return False
 
-    def place(self, src: str, dest: str) -> str:
-        """``src`` at ``dest`` whatever is there: ``"linked"``, ``"copied"`` or ``"kept"``."""
-        if _current(src, dest):
+    def place(self, source: str, destination: str) -> str:
+        """``source`` at ``destination`` whatever is there: ``"linked"``, ``"copied"`` or ``"kept"``."""
+        if _current(source, destination):
             return "kept"
-        if os.path.lexists(dest):
-            remove(dest)
-        return "linked" if self.put(src, dest) else "copied"
+        if os.path.lexists(destination):
+            remove(destination)
+        return "linked" if self.put(source, destination) else "copied"
 
 
 def make_parents(root: str | Path, rels: list[str], made: set[str]) -> None:
@@ -156,7 +158,10 @@ def _remove_stale(out: Path, wanted: set[str]) -> int:
 
 
 def sync(
-    out: Path, files: dict[str, bytes | FileRef | Path], say: Callable[[str], None] = lambda _t: None, link: bool = True
+    out: Path,
+    files: dict[str, bytes | CFileRef | Path],
+    say: Callable[[str], None] = lambda _t: None,
+    use_links: bool = True,
 ) -> Counter[str]:
     """Make ``out`` hold exactly ``files`` (mod path -> content). Returns the counts: ``linked``, ``copied``,
     ``written``, ``kept``, ``removed``. ``say`` is called between chunks and may raise to stop (what is placed stays)."""
@@ -165,13 +170,13 @@ def sync(
     counts: Counter[str] = Counter()
     counts["removed"] = _remove_stale(out, set(files))
     made: set[str] = set()
-    placer = Placer(link)
+    placer = CPlacer(use_links)
     names = sorted(files)
 
     def one(rel: str) -> str:
         dest = os.path.join(out, rel)
         data = files[rel]
-        if isinstance(data, FileRef | Path):
+        if isinstance(data, CFileRef | Path):
             return placer.place(str(data), dest)
         if os.path.lexists(dest):
             if os.path.isfile(dest) and os.path.getsize(dest) == len(data) and Path(dest).read_bytes() == data:

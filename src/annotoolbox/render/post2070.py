@@ -2,15 +2,15 @@
 picture: the bright pass with the G-buffer's glow, two blurs at half and two at a quarter of the size, the combine
 with the filmic tone curve, then the mood colour; the result is linear, the view's final pass encodes it.
 
-``PostChain2070(ctx, stages, dummies)`` is the entry (``stages``: the step -> ``PassStages``, see ``STEPS``);
-``render(source, glow, size, values)`` records it. docs/rendering/shader-compile.md section 10, "Bloom and post".
+``CPostChain2070(ctx, stages, dummies)`` is the entry (``stages``: the step -> ``SPassStages``, see ``STEPS``);
+``render(source, glow, size_px, values)`` records it. docs/rendering/shader-compile.md section 10, "Bloom and post".
 """
 
 from __future__ import annotations
 
-from .fxcdraw import ScreenChain
-from .gamedraw import Program
-from .nativepass import Composite
+from .fxcdraw import CScreenChain
+from .gamedraw import CProgram
+from .nativepass import CComposite
 
 FX = "data/system/shaders/fx/"
 # the sequence's steps: (name, effect, technique, size divisor, inputs by texture name, cUsrConstant1 of the pfx)
@@ -43,41 +43,45 @@ void main() {
 
 
 def compile_steps(shaders, steps: tuple = STEPS) -> dict:
-    """In the background: every step's ``PassStages`` (``shaders``: a ``shader2070.Source2070``)."""
-    return {name: shaders.effect_pass(FX + fx, (), technique) for name, fx, technique, *_ in steps}
+    """In the background: every step's ``SPassStages`` (``shaders``: a ``shader2070.CSource2070``)."""
+    return {name: shaders.effect_pass(FX + effect_file, (), technique) for name, effect_file, technique, *_ in steps}
 
 
-class PostChain2070(ScreenChain):
+class CPostChain2070(CScreenChain):
     """The sequence's draws, each into a half-float target of its size (module docstring); ``steps`` another game's
     (``STEPS_1404``), ``scale`` what the scene is multiplied by first (2070's is stored halved)."""
 
     def __init__(self, ctx, stages: dict, dummies, steps: tuple = STEPS, scale: float = 0.5) -> None:
-        super().__init__(ctx, {name: Program(stages[name].vs, stages[name].ps) for name, *_ in steps}, dummies)
-        self.steps, self.scale = steps, scale
-        self.copy = Composite(ctx, COPY_FS)
+        super().__init__(
+            ctx, {name: CProgram(stages[name].vertex_stage, stages[name].pixel_stage) for name, *_ in steps}, dummies
+        )
+        self.m_steps, self.m_scale = steps, scale
+        self.m_copy = CComposite(ctx, COPY_FS)
 
-    def render(self, source, glow, size: tuple[int, int], values: dict):
+    def render(self, source, glow, size_px: tuple[int, int], values: dict):
         """The sequence over ``source`` (the view's resolved picture), ``glow`` the G-buffer's glow target (or None);
         ``values``: ``cPostBlur`` and ``cMoodColor``. Returns the finished, linear texture (the view's way up)."""
-        self.ensure_targets(size, {"scene": 1, "glow": 1, **{name: div for name, _fx, _t, div, *_ in self.steps}})
+        self.ensure_targets(
+            size_px, {"scene": 1, "glow": 1, **{name: divisor for name, _fx, _t, divisor, *_ in self.m_steps}}
+        )
         made = {}
         for name, picture, flip, scale in (
-            ("scene", source, False, self.scale),
-            ("glow", glow, self.ctx.flip_offscreen, 1.0),
+            ("scene", source, False, self.m_scale),
+            ("glow", glow, self.m_ctx.m_flip_offscreen, 1.0),
         ):
             if picture is None:
                 continue
-            tex, fbo, _ = self.targets[name]
-            self.copy.draw(fbo, {"gSource": picture}, {"flip": bool(flip), "scale": scale}, depth_test=False)
-            made[name] = tex.native
-        for name, _fx, _t, _div, inputs, direction in self.steps:
+            texture, fbo, _ = self.m_targets[name]
+            self.m_copy.draw(fbo, {"gSource": picture}, {"flip": bool(flip), "scale": scale}, depth_test=False)
+            made[name] = texture.native
+        for name, _fx, _t, _div, inputs, direction in self.m_steps:
             target_size = self.target_size(name)
             maps = {slot: made[what] for slot, what in inputs.items() if made.get(what) is not None}
             texel = [1.0 / target_size[0], 1.0 / target_size[1], *target_size]  # the pass's pixel (inferred)
             frame = {**values, "cUsrConstant0": texel, "cUsrConstant1": [*(direction or (0.0, 0.0)), 0.0, 0.0]}
             made[name] = self.run(name, maps, frame).native
-        return self.targets[self.steps[-1][0]][0]
+        return self.m_targets[self.m_steps[-1][0]][0]
 
     def release(self) -> None:
         super().release()
-        self.copy.release()
+        self.m_copy.release()

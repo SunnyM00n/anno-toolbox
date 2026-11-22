@@ -3,7 +3,7 @@ when they load an effect (particles, border lines, build grid, SMAA, shadows, SS
 compiles, and the compiler's arguments (docs/rendering/shader-compile.md, "Defines from the engine", "The compile").
 
 ``compile_args`` is one compile's argument list; ``engine_lists(stem)`` the define lists the engine loads a file
-with (the shipped cache records the same, ``GameShaders.shipped_of``; the real-install test holds the table against
+with (the shipped cache records the same, ``CGameShaders.shipped_of``; the real-install test holds the table against
 it); ``NOT_COMPILED`` the files only the studio's tools build, with why they cannot compile as shipped.
 """
 
@@ -24,13 +24,13 @@ SM66_ENTRIES = ("csDebugRT", "csRTGIInline")  # compute shaders compiled as cs_6
 def compile_args(entry: str, profile: str) -> list[str]:
     """The compiler arguments of one pass shader as the game builds them: the entry, the options, 16-bit types for
     ray-tracing libraries and the entries named above, the profile (``cs_6_6`` for ``SM66_ENTRIES``), ``-Zpc``."""
-    args = ["-E", entry, *GAME_OPTIONS]
+    arguments = ["-E", entry, *GAME_OPTIONS]
     if profile.startswith("lib") or entry in HALF_ENTRIES:
-        args.append(HALF_TYPES)
+        arguments.append(HALF_TYPES)
     if entry in SM66_ENTRIES:
         profile = "cs_6_6"
-        args.append(HALF_TYPES)
-    return [*args, "-T", profile, "-Zpc"]
+        arguments.append(HALF_TYPES)
+    return [*arguments, "-T", profile, "-Zpc"]
 
 
 def _fsr3() -> str:
@@ -55,8 +55,8 @@ def _fsr3() -> str:
         "UAV_SPD_MIPS_LEVEL_1 UAV_SPD_MIPS_LEVEL_2 UAV_SPD_MIPS_LEVEL_3 UAV_SPD_MIPS_LEVEL_4 UAV_SPD_MIPS_LEVEL_5 "
         "UAV_SPD_GLOBAL_ATOMIC"
     ).split()
-    head = "FFX_GPU=1;FFX_HLSL=1;" + ";".join(f"FFX_FSR3UPSCALER_OPTION_{o}" for o in options.split(";"))
-    return head + ";" + ";".join(f"FSR3UPSCALER_BIND_{b}=1" for b in binds)
+    head = "FFX_GPU=1;FFX_HLSL=1;" + ";".join(f"FFX_FSR3UPSCALER_OPTION_{option}" for option in options.split(";"))
+    return head + ";" + ";".join(f"FSR3UPSCALER_BIND_{bind}=1" for bind in binds)
 
 
 # the terrain shaders: the baked texture size, the tessellation quality setting and the switches it allows

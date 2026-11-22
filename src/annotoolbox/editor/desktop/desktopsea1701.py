@@ -3,7 +3,7 @@ view's own terrain and models: the projected grid of ``render.ocean1701``, refra
 view's scene mirrored in the water and the game's sky cube, its waves damped by the water depth worked out from the
 view's depth as the game's terrain writes it; the view's own sea while it compiles, where it fails and on OpenGL.
 
-``GameSea1701(renderer)`` is the entry, one per ``desktoprender.Renderer``, on ``desktopsea.IslandSea``'s seam;
+``CGameSea1701(renderer)`` is the entry, one per ``desktoprender.CRenderer``, on ``desktopsea.CIslandSea``'s seam;
 docs/island-editor-view.md "1701's sea by the game's shaders".
 """
 
@@ -18,8 +18,8 @@ from ...render import coast1701, ocean1701
 from ...render.camera import gl
 from ...render.frame1404 import config_text
 from ...render.frame1701 import AMBIENT, LIGHT, read_light
-from ...render.fxcdraw import Dummies, cube_faces, cube_of
-from .desktopsea import GAMMA_LAYER_FS, Files, IslandSea, ViewShadow, by_folder, sun_direction, upload
+from ...render.fxcdraw import CDummies, cube_faces, cube_of
+from .desktopsea import GAMMA_LAYER_FS, CFiles, CIslandSea, SViewShadow, by_folder, sun_direction, upload
 
 JOB = "game-sea-1701"
 # the ambient map's default profiles of a northern and a southern island; an island in the editor has no place on a
@@ -53,8 +53,12 @@ void main() {
 def seabed(heights: np.ndarray) -> float:
     """The sea floor round an island (view units): the height of its border. 1701's islands end at -100 world units
     all round, where the world's floor lies **[I]**."""
-    h = np.asarray(heights, float)
-    return float(np.concatenate([h[0], h[-1], h[:, 0], h[:, -1]]).mean()) if h.size else 0.0
+    heights_array = np.asarray(heights, float)
+    return (
+        float(np.concatenate([heights_array[0], heights_array[-1], heights_array[:, 0], heights_array[:, -1]]).mean())
+        if heights_array.size
+        else 0.0
+    )
 
 
 def profile_of(source: str) -> str:
@@ -62,30 +66,30 @@ def profile_of(source: str) -> str:
     return by_folder(source, "south", PROFILES)
 
 
-def coast_lines(session, isl) -> list[coast1701.CoastLine]:
+def coast_lines(session, isl) -> list[coast1701.SCoastLine]:
     """The island's coast lines in world units with the edits on (the points the session's, the widths and kinds
     the file's: each point the width of the file's point nearest to it, as an edit writes it back). Lines of the
     file with fewer than two points are the ones the session leaves out."""
     shipped = [line for line in (isl.coasts() if isl is not None else []) if len(line.points) >= 2]
     out = []
-    for k in range(len((session.water_net or {}).get("coasts", []))):
-        pts = np.asarray(session.path.coast(k)["points"], float).reshape(-1, 2) * TILE
+    for k in range(len((session.m_water_net or {}).get("coasts", []))):
+        points = np.asarray(session.m_path.coast(k)["points"], float).reshape(-1, 2) * TILE
         line = shipped[k] if k < len(shipped) else None
         if line is None:
-            widths, kind = np.full(len(pts), COAST_WIDTH), 0
+            widths, kind = np.full(len(points), COAST_WIDTH), 0
         else:
             old = np.asarray(line.points, float)[:, [0, 2]] * TILE
-            near = ((pts[:, None, :] - old[None, :, :]) ** 2).sum(-1).argmin(1)
+            near = ((points[:, None, :] - old[None, :, :]) ** 2).sum(-1).argmin(1)
             widths, kind = np.asarray(line.widths, float)[near] * TILE, line.variation
         # the session keeps no height: y 0, as nearly every shipped coast point has it (80,517 of 80,527 in 400
         # files) [ours]
-        xyz = np.stack([pts[:, 0], np.zeros(len(pts)), pts[:, 1]], 1)
-        out.append(coast1701.CoastLine(xyz, widths, kind))
+        xyz = np.stack([points[:, 0], np.zeros(len(points)), points[:, 1]], 1)
+        out.append(coast1701.SCoastLine(xyz, widths, kind))
     return out
 
 
-def shadow_values(shadow: ViewShadow | None) -> tuple | None:
-    """The view's sun shadow as ``water.fx`` with ``VERTEXWATER_SHADOW`` reads it (``Ocean1701.draw``'s
+def shadow_values(shadow: SViewShadow | None) -> tuple | None:
+    """The view's sun shadow as ``water.fx`` with ``VERTEXWATER_SHADOW`` reads it (``COcean1701.draw``'s
     ``shadow``): the map's texture matrix, the plane of its depth, the map; None without one."""
     if shadow is None:
         return None
@@ -99,18 +103,18 @@ def _compile(tree, source: str) -> tuple:
     waves' textures."""
     from ...models import ddsdecode, shader1701
 
-    files = Files(tree)
-    shaders = shader1701.Source1701(files, files.compiler("anno1701"))
+    files = CFiles(tree)
+    shaders = shader1701.CSource1701(files, files.compiler("anno1701"))
     wanted = {**ocean1701.STAGES, **ocean1701.WAVE_STAGES, **coast1701.STAGES}
-    stages = {k: shaders.effect_pass(*v) for k, v in wanted.items()}
+    stages = {k: shaders.effect_pass(*arguments) for k, arguments in wanted.items()}
     name, ambient = profile_of(source), config_text(files, AMBIENT)
     light = read_light(ambient, config_text(files, LIGHT), name)
-    sky = cube_faces(ddsdecode.DdsFile(files.read(ocean1701.SKY_CUBE)))
-    coast = {k: files.level0(p) for k, p in coast1701.TEXTURES.items()}
+    sky = cube_faces(ddsdecode.CDdsFile(files.read(ocean1701.SKY_CUBE)))
+    coast = {k: files.level0(texture_path) for k, texture_path in coast1701.TEXTURES.items()}
     return stages, light, ocean1701.ocean_color(ambient, name), files.level0(ocean1701.WAVES), sky, coast
 
 
-class GameSea1701(IslandSea):
+class CGameSea1701(CIslandSea):
     """The 1701 island's sea by the game's shaders (module docstring)."""
 
     GAMES = ("anno1701",)
@@ -119,81 +123,85 @@ class GameSea1701(IslandSea):
 
     def __init__(self, renderer) -> None:
         super().__init__(renderer)
-        self.ocean: ocean1701.Ocean1701 | None = None
-        self.light = self.color = None
-        self.maps: dict = {}  # the waves, the sky cube and the coast waves' textures on the device
-        self.coast: coast1701.CoastWaves1701 | None = None
-        self._coast_key = None  # the coast lines' edits the strips were made from
+        self.m_ocean: ocean1701.COcean1701 | None = None
+        self.m_light = self.m_color = None
+        self.m_maps: dict = {}  # the waves, the sky cube and the coast waves' textures on the device
+        self.m_coast: coast1701.CCoastWaves1701 | None = None
+        self._m_coast_key = None  # the coast lines' edits the strips were made from
 
     def _ready(self) -> bool:
         """The sea made once its shaders and maps are in; False while they load or when they failed (said once)."""
-        if self.ocean is not None:
+        if self.m_ocean is not None:
             return True
         got = self._compiled(JOB, _compile)
         if got is None:
             return False
-        stages, self.light, self.color, waves, sky, coast = got
-        ctx = self.r.ctx
-        self.maps = {
+        stages, self.m_light, self.m_color, waves, sky, coast = got
+        ctx = self.m_renderer.m_ctx
+        self.m_maps = {
             "waves": upload(ctx, waves),
             "sky": cube_of(ctx, sky),
-            **{k: upload(ctx, v) for k, v in coast.items()},
+            **{k: upload(ctx, texture) for k, texture in coast.items()},
         }
-        dummies = Dummies(ctx.rhi)
-        self.ocean = ocean1701.Ocean1701(ctx, stages, dummies)
-        self.coast = coast1701.CoastWaves1701(ctx, stages, dummies)
+        dummies = CDummies(ctx.m_rhi)
+        self.m_ocean = ocean1701.COcean1701(ctx, stages, dummies)
+        self.m_coast = coast1701.CCoastWaves1701(ctx, stages, dummies)
         return True
 
-    def _coast_waves(self, cam, seconds: float):
+    def _coast_waves(self, camera, seconds: float):
         """The terrain's wave texture of this frame: the coast lines' strips (made again when the lines are
-        edited) drawn for the camera ``cam``."""
-        s = self.r.session
-        key = repr(sorted(s.edits.get("coast", {}).items()))
-        if key != self._coast_key:
-            lines = coast_lines(s, getattr(self.r.editor, "isl", None))
-            self.coast.lines(coast1701.strips(lines))
-            self._coast_key = key
-        maps = {k: self.maps[k].native for k in coast1701.TEXTURES}
-        return self.coast.draw(cam, seconds, maps).native
+        edited) drawn for the camera ``camera``."""
+        session = self.m_renderer.m_session
+        key = repr(sorted(session.m_edits.get("coast", {}).items()))
+        if key != self._m_coast_key:
+            lines = coast_lines(session, getattr(self.m_renderer.m_editor, "m_isl", None))
+            self.m_coast.lines(coast1701.strips(lines))
+            self._m_coast_key = key
+        maps = {k: self.m_maps[k].native for k in coast1701.TEXTURES}
+        return self.m_coast.draw(camera, seconds, maps).native
 
-    def _record(self, f, t: dict, camera, opts) -> bool:
+    def _record(self, frame, targets: dict, camera, options) -> bool:
         """The view's scene mirrored, the copies of the view's frame and its water depth, the sea into its layer over
         the view's depth, the layer into the frame; False where the engine draws no water (a camera too low)."""
-        ctx = self.r.ctx
-        game = self._game_camera(camera, t["size"])
-        if ocean1701.trapezoid(game.view @ game.proj) is None:  # the engine draws none: no passes for nothing
+        ctx = self.m_renderer.m_ctx
+        game = self._game_camera(camera, targets["size"])
+        if ocean1701.trapezoid(game.view @ game.projection) is None:  # the engine draws none: no passes for nothing
             return False
-        own, reflection = self._begin(f, opts, t)
-        bed = {"invViewProj": gl(np.linalg.inv(np.asarray(f.view_proj, float))), "scale": float(self.SCALE),
-               "range": ocean1701.DEPTH_RANGE, "floorY": seabed(self.r.session.heights),
-               "seabed": tuple(float(v) for v in ocean1701.deep_color(self.light, self.color))}  # fmt: skip
-        inputs, copy = {"gLit": t["color"], "gDepth": t["depth"]}, self._pass("refraction", REFRACTION_FS)
+        own, reflection = self._begin(frame, options, targets)
+        bed = {"invViewProj": gl(np.linalg.inv(np.asarray(frame.view_proj, float))), "scale": float(self.SCALE),
+               "range": ocean1701.DEPTH_RANGE, "floorY": seabed(self.m_renderer.m_session.m_heights),
+               "seabed": tuple(float(component) for component in ocean1701.deep_color(self.m_light, self.m_color))}  # fmt: skip
+        inputs, copy = {"gLit": targets["color"], "gDepth": targets["depth"]}, self._pass("refraction", REFRACTION_FS)
         copy.draw(own["refraction_fbo"], inputs, {**bed, "depthMap": False}, depth_test=False)
         copy.draw(own["read_fbo"], inputs, {**bed, "depthMap": True}, depth_test=False)
-        seconds = float(f.lt.get("uwTime", 0.0))
-        light = replace(self.light, direction=sun_direction(f), seconds=seconds)
+        seconds = float(frame.lt.get("uwTime", 0.0))
+        light = replace(self.m_light, direction=sun_direction(frame), seconds=seconds)
         cam = self._flipped(game)
-        self.ocean.mirrored = not bool(ctx.flip_offscreen)  # the game's mirror, undone again by the turned picture
-        maps = {"cSamplerWave": self.maps["waves"].native, "cSamplerSkyRef": self.maps["sky"],
+        self.m_ocean.m_is_mirrored = not bool(
+            ctx.m_flip_offscreen
+        )  # the game's mirror, undone again by the turned picture
+        maps = {"cSamplerWave": self.m_maps["waves"].native, "cSamplerSkyRef": self.m_maps["sky"],
                 "cSamplerRefrac": own["refraction"].native, "cSamplerReflec": reflection,
                 "cSamplerWaterDepth": own["read"].native,
                 ocean1701.DYNAMIC_WAVES: self._coast_waves(cam, seconds)}  # fmt: skip
-        drew = self.ocean.draw(own["sea_fbo"], t["size"], (game, cam), light, maps, seconds, self.color,
-                               shadow_values(self._view_shadow(f)))  # fmt: skip
-        self._end(t, GAMMA_LAYER_FS, drew)
+        drew = self.m_ocean.draw(own["sea_fbo"], targets["size"], (game, cam), light, maps, seconds, self.m_color,
+                               shadow_values(self._view_shadow(frame)))  # fmt: skip
+        self._end(targets, GAMMA_LAYER_FS, drew)
         return drew
 
     def release(self) -> None:
         super().release()
-        for k, tex in self.maps.items():
+        for k, texture in self.m_maps.items():
             if k == "sky":
-                self.r.ctx.later(tex)  # a native cube (``fxcdraw.cube_of``): gone after the frame in flight
+                self.m_renderer.m_ctx.later(
+                    texture
+                )  # a native cube (``fxcdraw.cube_of``): gone after the frame in flight
             else:
-                tex.release()
-        self.maps = {}
-        if self.coast is not None:
-            self.coast.release()
-            self.coast, self._coast_key = None, None
-        if self.ocean is not None:
-            self.ocean.release()
-            self.ocean = None
+                texture.release()
+        self.m_maps = {}
+        if self.m_coast is not None:
+            self.m_coast.release()
+            self.m_coast, self._m_coast_key = None, None
+        if self.m_ocean is not None:
+            self.m_ocean.release()
+            self.m_ocean = None

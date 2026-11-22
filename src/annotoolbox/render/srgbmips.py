@@ -1,7 +1,7 @@
 """The mip levels of an 8-bit sRGB texture built by a compute pass of ours on the GPU, where QRhi's own level
 generation fails (Direct3D 12 loses the device on an sRGB texture, docs/tool-suite.md section 21).
 
-``SrgbMips(rhi)`` is the entry, one per device; ``build(ctx, texture)`` records one compute pass per level: the level
+``CSrgbMips(rhi)`` is the entry, one per device; ``build(ctx, texture)`` records one compute pass per level: the level
 above read decoded to linear light (an sRGB texture's loads decode), a 2 x 2 box (the edge texel repeated at an odd
 size), colour and alpha each on its own as ``models.mipchain`` filters them, encoded to sRGB into an 8-bit
 storage image (no storage view of an sRGB format exists), then copied into the level.
@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 from . import shaderbake
 from .gamecompute import copy_into, groups
 
-B = QRhiShaderResourceBinding
+Binding = QRhiShaderResourceBinding
 _N, _CLAMP = QRhiSampler.Filter.Nearest, QRhiSampler.AddressMode.ClampToEdge
 GROUP = 8
 MIPS_CS = """#version 440
@@ -45,61 +45,67 @@ void main() {
 """
 
 
-class SrgbMips:
+class CSrgbMips:
     """The compute pipeline (baked once) and the passes of each texture (module docstring)."""
 
     def __init__(self, rhi) -> None:
-        self.rhi = rhi
-        self.shader = QShader.fromSerialized(shaderbake.bake_compute(MIPS_CS))
-        self.pipeline = None
+        self.m_rhi = rhi
+        self.m_shader = QShader.fromSerialized(shaderbake.bake_compute(MIPS_CS))
+        self.m_pipeline = None
 
     def build(self, ctx, texture) -> None:
         """Levels 1.. of ``texture`` (a device texture, 8-bit sRGB, level 0 uploaded), each a compute pass and a copy
         recorded on ``ctx``; the per-level resources are released a frame later."""
-        w, h = texture.size[0], texture.size[1]
+        width_px, height_px = texture.size[0], texture.size[1]
         level = 0
-        while w > 1 or h > 1:
-            w, h = max(1, w // 2), max(1, h // 2)
-            self._level(ctx, texture, level, (w, h))
+        while width_px > 1 or height_px > 1:
+            width_px, height_px = max(1, width_px // 2), max(1, height_px // 2)
+            self._level(ctx, texture, level, (width_px, height_px))
             level += 1
 
-    def _level(self, ctx, texture, level: int, size: tuple[int, int]) -> None:
-        rhi = self.rhi
+    def _level(self, ctx, texture, level: int, size_px: tuple[int, int]) -> None:
+        rhi = self.m_rhi
         flags = QRhiTexture.Flag.UsedWithLoadStore | QRhiTexture.Flag.UsedAsTransferSource
-        scratch = rhi.newTexture(QRhiTexture.Format.RGBA8, QSize(*size), 1, flags)
+        scratch = rhi.newTexture(QRhiTexture.Format.RGBA8, QSize(*size_px), 1, flags)
         scratch.create()
-        params = rhi.newBuffer(QRhiBuffer.Type.Dynamic, QRhiBuffer.UsageFlag.UniformBuffer, 16)
-        params.create()
+        parameters_buffer = rhi.newBuffer(QRhiBuffer.Type.Dynamic, QRhiBuffer.UsageFlag.UniformBuffer, 16)
+        parameters_buffer.create()
         sampler = rhi.newSampler(_N, _N, _N, _CLAMP, _CLAMP)
         sampler.create()
-        srb = rhi.newShaderResourceBindings()
-        st = B.StageFlag.ComputeStage
-        srb.setBindings([B.uniformBuffer(0, st, params), B.sampledTexture(1, st, texture.native, sampler),
-                         B.imageStore(2, st, scratch, 0)])  # fmt: skip
-        srb.create()
-        if self.pipeline is None:
-            pipe = rhi.newComputePipeline()
-            pipe.setShaderStage(QRhiShaderStage(QRhiShaderStage.Type.Compute, self.shader))
-            pipe.setShaderResourceBindings(srb)
-            if not pipe.create():
-                for r in (pipe, srb, sampler, params, scratch):  # never recorded: nothing else lets them go
-                    r.destroy()
+        resource_bindings = rhi.newShaderResourceBindings()
+        stage = Binding.StageFlag.ComputeStage
+        resource_bindings.setBindings([Binding.uniformBuffer(0, stage, parameters_buffer), Binding.sampledTexture(1, stage, texture.native, sampler),
+                         Binding.imageStore(2, stage, scratch, 0)])  # fmt: skip
+        resource_bindings.create()
+        if self.m_pipeline is None:
+            compute_pipeline = rhi.newComputePipeline()
+            compute_pipeline.setShaderStage(QRhiShaderStage(QRhiShaderStage.Type.Compute, self.m_shader))
+            compute_pipeline.setShaderResourceBindings(resource_bindings)
+            if not compute_pipeline.create():
+                for resource in (
+                    compute_pipeline,
+                    resource_bindings,
+                    sampler,
+                    parameters_buffer,
+                    scratch,
+                ):  # never recorded: nothing else lets them go
+                    resource.destroy()
                 raise RuntimeError("the backend refused the sRGB level pass")
-            self.pipeline = pipe
+            self.m_pipeline = compute_pipeline
 
-        def compute_pass(cb, batch, native=texture.native) -> None:
-            batch.updateDynamicBuffer(params, 0, struct.pack("<4i", level, *size, 0))
-            cb.beginComputePass(batch)
-            cb.setComputePipeline(self.pipeline)
-            cb.setShaderResources(srb)
-            cb.dispatch(groups(size[0], GROUP), groups(size[1], GROUP), 1)
-            cb.endComputePass(copy_into(rhi, native, scratch, size, 0, level + 1))
+        def compute_pass(command_buffer, batch, native=texture.native) -> None:
+            batch.updateDynamicBuffer(parameters_buffer, 0, struct.pack("<4i", level, *size_px, 0))
+            command_buffer.beginComputePass(batch)
+            command_buffer.setComputePipeline(self.m_pipeline)
+            command_buffer.setShaderResources(resource_bindings)
+            command_buffer.dispatch(groups(size_px[0], GROUP), groups(size_px[1], GROUP), 1)
+            command_buffer.endComputePass(copy_into(rhi, native, scratch, size_px, 0, level + 1))
 
         ctx.native_pass(compute_pass)
-        for r in (scratch, params, sampler, srb):
-            ctx.later(r)
+        for resource in (scratch, parameters_buffer, sampler, resource_bindings):
+            ctx.later(resource)
 
     def release(self) -> None:
-        if self.pipeline is not None:
-            self.pipeline.destroy()
-            self.pipeline = None
+        if self.m_pipeline is not None:
+            self.m_pipeline.destroy()
+            self.m_pipeline = None

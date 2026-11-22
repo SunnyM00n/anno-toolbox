@@ -1,6 +1,6 @@
 """The ``.sp`` lip file beside a speech file of 1404 and 1701 (docs/text-editor.md, "Lip files"). No Qt.
 
-``Lips.read(data)``: a 32-bit count ``n``, then ``n + 8`` bytes and four zero bytes; the bytes in between are read as one
+``SLips.read(data)``: a 32-bit count ``n``, then ``n + 8`` bytes and four zero bytes; the bytes in between are read as one
 mouth-opening value per frame of the clip. ``mp3_seconds(data)`` walks the MPEG frames of the clip so the frame rate
 can be told (the game's own rate is not known: the frames are spread over the clip).
 """
@@ -18,13 +18,13 @@ _RATES = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 
 
 
 @dataclass(frozen=True)
-class Lips:
+class SLips:
     """The frames of one ``.sp`` file: ``levels`` are 0 to 255."""
 
     levels: tuple[int, ...]
 
     @classmethod
-    def read(cls, data: bytes) -> Lips | None:
+    def read(cls, data: bytes) -> SLips | None:
         """The file's frames, None for bytes that are not such a file."""
         if len(data) < 12:
             return None
@@ -51,19 +51,19 @@ class Lips:
 
 def mp3_seconds(data: bytes) -> float:
     """The length of an MP3 (layer III) in seconds, 0 where no frame is found."""
-    pos = 0
+    offset = 0
     if data[:3] == b"ID3" and len(data) >= 10:
-        pos = 10 + ((data[6] & 0x7F) << 21 | (data[7] & 0x7F) << 14 | (data[8] & 0x7F) << 7 | (data[9] & 0x7F))
+        offset = 10 + ((data[6] & 0x7F) << 21 | (data[7] & 0x7F) << 14 | (data[8] & 0x7F) << 7 | (data[9] & 0x7F))
     seconds = 0.0
-    while pos + 4 <= len(data):
-        head = int.from_bytes(data[pos : pos + 4], "big")
+    while offset + 4 <= len(data):
+        head = int.from_bytes(data[offset : offset + 4], "big")
         frame = _frame(head)
         if frame is None:
-            pos += 1
+            offset += 1
             continue
         size, duration = frame
         seconds += duration
-        pos += size
+        offset += size
     return seconds
 
 
@@ -74,7 +74,7 @@ def _frame(head: int) -> tuple[int, float] | None:
         return None
     mpeg1 = version == 3
     kbit = _BITRATES[1 if mpeg1 else 2][bitrate]
-    hz = _RATES[version][rate]
+    sample_rate_hz = _RATES[version][rate]
     samples = 1152 if mpeg1 else 576
-    size = samples // 8 * kbit * 1000 // hz + ((head >> 9) & 1)
-    return (size, samples / hz) if size > 4 else None
+    size = samples // 8 * kbit * 1000 // sample_rate_hz + ((head >> 9) & 1)
+    return (size, samples / sample_rate_hz) if size > 4 else None

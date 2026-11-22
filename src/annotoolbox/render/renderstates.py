@@ -1,7 +1,7 @@
 """A technique's render states as a draw on QRhi needs them: the effect's ``renderstateblock`` (depth test and write,
-blends per target, the colour write mask, the stencil test) read into a ``PassState`` (``pass_state``,
-``stencil_of``), and QRhi's blend factors and stencil operations of the effect's words. ``gamedraw.GameModel`` takes
-a ``PassState``; the words: docs/tool-suite.md section 21, "The game-shader path".
+blends per target, the colour write mask, the stencil test) read into a ``SPassState`` (``pass_state``,
+``stencil_of``), and QRhi's blend factors and stencil operations of the effect's words. ``gamedraw.CGameModel`` takes
+a ``SPassState``; the words: docs/tool-suite.md section 21, "The game-shader path".
 """
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ from PySide6.QtGui import QRhiGraphicsPipeline
 
 
 @dataclass(frozen=True)
-class Stencil:
+class SStencil:
     """A technique's stencil test, the same for both faces, by the effect's words: the compare, the operation where
     the test and the depth test pass, where the test fails and where the depth test fails, the reference value and
-    the read and write masks (a pass that sets one needs a target with stencil: ``gameframe.GameFrame(stencil=True)``)."""
+    the read and write masks (a pass that sets one needs a target with stencil: ``gameframe.CGameFrame(has_stencil=True)``)."""
 
     func: str = "ALWAYS"
     pass_op: str = "KEEP"
@@ -27,7 +27,7 @@ class Stencil:
 
 
 @dataclass(frozen=True)
-class PassState:
+class SPassState:
     """A technique's states as a draw needs them: the depth test (the engine's depth: 1 near, 0 far) and its write,
     per colour target its blend (None: off, else QRhi's colour source and destination and alpha source and
     destination factors), the culling."""
@@ -40,10 +40,10 @@ class PassState:
     colour: bool = True  # False: depth only (a depth prepass)
     writes: tuple = ()  # per colour target the channels written (D3D's bits: 1 red .. 8 alpha; None or missing: all)
     depth_always: bool = False  # the depth test passes everywhere (a cut-out's depth clear)
-    stencil: Stencil | None = None
+    stencil: SStencil | None = None
 
 
-GBUFFER_STATE = PassState()
+GBUFFER_STATE = SPassState()
 _COMPARES = {"NEVER": "Never", "LESS": "Less", "EQUAL": "Equal", "LESS_EQUAL": "LessOrEqual", "GREATER": "Greater",
              "NOT_EQUAL": "NotEqual", "GREATER_EQUAL": "GreaterOrEqual", "ALWAYS": "Always"}  # fmt: skip
 _STENCIL_OPS = {"KEEP": "Keep", "ZERO": "StencilZero", "REPLACE": "Replace", "INCR_SAT": "IncrementAndClamp",
@@ -51,38 +51,38 @@ _STENCIL_OPS = {"KEEP": "Keep", "ZERO": "StencilZero", "REPLACE": "Replace", "IN
                 "DECR": "DecrementAndWrap"}  # fmt: skip
 
 
-def stencil_state(s: Stencil):
+def stencil_state(stencil: SStencil):
     """QRhi's stencil operations of a face for ``s``."""
-    op, compare = QRhiGraphicsPipeline.StencilOp, QRhiGraphicsPipeline.CompareOp
+    stencil_op, compare = QRhiGraphicsPipeline.StencilOp, QRhiGraphicsPipeline.CompareOp
 
     def of(word: str):
-        return getattr(op, _STENCIL_OPS[word])
+        return getattr(stencil_op, _STENCIL_OPS[word])
 
     state = QRhiGraphicsPipeline.StencilOpState()
-    state.failOp, state.depthFailOp, state.passOp = of(s.fail), of(s.depth_fail), of(s.pass_op)
-    state.compareOp = getattr(compare, _COMPARES[s.func])
+    state.failOp, state.depthFailOp, state.passOp = of(stencil.fail), of(stencil.depth_fail), of(stencil.pass_op)
+    state.compareOp = getattr(compare, _COMPARES[stencil.func])
     return state
 
 
-def stencil_of(states: dict[str, str]) -> Stencil | None:
+def stencil_of(states: dict[str, str]) -> SStencil | None:
     """A ``renderstateblock``'s stencil test (``StencilEnable`` and its words; ``0x`` numbers or the defines' values
     as the preprocessor left them), None without one."""
-    s = {k.lower(): v.upper() for k, v in states.items()}
-    if s.get("stencilenable", "FALSE") != "TRUE":
+    words = {k.lower(): value.upper() for k, value in states.items()}
+    if words.get("stencilenable", "FALSE") != "TRUE":
         return None
 
     def number(key: str) -> int:
         bits = 0
-        for word in s.get(key, "0xFF").strip("() ").split("|"):  # "0x01 | 0x08": the defines as preprocessed
+        for word in words.get(key, "0xFF").strip("() ").split("|"):  # "0x01 | 0x08": the defines as preprocessed
             try:
                 bits |= int(word.strip("() "), 0)
             except ValueError:  # a word no preprocessor turned into a number: every bit
                 return 0xFF
         return bits
 
-    return Stencil(s.get("stencilfunc", "ALWAYS"), s.get("stencilpass", "KEEP"), number("stencilref"),
-                   number("stencilmask"), number("stencilwritemask"), s.get("stencilfail", "KEEP"),
-                   s.get("stencilzfail", "KEEP"))  # fmt: skip
+    return SStencil(words.get("stencilfunc", "ALWAYS"), words.get("stencilpass", "KEEP"), number("stencilref"),
+                   number("stencilmask"), number("stencilwritemask"), words.get("stencilfail", "KEEP"),
+                   words.get("stencilzfail", "KEEP"))  # fmt: skip
 
 
 _FACTORS = {"ZERO": "Zero", "ONE": "One", "SRC_COLOR": "SrcColor", "INV_SRC_COLOR": "OneMinusSrcColor",
@@ -98,23 +98,23 @@ def blend_factor(name: str, default: str = "ONE"):
     return getattr(QRhiGraphicsPipeline.BlendFactor, _FACTORS.get(word, _FACTORS[default]))
 
 
-def pass_state(states: dict[str, str], targets: int = 2) -> PassState:
-    """A ``renderstateblock``'s states (``fxeffect.Effect.state_of``) as a ``PassState``: what a block does not name
+def pass_state(states: dict[str, str], targets: int = 2) -> SPassState:
+    """A ``renderstateblock``'s states (``fxeffect.SEffect.state_of``) as a ``SPassState``: what a block does not name
     keeps the engine's default (depth tested and written, no blend). The culling stays off: the view's mirror turns
     the winding (docs/rendering/frame-117-viewer.md 3)."""
-    s = {k.lower(): v.upper() for k, v in states.items()}
+    words = {k.lower(): value.upper() for k, value in states.items()}
 
     def factor(key: str, default: str):
-        return blend_factor(s.get(key, default))
+        return blend_factor(words.get(key, default))
 
     blends = []
     for i in range(targets):
-        on = s.get(f"alphablendenable[{i}]", s.get("alphablendenable", "FALSE")) == "TRUE"
-        src, dst = factor(f"srcblend[{i}]", "ONE"), factor(f"dstblend[{i}]", "ZERO")
-        blends.append((src, dst, factor(f"srcblendalpha[{i}]", s.get(f"srcblend[{i}]", "ONE")),
-                       factor(f"dstblendalpha[{i}]", s.get(f"dstblend[{i}]", "ZERO"))) if on else None)  # fmt: skip
+        is_blending = words.get(f"alphablendenable[{i}]", words.get("alphablendenable", "FALSE")) == "TRUE"
+        source_factor, destination_factor = factor(f"srcblend[{i}]", "ONE"), factor(f"dstblend[{i}]", "ZERO")
+        blends.append((source_factor, destination_factor, factor(f"srcblendalpha[{i}]", words.get(f"srcblend[{i}]", "ONE")),
+                       factor(f"dstblendalpha[{i}]", words.get(f"dstblend[{i}]", "ZERO"))) if is_blending else None)  # fmt: skip
     writes = tuple(
-        int(s[f"colorwriteenable[{i}]"], 0) if f"colorwriteenable[{i}]" in s else None for i in range(targets)
+        int(words[f"colorwriteenable[{i}]"], 0) if f"colorwriteenable[{i}]" in words else None for i in range(targets)
     )
-    return PassState(s.get("zenable", "TRUE") == "TRUE", s.get("zwriteenable", "TRUE") == "TRUE", tuple(blends),
-                     writes=writes if any(w is not None for w in writes) else ())  # fmt: skip
+    return SPassState(words.get("zenable", "TRUE") == "TRUE", words.get("zwriteenable", "TRUE") == "TRUE", tuple(blends),
+                     writes=writes if any(mask is not None for mask in writes) else ())  # fmt: skip

@@ -63,10 +63,14 @@ SPEC = """# written by scripts/build_app.py
 import os
 import sys
 sys.path.insert(0, {src!r})
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 import PySide6
 _qt = os.path.dirname(PySide6.__file__)
+try:  # the package's metadata carries its entry points: the apps it adds to the Toolbox (docs/app-api.md)
+    _meta = copy_metadata({package!r})
+except Exception:
+    _meta = []
 
 a = Analysis(
     [{launcher!r}],
@@ -74,7 +78,7 @@ a = Analysis(
     binaries=[(os.path.join(_qt, n), "PySide6") for n in os.listdir(_qt) if n.split(".")[0] in {baker!r}],
     hiddenimports=collect_submodules({package!r}) + collect_submodules("glcontext") + ["velopack"]
     + (["PySide6.QtShaderTools"] if sys.platform.startswith("linux") else []),  # pulls in qsb's Qt library
-    datas=collect_data_files({package!r}),
+    datas=collect_data_files({package!r}) + _meta,
     excludes={excludes!r},
 )
 pyz = PYZ(a.pure)
@@ -89,18 +93,18 @@ COLLECT(*programs, a.binaries, a.datas, name={program!r})
 SHADER_BAKER = ("qsb", "Qt6ShaderTools")
 
 
-def spec_text(launcher: Path, src: Path, edition: bundle.Edition) -> str:
+def spec_text(launcher: Path, source: Path, edition: bundle.Edition) -> str:
     """The PyInstaller spec: one analysis, two exes (windowed and console) in one folder."""
     return SPEC.format(
-        src=str(src), launcher=str(launcher), package=edition.package, excludes=list(TOOLBOX_EXCLUDES),
+        src=str(source), launcher=str(launcher), package=edition.package, excludes=list(TOOLBOX_EXCLUDES),
         program=bundle.PROGRAM, console=bundle.CONSOLE_BUILD, baker=list(SHADER_BAKER),
     )  # fmt: skip
 
 
-def pyinstaller_env(src: Path) -> dict[str, str]:
+def pyinstaller_env(source: Path) -> dict[str, str]:
     """The build's environment: the tree's ``src`` on PYTHONPATH, where PyInstaller's helper processes import from."""
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(src), env.get("PYTHONPATH", "")]))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(source), env.get("PYTHONPATH", "")]))
     return env
 
 
@@ -130,8 +134,8 @@ def native_module(tree: Path, edition: bundle.Edition) -> Path:
     """The game look's compiled module in the tree's package, built by the tree's scripts/build_native.py when it is
     missing or older than its sources (needs Visual Studio's C++ build tools)."""
     target = tree / "src" / edition.package / NATIVE_MODULE
-    sources = [p for p in (tree / "native" / "d3d12").rglob("*") if p.is_file()]
-    newest = max((p.stat().st_mtime for p in sources), default=0.0)
+    sources = [path for path in (tree / "native" / "d3d12").rglob("*") if path.is_file()]
+    newest = max((path.stat().st_mtime for path in sources), default=0.0)
     if not target.is_file() or target.stat().st_mtime < newest:
         subprocess.run([sys.executable, str(tree / "scripts" / "build_native.py")], check=True, cwd=tree)
     return target
@@ -145,7 +149,7 @@ def check_program(app: Path, tree: Path, edition: bundle.Edition, work: Path, na
     if toc is not None and rules:
         problems += rules.pyz_violations(edition, toc.read_text(encoding="utf-8", errors="replace"))
     bundled = app / "_internal" / edition.package
-    problems += [f"package data missing: {p}" for p in bundle.package_data_missing(package_dir, bundled)]
+    problems += [f"package data missing: {path}" for path in bundle.package_data_missing(package_dir, bundled)]
     for rel in bundle.RUNTIME_FILES[:1]:
         if not (app / rel).is_file():
             problems.append(f"missing beside the program: {rel}")
@@ -171,9 +175,9 @@ def run_pyinstaller(tree: Path, edition: bundle.Edition, work: Path, dist: Path)
     launcher.write_text(LAUNCHER.replace("__PACKAGE__", edition.package), encoding="utf-8", newline="\n")
     spec = work / "toolbox.spec"
     spec.write_text(spec_text(launcher, tree / "src", edition), encoding="utf-8", newline="\n")
-    cmd = [sys.executable, "-m", "PyInstaller", str(spec), "--noconfirm", "--clean"]
-    cmd += ["--distpath", str(dist), "--workpath", str(work / "pyi")]
-    subprocess.run(cmd, check=True, cwd=work, env=pyinstaller_env(tree / "src"))
+    command = [sys.executable, "-m", "PyInstaller", str(spec), "--noconfirm", "--clean"]
+    command += ["--distpath", str(dist), "--workpath", str(work / "pyi")]
+    subprocess.run(command, check=True, cwd=work, env=pyinstaller_env(tree / "src"))
     if WINDOWS:  # the devenv way: AnnoToolbox.exe and AnnoToolbox.com, so a terminal's PATHEXT picks the console build
         (dist / bundle.PROGRAM / f"{bundle.CONSOLE_BUILD}.exe").replace(dist / bundle.PROGRAM / console_name())
     return dist / bundle.PROGRAM
@@ -225,7 +229,7 @@ def find_vpk() -> Path | None:
     options.append(ROOT / "tools" / "vpk" / exe_name("vpk"))
     if on_path := shutil.which("vpk"):
         options.append(Path(on_path))
-    return next((p for p in options if p.is_file()), None)
+    return next((path for path in options if path.is_file()), None)
 
 
 def pack_command(
@@ -234,24 +238,24 @@ def pack_command(
 ) -> list[str]:  # fmt: skip
     """``vpk pack`` for the program folder: no shortcuts (the setup page makes the chosen ones), no portable bundle,
     deltas against the earlier packages in ``out``, x64."""
-    cmd = [
+    command = [
         vpk, "pack", "--packId", edition.pack_id, "--packVersion", bundle.semver(version), "--packDir", str(app),
         "--mainExe", f"{bundle.PROGRAM}.exe", "--packTitle", edition.product, "--packAuthors", wix.MANUFACTURER,
         "--outputDir", str(out), "--runtime", "win-x64", "--shortcuts", "None", "--noPortable", "--delta", "BestSpeed",
     ]  # fmt: skip
     if icon:
-        cmd += ["--icon", str(icon)]
+        command += ["--icon", str(icon)]
     if notes:
-        cmd += ["--releaseNotes", str(notes)]
+        command += ["--releaseNotes", str(notes)]
     if sign:
-        cmd += ["--signTemplate", sign.replace("{file}", "{{file}}")]
-    return cmd
+        command += ["--signTemplate", sign.replace("{file}", "{{file}}")]
+    return command
 
 
 def download_command(vpk: str, repo_url: str, out: Path, token: str = "") -> list[str]:
     """``vpk download github``: the earlier release's packages into ``out``, where the packer finds them for the delta."""
-    cmd = [vpk, "download", "github", "--repoUrl", repo_url, "--outputDir", str(out)]
-    return cmd + (["--token", token] if token else [])
+    command = [vpk, "download", "github", "--repoUrl", repo_url, "--outputDir", str(out)]
+    return command + (["--token", token] if token else [])
 
 
 def release_files(out: Path, edition: bundle.Edition, version: str) -> list[Path]:
@@ -259,24 +263,26 @@ def release_files(out: Path, edition: bundle.Edition, version: str) -> list[Path
     full and delta packages of ``version``, the feed's index files. Only those that exist."""
     sem, pid = bundle.semver(version), edition.pack_id
     names = [f"{pid}-win-Setup.exe", f"{pid}-{sem}-full.nupkg", f"{pid}-{sem}-delta.nupkg", *FEED_FILES]
-    return [out / n for n in names if (out / n).is_file()]
+    return [out / name for name in names if (out / name).is_file()]
 
 
-def pack(app: Path, tree: Path, edition: bundle.Edition, out: Path, args) -> list[Path]:
+def pack(app: Path, tree: Path, edition: bundle.Edition, out: Path, arguments) -> list[Path]:
     """Run the packer (after the earlier release's download, when asked) and return this release's files."""
     vpk = find_vpk()
     if vpk is None:
         raise SystemExit(f"vpk not found: dotnet tool install vpk --version {VPK_VERSION} --tool-path tools/vpk")
     version = bundle.package_version(tree / "src" / edition.package)
-    if args.delta_from:
+    if arguments.delta_from:
         token = os.environ.get("GITHUB_TOKEN", "")
-        done = subprocess.run(download_command(str(vpk), args.delta_from, out, token), check=False)
+        done = subprocess.run(download_command(str(vpk), arguments.delta_from, out, token), check=False)
         print("earlier release:", "downloaded" if done.returncode == 0 else "none found (no delta this time)")
     if LINUX:
-        icon = args.icon or linux.write_icon(out / "build" / linux.ICON)
-        subprocess.run(linux.pack_command(str(vpk), edition, version, app, out, icon, args.notes), check=True)
+        icon = arguments.icon or linux.write_icon(out / "build" / linux.ICON)
+        subprocess.run(linux.pack_command(str(vpk), edition, version, app, out, icon, arguments.notes), check=True)
         return []
-    subprocess.run(pack_command(str(vpk), edition, version, app, out, args.icon, args.notes, args.sign), check=True)
+    subprocess.run(
+        pack_command(str(vpk), edition, version, app, out, arguments.icon, arguments.notes, arguments.sign), check=True
+    )
     return release_files(out, edition, version)
 
 
@@ -286,93 +292,93 @@ def carries_migration(edition: bundle.Edition, version: str) -> bool:
     return edition.key == "public" and tuple(map(int, bundle.msi_version(version).split("."))) < MIGRATION_BELOW
 
 
-def make_migration(tree: Path, edition: bundle.Edition, out: Path, setup: Path, sign_cmd: str | None) -> Path:
+def make_migration(tree: Path, edition: bundle.Edition, out: Path, setup: Path, sign_command: str | None) -> Path:
     """The migration package of the public edition, with this release's ``Setup.exe`` inside."""
     tool = wix.find_wix()
     if tool is None:
         raise SystemExit(f"WiX not found: dotnet tool install wix --version {wix.WIX_VERSION} --tool-path tools/wix")
     version = bundle.msi_version(bundle.package_version(tree / "src" / edition.package))
     msi = wix.build_migration(tool, edition, version, setup, out)
-    if sign_cmd:
-        wix.sign(sign_cmd, [str(msi)])
+    if sign_command:
+        wix.sign(sign_command, [str(msi)])
     return msi
 
 
 def write_sums(out: Path, files: list[Path], edition: bundle.Edition) -> Path:
     """SHA256SUMS: the release's files and the program's own exes and libraries, read back and checked at once."""
     app = out / bundle.PROGRAM
-    packed = [f"{bundle.PROGRAM}/{f}" for f in wix.signable(bundle.folder_files(app), edition.package)]
+    packed = [f"{bundle.PROGRAM}/{file_name}" for file_name in wix.signable(bundle.folder_files(app), edition.package)]
     sums = out / "SHA256SUMS"
-    sums.write_text(bundle.sums_text(out, [*(p.name for p in files), *packed]), encoding="utf-8", newline="\n")
+    sums.write_text(bundle.sums_text(out, [*(path.name for path in files), *packed]), encoding="utf-8", newline="\n")
     if bad := bundle.verify_sums(out, sums.read_text(encoding="utf-8")):
         raise SystemExit("SHA256SUMS does not verify:\n  " + "\n  ".join(bad))
     return sums
 
 
-def build_toolbox(args) -> int:
-    tree = Path(args.source).resolve() if args.source else ROOT
-    edition = bundle.edition_of(tree, args.edition)
+def build_toolbox(arguments) -> int:
+    tree = Path(arguments.source).resolve() if arguments.source else ROOT
+    edition = bundle.edition_of(tree, arguments.edition)
     package_dir = tree / "src" / edition.package
     if rules and (bad := rules.edition_violations(edition, package_dir)):
         raise SystemExit("the source tree is not the public edition:\n  " + "\n  ".join(bad))
-    out = args.out or ROOT / "out" / "installer" / edition.key
+    out = arguments.out or ROOT / "out" / "installer" / edition.key
     texconv = bundle.find_texconv(tree, dict(os.environ))
-    native = WINDOWS and not args.no_native  # the Direct3D 12 module and texconv are Windows only
-    if texconv is None and not args.no_texconv and WINDOWS:
+    native = WINDOWS and not arguments.no_native  # the Direct3D 12 module and texconv are Windows only
+    if texconv is None and not arguments.no_texconv and WINDOWS:
         raise SystemExit("missing texconv (tools/README.md); --no-texconv leaves it out")
-    if native and not args.skip_bundle:
+    if native and not arguments.skip_bundle:
         print(f"native module: {native_module(tree, edition)}")
     started = time.time()
-    if not args.skip_bundle:
+    if not arguments.skip_bundle:
         app = run_pyinstaller(tree, edition, out / "build", out)
         add_beside_program(app, tree, edition, texconv)
         if LINUX:
             linux.add_files(out / bundle.PROGRAM)
     app = out / bundle.PROGRAM
-    print(f"folder: {app} ({sum(p.stat().st_size for p in app.rglob('*') if p.is_file()) / 2**20:.0f} MB, "
+    print(f"folder: {app} ({sum(path.stat().st_size for path in app.rglob('*') if path.is_file()) / 2**20:.0f} MB, "
           f"{time.time() - started:.0f} s)")  # fmt: skip
     problems = check_program(app, tree, edition, out / "build", native=native)
-    if args.smoke:
+    if arguments.smoke:
         problems += smoke_toolbox(app, edition)
     if problems:
         raise SystemExit("the program folder has problems:\n  " + "\n  ".join(problems))
-    if args.pack:
-        pack_release(app, tree, edition, out, args)
+    if arguments.pack:
+        pack_release(app, tree, edition, out, arguments)
     return 0
 
 
-def pack_release(app: Path, tree: Path, edition: bundle.Edition, out: Path, args) -> None:
+def pack_release(app: Path, tree: Path, edition: bundle.Edition, out: Path, arguments) -> None:
     """The packer, the files only this system's release carries, the checksums and the list of what a release attaches."""
     started = time.time()
-    files = pack(app, tree, edition, out, args)
+    files = pack(app, tree, edition, out, arguments)
     version = bundle.package_version(tree / "src" / edition.package)
     if LINUX:
-        files = finish_linux(app, edition, out, version, args)
-    for f in files:
-        print(f"release file: {f.name} ({f.stat().st_size / 2**20:.1f} MB)")
+        files = finish_linux(app, edition, out, version, arguments)
+    for file_path in files:
+        print(f"release file: {file_path.name} ({file_path.stat().st_size / 2**20:.1f} MB)")
     print(f"packed in {time.time() - started:.0f} s")
     if LINUX:
         sums = linux.write_sums(out, files)
     else:
         if carries_migration(edition, version):
             setup = out / f"{edition.pack_id}-win-Setup.exe"
-            files.append(make_migration(tree, edition, out, setup, args.sign))
+            files.append(make_migration(tree, edition, out, setup, arguments.sign))
             print(f"migration package: {files[-1]} ({files[-1].stat().st_size / 2**20:.0f} MB)")
         else:
             print(f"migration package: none for {edition.key} {version} (carried below {MIGRATION_BELOW})")
         sums = write_sums(out, files, edition)
-    names = [*(p.name for p in files), sums.name]
+    names = [*(path.name for path in files), sums.name]
     (out / UPLOAD_LIST).write_text("\n".join(names) + "\n", encoding="utf-8", newline="\n")
     print(f"checksums: {sums} (verified); the files of the release are listed in {UPLOAD_LIST}")
 
 
-def finish_linux(app: Path, edition: bundle.Edition, out: Path, version: str, args) -> list[Path]:
+def finish_linux(app: Path, edition: bundle.Edition, out: Path, version: str, arguments) -> list[Path]:
     """The AppImage under its release name, the tarball, and (with ``--smoke``) a start of the AppImage itself."""
     built = out / linux.appimage_name(edition)
     final = out / linux.release_appimage_name(edition)
     built.replace(final)
     linux.make_tarball(app, out, edition, version)
-    if args.smoke:
+    if arguments.smoke:
         env_flag = "--appimage-extract-and-run"  # no FUSE needed: a CI runner or a container may have none
         problems = run_smoke([str(final), env_flag], out, final.name)
         if problems:
@@ -381,33 +387,37 @@ def finish_linux(app: Path, edition: bundle.Edition, out: Path, version: str, ar
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0], epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--source", metavar="TREE", help="the source tree (default: this repository, the full edition)")
-    ap.add_argument("--edition", choices=sorted(bundle.EDITIONS), help="assert the edition the tree must be")
-    ap.add_argument("--out", type=Path, help="folder for the result (default out/installer/<edition>)")
-    ap.add_argument("--smoke", action="store_true", help="start every app once")
-    ap.add_argument("--pack", action="store_true", help="also run the installer's packer (Setup.exe, updates)")
-    ap.add_argument("--delta-from", metavar="REPO_URL", help="download the earlier release's packages first (deltas)")
-    ap.add_argument("--icon", type=Path, help="the setup's icon file (.ico)")
-    ap.add_argument("--notes", type=Path, help="a Markdown file with the release notes for the packer")
-    ap.add_argument(
+    parser.add_argument("--source", metavar="TREE", help="the source tree (default: this repository, the full edition)")
+    parser.add_argument("--edition", choices=sorted(bundle.EDITIONS), help="assert the edition the tree must be")
+    parser.add_argument("--out", type=Path, help="folder for the result (default out/installer/<edition>)")
+    parser.add_argument("--smoke", action="store_true", help="start every app once")
+    parser.add_argument("--pack", action="store_true", help="also run the installer's packer (Setup.exe, updates)")
+    parser.add_argument(
+        "--delta-from", metavar="REPO_URL", help="download the earlier release's packages first (deltas)"
+    )
+    parser.add_argument("--icon", type=Path, help="the setup's icon file (.ico)")
+    parser.add_argument("--notes", type=Path, help="a Markdown file with the release notes for the packer")
+    parser.add_argument(
         "--sign",
         metavar="COMMAND",
         help="signing command with {file}; signs the program's files and the migration .msi",
     )
-    ap.add_argument("--sign-file", metavar="PATH", action="append", help="sign this file with --sign and stop")
-    ap.add_argument("--skip-bundle", action="store_true", help="reuse the program folder of the last build")
-    ap.add_argument("--no-texconv", action="store_true", help="leave texconv out of the program")
-    ap.add_argument("--no-native", action="store_true", help="leave the game look's module out (the editor look draws)")
-    args = ap.parse_args(argv)
-    if args.sign_file:
-        if not args.sign:
+    parser.add_argument("--sign-file", metavar="PATH", action="append", help="sign this file with --sign and stop")
+    parser.add_argument("--skip-bundle", action="store_true", help="reuse the program folder of the last build")
+    parser.add_argument("--no-texconv", action="store_true", help="leave texconv out of the program")
+    parser.add_argument(
+        "--no-native", action="store_true", help="leave the game look's module out (the editor look draws)"
+    )
+    arguments = parser.parse_args(argv)
+    if arguments.sign_file:
+        if not arguments.sign:
             raise SystemExit("--sign-file needs --sign COMMAND")
-        wix.sign(args.sign, args.sign_file)
+        wix.sign(arguments.sign, arguments.sign_file)
         return 0
-    return build_toolbox(args)
+    return build_toolbox(arguments)
 
 
 if __name__ == "__main__":

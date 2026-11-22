@@ -9,7 +9,7 @@ from PySide6.QtCore import QCoreApplication, QLibraryInfo, QLocale, QTranslator
 
 from ..infra import i18n
 
-_installed: list[QTranslator] = []  # what is installed now, so a change of language removes it
+_g_installed: list[QTranslator] = []  # what is installed now, so a change of language removes it
 
 
 def install() -> None:
@@ -17,9 +17,9 @@ def install() -> None:
     app = QCoreApplication.instance()
     if app is None:
         return
-    for translator in _installed:
+    for translator in _g_installed:
         app.removeTranslator(translator)
-    _installed.clear()
+    _g_installed.clear()
     code = i18n.current()
     if code == i18n.DEFAULT:
         return
@@ -28,4 +28,4 @@ def install() -> None:
         translator = QTranslator(app)
         if translator.load(QLocale(code), name, "_", folder):
             app.installTranslator(translator)
-            _installed.append(translator)
+            _g_installed.append(translator)

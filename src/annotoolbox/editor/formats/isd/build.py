@@ -1,6 +1,6 @@
 """Delivery of edited 2070-format islands: 2070's ``maindata/patch9.rda``, and the edited files 1404 shares.
 
-``edited_files`` applies every edit file of a game to its islands (``formats.isd.edit.Island2070``) and returns the files
+``edited_files`` applies every edit file of a game to its islands (``formats.isd.edit.CIsland2070``) and returns the files
 to put in an archive; ``build_patch`` / ``install_patch`` / ``uninstall_patch`` are 2070's route, the archive that 2070
 mounts last and without a checksum (engine-notes "Anno 2070 archives"). 1404's route is ``oldenginebuild``.
 """
@@ -15,14 +15,14 @@ from pathlib import Path
 import numpy as np
 
 from ....formats import isd2070
-from ....formats.rda import RdaArchive, write_v20
+from ....formats.rda import CRdaArchive, write_v20
 from ....infra.buildcache import copy_atomic, write_atomic
 from ....infra.i18n import tr
 from ....islands import islandedits
 from ....othergames import gamebackups
 from ...editchange import count_line
 from . import blank as isd_blank
-from .edit import EDIT_PREFIX, Island2070
+from .edit import EDIT_PREFIX, CIsland2070
 
 PATCH = "maindata/patch9.rda"
 MARKER = "data/anno-toolbox/islands.txt"  # in our archive: which islands it carries
@@ -35,29 +35,29 @@ FAR_LAND = ([-2.5, -2, -1.5, -1, -0.5, 0, 0.25, 0.5], [0, 7, 23, 77, 163, 212, 2
 FAR_COAST = ([-4, -3, -2, -1, 0, 1, 2, 3], [0, 34, 119, 154, 154, 117, 39, 0])  # tiles inland -> G
 
 
-def far_view(island: isd2070.Island, vanilla: bytes) -> bytes:
+def far_view(island: isd2070.CIsland, vanilla: bytes) -> bytes:
     """The island's far-view texture with land and coast redrawn from its (edited) heights."""
     from PIL import Image
     from scipy.ndimage import distance_transform_edt, map_coordinates
 
     rgba = np.flipud(np.asarray(Image.open(io.BytesIO(vanilla)).convert("RGBA"))).copy()
-    hm = np.asarray(island.heightmap(), np.float32)
+    heightmap = np.asarray(island.heightmap(), np.float32)
     size = rgba.shape[0]
-    per = size / (hm.shape[0] - 1)  # pixels per tile
-    at = (np.arange(size) + 0.5) / per
-    zz, xx = np.meshgrid(at, at, indexing="ij")
-    h = map_coordinates(hm, [zz, xx], order=1)
-    land = h > 0
+    per = size / (heightmap.shape[0] - 1)  # pixels per tile
+    sample_centres = (np.arange(size) + 0.5) / per
+    sample_z, sample_x = np.meshgrid(sample_centres, sample_centres, indexing="ij")
+    height = map_coordinates(heightmap, [sample_z, sample_x], order=1)
+    land = height > 0
     inland = (distance_transform_edt(land) - distance_transform_edt(~land)) / per
-    rgba[..., 3] = np.round(np.interp(h, *FAR_LAND))
+    rgba[..., 3] = np.round(np.interp(height, *FAR_LAND))
     rgba[..., 1] = np.round(np.interp(inland, *FAR_COAST))
     (levels,) = struct.unpack_from("<I", vanilla, 28)
-    img = Image.fromarray(np.flipud(rgba), "RGBA")
+    image = Image.fromarray(np.flipud(rgba), "RGBA")
     out = bytearray(vanilla[:128])  # the same size, format and mip count
     for k in range(max(1, levels)):
         side = max(1, size >> k)
-        r, g, b, a = (img if k == 0 else img.resize((side, side), Image.BOX)).split()
-        out += Image.merge("RGBA", (b, g, r, a)).tobytes()  # stored B, G, R, A
+        red, green, blue, alpha = (image if k == 0 else image.resize((side, side), Image.BOX)).split()
+        out += Image.merge("RGBA", (blue, green, red, alpha)).tobytes()  # stored B, G, R, A
     return bytes(out)
 
 
@@ -75,13 +75,13 @@ def edited_files(
         if not source or not tree.exists(source):
             log(tr("islands.no_source_island_skipped", name=path.name))
             continue
-        isl = Island2070(tree.read_bytes(source))
+        isl = CIsland2070(tree.read_bytes(source))
         report = isl.apply(edits, types)
         files[source.lower()] = isl.write()
         written.append(source.lower())
         far = source.lower().removesuffix(".isd") + FAR_SUFFIX
         if report["heights"] and tree.exists(far):  # the coast may have moved
-            files[far] = far_view(isl.island, tree.read_bytes(far))
+            files[far] = far_view(isl.m_island, tree.read_bytes(far))
         log(f"{source}: " + count_line(report))
         for miss in report["unmatched"]:
             log(tr("islands.not_found_name", name=miss))
@@ -91,7 +91,7 @@ def edited_files(
 # 2070: patch9.rda
 def is_ours(path: Path) -> bool:
     try:
-        return MARKER in RdaArchive(path).entries
+        return MARKER in CRdaArchive(path).entries
     except (OSError, ValueError):
         return False
 
@@ -112,8 +112,8 @@ def patch_bytes(edited: dict[str, bytes], written: list[str], original: Path | N
     ``written``: the islands among them, for the marker."""
     files: dict[str, bytes] = {}
     if original is not None and original.is_file():
-        arc = RdaArchive(original)
-        files = {e.path: arc.read_entry(e) for e in arc if e.path != MARKER}
+        arc = CRdaArchive(original)
+        files = {entry.path: arc.read_entry(entry) for entry in arc if entry.path != MARKER}
     files |= edited
     files[MARKER] = ("\r\n".join(written) + "\r\n").encode("utf-8")
     return write_v20(files)

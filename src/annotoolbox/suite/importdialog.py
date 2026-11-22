@@ -17,13 +17,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from ..infra.i18n import N_, tr
 from . import archivemod, importchecks, importresume, projectimport, reimport
-from .background import Background, JobTalk, Stopped
+from .background import CBackground, CJobTalk, CStopped
 from .settings import settings_file
 
 MAX_ROWS = 500  # conflicts listed in the question; the rest take the choice made for "all"
@@ -63,45 +64,45 @@ def ask_archive(parent: QWidget, loose_files: bool = False) -> tuple[Path, str |
     games = list(archivemod.GAME_VERSIONS) if loose_files else archivemod.guess_game(source)
     if len(games) <= 1 and not loose_files:
         return source, (games[0] if games else None)  # a file that is no archive: the import says so
-    game, ok = QInputDialog.getItem(
+    game, accepted = QInputDialog.getItem(
         parent, tr("common.project"), tr("common.archive_mod_pick_game", name=source.name), games, 0, False
     )
-    return (source, game) if ok else None
+    return (source, game) if accepted else None
 
 
 def start_archive(
-    talk: JobTalk,
-    background: Background,
+    talk: CJobTalk,
+    background: CBackground,
     source: Path,
     game: str | None,
     folder: Path,
     settings,
-    done: Callable[[projectimport.ImportReport | Exception], None],
-    wait: bool = False,
+    done: Callable[[projectimport.SImportReport | Exception], None],
+    is_waiting: bool = False,
 ) -> None:
     """Import the archive mod ``source`` as a project in ``folder`` off the window's thread (``talk.stop()`` removes
-    the half-made project, ``done`` gets ``Stopped``)."""
-    background.run(lambda: archivemod.import_archive_mod(source, folder, game, settings, talk.say), done, wait)
+    the half-made project, ``done`` gets ``CStopped``)."""
+    background.run(lambda: archivemod.import_archive_mod(source, folder, game, settings, talk.say), done, is_waiting)
 
 
 def start(
-    talk: JobTalk,
-    background: Background,
+    talk: CJobTalk,
+    background: CBackground,
     source: Path,
     folder: Path,
     settings,
-    done: Callable[[projectimport.ImportReport | Exception], None],
-    wait: bool = False,
+    done: Callable[[projectimport.SImportReport | Exception], None],
+    is_waiting: bool = False,
     settings_path: Path | None = None,
 ) -> None:
     """Import ``source`` as a project in ``folder`` off the window's thread. ``talk``'s ``said`` carries the progress;
     ``talk.stop()`` ends it: the half-made project stays and can be resumed (``ask_pending``), and ``done`` gets
-    ``Stopped``."""
+    ``CStopped``."""
     context = importchecks.context_from_settings(settings, registry_of(settings_path))
     background.run(
-        lambda: projectimport.import_mod(source, folder, settings, talk.say, context=context, resumable=True),
+        lambda: projectimport.import_mod(source, folder, settings, talk.say, context=context, is_resumable=True),
         done,
-        wait,
+        is_waiting,
     )
 
 
@@ -110,13 +111,15 @@ def registry_of(settings_path: Path | None = None) -> Path:
     return (settings_path or settings_file()).parent / importresume.PENDING
 
 
-def start_resume(talk: JobTalk, background: Background, folder: Path, settings, done, wait=False, path=None) -> None:
+def start_resume(
+    talk: CJobTalk, background: CBackground, folder: Path, settings, done, is_waiting=False, path=None
+) -> None:
     """Continue the half-made import in ``folder`` off the window's thread (a stop keeps it again)."""
     context = importchecks.context_from_settings(settings, registry_of(path))
-    background.run(lambda: importresume.resume(folder, settings, talk.say, context), done, wait)
+    background.run(lambda: importresume.resume(folder, settings, talk.say, context), done, is_waiting)
 
 
-def ask_pending(parent: QWidget, found: list[importresume.Pending]) -> tuple[str, importresume.Pending] | None:
+def ask_pending(parent: QWidget, found: list[importresume.SPending]) -> tuple[str, importresume.SPending] | None:
     """Offer the first half-made import: ``("resume" | "remove", it)``, or None for later."""
     if not found:
         return None
@@ -133,19 +136,19 @@ def ask_pending(parent: QWidget, found: list[importresume.Pending]) -> tuple[str
     return ("resume", one) if clicked is resume else ("remove", one) if clicked is remove else None
 
 
-def ask_conflicts(parent: QWidget, made: reimport.ReimportPlan) -> dict[str, str] | None:
+def ask_conflicts(parent: QWidget, made: reimport.CReimportPlan) -> dict[str, str] | None:
     """The three-way question of a re-import: the plan's lines, and per file both sides changed a choice, mine or the
     mod's (mine is the default); None when the person cancels."""
     dialog = QDialog(parent)
     dialog.setWindowTitle(tr("common.reimport_title"))
     layout = QVBoxLayout(dialog)
-    layout.addWidget(QLabel(chr(10).join(made.lines())))
-    rows = made.conflicts[:MAX_ROWS]
+    layout.addWidget(QLabel("\n".join(made.lines())))
+    rows = made.m_conflicts[:MAX_ROWS]
     table = QTableWidget(len(rows), 2, dialog)
     table.setHorizontalHeaderLabels([tr("common.reimport_file"), tr("common.reimport_choice")])
     boxes = []
     for row, conflict in enumerate(rows):
-        table.setItem(row, 0, _item(conflict.rel + (" (removed)" if conflict.removed else "")))
+        table.setItem(row, 0, QTableWidgetItem(conflict.rel + (" (removed)" if conflict.removed else "")))
         box = QComboBox()
         box.addItem(tr("common.reimport_keep_mine"), reimport.KEEP)
         box.addItem(tr("common.reimport_take_mod"), reimport.TAKE)
@@ -161,26 +164,24 @@ def ask_conflicts(parent: QWidget, made: reimport.ReimportPlan) -> dict[str, str
     layout.addWidget(buttons)
     if not dialog.exec():
         return None
-    return {c.rel: box.currentData() for c, box in zip(rows, boxes, strict=True)}
+    return {chosen_conflict.rel: box.currentData() for chosen_conflict, box in zip(rows, boxes, strict=True)}
 
 
-def _item(text: str):
-    from PySide6.QtWidgets import QTableWidgetItem
-
-    return QTableWidgetItem(text)
-
-
-def start_reimport_plan(talk: JobTalk, background: Background, folder: Path, source: Path, done, wait=False) -> None:
-    background.run(lambda: reimport.plan(folder, source, talk.say), done, wait)
+def start_reimport_plan(
+    talk: CJobTalk, background: CBackground, folder: Path, source: Path, done, is_waiting=False
+) -> None:
+    """Compare the mod at ``source`` with the project in ``folder`` off the window's thread (``reimport.plan``)."""
+    background.run(lambda: reimport.plan(folder, source, talk.say), done, is_waiting)
 
 
-def start_reimport_apply(talk: JobTalk, background, made, choices, done, wait=False) -> None:
-    background.run(lambda: reimport.apply(made, choices, talk.say), done, wait)
+def start_reimport_apply(talk: CJobTalk, background, made, choices, done, is_waiting=False) -> None:
+    """Carry out the re-import plan ``made`` with the person's ``choices`` off the window's thread."""
+    background.run(lambda: reimport.apply(made, choices, talk.say), done, is_waiting)
 
 
-def explain(result: projectimport.ImportReport | Exception, folder: Path | None = None) -> list[str]:
+def explain(result: projectimport.SImportReport | Exception, folder: Path | None = None) -> list[str]:
     """The lines to show for how an import ended; ``folder``: the project's, to tell a kept stop from a removed one."""
-    if isinstance(result, Stopped):
+    if isinstance(result, CStopped):
         kept = folder is not None and importresume.read_journal(folder) is not None
         return [tr(N_("common.import_stopped_kept") if kept else N_("common.import_stopped"))]
     if isinstance(result, Exception):

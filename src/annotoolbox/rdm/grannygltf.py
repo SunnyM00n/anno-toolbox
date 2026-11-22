@@ -1,5 +1,5 @@
 """Granny ``.gr2`` files (Anno 1404, 1701) and glTF, both ways through the RDM records the toolchain already moves:
-``granny_to_rdm`` makes a ``.gr2``'s meshes, skeletons and animations an ``RdmFile`` for ``rdmgltf.export``, and
+``granny_to_rdm`` makes a ``.gr2``'s meshes, skeletons and animations an ``SRdmFile`` for ``rdmgltf.export``, and
 ``rdm_to_granny`` writes the RDM files a glTF import gives (``gltfrdm.import_gltf``) as one ``.gr2``
 (``formats.grannywrite``); ``gltf_to_granny`` does both steps, ``config_files`` the model config and info file that
 place the result. Granny keeps the usual quaternion, RDM its conjugate; both sit in the game's own axes, so the glTF
@@ -13,15 +13,15 @@ import math
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import numpy as np
 
-from ..formats import grannyanim, grannyread
-from ..formats import grannywrite as gw
+from ..formats import grannyanim, grannyread, grannywrite
 from ..formats.grannyglb import meshes_of
 from ..formats.isd2070 import FIXED
 from ..formats.rdmlayout import encode, parse, weight_bytes
-from ..formats.rdmread import Animation, Material, Mesh, RdmFile, Skeleton, Submesh
+from ..formats.rdmread import SAnimation, SMaterial, SMesh, SRdmFile, SSkeleton, SSubmesh
 from ..models.grannyrig import best_skeleton, granny_animation, granny_skeleton, granny_skin
 from ..models.meshxform import qconj
 from ..models.rdmmesh import mesh_data
@@ -32,7 +32,7 @@ STATIC, SKINNED = "P3f_N3f_T2f", "P3f_N3f_T2f_I4b_W4b"  # the RDM layouts a Gran
 
 
 @dataclass(frozen=True)
-class RecordOptions:
+class SRecordOptions:
     """What ``granny_to_rdm`` makes beyond the glTF export's needs: ``colours`` the vertex colours as a ``C4c``
     element of an unskinned mesh (bytes B, G, R, A, as 2070 stores them), ``skin`` the skin elements' names (a
     second and later ``I4b`` or ``W4b`` hold zeros: 2205's 16-bone layout), ``turn`` the model turned half a turn
@@ -48,98 +48,115 @@ class RecordOptions:
 _HALF_TURN = np.diag([-1.0, 1.0, -1.0, 1.0])  # x and z negated: a rotation, the winding stays
 
 
-def _turned(m):
+def _turned(mesh):
     """A Granny mesh with its positions and normals turned half a turn about y."""
-    flip = lambda v: (-v[0], v[1], -v[2])  # noqa: E731
-    return replace(m, positions=[flip(p) for p in m.positions], normals=[flip(n) for n in m.normals])
+    flip = lambda vector: (-vector[0], vector[1], -vector[2])  # noqa: E731
+    return replace(
+        mesh,
+        positions=[flip(position) for position in mesh.positions],
+        normals=[flip(normal) for normal in mesh.normals],
+    )
 
 
-def _row(elements, p, n, uv, colour, joints, weights) -> bytes:
+def _row(elements, position, normal, uv, colour, joints, weights) -> bytes:
     """One vertex: the value each element takes by its usage (the first ``I4b`` and ``W4b`` the skin's, later ones zero)."""
     seen: Counter[int] = Counter()
     out = []
-    for e in elements:
-        slot, seen[e.usage] = seen[e.usage], seen[e.usage] + 1
-        value = {0: p, 1: n, 4: uv, 5: colour}.get(e.usage)
-        if e.usage in (6, 7):
-            value = (joints if e.usage == 7 else weights) if slot == 0 else (0, 0, 0, 0)
-        out.append(encode(e, value))
+    for element in elements:
+        slot, seen[element.usage] = seen[element.usage], seen[element.usage] + 1
+        value = {0: position, 1: normal, 4: uv, 5: colour}.get(element.usage)
+        if element.usage in (6, 7):
+            value = (joints if element.usage == 7 else weights) if slot == 0 else (0, 0, 0, 0)
+        out.append(encode(element, value))
     return b"".join(out)
 
 
-def _rdm_mesh(m, skin, scale: float = 1.0, opts: RecordOptions = RecordOptions()) -> tuple[Mesh, list[str]]:  # noqa: B008
-    """A Granny mesh (``grannyglb.GrannyMesh``) as an RDM mesh record of float vertices, skinned by ``skin``, and
+def _rdm_mesh(
+    granny_mesh,
+    skin,
+    scale: float = 1.0,
+    options: SRecordOptions = SRecordOptions(),  # noqa: B008
+) -> tuple[SMesh, list[str]]:
+    """A Granny mesh (``grannyglb.SGrannyMesh``) as an RDM mesh record of float vertices, skinned by ``skin``, and
     its material names in the order its submeshes number them."""
-    coloured = opts.colours and skin is None and m.colors is not None
-    layout = SKINNED.replace("I4b_W4b", opts.skin) if skin is not None else STATIC + ("_C4c" if coloured else "")
+    coloured = options.colours and skin is None and granny_mesh.colors is not None
+    layout = SKINNED.replace("I4b_W4b", options.skin) if skin is not None else STATIC + ("_C4c" if coloured else "")
     elements = parse(layout)
-    rows, positions = [], [tuple(c / scale for c in p) for p in m.positions]
-    for k, (p, n, uv) in enumerate(zip(positions, m.normals, m.uvs, strict=True)):
-        colour = bytes(round(min(max(m.colors[k][c], 0.0), 1.0) * 255) for c in (2, 1, 0, 3)) if coloured else None
+    rows, positions = [], [tuple(component / scale for component in position) for position in granny_mesh.positions]
+    for k, (position, normal, uv) in enumerate(zip(positions, granny_mesh.normals, granny_mesh.uvs, strict=True)):
+        colour = (
+            bytes(round(min(max(granny_mesh.colors[k][c], 0.0), 1.0) * 255) for c in (2, 1, 0, 3)) if coloured else None
+        )
         joints, weights = (skin[1][k], weight_bytes(skin[2][k])) if skin is not None else (None, None)
-        rows.append(_row(elements, p, n, uv, colour and tuple(colour), joints, weights))
+        rows.append(_row(elements, position, normal, uv, colour and tuple(colour), joints, weights))
     indices, submeshes, names = [], [], []
-    for name, tris in m.groups:
+    for name, triangles in granny_mesh.groups:
         if name not in names:
             names.append(name)
-        submeshes.append(Submesh(len(indices), len(tris), names.index(name)))
-        indices += tris
-    lo = tuple(min(p[k] for p in positions) for k in range(3))
-    hi = tuple(max(p[k] for p in positions) for k in range(3))
+        submeshes.append(SSubmesh(len(indices), len(triangles), names.index(name)))
+        indices += triangles
+    low = tuple(min(position[k] for position in positions) for k in range(3))
+    high = tuple(max(position[k] for position in positions) for k in range(3))
     stride = len(rows[0]) if rows else 0
-    mesh = Mesh(m.name, elements, 4 if skin is not None else 0, 1 if len(m.positions) > 0xFFFF else 0,
-                len(rows), stride, b"".join(rows), indices, submeshes, skin[0] if skin else None, (*lo, *hi), 0x5C)  # fmt: skip
+    mesh = SMesh(granny_mesh.name, elements, 4 if skin is not None else 0, 1 if len(granny_mesh.positions) > 0xFFFF else 0,
+                len(rows), stride, b"".join(rows), indices, submeshes, skin[0] if skin else None, (*low, *high), 0x5C)  # fmt: skip
     return mesh, names
 
 
-def _turn_rig(out: RdmFile) -> None:
+def _turn_rig(out: SRdmFile) -> None:
     """The skeletons and keys of ``out`` for a model turned half a turn about y: a joint's inverse bind keeps its move
     and turns by the half turn after it (a vertex in bone space stays where it was); a root joint's keys, which
     are its place in the model, are turned by it, a child's stay as they are."""
-    for sk in out.skeletons:
-        for j in sk.joints:
-            m = rigid(j.rotation, j.position) @ _HALF_TURN
-            j.rotation = qconj(matrix_quat(m[:3, :3]))
-    roots = {j.name for sk in out.skeletons for j in sk.joints if j.parent is None}
-    for a in out.animations:
-        for t in (t for t in a.tracks if t.joint in roots):
-            for k in t.keys:
-                m = _HALF_TURN @ rigid(k.rotation, k.position)
-                k.rotation, k.position = qconj(matrix_quat(m[:3, :3])), tuple(m[:3, 3])
+    for skeleton in out.skeletons:
+        for j in skeleton.joints:
+            matrix = rigid(j.rotation, j.position) @ _HALF_TURN
+            j.rotation = qconj(matrix_quat(matrix[:3, :3]))
+    roots = {j.name for skeleton in out.skeletons for j in skeleton.joints if j.parent is None}
+    for animation in out.animations:
+        for track in (track for track in animation.tracks if track.joint in roots):
+            for k in track.keys:
+                matrix = _HALF_TURN @ rigid(k.rotation, k.position)
+                k.rotation, k.position = qconj(matrix_quat(matrix[:3, :3])), tuple(matrix[:3, 3])
 
 
 def granny_to_rdm(
     data: bytes,
-    animations: Sequence[grannyanim.Animation] = (),
+    animations: Sequence[grannyanim.SAnimation] = (),
     scale: float = 1.0,
-    opts: RecordOptions = RecordOptions(),  # noqa: B008
-) -> RdmFile:
+    options: SRecordOptions = SRecordOptions(),  # noqa: B008
+) -> SRdmFile:
     """A ``.gr2`` as one RDM file: its meshes (float vertices; a skin's bones through its bindings, a rigid mesh as a
     one-bone skin), its skeletons as joints, its own animations and ``animations`` (read from other ``.gr2`` files)
     sampled every time step against the skeleton naming most of their bones; every length divided by ``scale``
-    (``rdm_to_granny``'s). Raises ``GrannyError``."""
-    root = grannyread.GrannyFile(data).root()
+    (``rdm_to_granny``'s). Raises ``CGrannyError``."""
+    root = grannyread.CGrannyFile(data).root()
     skeletons = grannyanim.read_skeletons(root)
     owners = grannyanim.model_skeletons(root)
-    out = RdmFile(False, root.get("FromFileName") or "", "granny", skeletons=[granny_skeleton(s) for s in skeletons])
+    out = SRdmFile(
+        False, root.get("FromFileName") or "", "granny", skeletons=[granny_skeleton(skeleton) for skeleton in skeletons]
+    )
     materials: list[str] = []
-    for m in meshes_of(root):
-        m = _turned(m) if opts.turn else m
-        mesh, names = _rdm_mesh(m, granny_skin(m, skeletons, owners.get(m.name)), scale, opts)
-        for s in mesh.submeshes:  # the file's material numbers: one list over all its meshes
-            name = names[s.material]
+    for granny_mesh in meshes_of(root):
+        granny_mesh = _turned(granny_mesh) if options.turn else granny_mesh
+        mesh, names = _rdm_mesh(
+            granny_mesh, granny_skin(granny_mesh, skeletons, owners.get(granny_mesh.name)), scale, options
+        )
+        for submesh in mesh.submeshes:  # the file's material numbers: one list over all its meshes
+            name = names[submesh.material]
             if name not in materials:
                 materials.append(name)
-            s.material = materials.index(name)
+            submesh.material = materials.index(name)
         out.meshes.append(mesh)
-    out.materials = [Material(n, "") for n in materials]
-    for a in [*grannyanim.read_animations(root), *animations]:
-        out.animations.append(granny_animation(a, best_skeleton(a, skeletons)))
-    for joint in (j for sk in out.skeletons for j in sk.joints):  # a uniform scale moves an inverse bind's move
-        joint.position = tuple(c / scale for c in joint.position)
-    for key in (k for a in out.animations for t in a.tracks for k in t.keys):
-        key.position = tuple(c / scale for c in key.position)
-    if opts.turn:
+    out.materials = [SMaterial(material_name, "") for material_name in materials]
+    for animation in [*grannyanim.read_animations(root), *animations]:
+        out.animations.append(granny_animation(animation, best_skeleton(animation, skeletons)))
+    for joint in (
+        j for skeleton in out.skeletons for j in skeleton.joints
+    ):  # a uniform scale moves an inverse bind's move
+        joint.position = tuple(component / scale for component in joint.position)
+    for key in (k for animation in out.animations for track in animation.tracks for k in track.keys):
+        key.position = tuple(component / scale for component in key.position)
+    if options.turn:
         _turn_rig(out)
     return out
 
@@ -148,7 +165,7 @@ def granny_to_rdm(
 
 
 @dataclass(frozen=True)
-class GrannyOptions:
+class SGrannyOptions:
     """``scale`` every length (1701: 32 units a tile), ``units_per_meter`` the art tool info's (1701: 39.37)."""
 
     scale: float = 1.0
@@ -156,102 +173,119 @@ class GrannyOptions:
 
 
 GAME_UNITS = {
-    "anno1404": GrannyOptions(),
-    "anno1701": GrannyOptions(32.0, 39.370079),
+    "anno1404": SGrannyOptions(),
+    "anno1701": SGrannyOptions(32.0, 39.370079),
 }  # granny.md "What the games ship"
 
 
-def _bones(skeleton: Skeleton, scale: float) -> list[dict]:
+def _bones(skeleton: SSkeleton, scale: float) -> list[dict]:
     """RDM joints (inverse binds) as Granny bones: the rest transform in the parent, the inverse world for row
     vectors (the move in the last row)."""
     inverse = [rigid(j.rotation, np.asarray(j.position) * scale) for j in skeleton.joints]
-    bind = [np.linalg.inv(m) for m in inverse]
+    bind = [np.linalg.inv(matrix) for matrix in inverse]
     out = []
     for k, j in enumerate(skeleton.joints):
         parent = j.parent if j.parent is not None and 0 <= j.parent < k else None
         local = bind[k] if parent is None else np.linalg.inv(bind[parent]) @ bind[k]
-        transform = {**gw.IDENTITY_TRANSFORM, "position": tuple(local[:3, 3]),
+        transform = {**grannywrite.IDENTITY_TRANSFORM, "position": tuple(local[:3, 3]),
                      "orientation": matrix_quat(local[:3, :3])}  # fmt: skip
         out.append({"Name": j.name, "ParentIndex": -1 if parent is None else parent, "Transform": transform,
                     "InverseWorldTransform": tuple(inverse[k].T.reshape(16))})  # fmt: skip
     return out
 
 
-def _spec(mesh: Mesh, rdm: RdmFile, materials: dict, names: list[str], scale: float) -> gw.MeshSpec:
+def _spec(mesh: SMesh, rdm: SRdmFile, materials: dict, names: list[str], scale: float) -> grannywrite.SMeshSpec:
     """An RDM mesh as a Granny mesh: its groups by the file's material names, a skin's bones numbered as the
     skeleton's joints (``names``); a rigid mesh binds the one bone ``names`` holds."""
     data = mesh_data(mesh)
-    v = data.vertices
+    vertices = data.vertices
     groups = []
-    for k, tris in data.groups.items():
+    for k, triangles in data.groups.items():
         name = rdm.materials[k].name if 0 <= k < len(rdm.materials) else f"material_{k}"
-        groups.append((materials.setdefault(name, gw.Rec(gw.MATERIAL, {"Name": name})), [int(i) for i in tris]))
-    spec = gw.MeshSpec(mesh.name, [tuple(p * scale) for p in v[:, :3]], [tuple(n) for n in v[:, 3:6]],
-                       [tuple(t) for t in v[:, 6:8]], groups, list(names))  # fmt: skip
-    indices = [i for _material, tris in groups for i in tris]
+        groups.append(
+            (
+                materials.setdefault(name, grannywrite.SRec(grannywrite.MATERIAL, {"Name": name})),
+                [int(i) for i in triangles],
+            )
+        )
+    spec = grannywrite.SMeshSpec(mesh.name, [tuple(position * scale) for position in vertices[:, :3]], [tuple(normal) for normal in vertices[:, 3:6]],
+                       [tuple(uv_pair) for uv_pair in vertices[:, 6:8]], groups, list(names))  # fmt: skip
+    indices = [i for _material, triangles in groups for i in triangles]
     _normals, spec.tangents, spec.binormals = frames(spec.positions, spec.uvs, indices, spec.normals)
     if data.skinned:
         spec.bone_indices = [tuple(int(j) for j in row) for row in data.joints]
-        spec.bone_weights = [weight_bytes([float(w) for w in row]) for row in data.weights]
+        spec.bone_weights = [weight_bytes([float(weight) for weight in row]) for row in data.weights]
     return spec
 
 
 def _track(track, scale: float) -> dict:
     """An RDM track (local keys) as linear Granny curves."""
     times = [k.time for k in track.keys]
-    position = [tuple(c * scale for c in k.position) for k in track.keys]
+    position = [tuple(component * scale for component in k.position) for k in track.keys]
     orientation = [qconj(k.rotation) for k in track.keys]
-    return {"Name": track.joint, "PositionCurve": gw.curve(times, position),
-            "OrientationCurve": gw.curve(times, orientation, dimension=4)}  # fmt: skip
+    return {"Name": track.joint, "PositionCurve": grannywrite.curve(times, position),
+            "OrientationCurve": grannywrite.curve(times, orientation, dimension=4)}  # fmt: skip
 
 
-def _animation(a: Animation, group: str, scale: float) -> gw.Rec:
-    tracks = [_track(t, scale) for t in a.tracks if t.keys]
-    step = 1.0 / a.frame_rate if a.frame_rate > 0 else 1.0 / 30
-    return gw.animation_record(a.name, a.duration_ms / 1000.0, step, [(group, tracks)])
+def _animation(animation: SAnimation, group: str, scale: float) -> grannywrite.SRec:
+    tracks = [_track(track, scale) for track in animation.tracks if track.keys]
+    step = 1.0 / animation.frame_rate if animation.frame_rate > 0 else 1.0 / 30
+    return grannywrite.animation_record(animation.name, animation.duration_ms / 1000.0, step, [(group, tracks)])
 
 
-def rdm_to_granny(files: list[tuple[str, RdmFile]], name: str, opts: GrannyOptions | None = None) -> bytes:
+def _rigid_model(
+    mesh: SMesh, rdm: SRdmFile, materials: dict, scale: float
+) -> tuple[grannywrite.SRec, grannywrite.SRec, grannywrite.SRec]:
+    """A mesh without a skeleton as a model of its own: one bone at the origin; its skeleton, mesh and model."""
+    bone = {"Name": mesh.name, "ParentIndex": -1, "InverseWorldTransform": tuple(np.identity(4).reshape(16))}
+    skeleton = grannywrite.skeleton_record(mesh.name, [bone])
+    record = grannywrite.mesh_record(_spec(mesh, rdm, materials, [mesh.name], scale))
+    return skeleton, record, grannywrite.model_record(mesh.name, skeleton, [record])
+
+
+def rdm_to_granny(files: list[tuple[str, SRdmFile]], name: str, options: SGrannyOptions | None = None) -> bytes:
     """One ``.gr2`` of RDM files (mesh files first, then animation files): a model per skeleton (a rigid mesh
     without one gets a bone of its own), every animation as a track group of the first model."""
-    opts = opts or GrannyOptions()
-    materials: dict[str, gw.Rec] = {}
+    options = options or SGrannyOptions()
+    materials: dict[str, grannywrite.SRec] = {}
     meshes, skeletons, models, animations = [], [], [], []
     stem = name.rsplit(".", 1)[0]
     for _file, rdm in files:
-        made = [gw.skeleton_record(f"{stem}_{k}", _bones(s, opts.scale)) for k, s in enumerate(rdm.skeletons)]
-        joints = [[j.name for j in s.joints] for s in rdm.skeletons]
+        made = [
+            grannywrite.skeleton_record(f"{stem}_{k}", _bones(skeleton, options.scale))
+            for k, skeleton in enumerate(rdm.skeletons)
+        ]
+        joints = [[j.name for j in skeleton.joints] for skeleton in rdm.skeletons]
         bound: dict[int, list] = {}
         for mesh in rdm.meshes:
             if mesh.skeleton is not None and 0 <= mesh.skeleton < len(made):
-                spec = _spec(mesh, rdm, materials, joints[mesh.skeleton], opts.scale)
-                bound.setdefault(mesh.skeleton, []).append(gw.mesh_record(spec))
-            else:  # its own bone at the origin
-                own = gw.skeleton_record(mesh.name, [{"Name": mesh.name, "ParentIndex": -1,
-                                                      "InverseWorldTransform": tuple(np.identity(4).reshape(16))}])  # fmt: skip
-                record = gw.mesh_record(_spec(mesh, rdm, materials, [mesh.name], opts.scale))
+                spec = _spec(mesh, rdm, materials, joints[mesh.skeleton], options.scale)
+                bound.setdefault(mesh.skeleton, []).append(grannywrite.mesh_record(spec))
+            else:
+                own, record, model = _rigid_model(mesh, rdm, materials, options.scale)
                 skeletons.append(own)
                 meshes.append(record)
-                models.append(gw.model_record(mesh.name, own, [record]))
-        for k, s in enumerate(made):
-            skeletons.append(s)
+                models.append(model)
+        for k, skeleton in enumerate(made):
+            skeletons.append(skeleton)
             meshes += bound.get(k, [])
-            models.append(gw.model_record(stem if not k else f"{stem}_{k}", s, bound.get(k, [])))
+            models.append(grannywrite.model_record(stem if not k else f"{stem}_{k}", skeleton, bound.get(k, [])))
         animations += rdm.animations
     group = models[0].values["Name"] if models else stem
-    records = [_animation(a, group, opts.scale) for a in animations]
-    root = gw.root_record(name, opts.units_per_meter, Materials=list(materials.values()), Skeletons=skeletons,
+    records = [_animation(animation, group, options.scale) for animation in animations]
+    root = grannywrite.root_record(name, options.units_per_meter, Materials=list(materials.values()), Skeletons=skeletons,
                           Meshes=meshes, Models=models, Animations=records)  # fmt: skip
-    return gw.write_file(root)
+    return grannywrite.write_file(root)
 
 
-def gltf_to_granny(path, opts: GrannyOptions | None = None, import_options=None) -> tuple[bytes, list[str]]:
+def gltf_to_granny(path, options: SGrannyOptions | None = None, import_options=None) -> tuple[bytes, list[str]]:
     """A glTF file as one ``.gr2`` (its name the glTF's, ``.gr2``) and the import's notes."""
     from ..formats.gltf import read_gltf
     from . import gltfrdm
 
+    path = Path(path)
     imported = gltfrdm.import_gltf(read_gltf(path), path.with_suffix(".rdm").name, import_options)
-    return rdm_to_granny(imported.files, path.with_suffix(".gr2").name, opts), imported.notes
+    return rdm_to_granny(imported.files, path.with_suffix(".gr2").name, options), imported.notes
 
 
 # The files that place a written .gr2
@@ -345,18 +379,22 @@ def config_files(data: bytes, mesh_path: str, game: str) -> dict[str, str]:
     files) as the game's own name them, beside it: 1701's ``.mcf`` and ``.info``, 1404's ``.cfg`` and ``.ifo``; each
     material's diffuse texture named ``<mesh>_<material>_diff`` (``.tga`` for 1701, ``.png`` for 1404, which loads
     its ``_0.dds``). docs/rdm-gltf.md "Granny models"."""
-    meshes = meshes_of(grannyread.GrannyFile(data).root())
-    points = [p for m in meshes for p in m.positions] or [(0.0, 0.0, 0.0)]
-    lo = [min(p[k] for p in points) for k in range(3)]
-    hi = [max(p[k] for p in points) for k in range(3)]
-    names = list(dict.fromkeys(name for m in meshes for name, _tris in m.groups))
+    meshes = meshes_of(grannyread.CGrannyFile(data).root())
+    points = [point for mesh in meshes for point in mesh.positions] or [(0.0, 0.0, 0.0)]
+    low = [min(point[k] for point in points) for k in range(3)]
+    high = [max(point[k] for point in points) for k in range(3)]
+    names = list(dict.fromkeys(name for mesh in meshes for name, _tris in mesh.groups))
     stem, windows = mesh_path.rsplit(".", 1)[0], mesh_path.replace("/", "\\")
-    texture = lambda name, ext: f"{stem}_{name or 'default'}_diff.{ext}".replace("/", "\\")  # noqa: E731
+    texture = lambda name, extension: f"{stem}_{name or 'default'}_diff.{extension}".replace("/", "\\")  # noqa: E731
     if game == "anno1701":
-        materials = "".join(_MATERIAL_1701.format(name=n, texture=texture(n, "tga")) for n in names)
-        box = [math.floor(v) for v in lo] + [math.ceil(v) for v in hi]
+        materials = "".join(
+            _MATERIAL_1701.format(name=material_name, texture=texture(material_name, "tga")) for material_name in names
+        )
+        box = [math.floor(value) for value in low] + [math.ceil(value) for value in high]
         return {f"{stem}.mcf": _MCF.format(mesh=windows, materials=materials), f"{stem}.info": _INFO.format(*box)}
-    materials = "".join(_MATERIAL_1404.format(name=n, texture=texture(n, "png")) for n in names)
-    fixed = [round((a + b) / 2 * FIXED) for a, b in zip(lo, hi, strict=True)]
-    fixed += [round((b - a) / 2 * FIXED) for a, b in zip(lo, hi, strict=True)]
+    materials = "".join(
+        _MATERIAL_1404.format(name=material_name, texture=texture(material_name, "png")) for material_name in names
+    )
+    fixed = [round((lower + upper) / 2 * FIXED) for lower, upper in zip(low, high, strict=True)]
+    fixed += [round((upper - lower) / 2 * FIXED) for lower, upper in zip(low, high, strict=True)]
     return {f"{stem}.cfg": _CFG.format(mesh=windows, materials=materials), f"{stem}.ifo": _IFO.format(*fixed)}

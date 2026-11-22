@@ -3,7 +3,7 @@ binding layouts by register space (as the engine lays out its tables: shader-com
 ranges, the root constants, and the vertex input from the shader's own input signature. No GPU and no module here:
 the result is the description ``nativegpu`` hands to the module.
 
-``BindingPlan.of(reflections)`` is the entry (one pass's stages, or a compute shader); ``signature(container)`` reads
+``SBindingPlan.of(reflections)`` is the entry (one pass's stages, or a compute shader); ``signature(container)`` reads
 a shader's input or output signature, ``input_elements`` lays it over a mesh's stored elements. The design:
 docs/rendering/native-backend.md, "Step 1".
 """
@@ -30,7 +30,7 @@ KINDS = {"cbuffer": "cbuffer", "tbuffer": "typed", "texture": "texture", "sample
 
 
 @dataclass(frozen=True)
-class Item:
+class SItem:
     """One binding of a layout: NVRHI's ``kind``, the shader's register, how many (an array) and the shader's name."""
 
     kind: str
@@ -40,11 +40,11 @@ class Item:
 
 
 @dataclass
-class LayoutSpec:
+class SLayoutSpec:
     """One binding layout: a register space's bounded bindings, or one unbounded range of it (``bindless``)."""
 
     space: int
-    items: list[Item] = field(default_factory=list)
+    items: list[SItem] = field(default_factory=list)
     bindless: bool = False
 
     def tuples(self) -> list[tuple[str, int, int]]:
@@ -52,50 +52,58 @@ class LayoutSpec:
 
 
 @dataclass
-class BindingPlan:
+class SBindingPlan:
     """The layouts a pass binds with, in the order its pipeline takes them (spaces ascending, a space's bindless
     ranges after its table, the root constants last), and the samplers it reads by name."""
 
-    layouts: list[LayoutSpec]
-    push: Item | None = None  # the root constants buffer that becomes NVRHI's push constants
+    layouts: list[SLayoutSpec]
+    push: SItem | None = None  # the root constants buffer that becomes NVRHI's push constants
     samplers: dict[tuple[int, int], str] = field(default_factory=dict)  # (space, register) -> name
 
     @classmethod
-    def of(cls, reflections: list, bindless: tuple = (), volatile: bool = False) -> BindingPlan:
+    def of(cls, reflections: list, bindless: tuple = (), volatile: bool = False, rooted: tuple = ()) -> SBindingPlan:
         """The union of every stage's bindings (a register two stages share is bound once). ``bindless``: arrays
         the engine declares bindless, bound as unbounded ranges (a descriptor table); ``volatile``: the constant
-        buffers written per dispatch on the module's own lists (NVRHI's volatile ones)."""
+        buffers written per dispatch on the module's own lists (NVRHI's volatile ones); ``rooted``: root constant
+        buffers that stay root views, never push constants (``cbModel``, a draw's slot of one buffer)."""
         seen: dict[tuple[int, str, int], tuple[str, int]] = {}
-        sizes = {cb.name: cb.size for refl in reflections for cb in refl.cbuffers}
+        sizes = {
+            constant_buffer.name: constant_buffer.size
+            for reflection in reflections
+            for constant_buffer in reflection.cbuffers
+        }
         samplers: dict[tuple[int, int], str] = {}
-        for refl in reflections:
-            for b in refl.bindings:
-                kind = KINDS.get(b.kind, "texture")
+        for reflection in reflections:
+            for binding in reflection.bindings:
+                kind = KINDS.get(binding.kind, "texture")
                 if kind == "sampler":
-                    samplers.setdefault((b.space, b.register), b.name)
-                if volatile and kind == "cbuffer" and b.space != ROOT_SPACE:
+                    samplers.setdefault((binding.space, binding.register), binding.name)
+                if volatile and kind == "cbuffer" and binding.space != ROOT_SPACE:
                     kind = "volatile"
-                seen.setdefault((b.space, kind, b.register), (b.name, 0 if b.name in bindless else b.count))
-        layouts: dict[int, LayoutSpec] = {}
-        open_ranges: list[LayoutSpec] = []
-        roots: list[Item] = []
+                seen.setdefault(
+                    (binding.space, kind, binding.register),
+                    (binding.name, 0 if binding.name in bindless else binding.count),
+                )
+        layouts: dict[int, SLayoutSpec] = {}
+        open_ranges: list[SLayoutSpec] = []
+        roots: list[SItem] = []
         for (space, kind, register), (name, count) in sorted(seen.items()):
             if space == ROOT_SPACE and kind == "cbuffer":
-                roots.append(Item("volatile", register, sizes.get(name, 16), name))
+                roots.append(SItem("volatile", register, sizes.get(name, 16), name))
             elif count == 0:  # unbounded: a bindless layout of its own, bound by a descriptor table
-                open_ranges.append(LayoutSpec(space, [Item(kind, register, 0, name)], bindless=True))
+                open_ranges.append(SLayoutSpec(space, [SItem(kind, register, 0, name)], bindless=True))
             else:
-                layouts.setdefault(space, LayoutSpec(space)).items.append(Item(kind, register, count, name))
+                layouts.setdefault(space, SLayoutSpec(space)).items.append(SItem(kind, register, count, name))
         ordered = []
-        for space in sorted({*layouts, *(o.space for o in open_ranges)}):
+        for space in sorted({*layouts, *(open_range.space for open_range in open_ranges)}):
             if space in layouts:
                 ordered.append(layouts[space])
-            ordered += [o for o in open_ranges if o.space == space]
-        push = _push(roots)
+            ordered += [open_range for open_range in open_ranges if open_range.space == space]
+        push = _push([root for root in roots if root.name not in rooted])
         if roots:
-            items = [Item("push", push.slot, push.count, push.name) if r is push else Item("volatile", r.slot, 1, r.name)
-                     for r in roots]  # fmt: skip
-            ordered.append(LayoutSpec(ROOT_SPACE, items))
+            items = [SItem("push", push.slot, push.count, push.name) if root is push else SItem("volatile", root.slot, 1, root.name)
+                     for root in roots]  # fmt: skip
+            ordered.append(SLayoutSpec(ROOT_SPACE, items))
         if len(ordered) > MAX_LAYOUTS:
             raise ValueError(f"{len(ordered)} binding layouts: NVRHI takes {MAX_LAYOUTS}")
         return cls(ordered, push, samplers)
@@ -109,14 +117,14 @@ class BindingPlan:
         raise KeyError((space, bindless_slot))
 
 
-def _push(roots: list[Item]) -> Item | None:
+def _push(roots: list[SItem]) -> SItem | None:
     """The root constants buffer that becomes push constants: the one a draw changes most (the draw's index, the
     smallest that fits), the others go in as root constant buffers."""
-    fits = [r for r in roots if r.count <= PUSH_BYTES]
+    fits = [root for root in roots if root.count <= PUSH_BYTES]
     if not fits:
         return None
-    named = [r for r in fits if "DrawCall" in r.name]
-    return named[0] if named else min(fits, key=lambda r: (r.count, r.slot))
+    named = [root for root in fits if "DrawCall" in root.name]
+    return named[0] if named else min(fits, key=lambda root: (root.count, root.slot))
 
 
 def sampler_state(name: str) -> dict:
@@ -148,7 +156,7 @@ FILL_SLOT = 1  # the stream of an input the mesh lacks: one constant vertex (a c
 
 
 @dataclass(frozen=True)
-class SignatureElement:
+class SSignatureElement:
     semantic: str
     index: int
     register: int
@@ -162,17 +170,21 @@ class SignatureElement:
         return bin(self.mask).count("1")
 
 
-def signature(container: bytes, part: str = "ISG1") -> list[SignatureElement]:
-    """A shader's input (``ISG1``) or output (``OSG1``) signature, read from its DXBC container."""
-    data = container_parts(container).get(part)
-    if not data:
-        return []
-    count, offset = struct.unpack_from("<II", data, 0)
-    out = []
-    for i in range(count):
-        _stream, name_at, index, sv, comp, reg, mask = struct.unpack_from("<6IB", data, offset + 32 * i)
-        name = data[name_at : data.index(b"\0", name_at)].decode("ascii")
-        out.append(SignatureElement(name, index, reg, sv, _COMPONENT.get(comp, "float"), mask))
+def signature(container: bytes, part: str = "ISG1") -> list[SSignatureElement]:
+    """A shader's input (``ISG1``) or output (``OSG1``) signature, read from its DXBC container; ``ValueError`` on a
+    container or signature that is cut short."""
+    try:
+        data = container_parts(container).get(part)
+        if not data:
+            return []
+        count, offset = struct.unpack_from("<II", data, 0)
+        out = []
+        for i in range(count):
+            _stream, name_at, index, sv, comp, reg, mask = struct.unpack_from("<6IB", data, offset + 32 * i)
+            name = data[name_at : data.index(b"\0", name_at)].decode("ascii")
+            out.append(SSignatureElement(name, index, reg, sv, _COMPONENT.get(comp, "float"), mask))
+    except struct.error as exc:
+        raise ValueError(f"the shader's {part} signature is cut short: {exc}") from exc
     return out
 
 
@@ -180,9 +192,9 @@ def signature(container: bytes, part: str = "ISG1") -> list[SignatureElement]:
 InputElement = tuple[str, int, str, int, int, int, bool]
 
 
-def input_elements(elements, inputs: list[SignatureElement], stride: int) -> tuple[list[InputElement], bytes]:
+def input_elements(elements, inputs: list[SSignatureElement], stride: int) -> tuple[list[InputElement], bytes]:
     """The shader's inputs laid out over a mesh's stored ``elements`` ((usage, type, count, offset), as
-    ``gamedraw.Mesh`` keeps them, ``stride`` bytes a vertex): each semantic finds its element by usage and index;
+    ``gamedraw.CMesh`` keeps them, ``stride`` bytes a vertex): each semantic finds its element by usage and index;
     one the mesh lacks reads a constant from ``FILL_SLOT``, whose one vertex's bytes come back with the layout."""
     out: list[InputElement] = []
     fill = bytearray()
@@ -190,11 +202,11 @@ def input_elements(elements, inputs: list[SignatureElement], stride: int) -> tup
         if inp.semantic.upper() in SYSTEM_VALUES:
             continue
         usage = USAGES.get(re.sub(r"\d+$", "", inp.semantic.upper()))
-        found = [e for e in elements if e[0] == usage]
-        e = found[inp.index] if inp.index < len(found) else None
-        fmt = _format(e, inp.component) if e is not None else None
+        found = [element for element in elements if element[0] == usage]
+        element = found[inp.index] if inp.index < len(found) else None
+        fmt = _format(element, inp.component) if element is not None else None
         if fmt is not None:
-            out.append((inp.semantic, inp.index, fmt, 0, e[3], stride, False))
+            out.append((inp.semantic, inp.index, fmt, 0, element[3], stride, False))
             continue
         white = 255 if usage == 5 else 0
         out.append((inp.semantic, inp.index, _PACKED[inp.component], FILL_SLOT, len(fill), 0, False))
@@ -202,8 +214,8 @@ def input_elements(elements, inputs: list[SignatureElement], stride: int) -> tup
     return out, bytes(fill)
 
 
-def _format(e, component: str) -> str | None:
-    _usage, kind, count = e[0], e[1], e[2]
+def _format(element, component: str) -> str | None:
+    _usage, kind, count = element[0], element[1], element[2]
     if kind == 5:
         return _PACKED[component]
     if component != "float" and (kind, count) in _INTEGERS:
@@ -211,7 +223,7 @@ def _format(e, component: str) -> str | None:
     return _FORMATS.get((kind, count))
 
 
-def float_elements(inputs: list[SignatureElement]) -> tuple[list[InputElement], int]:
+def float_elements(inputs: list[SSignatureElement]) -> tuple[list[InputElement], int]:
     """A vertex of 32-bit floats for each input as wide as the shader reads it, in signature order (a full-screen
     triangle's: ``gamepost.TRIANGLE``), and the vertex's stride."""
     names = {1: "R32_FLOAT", 2: "RG32_FLOAT", 3: "RGB32_FLOAT", 4: "RGBA32_FLOAT"}
@@ -221,4 +233,4 @@ def float_elements(inputs: list[SignatureElement]) -> tuple[list[InputElement], 
             continue
         out.append((inp.semantic, inp.index, names[inp.width], 0, at, 0, False))
         at += 4 * inp.width
-    return [(*e[:5], at, e[6]) for e in out], at
+    return [(*element[:5], at, element[6]) for element in out], at

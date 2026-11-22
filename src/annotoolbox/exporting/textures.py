@@ -10,22 +10,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .run import Job, Made
+from .run import SJob, SMade
 
 CUBE = 0x200  # the cube-map bit of a DDS header's caps2 word
 HALF_KINDS = ("BC6H", "RGBA16F", "RG16F", "R16F")  # layouts whose values are half floats: the EXR keeps half
 
 
-def _levels(job: Job, info, cube: bool) -> list[tuple[int, int, str]]:
+def _levels(job: SJob, texture_info, cube: bool) -> list[tuple[int, int, str]]:
     """(mip, face, name tag) of every level the options ask for."""
-    mips = range(info.mips) if job.options.all_mips else range(1)
+    mips = range(texture_info.mips) if job.options.all_mips else range(1)
     every = job.options.all_faces if cube else job.options.all_slices
-    faces = range(info.faces) if every else range(1)
+    faces = range(texture_info.faces) if every else range(1)
     kind = "face" if cube else "slice"
     return [
-        (m, f, (f"_{kind}{f}" if info.faces > 1 and every else "") + (f"_mip{m}" if job.options.all_mips else ""))
-        for f in faces
-        for m in mips
+        (
+            mip,
+            face,
+            (f"_{kind}{face}" if texture_info.faces > 1 and every else "")
+            + (f"_mip{mip}" if job.options.all_mips else ""),
+        )
+        for face in faces
+        for mip in mips
     ]
 
 
@@ -46,11 +51,13 @@ def radiance_pixels(rgb) -> bytes:
 def _planes(values, dtype: str) -> dict[str, bytes]:
     import numpy as np
 
-    return {n: np.ascontiguousarray(values[..., k]).astype(dtype).tobytes() for k, n in enumerate("RGBA")}
+    return {
+        plane_name: np.ascontiguousarray(values[..., k]).astype(dtype).tobytes() for k, plane_name in enumerate("RGBA")
+    }
 
 
 @dataclass(frozen=True)
-class Levels:
+class SLevels:
     """What every level of one texture is exported as: the decoder, the forms, the float forms and the exposure."""
 
     dds: object
@@ -59,7 +66,7 @@ class Levels:
     exposure: float
 
 
-def _level_files(job: Job, levels: Levels, mip: int, face: int, tag: str, made: Made) -> None:
+def _level_files(job: SJob, levels: SLevels, mip: int, face: int, tag: str, made: SMade) -> None:
     """The files of one level (mip and face or slice) in the forms asked."""
     import numpy as np
 
@@ -67,7 +74,7 @@ def _level_files(job: Job, levels: Levels, mip: int, face: int, tag: str, made: 
     from ..models.mipchain import exposed_srgb8
 
     dds, want, float_forms = levels.dds, levels.want, levels.float_forms
-    hdr, half = dds.hdr, dds.kind in HALF_KINDS
+    hdr, half = dds.m_hdr, dds.m_kind in HALF_KINDS
     width, height = dds.size_of(mip)
     values = None
     if want & {"png", "png16", "exr", "hdr"}:
@@ -92,23 +99,23 @@ def _level_files(job: Job, levels: Levels, mip: int, face: int, tag: str, made: 
         made.files[job.name(".hdr", tag)] = imagewrite.radiance_bytes(width, height, radiance_pixels(values[..., :3]))
 
 
-def export(job: Job) -> Made:
+def export(job: SJob) -> SMade:
     """The forms of ``job.formats`` (png, png16, exr, hdr) of a DDS, one file per level the options ask for."""
     try:
         import numpy  # noqa: F401  # the decoders need it
 
-        from ..models.ddsdecode import DdsFile, UnsupportedDds
+        from ..models.ddsdecode import CDdsFile, CUnsupportedDds
     except ImportError:
-        return Made(notes=["textures need numpy (pip install numpy); the file is exported as stored"], status="failed")
+        return SMade(notes=["textures need numpy (pip install numpy); the file is exported as stored"], status="failed")
     try:
-        dds = DdsFile(job.data)
-    except UnsupportedDds as exc:
-        return Made(notes=[f"not decoded ({exc}); exported as stored"], status="failed")
-    made, info, want = Made(), dds.info, job.formats
+        dds = CDdsFile(job.data)
+    except CUnsupportedDds as exc:
+        return SMade(notes=[f"not decoded ({exc}); exported as stored"], status="failed")
+    made, texture_info, want = SMade(), dds.m_info, job.formats
     cube = bool(int.from_bytes(job.data[112:116], "little") & CUBE)
-    hdr = dds.hdr
+    hdr = dds.m_hdr
     if hdr:
-        made.notes.append(f"{info.format}: float texels{', decoded from BC6H' if dds.kind == 'BC6H' else ''}")
+        made.notes.append(f"{texture_info.format}: float texels{', decoded from BC6H' if dds.m_kind == 'BC6H' else ''}")
     if job.options.png_depth == 16 and "png" in want and "png16" not in want:
         want = (want - {"png"}) | {"png16"}
         made.notes.append("png_depth 16: the png is written as the 16-bit form")
@@ -116,16 +123,16 @@ def export(job: Job) -> Made:
     if len(float_forms) == 2:
         float_forms = [job.options.hdr_form if job.options.hdr_form in ("exr", "hdr") else "exr"]
         made.notes.append(f"exr and hdr both asked: only {float_forms[0]} written (options: hdr_form)")
-    levels = Levels(dds, want, float_forms, job.options.exposure)
-    for mip, face, tag in _levels(job, info, cube):
+    levels = SLevels(dds, want, float_forms, job.options.exposure)
+    for mip, face, tag in _levels(job, texture_info, cube):
         try:
             _level_files(job, levels, mip, face, tag, made)
-        except (UnsupportedDds, IndexError) as exc:
+        except (CUnsupportedDds, IndexError) as exc:
             made.notes.append(f"mip {mip} face {face}: {exc}")
             made.status = "failed"
     if float_forms and not hdr:
         made.notes.append("float forms of an 8-bit texture: its bytes over 255")
-    if info.faces > 1 and not (job.options.all_faces if cube else job.options.all_slices):
-        made.notes.append(f"only the first of {info.faces} {'faces' if cube else 'slices'} (options)")
+    if texture_info.faces > 1 and not (job.options.all_faces if cube else job.options.all_slices):
+        made.notes.append(f"only the first of {texture_info.faces} {'faces' if cube else 'slices'} (options)")
     made.notes = list(dict.fromkeys(made.notes))
     return made

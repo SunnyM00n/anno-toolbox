@@ -112,8 +112,10 @@ def build_migration(wix: Path, edition: Edition, version: str, setup_exe: Path, 
 def signable(files: list[str], package: str) -> list[str]:
     """What the signing step signs: the program's own exes and the libraries and extension modules of the package itself
     (not the libraries of others, which carry their own signatures or none)."""
-    ours = [f for f in files if f.lower().endswith((".exe", ".com")) and "/" not in f]  # AnnoToolbox.exe and .com
-    ours += [f for f in files if f.lower().endswith(SIGNABLE) and f.startswith(f"_internal/{package}/")]
+    ours = [
+        file for file in files if file.lower().endswith((".exe", ".com")) and "/" not in file
+    ]  # AnnoToolbox.exe and .com
+    ours += [file for file in files if file.lower().endswith(SIGNABLE) and file.startswith(f"_internal/{package}/")]
     return sorted(ours)
 
 
@@ -121,7 +123,8 @@ def sign_commands(template: str, paths: list[str]) -> list[list[str]]:
     """One argv per file from ``template`` (a command with ``{file}``); an error when the template has no place."""
     if "{file}" not in template:
         raise SystemExit("--sign needs a command with {file} in it, e.g. 'signtool sign /fd SHA256 /a {file}'")
-    return [shlex.split(template.replace("{file}", p), posix=False) for p in paths]
+    parts = shlex.split(template, posix=False)  # split first: a path with a space stays one argument
+    return [[part.replace("{file}", path) for part in parts] for path in paths]
 
 
 def sign(template: str, paths: list[str]) -> None:
@@ -135,4 +138,4 @@ def find_wix() -> Path | None:
     options.append(bundle.ROOT / "tools" / "wix" / "wix.exe")
     if on_path := shutil.which("wix"):
         options.append(Path(on_path))
-    return next((p for p in options if p.is_file()), None)
+    return next((option for option in options if option.is_file()), None)

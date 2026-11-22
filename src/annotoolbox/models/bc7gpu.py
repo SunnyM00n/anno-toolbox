@@ -33,7 +33,7 @@ SLOT_WAIT = 0.05
 _USING = re.compile(r'Using DirectCompute [\d.]+ on "([^"]*)"')
 
 
-class GpuError(RuntimeError):
+class CGpuError(RuntimeError):
     """Every adapter failed on a texture."""
 
 
@@ -41,28 +41,29 @@ def _texconv() -> Path | None:
     return find_tool("texconv") if os.name == "nt" and texbackend.mode() != "builtin" else None
 
 
-def _dds_in(width: int, height: int, data: bytes, srgb: bool) -> bytes:
+def _dds_in(width_px: int, height_px: int, data: bytes, is_srgb: bool) -> bytes:
     """One uncompressed R8G8B8A8 level as a DX10 DDS (what the probe encodes)."""
-    head = struct.pack("<4sIIIIIII", b"DDS ", 124, 0x100F, height, width, width * 4, 1, 1) + bytes(44)
+    head = struct.pack("<4sIIIIIII", b"DDS ", 124, 0x100F, height_px, width_px, width_px * 4, 1, 1) + bytes(44)
     head += struct.pack("<II4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)
     head += struct.pack("<5I", 0x1000, 0, 0, 0, 0)
-    return head + struct.pack("<5I", 29 if srgb else 28, 3, 0, 1, 0) + data
+    return head + struct.pack("<5I", 29 if is_srgb else 28, 3, 0, 1, 0) + data
 
 
-def run_encode(texconv: Path, index: int, dds: bytes, srgb: bool) -> tuple[str | None, bytes | None]:
+def run_encode(texconv: Path, index: int, dds: bytes, is_srgb: bool) -> tuple[str | None, bytes | None]:
     """``dds`` (uncompressed, its mips included) as texconv's BC7 on adapter ``index``: the adapter's name and the
     file, or None for each when the encode did not run on that adapter (texconv silently takes its CPU codec)."""
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_gpu_") as tmp:
-        src, out = Path(tmp) / "levels.dds", Path(tmp) / "out"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="a2070_gpu_") as temp_dir:
+        source, out = Path(temp_dir) / "levels.dds", Path(temp_dir) / "out"
         out.mkdir()
-        src.write_bytes(dds)
-        fmt = "BC7_UNORM_SRGB" if srgb else "BC7_UNORM"
-        res = run_tool(
-            texconv, ["-gpu", str(index), "-f", fmt, "-ft", "dds", "-o", str(out), "-y", "-nologo", str(src)]
+        source.write_bytes(dds)
+        pixel_format = "BC7_UNORM_SRGB" if is_srgb else "BC7_UNORM"
+        result = run_tool(
+            texconv,
+            ["-gpu", str(index), "-f", pixel_format, "-ft", "dds", "-o", str(out), "-y", "-nologo", str(source)],
         )
         produced = out / "levels.dds"
-        used = _USING.search(res.stdout or "")
-        if not res.ok or used is None or not produced.is_file():
+        used = _USING.search(result.stdout or "")
+        if not result.ok or used is None or not produced.is_file():
             return None, None
         return used.group(1), produced.read_bytes()
 
@@ -89,8 +90,8 @@ def probe(texconv: Path | None = None) -> str:
         if name is None:
             break
         names[index] = (name, data)
-    hardware = next((i for i, (n, _) in names.items() if n != WARP), None)
-    warp = next((i for i, (n, _) in names.items() if n == WARP), None)
+    hardware = next((i for i, (adapter_name, _) in names.items() if adapter_name != WARP), None)
+    warp = next((i for i, (adapter_name, _) in names.items() if adapter_name == WARP), None)
     if hardware is None:
         return "none"  # WARP alone is slower than the CPU encoder
     first = names[hardware][1]
@@ -108,7 +109,7 @@ def adapters() -> list[int]:
     if value.strip().lower() in ("", "none", "off"):
         return []
     try:
-        return [int(v) for v in value.split(",") if v.strip()]
+        return [int(adapter_index) for adapter_index in value.split(",") if adapter_index.strip()]
     except ValueError:
         return []
 
@@ -180,24 +181,24 @@ def slot():
         time.sleep(SLOT_WAIT)
 
 
-def wanted(width: int, height: int) -> bool:
+def wanted(width_px: int, height_px: int) -> bool:
     """Whether a picture of this top level goes to the GPU (vector data never does: texture-pipeline "GPU encoder")."""
-    return width * height >= MIN_TEXELS and bool(adapters())
+    return width_px * height_px >= MIN_TEXELS and bool(adapters())
 
 
-def encode(dds: bytes, srgb: bool) -> bytes:
+def encode(dds: bytes, is_srgb: bool) -> bytes:
     """``dds`` (our uncompressed mip levels) as a BC7 file, on the first adapter that runs it. The header is the
     tail texconv writes after its own: the alpha mode it notes is left at 0, as the CPU encoder writes it."""
     from .bc7encode import dds_header
 
     texconv = _texconv()
     if texconv is None:
-        raise GpuError("texconv is not there")
+        raise CGpuError("texconv is not there")
     height, width = struct.unpack_from("<II", dds, 12)
-    mips = struct.unpack_from("<I", dds, 28)[0]
+    mip_count = struct.unpack_from("<I", dds, 28)[0]
     with slot():
         for index in adapters():
-            _name, data = run_encode(texconv, index, dds, srgb)
+            _name, data = run_encode(texconv, index, dds, is_srgb)
             if data is not None and data[84:88] == b"DX10" and len(data) > 148:
-                return dds_header(width, height, max(1, mips), srgb) + data[148:]
-    raise GpuError(f"no adapter of {adapters()} encoded the texture")
+                return dds_header(width, height, max(1, mip_count), is_srgb) + data[148:]
+    raise CGpuError(f"no adapter of {adapters()} encoded the texture")

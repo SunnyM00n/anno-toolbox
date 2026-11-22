@@ -1,10 +1,10 @@
 """Export game files: one file or many, each as stored and in the converted forms its kind has, with an index.
 
 ``export_path(source, path, formats, out)`` exports one file, ``export_many`` a list (and writes the index). A
-``Source`` is anything that reads game paths (``sources.gametree.GameTree``, or ``FolderSource`` for loose files).
-A file that cannot be exported is an ``Entry`` with status "failed" and the reason, never an exception: a batch goes
+``Source`` is anything that reads game paths (``sources.gametree.CGameTree``, or ``CFolderSource`` for loose files).
+A file that cannot be exported is an ``SEntry`` with status "failed" and the reason, never an exception: a batch goes
 on. The per-kind work is in ``textures``, ``pictures``, ``sounds``, ``movies``, ``models`` and ``data``; each takes a
-``Job`` and returns the files it makes (``Made``), this module writes them. docs/exporting.md.
+``SJob`` and returns the files it makes (``SMade``), this module writes them. docs/exporting.md.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from . import kinds
 from .index import write_index
 
 
-class Source(Protocol):
+class ISource(Protocol):
     """Where game files are read from: ``read``, ``exists`` and ``origins`` (the archives that carry a path)."""
 
     def read(self, path: str) -> bytes: ...
@@ -29,31 +29,33 @@ class Source(Protocol):
     def origins(self, path: str) -> list[str]: ...
 
 
-class FolderSource:
+class CFolderSource:
     """A folder of loose files as a source; paths are relative to it, with forward slashes."""
 
     def __init__(self, root: Path) -> None:
-        self.root = Path(root)
+        self.m_root = Path(root)
 
     def exists(self, path: str) -> bool:
-        return (self.root / path).is_file()
+        return (self.m_root / path).is_file()
 
     def read(self, path: str) -> bytes:
-        return (self.root / path).read_bytes()
+        return (self.m_root / path).read_bytes()
 
     def origins(self, path: str) -> list[str]:
-        return [str(self.root)] if self.exists(path) else []
+        return [str(self.m_root)] if self.exists(path) else []
 
     def under(self, prefix: str) -> list[str]:
         """The files below a folder (``a/b/``), as paths relative to the root, sorted."""
-        base = self.root / prefix
+        base = self.m_root / prefix
         return (
-            sorted(p.relative_to(self.root).as_posix() for p in base.rglob("*") if p.is_file()) if base.is_dir() else []
+            sorted(path.relative_to(self.m_root).as_posix() for path in base.rglob("*") if path.is_file())
+            if base.is_dir()
+            else []
         )
 
 
 @dataclass
-class Options:
+class SOptions:
     """What the exports can be asked for beyond the forms. ``png_depth`` is 8 or 16 for a texture's ``png`` form;
     ``all_mips`` writes every mip level (else the largest), ``all_faces`` every face of a cube or array and every
     slice; ``hdr_form`` is "exr" or "hdr" for a float texture; ``exposure`` (stops) brightens a float texture's
@@ -78,7 +80,7 @@ class Options:
 
 
 @dataclass
-class Entry:
+class SEntry:
     """What happened to one source file: the kind, the archive it came from, the files written (relative to the output
     folder), the size of the source, the status ("written", "skipped", "failed", "tool-missing") and notes."""
 
@@ -86,13 +88,13 @@ class Entry:
     kind: str
     archive: str = ""
     files: list[str] = field(default_factory=list)
-    size: int = 0
+    size_bytes: int = 0
     status: str = "written"
     notes: list[str] = field(default_factory=list)
 
 
 @dataclass
-class Made:
+class SMade:
     """What an exporter makes: files by name (relative to the output folder) and notes; ``status`` other than
     "written" says why a form was not made ("tool-missing", "failed")."""
 
@@ -102,15 +104,15 @@ class Made:
 
 
 @dataclass
-class Job:
+class SJob:
     """One file to export: its game path, its bytes, the forms asked for (keys), the options and the source (for the
     files beside it: a bank's media, a model's textures)."""
 
-    source: Source
+    source: ISource
     path: str
     data: bytes
     formats: frozenset[str]
-    options: Options
+    options: SOptions
 
     def name(self, suffix: str, tag: str = "") -> str:
         """The output name of a form: the game path with its suffix replaced, ``tag`` added to the stem."""
@@ -123,7 +125,7 @@ class Job:
         return self.name("")
 
 
-def _exporters() -> dict[str, Callable[[Job], Made]]:
+def _exporters() -> dict[str, Callable[[SJob], SMade]]:
     from . import data, models, movies, pictures, sounds, textures
 
     return {
@@ -146,7 +148,7 @@ def _clean(path: str) -> str:
 
 
 @dataclass
-class Written:
+class SWritten:
     """What ``_write`` did with one entry's files: names written, left alone (exist), and not written with why."""
 
     written: list[str] = field(default_factory=list)
@@ -167,10 +169,10 @@ def _put(target: Path, body: bytes) -> None:
     write_atomic(target, body)
 
 
-def _write(out: Path, files: dict[str, bytes], force: bool, claimed: dict[str, str], source: str) -> Written:
+def _write(out: Path, files: dict[str, bytes], force: bool, claimed: dict[str, str], source: str) -> SWritten:
     """Write ``files`` below ``out``. ``claimed`` maps the names this run already made to their source: two sources
     that make one name (``a.tga`` and ``a.png`` both give ``a.png``) must not overwrite each other."""
-    done = Written()
+    done = SWritten()
     for name, body in files.items():
         other = claimed.get(name.lower())
         if other is not None and other != source:
@@ -191,38 +193,39 @@ def _write(out: Path, files: dict[str, bytes], force: bool, claimed: dict[str, s
 
 
 def export_path(
-    source: Source,
+    source: ISource,
     path: str,
     formats: set[str] | None,
     out: Path,
-    options: Options | None = None,
+    options: SOptions | None = None,
     claimed: dict[str, str] | None = None,
-) -> list[Entry]:
+) -> list[SEntry]:
     """Export one game file into ``out``: as stored (always), and each other key of ``formats`` its kind knows. Keys
-    its kind does not know are ignored; with none left only the stored file is written. One ``Entry``. ``claimed``:
+    its kind does not know are ignored; with none left only the stored file is written. One ``SEntry``. ``claimed``:
     the output names a batch has made so far (``export_many`` keeps it)."""
-    options, path = options or Options(), _clean(path)
+    options, path = options or SOptions(), _clean(path)
     kind = kinds.kind_of(path)
-    entry = Entry(path, kind)
+    entry = SEntry(path, kind)
     try:
         entry.archive = next(iter(source.origins(path)), "")
         data = source.read(path)
     except (OSError, KeyError, ValueError) as exc:
         entry.status, entry.notes = "failed", [f"not read: {exc}"]
         return [entry]
-    entry.size = len(data)
-    wanted = frozenset(f.key for f in kinds.formats_for(kind)) & (formats or frozenset())
+    entry.size_bytes = len(data)
+    wanted = frozenset(form.key for form in kinds.formats_for(kind)) & (formats or frozenset())
     files: dict[str, bytes] = {path: data}
     exporter = _exporters().get(kind)
     if wanted - {"raw"} and exporter is not None:
         try:
-            made = exporter(Job(source, path, data, wanted, options))
+            made = exporter(SJob(source, path, data, wanted, options))
         except Exception as exc:  # one file's failure never stops a batch
-            made = Made(notes=[f"{type(exc).__name__}: {exc}"], status="failed")
+            made = SMade(notes=[f"{type(exc).__name__}: {exc}"], status="failed")
         files.update(made.files)
         entry.notes += made.notes
         entry.status = made.status
-    done = _write(out, files, options.force, {} if claimed is None else claimed, path)
+    who = f"{entry.archive}: {path}" if entry.archive else path  # two folders may each hold a path of one name
+    done = _write(out, files, options.force, {} if claimed is None else claimed, who)
     entry.files = done.written
     if done.skipped:
         entry.notes.append(f"left as they were (exist; force overwrites): {', '.join(done.skipped)}")
@@ -235,24 +238,24 @@ def export_path(
 
 
 def export_many(
-    source: Source,
+    source: ISource,
     paths: list[str],
     formats: set[str],
     out: Path,
-    options: Options | None = None,
+    options: SOptions | None = None,
     progress: Callable[[int, int, str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
-) -> list[Entry]:
+) -> list[SEntry]:
     """Export every path, then write ``index.json`` and ``index.csv`` into ``out``. ``progress(done, total, path)`` is
     called before each file; ``cancelled()`` true stops the run (the entries so far are indexed)."""
-    entries: list[Entry] = []
+    entries: list[SEntry] = []
     claimed: dict[str, str] = {}
     try:
-        for n, path in enumerate(paths):
+        for number, path in enumerate(paths):
             if cancelled is not None and cancelled():
                 break
             if progress is not None:
-                progress(n, len(paths), path)
+                progress(number, len(paths), path)
             entries += export_path(source, path, formats, out, options, claimed)
     finally:  # a stop part way still leaves the index of what was done
         write_index(out, entries)

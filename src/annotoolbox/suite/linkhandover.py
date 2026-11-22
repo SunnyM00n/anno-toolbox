@@ -1,6 +1,6 @@
 """Anno 1800 to the suite, one way: the game's "open in the editor" command starts a batch file in its ``Tools/ToolOne``
 folder with the selected object's GUID; the file this module writes there leaves the GUID in a request file, and
-``Watcher`` (a thread of the suite's window) turns it into the same ``edit.request`` event Anno 117's link sends, so
+``CWatcher`` (a thread of the suite's window) turns it into the same ``edit.request`` event Anno 117's link sends, so
 the asset editor opens that asset. No helper library and no pipe: 1800 has none. Nothing here changes the game on its own:
 ``install`` is asked for (a game folder without spaces; never over a ``launch.bat`` that is not ours), ``uninstall``
 removes only ours; the suite never offers the game's data reload for 1800. docs/live-link.md, "Anno 1800".
@@ -25,7 +25,7 @@ FOLDER = "live-link"
 POLL = 1.0  # seconds between looks at the request file
 
 
-class UnsuitableFolder(OSError):
+class CUnsuitableFolder(OSError):
     """The game's folder cannot take the hand-over."""
 
 
@@ -53,7 +53,7 @@ def bat_text(request: Path) -> str:
 
 def batch_path(path: Path) -> str:
     """``path`` as the ASCII batch file names it: a user folder with other letters (a user named ``Jörg``) through the
-    variable that holds it, which cmd expands itself; ``UnsuitableFolder`` when no variable covers it."""
+    variable that holds it, which cmd expands itself; ``CUnsuitableFolder`` when no variable covers it."""
     text = str(path)
     if text.isascii() and "%" not in text:
         return text
@@ -63,7 +63,7 @@ def batch_path(path: Path) -> str:
             rest = "\\".join(Path(path).relative_to(base).parts)  # cmd's separator on any host the file is written on
             if rest.isascii() and "%" not in rest:
                 return f"%{var}%\\{rest}" if rest else f"%{var}%"
-    raise UnsuitableFolder(tr("common.letters_games_start_file_cannot", path=path))
+    raise CUnsuitableFolder(tr("common.letters_games_start_file_cannot", path=path))
 
 
 def bat_path(game_dir: Path) -> Path:
@@ -72,10 +72,10 @@ def bat_path(game_dir: Path) -> Path:
 
 def install(game_dir: Path, data: Path | None = None) -> Path:
     """Write the batch file into the game's ``Tools/ToolOne``; ``FileExistsError`` when another ``launch.bat`` is there
-    (the game's own tool start is never replaced), ``UnsuitableFolder`` when the folder's path has a space."""
+    (the game's own tool start is never replaced), ``CUnsuitableFolder`` when the folder's path has a space."""
     path = bat_path(game_dir)
     if not folder_ok(game_dir):
-        raise UnsuitableFolder(
+        raise CUnsuitableFolder(
             tr(
                 "common.space_name_game_starts_file",
                 path=path,
@@ -113,23 +113,23 @@ def take_request(data: Path | None = None) -> dict | None:
     return {"game": GAME, "guid": guid}
 
 
-class Watcher:
+class CWatcher:
     """Looks for the request file every ``POLL`` seconds and emits ``edit.request`` on the suite's current link."""
 
-    def __init__(self, data: Path | None = None, interval: float = POLL) -> None:
-        self._data, self._interval = data, interval
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="live-link-handover", daemon=True)
+    def __init__(self, data: Path | None = None, interval_s: float = POLL) -> None:
+        self._m_data, self._m_interval_s = data, interval_s
+        self._m_stop = threading.Event()
+        self._m_thread = threading.Thread(target=self._run, name="live-link-handover", daemon=True)
 
-    def start(self) -> Watcher:
-        self._thread.start()
+    def start(self) -> CWatcher:
+        self._m_thread.start()
         return self
 
     def stop(self) -> None:
-        self._stop.set()
+        self._m_stop.set()
 
     def _run(self) -> None:
-        while not self._stop.wait(self._interval):
-            request = take_request(self._data)
+        while not self._m_stop.wait(self._m_interval_s):
+            request = take_request(self._m_data)
             if request:
                 livelink.current().emit(livelink.EDIT_REQUEST, request)

@@ -27,34 +27,36 @@ def pick_file(parent, name: str, hint: str, find: Callable[[str], list[str]], cu
     return pick_from_list(parent, title, hint, rows, value=current, size=(640, 480))
 
 
-class FlagsDialog(QDialog):
+class CFlagsDialog(QDialog):
     """The bits of a number as a check list (bit 0 first); the bits the names do not cover stay as they are."""
 
     def __init__(self, parent, name: str, names: tuple[str, ...], value: int) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("common.title.bits_of_name", name=name))
-        self.names, self.kept = names, value & ~((1 << len(names)) - 1)
-        self.list = QListWidget()
+        self.m_names, self.m_kept = names, value & ~((1 << len(names)) - 1)
+        self.m_list = QListWidget()
         for bit, text in enumerate(names):
             item = QListWidgetItem(f"{bit}  {text}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if value >> bit & 1 else Qt.CheckState.Unchecked)
-            self.list.addItem(item)
-        self.total = QLabel()
+            self.m_list.addItem(item)
+        self.m_total = QLabel()
         layout = QVBoxLayout(self)
-        for widget in (self.list, self.total, ok_cancel(self)):
+        for widget in (self.m_list, self.m_total, ok_cancel(self)):
             layout.addWidget(widget)
-        self.list.itemChanged.connect(lambda _i: self.total.setText(tr("common.eq_value", value=self.value())))
-        self.total.setText(tr("common.eq_value", value=self.value()))
+        self.m_list.itemChanged.connect(lambda _i: self.m_total.setText(tr("common.eq_value", value=self.value())))
+        self.m_total.setText(tr("common.eq_value", value=self.value()))
         self.resize(360, 520)
 
     def value(self) -> int:
-        bits = sum(1 << k for k in range(self.list.count()) if self.list.item(k).checkState() == Qt.CheckState.Checked)
-        return bits | self.kept
+        bits = sum(
+            1 << k for k in range(self.m_list.count()) if self.m_list.item(k).checkState() == Qt.CheckState.Checked
+        )
+        return bits | self.m_kept
 
 
 def pick_flags(parent, name: str, names: tuple[str, ...], value: int) -> int | None:
-    dialog = FlagsDialog(parent, name, names, value)
+    dialog = CFlagsDialog(parent, name, names, value)
     return dialog.value() if dialog.exec() else None
 
 

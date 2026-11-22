@@ -1,7 +1,7 @@
 """The element tree of a template: its widget instances and groups (a group's instances live in the template's
 ``Groups`` and are reached through the group instance), each with its kind, name and GUID.
 
-``tree(root)`` is the entry; an ``Element`` knows the list it sits in (``holder``), so it can be removed, moved or
+``tree(root)`` is the entry; an ``SElement`` knows the list it sits in (``holder``), so it can be removed, moved or
 copied, and a container's ``template`` (the widget file it places). docs/ui/117/widget-types.md, "The four widget kinds".
 """
 
@@ -28,14 +28,14 @@ TEMPLATE_TYPES = {"da06bd6e", "1795cb2b", "2f208351"}  # widget file, scene, gro
 
 
 @dataclass(eq=False)
-class Element:
+class SElement:
     """An instance (or the template itself, ``kind`` "template") in the tree of one file."""
 
     node: dict
     kind: str
-    parent: Element | None = None
+    parent: SElement | None = None
     holder: dict | None = None  # the WidgetInstances entry the node sits in
-    children: list[Element] = field(default_factory=list)
+    children: list[SElement] = field(default_factory=list)
     given: str | None = None  # the name the editor's document gives an instance the file stores none for
 
     @property
@@ -50,8 +50,8 @@ class Element:
 
     @cached_property
     def guid(self) -> str | None:
-        g = self.node.get("guid")
-        return str(uuid.UUID(bytes_le=g)) if g else None
+        guid_bytes = self.node.get("guid")
+        return str(uuid.UUID(bytes_le=guid_bytes)) if guid_bytes else None
 
     @cached_property
     def template(self) -> str | None:
@@ -62,17 +62,17 @@ class Element:
             return fields.get(self.node, "GroupTemplate")
         return None
 
-    def path(self) -> list[Element]:
-        out, cur = [], self
-        while cur is not None:
-            out.append(cur)
-            cur = cur.parent
+    def path(self) -> list[SElement]:
+        out, current = [], self
+        while current is not None:
+            out.append(current)
+            current = current.parent
         return out[::-1]
 
     def walk(self):
         yield self
-        for c in self.children:
-            yield from c.walk()
+        for child in self.children:
+            yield from child.walk()
 
 
 def kind_of(node: dict) -> str:
@@ -84,32 +84,32 @@ def groups_of(root: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
 
     def visit(node: dict) -> None:
-        for g in phoenixedit.objects(node, "Groups"):
-            if g.get("guid"):
-                out[str(uuid.UUID(bytes_le=g["guid"]))] = g
-            visit(g)
+        for group in phoenixedit.objects(node, "Groups"):
+            if group.get("guid"):
+                out[str(uuid.UUID(bytes_le=group["guid"]))] = group
+            visit(group)
 
     visit(root)
     return out
 
 
-def tree(root: dict, names: dict[str, str] | None = None) -> Element:
+def tree(root: dict, names: dict[str, str] | None = None) -> SElement:
     """The file's elements: the template, its instances, and under each group instance its group's instances;
-    ``names`` (instance GUID -> name) names those the file stores no name for (``uifiles.UiFiles.names_of``)."""
+    ``names`` (instance GUID -> name) names those the file stores no name for (``uifiles.CUiFiles.names_of``)."""
     groups = groups_of(root)
-    top = Element(root, "template")
+    top = SElement(root, "template")
     seen: set[int] = set()
 
-    def fill(owner: Element, holder_node: dict) -> None:
+    def fill(owner: SElement, holder_node: dict) -> None:
         entry = phoenixedit.get_entry(holder_node, "WidgetInstances")
         for inst in entry["objs"] if entry else []:
-            el = Element(inst, kind_of(inst), owner, entry)
-            el.given = _given(inst, names.get(el.guid or "")) if names else None
-            owner.children.append(el)
-            group = groups.get(el.template or "") if el.kind == "group" else None
+            element = SElement(inst, kind_of(inst), owner, entry)
+            element.given = _given(inst, names.get(element.guid or "")) if names else None
+            owner.children.append(element)
+            group = groups.get(element.template or "") if element.kind == "group" else None
             if group is not None and id(group) not in seen:
                 seen.add(id(group))
-                fill(el, group)
+                fill(element, group)
 
     fill(top, root)
     return top
@@ -126,14 +126,14 @@ def animations(root: dict) -> list[dict]:
     return list(phoenixedit.objects(root, "AnimationInstances"))
 
 
-def find(top: Element, node: dict) -> Element | None:
+def find(top: SElement, node: dict) -> SElement | None:
     return next((e for e in top.walk() if e.node is node), None)
 
 
-def crc_key(el: Element) -> str | None:
+def crc_key(element: SElement) -> str | None:
     """The key of an instance by its name CRC: a running game's ``guid`` is a run-time handle, the file's ``NameCrc``
     is what both share (names are unique within a file)."""
-    crc = fields.get(el.node, "NameCrc")
+    crc = fields.get(element.node, "NameCrc")
     return crc_name(int(crc)) if crc else None
 
 
@@ -142,20 +142,20 @@ def crc_name(crc: int) -> str:
     return f"crc:{crc & 0xFFFFFFFF:08x}"
 
 
-def keys(el: Element) -> tuple[str, ...]:
+def keys(element: SElement) -> tuple[str, ...]:
     """The keys a running game's widget is matched to an instance by: its GUID, then its name CRC."""
-    return tuple(k for k in (el.guid, crc_key(el)) if k)
+    return tuple(k for k in (element.guid, crc_key(element)) if k)
 
 
-def held_for(held: dict, el: Element):
+def held_for(held: dict, element: SElement):
     """What ``held`` (live values or texts by instance key) has for an instance: by GUID, else by name CRC; None."""
-    return next((held[k] for k in keys(el) if k in held), None) if held else None
+    return next((held[k] for k in keys(element) if k in held), None) if held else None
 
 
-def by_guid(top: Element, guid: str) -> Element | None:
+def by_guid(top: SElement, guid: str) -> SElement | None:
     return next((e for e in top.walk() if e.guid == guid), None)
 
 
-def by_node_id(top: Element | None, node_id: int) -> Element | None:
+def by_node_id(top: SElement | None, node_id: int) -> SElement | None:
     """The element whose node has this ``id()``: what the preview's signals carry (a node is no signal argument)."""
     return next((e for e in top.walk() if id(e.node) == node_id), None) if top is not None else None

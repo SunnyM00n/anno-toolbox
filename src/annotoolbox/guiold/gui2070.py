@@ -60,19 +60,19 @@ def _xml(data: bytes | str) -> ET.Element:
     return ET.fromstring(decode_text(data) if isinstance(data, bytes) else data)
 
 
-def _text(e: ET.Element | None) -> str:
-    return (e.text or "").strip() if e is not None else ""
+def _text(element: ET.Element | None) -> str:
+    return (element.text or "").strip() if element is not None else ""
 
 
 @dataclass
-class Event:
+class SEvent:
     type: str
     slot: str
     script: str | None  # Lua; None: a handler of the dialog's own code
 
 
 @dataclass
-class Model:
+class SModel:
     """Lua component model of a CUSTOM widget: attributes (type, getter, setter), actions, events."""
 
     name: str
@@ -84,15 +84,15 @@ class Model:
 
 
 @dataclass
-class Widget:
+class SWidget:
     kind: str  # element name: FRAME, PANEL, ... or TEMPLATE
     path_id: str
     uid: int | None
     templates: list[str]  # TEMPLATE_REF_ID (a few nodes carry two)
     props: dict[str, str | dict] = field(default_factory=dict)
-    children: list[Widget] = field(default_factory=list)
-    events: list[Event] = field(default_factory=list)
-    model: Model | None = None
+    children: list[SWidget] = field(default_factory=list)
+    events: list[SEvent] = field(default_factory=list)
+    model: SModel | None = None
 
     @property
     def cls(self) -> str | None:
@@ -100,105 +100,111 @@ class Widget:
 
     def walk(self):
         yield self
-        for c in self.children:
-            yield from c.walk()
+        for child in self.children:
+            yield from child.walk()
 
 
-def _prop(e: ET.Element) -> str | dict:
-    return _text(e) if len(e) == 0 else {c.tag: _prop(c) for c in e}
+def _prop(element: ET.Element) -> str | dict:
+    return _text(element) if len(element) == 0 else {child.tag: _prop(child) for child in element}
 
 
-def _model(e: ET.Element) -> Model:
-    m = Model(_text(e.find("NAME")), int(_text(e.find("UNIQUEID")) or 0) or None)
-    for c in e:
-        if c.tag == "ATTRIBUTE":
-            m.attributes[_text(c.find("NAME"))] = (
-                int(_text(c.find("TYPE")) or 0),
-                _text(c.find("GETTER")),
-                _text(c.find("SETTER")),
+def _model(element: ET.Element) -> SModel:
+    model = SModel(_text(element.find("NAME")), int(_text(element.find("UNIQUEID")) or 0) or None)
+    for child in element:
+        if child.tag == "ATTRIBUTE":
+            model.attributes[_text(child.find("NAME"))] = (
+                int(_text(child.find("TYPE")) or 0),
+                _text(child.find("GETTER")),
+                _text(child.find("SETTER")),
             )
-        elif c.tag == "ACTION":
-            m.actions[_text(c.find("NAME"))] = _text(c.find("SCRIPT"))
-        elif c.tag == "EVENT":
-            m.events.append(_text(c.find("NAME")))
-        elif c.tag == "CONSTRUCTOR":
-            m.constructor = _text(c)
-    return m
+        elif child.tag == "ACTION":
+            model.actions[_text(child.find("NAME"))] = _text(child.find("SCRIPT"))
+        elif child.tag == "EVENT":
+            model.events.append(_text(child.find("NAME")))
+        elif child.tag == "CONSTRUCTOR":
+            model.constructor = _text(child)
+    return model
 
 
-def _widget(e: ET.Element) -> Widget:
-    uid = _text(e.find("UNIQUEID"))
-    w = Widget(e.tag, _text(e.find("PATHID")), int(uid) if uid else None, [])
-    for c in e:
-        if c.find("PATHID") is not None:
-            w.children.append(_widget(c))
-        elif c.tag == "TEMPLATE_REF_ID":
-            if _text(c):
-                w.templates.append(_text(c))
-        elif c.tag == "EVENTLIST":
-            for ev in c.findall("EVENT"):
-                sc = ev.find("SCRIPT")
-                w.events.append(
-                    Event(_text(ev.find("TYPE")), _text(ev.find("SLOT")), None if sc is None else sc.text or "")
+def _widget(element: ET.Element) -> SWidget:
+    uid = _text(element.find("UNIQUEID"))
+    widget = SWidget(element.tag, _text(element.find("PATHID")), int(uid) if uid else None, [])
+    for child in element:
+        if child.find("PATHID") is not None:
+            widget.children.append(_widget(child))
+        elif child.tag == "TEMPLATE_REF_ID":
+            if _text(child):
+                widget.templates.append(_text(child))
+        elif child.tag == "EVENTLIST":
+            for event in child.findall("EVENT"):
+                script = event.find("SCRIPT")
+                widget.events.append(
+                    SEvent(
+                        _text(event.find("TYPE")),
+                        _text(event.find("SLOT")),
+                        None if script is None else script.text or "",
+                    )
                 )
-        elif c.tag == "MODEL":
-            w.model = _model(c)
-        elif c.tag not in ("PATHID", "UNIQUEID"):
-            w.props[c.tag] = _prop(c)
-    return w
+        elif child.tag == "MODEL":
+            widget.model = _model(child)
+        elif child.tag not in ("PATHID", "UNIQUEID"):
+            widget.props[child.tag] = _prop(child)
+    return widget
 
 
-def parse_widget_file(data: bytes | str) -> Widget:
+def parse_widget_file(data: bytes | str) -> SWidget:
     """A ``.dlg`` (root FRAME) or ``.tpl`` (root TEMPLATE, a property bag without children)."""
     return _widget(_xml(data))
 
 
 def _merge(base: dict, over: dict) -> dict:
     out = dict(base)
-    for k, v in over.items():
-        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    for k, value in over.items():
+        out[k] = _merge(out[k], value) if isinstance(value, dict) and isinstance(out.get(k), dict) else value
     return out
 
 
-class Templates:
+class CTemplates:
     """``TEMPLATE_REF_ID`` resolution: a template is found by its PATHID (= file name) and inherits its own."""
 
-    def __init__(self, templates: list[Widget]) -> None:
-        self.by_name = {t.path_id: t for t in templates}
+    def __init__(self, templates: list[SWidget]) -> None:
+        self.m_by_name = {template.path_id: template for template in templates}
 
-    def chain(self, names: list[str]) -> list[Widget]:
+    def chain(self, names: list[str]) -> list[SWidget]:
         out, todo, seen = [], list(names), set()
         while todo:
-            n = todo.pop(0)
-            if n in seen or n not in self.by_name:
+            name = todo.pop(0)
+            if name in seen or name not in self.m_by_name:
                 continue
-            seen.add(n)
-            t = self.by_name[n]
-            out.append(t)
-            todo.extend(t.templates)
+            seen.add(name)
+            template = self.m_by_name[name]
+            out.append(template)
+            todo.extend(template.templates)
         return out
 
     def missing(self, names: list[str]) -> list[str]:
-        return [n for n in names if n not in self.by_name]
+        return [name for name in names if name not in self.m_by_name]
 
-    def effective(self, w: Widget) -> dict:
+    def effective(self, widget: SWidget) -> dict:
         """Own properties over the template chain (nearest wins; EXTENT, TEXTSETTING ... merge per field)."""
         props: dict = {}
-        for t in reversed(self.chain(w.templates)):
-            props = _merge(props, t.props)
-        return _merge(props, w.props)
+        for template in reversed(self.chain(widget.templates)):
+            props = _merge(props, template.props)
+        return _merge(props, widget.props)
 
 
-def struct_templates(custom_windows: Widget) -> dict[int, Widget]:
+def struct_templates(custom_windows: SWidget) -> dict[int, SWidget]:
     """``INSTANCE``/``STRUCTTEMPLATEREF`` targets: the CUSTOM components of ``__custom_windows.dlg`` by UNIQUEID."""
-    return {c.uid: c for c in custom_windows.children if c.kind == "CUSTOM" and c.uid is not None}
+    return {
+        window.uid: window for window in custom_windows.children if window.kind == "CUSTOM" and window.uid is not None
+    }
 
 
 def extent(props: dict) -> tuple[int, int, int, int]:
     """(left, top, width, height) in the 1280x1024 reference space, relative to the parent's client area."""
-    ex = props.get("EXTENT") or {}
-    ex = ex if isinstance(ex, dict) else {}
-    return tuple(int(ex.get(k) or 0) for k in ("LEFT", "TOP", "WIDTH", "HEIGHT"))  # type: ignore[return-value]
+    extent_props = props.get("EXTENT") or {}
+    extent_props = extent_props if isinstance(extent_props, dict) else {}
+    return tuple(int(extent_props.get(k) or 0) for k in ("LEFT", "TOP", "WIDTH", "HEIGHT"))  # type: ignore[return-value]
 
 
 def tooltip_text_id(prop: str, guid: int) -> int:
@@ -206,21 +212,21 @@ def tooltip_text_id(prop: str, guid: int) -> int:
     return TOOLTIP_TEXT_OFFSET[prop] + guid
 
 
-def parse_color(v: str) -> tuple[str, tuple[float, ...]] | str | int | None:
+def parse_color(text: str) -> tuple[str, tuple[float, ...]] | str | int | None:
     """``HSV;h;s;v`` (degrees, percent), a 0xRRGGBB int, or a KnownColors name (texteditor/properties.xml)."""
-    if not v:
+    if not text:
         return None
-    if v.startswith("HSV;"):
-        return ("HSV", tuple(float(x) for x in v[4:].split(";")))
-    if re.fullmatch(r"-?\d+", v):
-        return int(v)
-    return v
+    if text.startswith("HSV;"):
+        return ("HSV", tuple(float(x) for x in text[4:].split(";")))
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return text
 
 
 def argb_rgb(value: int) -> tuple[int, int, int]:
     """An ARGB (or 0xRRGGBB) integer as RGB."""
-    v = value & 0xFFFFFFFF
-    return (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF
+    argb = value & 0xFFFFFFFF
+    return (argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF
 
 
 def parse_text_colors(data: bytes | str) -> dict[str, tuple[int, int, int]]:
@@ -234,7 +240,7 @@ def parse_text_colors(data: bytes | str) -> dict[str, tuple[int, int, int]]:
 
 
 @dataclass
-class Tile:
+class STile:
     file_id: int
     x: int
     y: int
@@ -246,7 +252,7 @@ class Tile:
 
 
 @dataclass
-class BackgroundState:
+class SBackgroundState:
     name: str  # Normal, Normal+MouseOver, Checked+Disabled, PB_Bar, Thumb_Normal ... (layoutnames.txt)
     grid: tuple[int, int]
     color_hsva: tuple[float, ...]
@@ -254,99 +260,112 @@ class BackgroundState:
     client_offsets: tuple[int, int, int, int]
     stencil_icon: int
     flags: int
-    tiles: list[Tile]
+    tiles: list[STile]
 
 
 @dataclass
-class Background:
+class SBackground:
     files: list[str]  # LocalFileID -> texture
-    states: dict[str, BackgroundState]
+    states: dict[str, SBackgroundState]
 
 
-def read_hsva(e: ET.Element, prefix: str) -> tuple[float, ...] | None:
+def read_hsva(element: ET.Element, prefix: str) -> tuple[float, ...] | None:
     """``<prefix>_H`` ... ``_A`` of an element (a background state's ``m_Color``), None without them."""
-    vals = [e.findtext(f"{prefix}_{c}") for c in "HSVA"]
-    return None if None in vals else tuple(float(v) for v in vals)  # type: ignore[arg-type]
+    vals = [element.findtext(f"{prefix}_{channel}") for channel in "HSVA"]
+    return None if None in vals else tuple(float(value) for value in vals)  # type: ignore[arg-type]
 
 
-def parse_background(data: bytes | str) -> Background:
+def parse_background(data: bytes | str) -> SBackground:
     """A ``.bkg``: per state a grid of atlas tiles drawn as a nine-slice (``XSize`` x ``YSize``, row-major)."""
-    r = _xml(data)
-    files = [_text(i) for i in r.findall("m_localIconFileMap/i")]
+    root = _xml(data)
+    files = [_text(i) for i in root.findall("m_localIconFileMap/i")]
     states = {}
-    for b in r.findall("BackgroundInfo/i"):
-        co = b.find("ClientAreaOffsets")
+    for background_info in root.findall("BackgroundInfo/i"):
+        client_offsets = background_info.find("ClientAreaOffsets")
         tiles = [
-            Tile(
+            STile(
                 *(
                     int(i.findtext(k) or 0)
                     for k in ("LocalFileID", "tileX", "tileY", "tileWidth", "tileHeight", "flags", "Width", "Height")
                 )
             )
-            for i in b.findall("IconList/i")
+            for i in background_info.findall("IconList/i")
         ]
-        name = _text(b.find("LayoutName"))
-        states[name] = BackgroundState(
+        name = _text(background_info.find("LayoutName"))
+        states[name] = SBackgroundState(
             name,
-            (int(b.findtext("m_XSize") or 0), int(b.findtext("m_YSize") or 0)),
-            read_hsva(b, "m_Color") or (0.0, 1.0, 1.0, 1.0),
-            read_hsva(b, "m_IconColor"),
-            tuple(int(co.findtext(k) or 0) for k in ("left", "top", "right", "bottom"))  # type: ignore[arg-type]
-            if co is not None
+            (int(background_info.findtext("m_XSize") or 0), int(background_info.findtext("m_YSize") or 0)),
+            read_hsva(background_info, "m_Color") or (0.0, 1.0, 1.0, 1.0),
+            read_hsva(background_info, "m_IconColor"),
+            tuple(int(client_offsets.findtext(k) or 0) for k in ("left", "top", "right", "bottom"))  # type: ignore[arg-type]
+            if client_offsets is not None
             else (0, 0, 0, 0),
-            int(b.findtext("m_StencilIconGUID") or -1),
-            int(b.findtext("flags") or 0),
+            int(background_info.findtext("m_StencilIconGUID") or -1),
+            int(background_info.findtext("flags") or 0),
             tiles,
         )
-    return Background(files, states)
+    return SBackground(files, states)
 
 
 @dataclass
-class Sequence:
+class SSequence:
     duration_ms: int
     blocking: bool
     tracks: list[list[tuple[float, dict]]]  # per track: (time 0..1, animated properties)
 
 
-def parse_sequence(data: bytes | str) -> Sequence:
+def parse_sequence(data: bytes | str) -> SSequence:
     """``sequences/*.xml``: keyframed property animation (Alpha, RGBColor, ScaleX, Extent ...)."""
-    r = _xml(data)
+    root = _xml(data)
     tracks = []
-    for t in r.findall("track"):
+    for track in root.findall("track"):
         keys = []
-        for k in t.findall("keyframe"):
-            p = k.find("properties")
-            props = {c.tag: _prop(c) for c in p if c.tag != "time"} if p is not None else {}
-            keys.append((float(p.findtext("time") or 0) if p is not None else 0.0, props))
+        for k in track.findall("keyframe"):
+            properties_element = k.find("properties")
+            props = (
+                {child.tag: _prop(child) for child in properties_element if child.tag != "time"}
+                if properties_element is not None
+                else {}
+            )
+            keys.append(
+                (float(properties_element.findtext("time") or 0) if properties_element is not None else 0.0, props)
+            )
         tracks.append(keys)
-    return Sequence(int(r.findtext("duration") or 0), r.findtext("blocking") == "1", tracks)
+    return SSequence(int(root.findtext("duration") or 0), root.findtext("blocking") == "1", tracks)
 
 
 def parse_editor_schema(data: bytes | str) -> dict[str, dict]:
     """``properties.xml``: the GUI editor's class tree, property groups and value types."""
     out: dict[str, dict] = {}
 
-    def walk(c: ET.Element, parent: str | None) -> None:
-        name = _text(c.find("Name"))
+    def walk(class_element: ET.Element, parent: str | None) -> None:
+        name = _text(class_element.find("Name"))
         props = {
-            _text(p.find("Name")): [
-                (_text(v.find("Name")), _text(v.find("DataType")), _text(v.find("DataSet")) or None)
-                for v in p.findall("ValueDefinition")
+            _text(property_element.find("Name")): [
+                (
+                    _text(value_definition.find("Name")),
+                    _text(value_definition.find("DataType")),
+                    _text(value_definition.find("DataSet")) or None,
+                )
+                for value_definition in property_element.findall("ValueDefinition")
             ]
-            for p in c.findall("Property")
+            for property_element in class_element.findall("Property")
         }
-        events = [_text(v.find("Name")) for v in c.findall("Events/Property/ValueDefinition")]
+        events = [
+            _text(value_definition.find("Name"))
+            for value_definition in class_element.findall("Events/Property/ValueDefinition")
+        ]
         out[name] = {
             "parent": parent,
             "properties": props,
             "events": events,
-            "description": _text(c.find("Description")),
+            "description": _text(class_element.find("Description")),
         }
-        for s in c.findall("GUIClassDefinition"):
-            walk(s, name)
+        for sub_class in class_element.findall("GUIClassDefinition"):
+            walk(sub_class, name)
 
-    for c in _xml(data).findall("GUIClassDefinition"):
-        walk(c, None)
+    for class_element in _xml(data).findall("GUIClassDefinition"):
+        walk(class_element, None)
     return out
 
 
@@ -356,11 +375,11 @@ def parse_css(text: str) -> list[tuple[list[str], dict[str, str]]]:
     rules = []
     for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", text):
         decl = {}
-        for d in body.split(";"):
-            if ":" in d:
-                k, v = d.split(":", 1)
-                decl[k.strip()] = v.strip()
-        rules.append(([s.strip() for s in sel.split(",") if s.strip()], decl))
+        for declaration in body.split(";"):
+            if ":" in declaration:
+                k, value = declaration.split(":", 1)
+                decl[k.strip()] = value.strip()
+        rules.append(([selector.strip() for selector in sel.split(",") if selector.strip()], decl))
     if re.sub(r"([^{}]+)\{([^{}]*)\}", "", text).strip():
         raise ValueError("unparsed CSS left over")
     return rules
@@ -372,46 +391,52 @@ def parse_tcd(text: str) -> ET.Element:
 
 
 @dataclass
-class GoldTables:
+class SGoldTables:
     header: str
     records: list[list]
 
 
-def parse_cgt(data: bytes) -> GoldTables:
-    """GOLD Parser compiled grammar tables v1 (``css.cgt``, ``tcd.cgt``)."""
-    i = 0
+def _string_end(data: bytes, start: int) -> int:
+    """The offset of the UTF-16 terminator after ``start``; a file that ends inside a string is not a table file."""
+    i = start
     while data[i : i + 2] != b"\0\0":
+        if i >= len(data):
+            raise ValueError(f"unterminated string at {start:#x}")
         i += 2
+    return i
+
+
+def parse_cgt(data: bytes) -> SGoldTables:
+    """GOLD Parser compiled grammar tables v1 (``css.cgt``, ``tcd.cgt``)."""
+    i = _string_end(data, 0)
     header = data[:i].decode("utf-16-le")
     i += 2
     records = []
     while i < len(data):
         if data[i] != ord("M"):
             raise ValueError(f"record tag {data[i]:#x} at {i:#x}")
-        n = struct.unpack_from("<H", data, i + 1)[0]
+        count = struct.unpack_from("<H", data, i + 1)[0]
         i += 3
         rec: list = []
-        for _ in range(n):
-            t = chr(data[i])
+        for _ in range(count):
+            type_char = chr(data[i])
             i += 1
-            if t == "E":
+            if type_char == "E":
                 rec.append(None)
-            elif t in "bB":
+            elif type_char in "bB":
                 rec.append(data[i])
                 i += 1
-            elif t == "I":
+            elif type_char == "I":
                 rec.append(struct.unpack_from("<h", data, i)[0])
                 i += 2
-            elif t == "S":
-                j = i
-                while data[j : j + 2] != b"\0\0":
-                    j += 2
+            elif type_char == "S":
+                j = _string_end(data, i)
                 rec.append(data[i:j].decode("utf-16-le"))
                 i = j + 2
             else:
-                raise ValueError(f"entry type {t!r} at {i - 1:#x}")
+                raise ValueError(f"entry type {type_char!r} at {i - 1:#x}")
         records.append(rec)
-    return GoldTables(header, records)
+    return SGoldTables(header, records)
 
 
 def parse_events_map(text: str) -> dict[str, str]:
@@ -421,15 +446,15 @@ def parse_events_map(text: str) -> dict[str, str]:
 
 def parse_path_map(data: bytes) -> dict[int, str]:
     """``path.map``: count, then (u32 id, length, latin-1 path) entries; 32- or 64-bit counts and lengths."""
-    for size, fmt in ((4, "<I"), (8, "<Q")):
+    for size, struct_format in ((4, "<I"), (8, "<Q")):
         try:
-            n = struct.unpack_from(fmt, data, 0)[0]
+            count = struct.unpack_from(struct_format, data, 0)[0]
             i, out = size, {}
-            for _ in range(n):
+            for _ in range(count):
                 pid = struct.unpack_from("<I", data, i)[0]
-                ln = struct.unpack_from(fmt, data, i + 4)[0]
-                out[pid] = data[i + 4 + size : i + 4 + size + ln].decode("latin-1")
-                i += 4 + size + ln
+                length = struct.unpack_from(struct_format, data, i + 4)[0]
+                out[pid] = data[i + 4 + size : i + 4 + size + length].decode("latin-1")
+                i += 4 + size + length
             if 0 <= len(data) - i <= 16:
                 return out
         except struct.error:
@@ -440,52 +465,52 @@ def parse_path_map(data: bytes) -> dict[int, str]:
 def parse_layout_names(text: str) -> dict[str, list[tuple[str, bool]]]:
     """``layoutnames.txt``: background state names per control kind; ``*`` marks the required ones."""
     out: dict[str, list[tuple[str, bool]]] = {}
-    cur = None
+    current_layouts = None
     for line in text.splitlines():
         line = line.strip()
         if line.endswith("-Layouts:"):
-            cur = out.setdefault(line[: -len("-Layouts:")], [])
-        elif cur is not None and line and not line.startswith("-"):
-            cur.append((line.lstrip("*"), line.startswith("*")))
+            current_layouts = out.setdefault(line[: -len("-Layouts:")], [])
+        elif current_layouts is not None and line and not line.startswith("-"):
+            current_layouts.append((line.lstrip("*"), line.startswith("*")))
     return out
 
 
 def read_gui_file(path: str, data: bytes):
     """Parse any file of ``data/config/gui`` by its kind; raises on anything it cannot read."""
     name = path.rsplit("/", 1)[-1].lower()
-    ext = name.rsplit(".", 1)[-1]
-    if ext in ("dlg", "tpl"):
+    suffix = name.rsplit(".", 1)[-1]
+    if suffix in ("dlg", "tpl"):
         return parse_widget_file(data)
-    if ext == "bkg":
+    if suffix == "bkg":
         return parse_background(data)
-    if ext == "png":
+    if suffix == "png":
         if len(data) == 4:
             return None  # a 4-byte stub instead of a preview
         if not data.startswith(b"\x89PNG\r\n\x1a\n"):
             raise ValueError("not a PNG")
         return struct.unpack(">II", data[16:24])  # editor preview of the .bkg beside it
-    if ext == "cgt":
+    if suffix == "cgt":
         return parse_cgt(data)
-    if ext == "css":
+    if suffix == "css":
         return parse_css(decode_text(data))
-    if ext == "tcd":
+    if suffix == "tcd":
         return parse_tcd(decode_text(data))
     if name == "events.map":
         return parse_events_map(decode_text(data))
-    if ext == "map":
+    if suffix == "map":
         return parse_path_map(data)
     if name == "properties.xml":
         return parse_editor_schema(data)
     if "/sequences/" in path.lower():
         return parse_sequence(data)
-    if ext == "xml":
+    if suffix == "xml":
         return _xml(data)
     if name == "layoutnames.txt":
         return parse_layout_names(decode_text(data))
-    if ext in ("txt", "sh"):
+    if suffix in ("txt", "sh"):
         return decode_text(data).splitlines()
-    if ext == "db":
+    if suffix == "db":
         if not data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
             raise ValueError("not an OLE compound file")
         return "thumbs.db"  # a Windows thumbnail cache shipped by accident
-    raise ValueError(f"unknown GUI file kind {ext!r}")
+    raise ValueError(f"unknown GUI file kind {suffix!r}")

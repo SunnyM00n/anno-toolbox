@@ -1,7 +1,7 @@
 """An XML element as plain data, and the value changes between two of them (``sources.valuediff``).
 
 ``element_data`` turns an element into text (a leaf), or a dict by child name (a repeated name a list, an attribute
-``@name``); ``data_changes`` lists the leaves that differ as ``Change``; ``asset_facts`` reads an asset's name and
+``@name``); ``data_changes`` lists the leaves that differ as ``SChange``; ``asset_facts`` reads an asset's name and
 template. ``docs/mod-diff.md`` "What a change is".
 """
 
@@ -11,20 +11,20 @@ import json
 import xml.etree.ElementTree as ET
 
 from ..sources.valuediff import diff_data
-from .model import Change
+from .model import SChange
 
 TEXT = "#text"  # the text of an element that also has children or attributes
 
 
-def element_data(el: ET.Element):
+def element_data(element: ET.Element):
     """``el`` as text, or as a dict: children by tag (two or more of a name make a list), attributes as ``@name``."""
-    if not len(el) and not el.attrib:
-        return (el.text or "").strip()
-    out: dict = {f"@{k}": v for k, v in el.attrib.items()}
-    if (el.text or "").strip():
-        out[TEXT] = el.text.strip()
+    if not len(element) and not element.attrib:
+        return (element.text or "").strip()
+    out: dict = {f"@{k}": value for k, value in element.attrib.items()}
+    if (element.text or "").strip():
+        out[TEXT] = element.text.strip()
     groups: dict[str, list] = {}
-    for child in el:
+    for child in element:
         if isinstance(child.tag, str):
             groups.setdefault(child.tag, []).append(element_data(child))
     for tag, values in groups.items():
@@ -32,11 +32,11 @@ def element_data(el: ET.Element):
     return out
 
 
-def data_changes(before, after) -> list[Change]:
+def data_changes(before, after) -> list[SChange]:
     """The leaves that differ between two data trees; text as it is, a block as its JSON (whole), in path order."""
     found: list[tuple] = []
     diff_data(before, after, "", found, full=True)  # whole: two long values must differ in what is compared
-    return [Change(p, _text(a), _text(b)) for p, a, b in found]
+    return [SChange(path, _text(old_text), _text(new_text)) for path, old_text, new_text in found]
 
 
 def _text(value) -> str | None:

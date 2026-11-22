@@ -33,9 +33,9 @@ _ENUM = "0xb00"
 
 TYPES = {  # type hash -> (name, parent, layout GUID, fields): the text style and font assets of these games
     "cd6d9d63": ("TextStyleAsset", "c36e7558", "8eb9999a-bb2e-698d-b9f7-afe8116e5dc1",
-                 tuple(f"afad631b/{n}" for n in _GRAFFITI_STYLE)),
+                 tuple(f"afad631b/{field_name}" for field_name in _GRAFFITI_STYLE)),
     "0c3c261e": ("FontAsset", "c36e7558", "e02e6037-91b3-6e1e-9019-51c8b7e4dbc1",
-                 ("d90a3eef/FontId", *(f"f1f64b8d/{n}" for n in _GRAFFITI_FONT))),
+                 ("d90a3eef/FontId", *(f"f1f64b8d/{field_name}" for field_name in _GRAFFITI_FONT))),
 }
 
 LAYOUTS: dict[tuple[str, str], tuple] = {
@@ -275,28 +275,28 @@ def field_hash(name: str) -> str:
     return name if _HEX.fullmatch(name) else f"{zlib.crc32(name.encode()):08x}"
 
 
-def _named(f: dict) -> dict:
-    return {**f, "name": f["name"] or NAMES.get(f["hash"])}
+def _named(schema_field: dict) -> dict:
+    return {**schema_field, "name": schema_field["name"] or NAMES.get(schema_field["hash"])}
 
 
-def _field(schemas: list[dict], rec: str, item) -> dict:
+def _field(schemas: list[dict], record: str, item) -> dict:
     """The schema field record of one ``LAYOUTS`` item of record ``rec``."""
     if isinstance(item, tuple):
         name, code, *elem = item
-        h = field_hash(name)
-        out = {"name": None if h == name else name, "hash": h, "code": code, "elem": elem[0] if elem else None,
+        hash_hex = field_hash(name)
+        out = {"name": None if hash_hex == name else name, "hash": hash_hex, "code": code, "elem": elem[0] if elem else None,
                "flags": "0x2001", "offset": 1}  # fmt: skip
         if name in TRAILING:
             out["trailing"] = True
         return out
     if "/" in item:
-        rec, item = item.split("/")
-    h = field_hash(item)
+        record, item = item.split("/")
+    hash_hex = field_hash(item)
     for schema in schemas:
-        for f in schema.get(rec, {}).get("fields", []):
-            if f["hash"] == h:
-                return _named(f)
-    raise KeyError(f"no field {item} of {rec} in the schemas")
+        for schema_field in schema.get(record, {}).get("fields", []):
+            if schema_field["hash"] == hash_hex:
+                return _named(schema_field)
+    raise KeyError(f"no field {item} of {record} in the schemas")
 
 
 def build(schemas: list[dict], stored) -> tuple[dict[tuple, list[dict]], dict[str, dict]]:
@@ -304,11 +304,13 @@ def build(schemas: list[dict], stored) -> tuple[dict[tuple, list[dict]], dict[st
     up in order for the fields named; ``stored(field)`` says whether a schema field is stored (``phoenix.is_stored``).
     A ``COUNTED`` list is keyed (record, version, its field count)."""
     lists = {**LAYOUTS, **EARLY_1800, **COUNTED}
-    layouts = {key: [_field(schemas, key[0], it) for it in items] for key, items in lists.items()}
-    for rec, guid in SAME:
-        layouts[(rec, guid)] = [_named(f) for f in schemas[0][rec]["fields"] if stored(f)]
+    layouts = {key: [_field(schemas, key[0], item) for item in items] for key, items in lists.items()}
+    for record, guid in SAME:
+        layouts[(record, guid)] = [
+            _named(schema_field) for schema_field in schemas[0][record]["fields"] if stored(schema_field)
+        ]
     types = {}
-    for h, (name, parent, guid, items) in TYPES.items():
-        types[h] = {"hash": h, "name": name, "parent": parent, "guid": guid,
-                    "fields": [_field(schemas, h, it) for it in items]}  # fmt: skip
+    for hash_hex, (name, parent, guid, items) in TYPES.items():
+        types[hash_hex] = {"hash": hash_hex, "name": name, "parent": parent, "guid": guid,
+                    "fields": [_field(schemas, hash_hex, item) for item in items]}  # fmt: skip
     return layouts, types

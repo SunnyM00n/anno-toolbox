@@ -1,6 +1,6 @@
 """Edit layers: named groups of objects a mapper makes (a town, the cliffs of one bay), hidden or locked together.
 
-``EditLayers`` keeps them in the edit file under ``layers`` (``{name: {"hidden": bool, "locked": bool, "members":
+``CEditLayers`` keeps them in the edit file under ``layers`` (``{name: {"hidden": bool, "locked": bool, "members":
 [keys]}}``); an object placed in the editor carries its layer in its own record (``"layer"``), as its key is not
 stable across a save. The island build reads neither. Every change is one step of the undo stack; ``hides`` and
 ``locked`` are what the view and the selection ask (island-editor "Full spec").
@@ -11,65 +11,67 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ..infra.i18n import tr
-from ..suite.undo import Command
+from ..suite.undo import SCommand
 from .editchange import copy_json
-from .editsession import EditSession, Entry
+from .editsession import CEditSession, SEntry
 
 
-class EditLayers:
-    def __init__(self, session: EditSession) -> None:
-        self.session = session
-        self.edits = session.edits
+class CEditLayers:
+    def __init__(self, session: CEditSession) -> None:
+        self.m_session = session
+        self.m_edits = session.m_edits
 
     @property
     def table(self) -> dict:
         """The layers; an island without any keeps its edit file free of the key until one is made."""
-        if "layers" not in self.edits:
+        if "layers" not in self.m_edits:
             return {}
-        return self.edits["layers"]
+        return self.m_edits["layers"]
 
     def names(self) -> list[str]:
         return list(self.table)
 
-    def layer_of(self, e: Entry) -> str | None:
-        if e.added is not None:
-            return e.added.get("layer")
-        return next((n for n, row in self.table.items() if e.key in row["members"]), None)
+    def layer_of(self, entry: SEntry) -> str | None:
+        if entry.added is not None:
+            return entry.added.get("layer")
+        return next((layer_name for layer_name, row in self.table.items() if entry.key in row["members"]), None)
 
-    def members(self, name: str) -> list[Entry]:
-        return [e for e in self.session.entries if e.alive and self.layer_of(e) == name]
+    def members(self, name: str) -> list[SEntry]:
+        return [entry for entry in self.m_session.m_entries if entry.alive and self.layer_of(entry) == name]
 
-    def hides(self, e: Entry) -> bool:
-        name = self.layer_of(e)
+    def hides(self, entry: SEntry) -> bool:
+        name = self.layer_of(entry)
         return bool(name and self.table.get(name, {}).get("hidden"))
 
-    def locked(self, e: Entry) -> bool:
-        name = self.layer_of(e)
+    def locked(self, entry: SEntry) -> bool:
+        name = self.layer_of(entry)
         return bool(name and self.table.get(name, {}).get("locked"))
 
     # changes, each one step of the undo stack
     def _snapshot(self) -> tuple:
-        added = [(e.added, e.added.get("layer")) for e in self.session.entries if e.added is not None]
+        added = [
+            (entry.added, entry.added.get("layer")) for entry in self.m_session.m_entries if entry.added is not None
+        ]
         return copy_json(self.table), added
 
     def _put(self, snap: tuple) -> None:
         table, added = snap
         self.table.clear()
         self.table.update(copy_json(table))
-        for rec, layer in added:
+        for record, layer in added:
             if layer is None:
-                rec.pop("layer", None)
+                record.pop("layer", None)
             else:
-                rec["layer"] = layer
+                record["layer"] = layer
 
-    def _change(self, label: str, do) -> None:
-        if self.session.readonly:
+    def _change(self, label: str, action) -> None:
+        if self.m_session.m_readonly:
             return
-        self.edits.setdefault("layers", {})
+        self.m_edits.setdefault("layers", {})
         before = self._snapshot()
-        do()
+        action()
         after = self._snapshot()
-        self.session.undo.push(Command(label, lambda: self._put(before), lambda: self._put(after)))
+        self.m_session.m_undo.push(SCommand(label, lambda: self._put(before), lambda: self._put(after)))
 
     def create(self, name: str) -> None:
         if not name or name in self.table:
@@ -81,38 +83,38 @@ class EditLayers:
 
         def do():
             self.table.pop(name, None)
-            for e in self.session.entries:
-                if e.added is not None and e.added.get("layer") == name:
-                    e.added.pop("layer")
+            for entry in self.m_session.m_entries:
+                if entry.added is not None and entry.added.get("layer") == name:
+                    entry.added.pop("layer")
 
         self._change(tr("islands.remove_layer_name", name=name), do)
 
-    def assign(self, entries: Iterable[Entry], name: str | None) -> None:
+    def assign(self, entries: Iterable[SEntry], name: str | None) -> None:
         """Put ``entries`` on the layer ``name`` (made when new), or on none."""
-        rows = [e for e in entries if e.kind != "tree"]
+        rows = [entry for entry in entries if entry.kind != "tree"]
 
         def do():
             if name is not None:
                 self.table.setdefault(name, _row())
-            for e in rows:
+            for entry in rows:
                 for row in self.table.values():
-                    if e.key in row["members"]:
-                        row["members"].remove(e.key)
-                if e.added is not None:
+                    if entry.key in row["members"]:
+                        row["members"].remove(entry.key)
+                if entry.added is not None:
                     if name is None:
-                        e.added.pop("layer", None)
+                        entry.added.pop("layer", None)
                     else:
-                        e.added["layer"] = name
+                        entry.added["layer"] = name
                 elif name is not None:
-                    self.table[name]["members"].append(e.key)
+                    self.table[name]["members"].append(entry.key)
 
         self._change(tr("islands.to_layer_name", name=name) if name else tr("islands.off_layer"), do)
 
-    def set_flag(self, name: str, flag: str, on: bool) -> None:
+    def set_flag(self, name: str, flag: str, is_on: bool) -> None:
         """Hide (``hidden``) or lock (``locked``) a layer."""
         if flag not in ("hidden", "locked"):
             raise ValueError(flag)
-        if on:
+        if is_on:
             label = tr("islands.hide_name", name=name) if flag == "hidden" else tr("islands.lock_name", name=name)
         else:
             label = (
@@ -120,7 +122,7 @@ class EditLayers:
                 if flag == "hidden"
                 else tr("islands.locked_off_name", name=name)
             )
-        self._change(label, lambda: self.table[name].update({flag: on}))
+        self._change(label, lambda: self.table[name].update({flag: is_on}))
 
 
 def _row() -> dict:

@@ -12,19 +12,19 @@ import struct
 from dataclasses import dataclass, field
 
 from .rdmio import RDM_MAGIC
-from .rdmread import NO_INDEX, Animation, Box, ExtraStream, RdmFile, Skeleton, VertexElement
+from .rdmread import NO_INDEX, Box, SAnimation, SExtraStream, SRdmFile, SSkeleton, SVertexElement
 
 
-def _attrs(*rows: tuple[int, int, int, int]) -> tuple[VertexElement, ...]:
-    return tuple(VertexElement(*r) for r in rows)
+def _attrs(*rows: tuple[int, int, int, int]) -> tuple[SVertexElement, ...]:
+    return tuple(SVertexElement(*row) for row in rows)
 
 
 def pack_direction(x: float, y: float, z: float) -> bytes:
     """A normal, tangent or bitangent as a packed ``4b`` element: x, y, z in ``b / 127.5 - 1``, then 0."""
-    return bytes(max(0, min(255, round((c + 1.0) * 127.5))) for c in (x, y, z)) + b"\0"
+    return bytes(max(0, min(255, round((component + 1.0) * 127.5))) for component in (x, y, z)) + b"\0"
 
 
-# Layouts as found in shipped 117 files (usage, type, subtype, count: rdmread.VertexElement)
+# Layouts as found in shipped 117 files (usage, type, subtype, count: rdmread.SVertexElement)
 P4H, N4B, G4B, B4B, T2H = (0, 6, 0, 4), (1, 5, 6, 1), (2, 5, 6, 1), (3, 5, 6, 1), (4, 6, 0, 2)
 C4B, C4B_2, C4C, I4B, W4B = (5, 5, 2, 1), (5, 5, 6, 1), (5, 5, 4, 1), (7, 5, 0, 1), (6, 5, 2, 1)
 FORMAT_P4H = _attrs(P4H)
@@ -40,21 +40,21 @@ HEADER1_SIZE = 0x30  # 117's mesh files have 0x34 (one more zero word); both rea
 
 
 @dataclass
-class RdmSubmesh:
+class SRdmSubmesh:
     index_start: int
     index_count: int
     material: int
 
 
 @dataclass
-class RdmMeshData:
+class SRdmMeshData:
     name: str
     vertices: bytes
     stride: int
-    attributes: tuple[VertexElement, ...]  # the vertex layout, as ``rdmread`` reads it
+    attributes: tuple[SVertexElement, ...]  # the vertex layout, as ``rdmread`` reads it
     indices: list[int]
     materials: list[str]
-    submeshes: list[RdmSubmesh]
+    submeshes: list[SRdmSubmesh]
     bbox: Box
     export_name: str = "anno-toolbox"
     export_material: str = "cloth.rmp"
@@ -71,7 +71,7 @@ class RdmMeshData:
 PTR = object()  # marker for a pointer field inside a struct description
 
 
-class _Writer:
+class _CWriter:
     """Sequential block writer resolving named forward pointers at the end."""
 
     def __init__(self) -> None:
@@ -93,7 +93,7 @@ class _Writer:
                 payload += part
         self.raw_block(name, bytes(payload), count)
         base = self.blocks[name]
-        self.fixups += [(base + off, target) for off, target in local_fixups]
+        self.fixups += [(base + offset, target) for offset, target in local_fixups]
 
     def raw_block(self, name: str, payload: bytes, count: int) -> None:
         if count <= 0 or len(payload) % count:
@@ -116,112 +116,132 @@ class _Writer:
         return bytes(self.buf)
 
 
-def _header1(w: _Writer, size: int, lists: set[str]) -> None:
+def _header1(writer: _CWriter, size_bytes: int, lists: set[str]) -> None:
     """header1 with a pointer to each of the file's ``lists`` that is present (meshes, materials, skeletons,
     animations, extra streams)."""
     names = ("meta", "blob_to_mat", "skeletons", "animations", "extra_streams")
-    ptrs = [(PTR, "export_info"), *((PTR, n if n in lists else None) for n in names)]
-    w.struct_block("header1", [*ptrs, bytes(size - 24)])
+    ptrs = [(PTR, "export_info"), *((PTR, name if name in lists else None) for name in names)]
+    writer.struct_block("header1", [*ptrs, bytes(size_bytes - 24)])
 
 
 def _lists(meshes: bool, materials: bool, skeletons: bool, animations: bool, extra: bool) -> set[str]:
     flags = {"meta": meshes, "blob_to_mat": materials, "skeletons": skeletons, "animations": animations}
-    return {n for n, on in {**flags, "extra_streams": extra}.items() if on}
+    return {name for name, on in {**flags, "extra_streams": extra}.items() if on}
 
 
-def _export_info(w: _Writer, source: str, exporter: str, placeholder: str) -> None:
+def _export_info(writer: _CWriter, source: str, exporter: str, placeholder: str) -> None:
     source, exporter = source or placeholder, exporter or placeholder
     parts = [(PTR, "export_name" if source else None), (PTR, "export_material" if exporter else None)]
-    w.struct_block("export_info", [*parts, bytes(64)])
-    w.text("export_name", source)
-    w.text("export_material", exporter)
+    writer.struct_block("export_info", [*parts, bytes(64)])
+    writer.text("export_name", source)
+    writer.text("export_material", exporter)
 
 
-def _skeletons(w: _Writer, skeletons: list[Skeleton]) -> None:
+def _skeletons(writer: _CWriter, skeletons: list[SSkeleton]) -> None:
     parts = []
-    for si, s in enumerate(skeletons):
-        if not s.joints:
+    for si, skeleton in enumerate(skeletons):
+        if not skeleton.joints:
             raise ValueError(f"skeleton {si} has no joints")
-        parts += [(PTR, f"s{si}_joints"), struct.pack("<I", s.word), (PTR, f"s{si}_extra" if s.extra else None)]
+        parts += [
+            (PTR, f"s{si}_joints"),
+            struct.pack("<I", skeleton.word),
+            (PTR, f"s{si}_extra" if skeleton.extra else None),
+        ]
         parts += [bytes(20)]
-    w.struct_block("skeletons", parts, len(skeletons))
-    for si, s in enumerate(skeletons):
-        if s.extra:
-            w.raw_block(f"s{si}_extra", s.extra, len(s.extra))
-    for si, s in enumerate(skeletons):
+    writer.struct_block("skeletons", parts, len(skeletons))
+    for si, skeleton in enumerate(skeletons):
+        if skeleton.extra:
+            writer.raw_block(f"s{si}_extra", skeleton.extra, len(skeleton.extra))
+    for si, skeleton in enumerate(skeletons):
         jparts = []
-        for ji, j in enumerate(s.joints):
-            parent = NO_INDEX if j.parent is None else j.parent
-            body = struct.pack("<3f4fI6f", *j.position, *j.rotation, parent, *j.box_min, *j.box_max)
-            jparts += [(PTR, f"s{si}_j{ji}_name" if j.name else None), body, bytes(24)]
-        w.struct_block(f"s{si}_joints", jparts, len(s.joints))
-        for ji, j in enumerate(s.joints):
-            w.text(f"s{si}_j{ji}_name", j.name)
+        for ji, joint in enumerate(skeleton.joints):
+            parent = NO_INDEX if joint.parent is None else joint.parent
+            body = struct.pack("<3f4fI6f", *joint.position, *joint.rotation, parent, *joint.box_min, *joint.box_max)
+            jparts += [(PTR, f"s{si}_j{ji}_name" if joint.name else None), body, bytes(24)]
+        writer.struct_block(f"s{si}_joints", jparts, len(skeleton.joints))
+        for ji, joint in enumerate(skeleton.joints):
+            writer.text(f"s{si}_j{ji}_name", joint.name)
 
 
-def _animations(w: _Writer, animations: list[Animation]) -> None:
+def _animations(writer: _CWriter, animations: list[SAnimation]) -> None:
     parts = []
-    for ai, a in enumerate(animations):
-        parts += [(PTR, f"a{ai}_name" if a.name else None), (PTR, f"a{ai}_tracks" if a.tracks else None)]
-        parts += [struct.pack("<II", a.duration_ms, a.frame_rate), bytes(32)]
-    w.struct_block("animations", parts, len(animations))
-    for ai, a in enumerate(animations):
-        w.text(f"a{ai}_name", a.name)
-        if not a.tracks:
+    for ai, animation in enumerate(animations):
+        parts += [
+            (PTR, f"a{ai}_name" if animation.name else None),
+            (PTR, f"a{ai}_tracks" if animation.tracks else None),
+        ]
+        parts += [struct.pack("<II", animation.duration_ms, animation.frame_rate), bytes(32)]
+    writer.struct_block("animations", parts, len(animations))
+    for ai, animation in enumerate(animations):
+        writer.text(f"a{ai}_name", animation.name)
+        if not animation.tracks:
             continue
         tparts = [
             part
-            for ti, t in enumerate(a.tracks)
+            for ti, track in enumerate(animation.tracks)
             for part in (
-                (PTR, f"a{ai}_t{ti}_joint" if t.joint else None),
-                (PTR, f"a{ai}_t{ti}_keys" if t.keys else None),
+                (PTR, f"a{ai}_t{ti}_joint" if track.joint else None),
+                (PTR, f"a{ai}_t{ti}_keys" if track.keys else None),
                 bytes(16),
             )
         ]
-        w.struct_block(f"a{ai}_tracks", tparts, len(a.tracks))
-        for ti, t in enumerate(a.tracks):
-            w.text(f"a{ai}_t{ti}_joint", t.joint)
-            if t.keys:
-                payload = b"".join(struct.pack("<8f", *k.rotation, *k.position, k.time) for k in t.keys)
-                w.raw_block(f"a{ai}_t{ti}_keys", payload, len(t.keys))
+        writer.struct_block(f"a{ai}_tracks", tparts, len(animation.tracks))
+        for ti, track in enumerate(animation.tracks):
+            writer.text(f"a{ai}_t{ti}_joint", track.joint)
+            if track.keys:
+                payload = b"".join(struct.pack("<8f", *key.rotation, *key.position, key.time) for key in track.keys)
+                writer.raw_block(f"a{ai}_t{ti}_keys", payload, len(track.keys))
 
 
-def _extra_streams(w: _Writer, streams: list[ExtraStream]) -> None:
+def _extra_streams(writer: _CWriter, streams: list[SExtraStream]) -> None:
     parts = []
-    for k, s in enumerate(streams):
-        w4, wc, w10, w14, _word = s.words
-        parts += [(PTR, f"x{k}_desc"), struct.pack("<I", w4), (PTR, f"x{k}_data" if s.data else None)]
+    for k, stream in enumerate(streams):
+        w4, wc, w10, w14, _word = stream.words
+        parts += [(PTR, f"x{k}_desc"), struct.pack("<I", w4), (PTR, f"x{k}_data" if stream.data else None)]
         parts += [struct.pack("<3I", wc, w10, w14), bytes(40)]
-    w.struct_block("extra_streams", parts, len(streams))
-    for k, s in enumerate(streams):
-        w.struct_block(f"x{k}_desc", [(PTR, f"x{k}_elements"), struct.pack("<I", s.words[4]), bytes(16)])
-        w.raw_block(f"x{k}_elements", b"".join(a.pack() for a in s.elements), len(s.elements))
-        stride = sum(a.size for a in s.elements)
-        if s.data:
-            w.raw_block(f"x{k}_data", s.data, len(s.data) // stride if stride else 1)
+    writer.struct_block("extra_streams", parts, len(streams))
+    for k, stream in enumerate(streams):
+        writer.struct_block(f"x{k}_desc", [(PTR, f"x{k}_elements"), struct.pack("<I", stream.words[4]), bytes(16)])
+        writer.raw_block(
+            f"x{k}_elements", b"".join(element.pack() for element in stream.elements), len(stream.elements)
+        )
+        stride = sum(element.size for element in stream.elements)
+        if stream.data:
+            writer.raw_block(f"x{k}_data", stream.data, len(stream.data) // stride if stride else 1)
 
 
-def _mesh_blocks(w: _Writer, p: str, m: RdmMeshData, placeholder: str) -> None:
+def _mesh_blocks(writer: _CWriter, prefix: str, mesh: SRdmMeshData, placeholder: str) -> None:
     """The blocks of one mesh record (``p`` prefixes their names): name, vertex description, index format,
     submeshes, vertices, indices."""
-    wide = m.index_type == 5 if m.index_type is not None else max(m.indices) > 0xFFFF
-    name = m.name or placeholder
-    w.struct_block(p + "model_name", [(PTR, p + "model_name_str" if name else None), bytes(24)])
-    w.text(p + "model_name_str", name)
-    w.struct_block(p + "vert_id", [(PTR, p + "attributes"), struct.pack("<I", m.bones_per_vertex), bytes(16)])
-    w.raw_block(p + "attributes", b"".join(a.pack() for a in m.attributes), len(m.attributes))
-    w.raw_block(p + "unknown", struct.pack("<I", 5 if wide else 3) + bytes(16), 1)
-    if m.submeshes:
-        w.raw_block(
-            p + "mesh_info",
-            b"".join(struct.pack("<3I", s.index_start, s.index_count, s.material) + bytes(16) for s in m.submeshes),
-            len(m.submeshes),
+    wide = mesh.index_type == 5 if mesh.index_type is not None else max(mesh.indices) > 0xFFFF
+    name = mesh.name or placeholder
+    writer.struct_block(prefix + "model_name", [(PTR, prefix + "model_name_str" if name else None), bytes(24)])
+    writer.text(prefix + "model_name_str", name)
+    writer.struct_block(
+        prefix + "vert_id", [(PTR, prefix + "attributes"), struct.pack("<I", mesh.bones_per_vertex), bytes(16)]
+    )
+    writer.raw_block(
+        prefix + "attributes", b"".join(element.pack() for element in mesh.attributes), len(mesh.attributes)
+    )
+    writer.raw_block(prefix + "unknown", struct.pack("<I", 5 if wide else 3) + bytes(16), 1)
+    if mesh.submeshes:
+        writer.raw_block(
+            prefix + "mesh_info",
+            b"".join(
+                struct.pack("<3I", submesh.index_start, submesh.index_count, submesh.material) + bytes(16)
+                for submesh in mesh.submeshes
+            ),
+            len(mesh.submeshes),
         )
-    w.raw_block(p + "vertex", m.vertices, m.vertex_count)
-    w.raw_block(p + "triangles", struct.pack(f"<{len(m.indices)}{'I' if wide else 'H'}", *m.indices), len(m.indices))
+    writer.raw_block(prefix + "vertex", mesh.vertices, mesh.vertex_count)
+    writer.raw_block(
+        prefix + "triangles",
+        struct.pack(f"<{len(mesh.indices)}{'I' if wide else 'H'}", *mesh.indices),
+        len(mesh.indices),
+    )
 
 
-def _materials(w: _Writer, mesh: RdmMeshData, placeholder: str) -> None:
+def _materials(writer: _CWriter, mesh: SRdmMeshData, placeholder: str) -> None:
     if not mesh.materials:
         return
     textures = list(mesh.textures) + [""] * len(mesh.materials)
@@ -229,19 +249,19 @@ def _materials(w: _Writer, mesh: RdmMeshData, placeholder: str) -> None:
     blob = []
     for i in range(len(mesh.materials)):
         blob += [(PTR, f"mat{i}"), bytes(24)]
-    w.struct_block("blob_to_mat", blob, len(mesh.materials))
+    writer.struct_block("blob_to_mat", blob, len(mesh.materials))
     for i in range(len(mesh.materials)):
         name_ptr = (PTR, f"mat{i}_name" if names[i] else None)
-        w.struct_block(f"mat{i}", [name_ptr, (PTR, f"mat{i}_tex" if textures[i] else None), bytes(40)])
+        writer.struct_block(f"mat{i}", [name_ptr, (PTR, f"mat{i}_tex" if textures[i] else None), bytes(40)])
     for i, name in enumerate(names):
-        w.text(f"mat{i}_name", name)
-        w.text(f"mat{i}_tex", textures[i])
+        writer.text(f"mat{i}_name", name)
+        writer.text(f"mat{i}_tex", textures[i])
 
 
 def write_rdm(
-    mesh: RdmMeshData,
-    *more: RdmMeshData,
-    skeletons: list[Skeleton] | tuple[Skeleton, ...] = (),
+    mesh: SRdmMeshData,
+    *more: SRdmMeshData,
+    skeletons: list[SSkeleton] | tuple[SSkeleton, ...] = (),
     animations=(),
     extra_streams=(),
     placeholder: str = "x",
@@ -253,57 +273,78 @@ def write_rdm(
     reads back as the empty string. ``complete`` wants a submesh in every mesh and a material (a game's file may
     lack them; ``write_file`` writes such a one as it is)."""
     meshes = (mesh, *more)
-    for m in meshes:
-        if m.vertex_count * m.stride != len(m.vertices) or not m.vertices:
+    for mesh_data in meshes:
+        if mesh_data.vertex_count * mesh_data.stride != len(mesh_data.vertices) or not mesh_data.vertices:
             raise ValueError("vertex buffer is not a whole number of vertices")
-        if not m.indices or (complete and not m.submeshes):
+        if not mesh_data.indices or (complete and not mesh_data.submeshes):
             raise ValueError("mesh needs indices and a submesh")
-        if m.skeleton is not None and m.skeleton >= len(skeletons):
-            raise ValueError(f"mesh {m.name!r} names skeleton {m.skeleton} of {len(skeletons)}")
+        if mesh_data.skeleton is not None and mesh_data.skeleton >= len(skeletons):
+            raise ValueError(f"mesh {mesh_data.name!r} names skeleton {mesh_data.skeleton} of {len(skeletons)}")
     if complete and not mesh.materials:
         raise ValueError("mesh needs a material")
-    w = _Writer()
+    writer = _CWriter()
     lists = _lists(True, bool(mesh.materials), bool(skeletons), bool(animations), bool(extra_streams))
-    _header1(w, HEADER1_SIZE, lists)
-    _export_info(w, mesh.export_name, mesh.export_material, placeholder)
+    _header1(writer, HEADER1_SIZE, lists)
+    _export_info(writer, mesh.export_name, mesh.export_material, placeholder)
     prefixes = ["", *(f"m{k}_" for k in range(1, len(more) + 1))]
     meta = []
-    for p, m in zip(prefixes, meshes, strict=True):
-        meta += [(PTR, p + "model_name"), (PTR, p + "vert_id"), (PTR, p + "unknown"), (PTR, p + "vertex")]
+    for prefix, mesh_data in zip(prefixes, meshes, strict=True):
         meta += [
-            (PTR, p + "triangles"),
-            (PTR, p + "mesh_info" if m.submeshes else None),
-            struct.pack("<I", NO_INDEX if m.skeleton is None else m.skeleton),
+            (PTR, prefix + "model_name"),
+            (PTR, prefix + "vert_id"),
+            (PTR, prefix + "unknown"),
+            (PTR, prefix + "vertex"),
         ]
-        meta += [struct.pack("<6f", *m.bbox), bytes(40)]
-    w.struct_block("meta", meta, len(prefixes))
-    for p, m in zip(prefixes, meshes, strict=True):
-        _mesh_blocks(w, p, m, placeholder)
-    _materials(w, mesh, placeholder)
+        meta += [
+            (PTR, prefix + "triangles"),
+            (PTR, prefix + "mesh_info" if mesh_data.submeshes else None),
+            struct.pack("<I", NO_INDEX if mesh_data.skeleton is None else mesh_data.skeleton),
+        ]
+        meta += [struct.pack("<6f", *mesh_data.bbox), bytes(40)]
+    writer.struct_block("meta", meta, len(prefixes))
+    for prefix, mesh_data in zip(prefixes, meshes, strict=True):
+        _mesh_blocks(writer, prefix, mesh_data, placeholder)
+    _materials(writer, mesh, placeholder)
     if skeletons:
-        _skeletons(w, list(skeletons))
+        _skeletons(writer, list(skeletons))
     if animations:
-        _animations(w, list(animations))
+        _animations(writer, list(animations))
     if extra_streams:
-        _extra_streams(w, list(extra_streams))
-    return w.finish()
+        _extra_streams(writer, list(extra_streams))
+    return writer.finish()
 
 
-def write_file(rdm: RdmFile, placeholder: str = "") -> bytes:
-    """An ``RdmFile`` as ``rdmread`` gives it, written back: every list as it is, the file's materials on the
+def write_file(rdm: SRdmFile, placeholder: str = "") -> bytes:
+    """An ``SRdmFile`` as ``rdmread`` gives it, written back: every list as it is, the file's materials on the
     first mesh (little-endian; a mesh without submeshes or materials is written without them only where the
     writer allows it). ``read_rdm(write_file(f))`` equals ``f`` in every field the games read."""
     if not rdm.meshes:
         return write_animation_rdm(rdm.animations, rdm.source, rdm.exporter, rdm.skeletons, placeholder)
     meshes = []
-    for m in rdm.meshes:
-        subs = [RdmSubmesh(s.first_index, s.index_count, s.material) for s in m.submeshes]
-        data = RdmMeshData(m.name, m.vertices, m.stride, m.elements, m.indices, [], subs, m.bbox, rdm.source)
-        data.export_material, data.skeleton, data.bones_per_vertex = rdm.exporter, m.skeleton, m.bones_per_vertex
-        data.index_type = m.index_type
+    for rdm_mesh in rdm.meshes:
+        submeshes = [
+            SRdmSubmesh(submesh.first_index, submesh.index_count, submesh.material) for submesh in rdm_mesh.submeshes
+        ]
+        data = SRdmMeshData(
+            rdm_mesh.name,
+            rdm_mesh.vertices,
+            rdm_mesh.stride,
+            rdm_mesh.elements,
+            rdm_mesh.indices,
+            [],
+            submeshes,
+            rdm_mesh.bbox,
+            rdm.source,
+        )
+        data.export_material, data.skeleton, data.bones_per_vertex = (
+            rdm.exporter,
+            rdm_mesh.skeleton,
+            rdm_mesh.bones_per_vertex,
+        )
+        data.index_type = rdm_mesh.index_type
         meshes.append(data)
-    meshes[0].materials = [x.name for x in rdm.materials]
-    meshes[0].textures = [x.texture for x in rdm.materials]
+    meshes[0].materials = [material.name for material in rdm.materials]
+    meshes[0].textures = [material.texture for material in rdm.materials]
     return write_rdm(
         *meshes,
         skeletons=rdm.skeletons,
@@ -315,20 +356,20 @@ def write_file(rdm: RdmFile, placeholder: str = "") -> bytes:
 
 
 def write_animation_rdm(
-    animations: list[Animation],
+    animations: list[SAnimation],
     source: str = "",
     exporter: str = "",
-    skeletons: list[Skeleton] | tuple = (),
+    skeletons: list[SSkeleton] | tuple = (),
     placeholder: str = "x",
 ) -> bytes:
     """An animation file: the export info and the animations (2070 also ships a file of two with a skeleton
     and no mesh), what 2070 and 117 ship. ``placeholder`` as for ``write_rdm``."""
     if not animations:
         raise ValueError("an animation file needs an animation")
-    w = _Writer()
-    _header1(w, HEADER1_SIZE, _lists(False, False, bool(skeletons), True, False))
-    _export_info(w, source, exporter, placeholder)
+    writer = _CWriter()
+    _header1(writer, HEADER1_SIZE, _lists(False, False, bool(skeletons), True, False))
+    _export_info(writer, source, exporter, placeholder)
     if skeletons:
-        _skeletons(w, list(skeletons))
-    _animations(w, animations)
-    return w.finish()
+        _skeletons(writer, list(skeletons))
+    _animations(writer, animations)
+    return writer.finish()

@@ -16,16 +16,17 @@ import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from ..infra.i18n import tr
 from ..mod.asset117 import set_value
 from ..mod.modxml import modinfo, modops
 from ..modloader.mods import read_mod
-from ..modloader.modswap import STAGING, InstallError, Trash, check_folder_name, recycle, swap_in
+from ..modloader.modswap import STAGING, CInstallError, Trash, check_folder_name, recycle, swap_in
 from ..suite import modcheck
-from .assetdoc import AssetDocument
-from .changeset import AssetChange, ChangeSet
-from .gamefiles import LAYOUTS, Layout
+from .assetdoc import CAssetDocument
+from .changeset import CChangeSet, SAssetChange
+from .gamefiles import LAYOUTS, SLayout
 from .values import apply_change, values_of
 from .xmltree import find_path, parse, to_text
 
@@ -36,15 +37,26 @@ def _attr(text: str) -> str:
     return text.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
 
-def asset_ops(doc: AssetDocument, guid: int) -> list[str]:
+def xpath_literal(value: str) -> str:
+    """``value`` as an XPath 1.0 string literal: quoted with whichever quote it lacks, joined by ``concat`` when it
+    holds both (XPath has no escape)."""
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    parts = value.split("'")
+    return "concat(" + ', "\'", '.join(f"'{part}'" for part in parts) + ")"
+
+
+def asset_ops(doc: CAssetDocument, guid: int) -> list[str]:
     """The operations that turn the game's asset ``guid`` into the edited one."""
-    change = doc.changes.assets.get(guid)
+    change = doc.m_changes.m_assets.get(guid)
     if change is None or change.empty:
         return []
     return change_ops(guid, doc.vanilla(guid), change)
 
 
-def change_ops(guid: int, asset: ET.Element, change: AssetChange) -> list[str]:
+def change_ops(guid: int, asset: ET.Element, change: SAssetChange) -> list[str]:
     """The operations that turn the game's ``asset`` into the one ``change`` makes of it."""
     if change.whole:
         return [f'<ModOp Type="replace" GUID="{guid}">\n{to_text(apply_change(asset, change))}\n</ModOp>']
@@ -58,74 +70,84 @@ def change_ops(guid: int, asset: ET.Element, change: AssetChange) -> list[str]:
     for path, value in change.set.items():
         set_value(merge, path, value)
     if len(merge):
-        body = "\n".join(to_text(c) for c in merge)
+        body = "\n".join(to_text(element) for element in merge)
         ops.insert(0, f'<ModOp Type="merge" GUID="{guid}" Path="/Values">\n{body}\n</ModOp>')
-    ops += [f'<ModOp Type="remove" GUID="{guid}" Path="/Values/{p}" AllowNoMatch="1" />' for p in change.reset]
+    ops += [
+        f'<ModOp Type="remove" GUID="{guid}" Path="/Values/{reset_path}" AllowNoMatch="1" />'
+        for reset_path in change.reset
+    ]
     return ops
 
 
-def new_asset_op(doc: AssetDocument, guid: int) -> str:
+def new_asset_op(doc: CAssetDocument, guid: int) -> str:
     asset = to_text(doc.asset(guid))
-    record = doc.changes.new[guid]
+    record = doc.m_changes.m_new[guid]
     if record.anchor is not None and doc.exists(record.anchor):
         kind = "addPrevSibling" if record.place == "before" else "addNextSibling"
         return f'<ModOp Type="{kind}" GUID="{record.anchor}">\n{asset}\n</ModOp>'
     return asset  # appended to the asset file's last group (engine-modloader "Where new assets go")
 
 
-def render(doc: AssetDocument, layout: Layout | None = None) -> dict[str, str]:
+def render(doc: CAssetDocument, layout: SLayout | None = None) -> dict[str, str]:
     """The patch files of the change set, by their path in the game's tree."""
-    layout = layout or LAYOUTS[doc.changes.game]
+    layout = layout or LAYOUTS[doc.m_changes.m_game]
     if not layout.patch_target:
         raise ValueError(tr("assets.no_mod_loader_write_files", game=layout.name))
-    ops = [new_asset_op(doc, g) for g in new_order(doc.changes)]
-    for guid in sorted(doc.changes.assets):
-        if guid in doc.index.by_guid and guid not in doc.changes.removed:
+    ops = [new_asset_op(doc, new_guid) for new_guid in new_order(doc.m_changes)]
+    for guid in sorted(doc.m_changes.m_assets):
+        if guid in doc.m_index.m_by_guid and guid not in doc.m_changes.m_removed:
             ops += asset_ops(doc, guid)
-    ops += [f"<ModOp Type=\"remove\" Path=\"//Asset[Values/Standard/GUID='{g}']\" />" for g in doc.changes.removed
-            if g in doc.index.by_guid]  # fmt: skip
+    ops += [f"<ModOp Type=\"remove\" Path=\"//Asset[Values/Standard/GUID='{new_guid}']\" />" for new_guid in doc.m_changes.m_removed
+            if new_guid in doc.m_index.m_by_guid]  # fmt: skip
     out = {layout.patch_target: modops(ops, COMMENT)} if ops else {}
-    for language, texts in doc.changes.texts.items():
+    for language, texts in doc.m_changes.m_texts.items():
         if texts and layout.texts:
-            known = doc.game_texts(language) if doc.game_texts else None
+            known = doc.m_game_texts(language) if doc.m_game_texts else None
             out[layout.texts.format(language=language)] = modops(text_ops(texts, layout, known), COMMENT)
     return out
 
 
-def text_ops(texts: dict[str, str], layout: Layout, known=None) -> list[str]:
+def text_ops(texts: dict[str, str], layout: SLayout, known=None) -> list[str]:
     """A text per id: replaced where the game has it, added where it does not. ``known``: the game's text ids;
     without them each text is a ``replace`` with ``AllowNoMatch`` and an ``add`` on the condition that it is absent,
     with them a ``replace`` per known text and one ``add`` of all the new ones (each lookup costs the loader a scan)."""
     key = "LineId" if layout.key == "anno117" else "GUID"
     ops, new = [], []
     for tid, value in texts.items():
-        el = ET.Element("Text")
-        el.text = value
-        entry = f"<Text><{key}>{tid}</{key}>{to_text(el)}</Text>"
-        cond = f"/TextExport/Texts/Text[{key}='{_attr(tid)}']"
+        element = ET.Element("Text")
+        element.text = value
+        entry = f"<Text><{key}>{escape(tid)}</{key}>{to_text(element)}</Text>"
+        cond = _attr(f"/TextExport/Texts/Text[{key}={xpath_literal(tid)}]")
         if known is not None:
             if tid in known:
-                ops.append(f'<ModOp Type="replace" Path="{cond}/Text">\n{to_text(el)}\n</ModOp>')
+                ops.append(f'<ModOp Type="replace" Path="{cond}/Text">\n{to_text(element)}\n</ModOp>')
             else:
                 new.append(entry)
             continue
-        ops.append(f'<ModOp Type="replace" Path="{cond}/Text" AllowNoMatch="1">\n{to_text(el)}\n</ModOp>')
+        ops.append(f'<ModOp Type="replace" Path="{cond}/Text" AllowNoMatch="1">\n{to_text(element)}\n</ModOp>')
         ops.append(f'<ModOp Type="add" Path="/TextExport/Texts" Condition="!{cond}">\n{entry}\n</ModOp>')
     if new:
         ops.append('<ModOp Type="add" Path="/TextExport/Texts">\n' + "\n".join(new) + "\n</ModOp>")
     return ops
 
 
-def info(doc: AssetDocument, layout: Layout) -> str:
-    c = doc.changes
+def info(doc: CAssetDocument, layout: SLayout) -> str:
+    changes = doc.m_changes
     description = f"Asset changes for {layout.name}, written by the asset editor."
     if layout.key == "anno117":
-        needs = {"Require": list(c.requires)} if c.requires else None
-        return modinfo(c.mod_id, "Balancing", c.mod_name, description, version=c.version, dependencies=needs)
+        needs = {"Require": list(changes.m_requires)} if changes.m_requires else None
+        return modinfo(
+            changes.m_mod_id,
+            "Balancing",
+            changes.m_mod_name,
+            description,
+            version=changes.m_version,
+            dependencies=needs,
+        )
     data = {
-        "ModID": c.mod_id,
-        "Version": c.version,
-        "ModName": {"English": c.mod_name},
+        "ModID": changes.m_mod_id,
+        "Version": changes.m_version,
+        "ModName": {"English": changes.m_mod_name},
         "Category": {"English": "Balancing"},
         "Description": {"English": description},
     }
@@ -133,15 +155,15 @@ def info(doc: AssetDocument, layout: Layout) -> str:
 
 
 def write_mod(
-    doc: AssetDocument, mods: Path, layout: Layout | None = None, game=None, trash: Trash = recycle
+    doc: CAssetDocument, mods: Path, layout: SLayout | None = None, game=None, trash: Trash = recycle
 ) -> tuple[Path, list[str]]:
     """The mod folder ``<mods>/<mod id>`` with the patches and ``modinfo.json``, written beside it and swapped in
     (the older copy to ``trash``, the recycle bin, ``modloader.modswap``); returns the folder and the mod check's
     findings (``game``: the game's files, to check the patched paths). Another mod's folder is never replaced."""
-    layout = layout or LAYOUTS[doc.changes.game]
-    mod_id = check_folder_name(doc.changes.mod_id)
+    layout = layout or LAYOUTS[doc.m_changes.m_game]
+    mod_id = check_folder_name(doc.m_changes.m_mod_id)
     folder = Path(mods) / mod_id
-    if folder.resolve() in {Path(c.folder).resolve() for c in doc.changes.carry}:
+    if folder.resolve() in {Path(carried.folder).resolve() for carried in doc.m_changes.m_carry}:
         raise ValueError(tr("assets.folder_change_set_imported_write", folder=folder))
     _check_ours(folder, mod_id)
     written = {**render(doc, layout), "modinfo.json": info(doc, layout)}
@@ -149,53 +171,57 @@ def write_mod(
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix=STAGING, dir=folder.parent) as stage:
         staged = Path(stage) / mod_id
         for path, text in written.items():
-            dest = staged / path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text, encoding="utf-8", newline="\n")
-        carry(doc.changes, staged, {p.lower() for p in written})
+            destination = staged / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(text, encoding="utf-8", newline="\n")
+        carry(doc.m_changes, staged, {written_path.lower() for written_path in written})
         swap_in(staged, folder, trash)
     return folder, modcheck.check(folder, modcheck.readable(game) if game is not None else None)
 
 
 def _check_ours(folder: Path, mod_id: str) -> None:
-    """An ``InstallError`` unless ``folder`` is absent, empty or the mod ``mod_id``: a build replaces it whole."""
+    """An ``CInstallError`` unless ``folder`` is absent, empty or the mod ``mod_id``: a build replaces it whole."""
     if not os.path.lexists(folder) or (folder.is_dir() and not any(folder.iterdir())):
         return
     old, _ = read_mod(folder) if folder.is_dir() else (None, "")
-    if old is None or old.mod_id != mod_id:
-        raise InstallError(
+    if old is None or old.m_mod_id != mod_id:
+        raise CInstallError(
             tr(
                 "common.folder_mods_holds_another_mod",
                 folder=folder.name,
-                mod=old.mod_id if old else tr("common.no_mod"),
+                mod=old.m_mod_id if old else tr("common.no_mod"),
             )
         )
 
 
-def new_order(changes: ChangeSet) -> list[int]:
+def new_order(changes: CChangeSet) -> list[int]:
     """The new assets (not removed), each after the new asset it is anchored to."""
-    pending = [g for g in changes.new if g not in changes.removed]
+    pending = [guid for guid in changes.m_new if guid not in changes.m_removed]
     done: set[int] = set()
     out: list[int] = []
     while pending:
-        ready = [g for g in pending if changes.new[g].anchor not in changes.new or changes.new[g].anchor in done]
-        for g in ready or pending[:1]:  # a loop of anchors: the rest in their own order
-            done.add(g)
-            out.append(g)
-        pending = [g for g in pending if g not in done]
+        ready = [
+            guid
+            for guid in pending
+            if changes.m_new[guid].anchor not in changes.m_new or changes.m_new[guid].anchor in done
+        ]
+        for guid in ready or pending[:1]:  # a loop of anchors: the rest in their own order
+            done.add(guid)
+            out.append(guid)
+        pending = [guid for guid in pending if guid not in done]
     return out
 
 
-def carried_files(changes: ChangeSet) -> dict[str, Path]:
+def carried_files(changes: CChangeSet) -> dict[str, Path]:
     """Mod-relative path -> source file of every file a build copies from the imported mods (a later one wins)."""
     out: dict[str, Path] = {}
-    for c in changes.carry:
-        root = Path(c.folder)
-        skip = {s.lower() for s in c.skip} | {"modinfo.json", "modinfo.jsonc"}
+    for carried in changes.m_carry:
+        root = Path(carried.folder)
+        skip = {skipped.lower() for skipped in carried.skip} | {"modinfo.json", "modinfo.jsonc"}
         for path in _own_files(root):
-            rel = path.relative_to(root).as_posix()
-            if rel.lower() not in skip:
-                out[rel] = path
+            relative_path = path.relative_to(root).as_posix()
+            if relative_path.lower() not in skip:
+                out[relative_path] = path
     return out
 
 
@@ -205,19 +231,21 @@ def _own_files(root: Path) -> list[Path]:
     found: list[Path] = []
     for here, dirs, names in os.walk(root) if root.is_dir() else ():
         dirs[:] = sorted(
-            d for d in dirs if not any((Path(here, d, n)).is_file() for n in ("modinfo.json", "modinfo.jsonc"))
+            dir_name
+            for dir_name in dirs
+            if not any((Path(here, dir_name, name)).is_file() for name in ("modinfo.json", "modinfo.jsonc"))
         )
-        found += [Path(here, n) for n in sorted(names)]
+        found += [Path(here, name) for name in sorted(names)]
     return sorted(found)
 
 
-def carry(changes: ChangeSet, folder: Path, written: set[str]) -> int:
+def carry(changes: CChangeSet, folder: Path, written: set[str]) -> int:
     """The imported mods' other files copied into ``folder`` (never over a file the build wrote); the count."""
-    n = 0
-    for rel, src in carried_files(changes).items():
-        if rel.lower() not in written:
-            dest = folder / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-            n += 1
-    return n
+    count = 0
+    for relative_path, source in carried_files(changes).items():
+        if relative_path.lower() not in written:
+            destination = folder / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            count += 1
+    return count

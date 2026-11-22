@@ -1,6 +1,6 @@
 """What the glTF import's steps share: its options, its error, the document with its node tree, and the extras.
 
-``gltfrdm.import_gltf`` builds a ``Doc`` and hands it to ``gltfmesh`` (the meshes) and ``gltfskin`` (skeletons and
+``gltfrdm.import_gltf`` builds a ``SDoc`` and hands it to ``gltfmesh`` (the meshes) and ``gltfskin`` (skeletons and
 animations).
 """
 
@@ -8,19 +8,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..formats.gltf import Gltf
-from ..formats.rdmread import RdmFile
+from ..formats.gltf import SGltf
+from ..formats.rdmread import SRdmFile
 from . import rigmath
 
 EXTRAS = "rdm"  # the key of every extras block the export writes
 
 
-class GltfImportError(ValueError):
+class CGltfImportError(ValueError):
     """A document the import refuses; the message says what to change."""
 
 
 @dataclass(frozen=True)
-class Options:
+class SOptions:
     """``axes`` None: the document's own (its scene's extras, else "gltf"). ``layout``: the vertex layout of every
     mesh (else the one the extras or ``like`` name, else the one the attributes ask for). ``mesh``: only the glTF
     mesh of this index or name. ``transform``: bake a static mesh's node transforms into it. ``joint_names``: "name"
@@ -33,7 +33,7 @@ class Options:
     joint_names: str = "name"
     material_order: tuple[str, ...] = ()
     frame_rate: int | None = None
-    like: RdmFile | None = None
+    like: SRdmFile | None = None
 
 
 def tags(item: dict) -> dict:
@@ -45,34 +45,60 @@ def tags(item: dict) -> dict:
 
 
 @dataclass
-class Doc:
+class SDoc:
     """The document with what every step needs: node parents and world matrices, the mirror, the notes."""
 
-    g: Gltf
-    opts: Options
+    gltf: SGltf
+    options: SOptions
     mirror: bool
     scene: dict
     parents: dict[int, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        for p, node in enumerate(self.g.items("nodes")):
-            for c in node.get("children", []):
-                self.parents[c] = p
+        for index, node in enumerate(self.gltf.items("nodes")):
+            for child in node.get("children", []):
+                self.parents[child] = index
+        self._refuse_cycle()
+
+    def _refuse_cycle(self) -> None:
+        """A node that is its own descendant makes ``world`` and ``walk`` loop for ever: refuse the file at load."""
+        nodes = self.gltf.items("nodes")
+        done: set[int] = set()
+        for start in range(len(nodes)):
+            if start in done:
+                continue
+            on_path = {start}
+            stack = [(start, iter(nodes[start].get("children", [])))]
+            while stack:
+                i, kids = stack[-1]
+                for child in kids:
+                    if child in on_path:
+                        raise CGltfImportError(
+                            f"node {child} ({self.name(child)}) is its own descendant: the node tree has a cycle"
+                        )
+                    if child not in done and isinstance(child, int) and 0 <= child < len(nodes):
+                        on_path.add(child)
+                        stack.append((child, iter(nodes[child].get("children", []))))
+                        break
+                else:
+                    on_path.discard(i)
+                    done.add(i)
+                    stack.pop()
 
     def node(self, i: int) -> dict:
-        return self.g.items("nodes")[i]
+        return self.gltf.items("nodes")[i]
 
     def name(self, i: int) -> str:
         return self.node(i).get("name", f"node {i}")
 
     def world(self, i: int) -> rigmath.Matrix:
         """The node's matrix in the scene: its own after its parents'."""
-        m = rigmath.from_node(self.node(i))
+        matrix = rigmath.from_node(self.node(i))
         while i in self.parents:
             i = self.parents[i]
-            m = rigmath.multiply(rigmath.from_node(self.node(i)), m)
-        return m
+            matrix = rigmath.multiply(rigmath.from_node(self.node(i)), matrix)
+        return matrix
 
     def walk(self, roots: list[int]) -> list[int]:
         """The nodes under ``roots``, depth first, in the document's order."""

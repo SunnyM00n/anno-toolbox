@@ -13,7 +13,7 @@ from ...infra.i18n import tr
 STEP_MS = 250  # how often the status bar looks at what still loads
 
 
-class OpenProgress(QObject):
+class COpenProgress(QObject):
     """A busy bar and a line in the window's status bar for as long as the island being opened has work left.
     ``step`` may be emitted from any thread (the one that reads the island): it arrives on the window's."""
 
@@ -21,17 +21,17 @@ class OpenProgress(QObject):
 
     def __init__(self, window) -> None:
         super().__init__(window)
-        self.window = window
-        self._doc = None
-        self.bar = QProgressBar(maximum=0, textVisible=False, fixedWidth=90, maximumHeight=12)
-        self.bar.hide()
-        window.statusBar().addPermanentWidget(self.bar)
+        self.m_window = window
+        self._m_doc = None
+        self.m_bar = QProgressBar(maximum=0, textVisible=False, fixedWidth=90, maximumHeight=12)
+        self.m_bar.hide()
+        window.statusBar().addPermanentWidget(self.m_bar)
         self.step.connect(self._say)
-        self._timer = QTimer(self, interval=STEP_MS, timeout=self._look)
+        self._m_timer = QTimer(self, interval=STEP_MS, timeout=self._look)
 
     def begin(self, name: str) -> None:
         """The island ``name`` is being asked for."""
-        self.bar.show()
+        self.m_bar.show()
         self._say(tr("islands.opening_name", name=name))
 
     def reading(self, name: str) -> None:
@@ -41,34 +41,34 @@ class OpenProgress(QObject):
     def building(self, name: str) -> None:
         """The island is read; the window makes its panels (this blocks the window's thread for a moment)."""
         self._say(tr("islands.opening_name_panels", name=name))
-        self.window.statusBar().repaint()
+        self.m_window.statusBar().repaint()
 
     def follow(self, doc) -> None:
         """The island's panels are in: say what still loads until nothing does."""
-        self._doc = doc
+        self._m_doc = doc
         self._look()
-        if self.bar.isVisible():
-            self._timer.start()
+        if self.m_bar.isVisible():
+            self._m_timer.start()
 
     def end(self) -> None:
         """Nothing is being opened any more (read, failed or closed)."""
-        self._timer.stop()
-        self.bar.hide()
-        self._doc = None  # (a closed island is let go of)
+        self._m_timer.stop()
+        self.m_bar.hide()
+        self._m_doc = None  # (a closed island is let go of)
 
     def _look(self) -> None:
-        doc = self.window.doc
-        mine = doc is not None and doc is self._doc
+        doc = self.m_window.m_doc
+        mine = doc is not None and doc is self._m_doc
         left = doc.loading_text() if mine else ""
         if left:
-            self.bar.show()
-            self._say(tr("islands.name_loading_what", name=doc.title, what=left))
+            self.m_bar.show()
+            self._say(tr("islands.name_loading_what", name=doc.m_title, what=left))
             return
-        self._timer.stop()
-        self.bar.hide()
+        self._m_timer.stop()
+        self.m_bar.hide()
         if mine:
-            self._say(doc.last_said)
-        self._doc = None
+            self._say(doc.m_last_said)
+        self._m_doc = None
 
     def _say(self, text: str) -> None:
-        self.window.say(text)
+        self.m_window.say(text)

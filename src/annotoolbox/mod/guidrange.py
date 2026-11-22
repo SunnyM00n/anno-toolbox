@@ -1,11 +1,11 @@
 """A GUID range a mod owns, handed out key by key and kept stable in a file: the same key gets the same GUID in
 every run, a new key the next free number, nothing is reused.
 
-``RangeAllocator(start, end, registry, mode)`` is the allocator: ``get(key)`` gives a key's GUID, ``save`` writes the
+``CRangeAllocator(start, end, registry, mode)`` is the allocator: ``get(key)`` gives a key's GUID, ``save`` writes the
 file (``{"format": 1, "range": [start, end], "guids": {key: guid}, "names": {key: text}}``). Runs that overlap on one
 file are serialised by a lock file and merged, never guessed. The modes: ``ASSIGN`` numbers a new key at once,
 ``RECORD`` notes the new keys and numbers them in ascending key order on ``save`` (so the numbers do not depend on the
-order they were asked in), ``LOOKUP`` refuses a key the file lacks (``MissingKey``). Stdlib only.
+order they were asked in), ``LOOKUP`` refuses a key the file lacks (``CMissingKey``). Stdlib only.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ LOCK_STALE = 120.0  # a lock file older than this belongs to a run that died
 ASSIGN, RECORD, LOOKUP = "assign", "record", "lookup"
 
 
-class MissingKey(KeyError):
+class CMissingKey(KeyError):
     """A lookup-only allocator was asked for a key its file does not hold."""
 
     def __init__(self, key, registry: Path | None):
@@ -37,7 +37,7 @@ class MissingKey(KeyError):
         return f"key {self.key} has no GUID in {self.registry or 'the allocator'}"
 
 
-class RangeAllocator:
+class CRangeAllocator:
     """Key -> GUID inside ``start``-``end``, kept stable by an optional registry file.
 
     Keys the file knows keep their GUID, new keys get the next number above everything ever handed out. ``mapping``
@@ -88,23 +88,23 @@ class RangeAllocator:
         return {}
 
     def missing(self, key) -> KeyError:
-        return MissingKey(key, self.registry)
+        return CMissingKey(key, self.registry)
 
     # the file
     def _read(self, path: Path) -> tuple[dict, dict]:
         try:
-            st = path.stat()
+            stat_result = path.stat()
             data = json.loads(path.read_text(encoding="utf-8"))
-            known = {self.key_of(k): int(v) for k, v in data["guids"].items()}
-            names = {self.key_of(k): str(v) for k, v in data.get("names", {}).items()}
+            known = {self.key_of(k): int(guid) for k, guid in data["guids"].items()}
+            names = {self.key_of(k): str(guid) for k, guid in data.get("names", {}).items()}
         except (OSError, ValueError, KeyError, AttributeError) as exc:
             raise ValueError(f"GUID registry {path} is unreadable: {exc}") from exc
         if len(set(known.values())) != len(known):
             raise ValueError(f"GUID registry {path} gives one GUID to two keys")
-        stray = [v for v in known.values() if not self.start <= v <= self.end]
+        stray = [guid for guid in known.values() if not self.start <= guid <= self.end]
         if stray:
             raise ValueError(f"GUID registry {path} holds GUIDs outside {self.start}-{self.end}, e.g. {stray[0]}")
-        self._stamp = (st.st_mtime_ns, st.st_size)
+        self._stamp = (stat_result.st_mtime_ns, stat_result.st_size)
         self.read_extra(data)
         return known, names
 
@@ -119,7 +119,7 @@ class RangeAllocator:
         if self.registry is None or not self.registry.is_file():
             return
         known, names = self._read(self.registry)
-        taken = {v: k for k, v in self.known.items()}
+        taken = {value: k for k, value in self.known.items()}
         for key, guid in known.items():
             if key in self.known:
                 if self.known[key] != guid:
@@ -142,10 +142,10 @@ class RangeAllocator:
         if self.registry is None or self._stamp is None:
             return False
         try:
-            st = self.registry.stat()
+            stat_result = self.registry.stat()
         except OSError:
             return False
-        return (st.st_mtime_ns, st.st_size) != self._stamp
+        return (stat_result.st_mtime_ns, stat_result.st_size) != self._stamp
 
     # handing out
     def get(self, key, listed: bool = True, source=None) -> int:
@@ -211,20 +211,20 @@ class RangeAllocator:
             if self.mode == RECORD:
                 self.commit_plan()
             names = self.saved_names()
-            by_guid = sorted(self.known.items(), key=lambda kv: kv[1])
+            sorted_known = sorted(self.known.items(), key=lambda kv: kv[1])
             doc = {
                 "format": 1,
                 "range": [self.start, self.end],
-                "guids": {str(k): v for k, v in by_guid},
-                "names": {str(k): names[k] for k, _ in by_guid if k in names},
+                "guids": {str(k): guid for k, guid in sorted_known},
+                "names": {str(k): names[k] for k, _ in sorted_known if k in names},
                 **self.extra(),
             }
             text = json.dumps(doc, indent=1) + "\n"
             if self.registry.is_file() and self.registry.read_text(encoding="utf-8") == text:
                 return
             write_atomic(self.registry, text.encode("utf-8"))
-            st = self.registry.stat()
-            self._stamp = (st.st_mtime_ns, st.st_size)
+            stat_result = self.registry.stat()
+            self._stamp = (stat_result.st_mtime_ns, stat_result.st_size)
 
 
 @contextmanager
@@ -234,7 +234,7 @@ def registry_lock(registry: Path):
     deadline = time.monotonic() + LOCK_WAIT
     while True:
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            lock_descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
             try:
@@ -242,11 +242,11 @@ def registry_lock(registry: Path):
                     lock.unlink(missing_ok=True)
                     continue
             except OSError:
-                continue  # it went away between the two calls
+                pass  # it went away between the two calls, or (Windows) a process holds it: the deadline decides
             if time.monotonic() > deadline:
                 raise TimeoutError(f"GUID registry {registry} is locked by another run ({lock} exists)") from None
             time.sleep(0.05)
-    os.close(fd)
+    os.close(lock_descriptor)
     try:
         yield
     finally:

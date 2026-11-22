@@ -1,4 +1,4 @@
-"""The object builder's share of a project's mod (``suite.project.Part``): the model configs, info and feedback files
+"""The object builder's share of a project's mod (``suite.project.SPart``): the model configs, info and feedback files
 and the ``.cfg.xml`` / ``.fc.xml`` patches it saved, kept under ``object-edits/<game>/<game path>``, each written into
 the mod at its game path.
 
@@ -9,7 +9,9 @@ through the live link). docs/tool-suite.md section 23, "Writing back".
 from __future__ import annotations
 
 from ..infra.i18n import N_
-from ..suite.project import ALL_GAMES, EditsFolder
+from ..suite.project import ALL_GAMES, SEditsFolder
 
-EDITS = EditsFolder("object-edits", ALL_GAMES)  # the builder's work in a project (the viewer's imports are model-edits)
+EDITS = SEditsFolder(
+    "object-edits", ALL_GAMES
+)  # the builder's work in a project (the viewer's imports are model-edits)
 PART = EDITS.part("objects", N_("objects.object_builder"), "object builder")

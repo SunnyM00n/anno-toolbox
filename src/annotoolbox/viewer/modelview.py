@@ -1,10 +1,10 @@
-"""The viewer's 3D view: ``modelrender.ModelRenderer`` in a widget of the chosen device, the orbit camera on the
+"""The viewer's 3D view: ``modelrender.CModelRenderer`` in a widget of the chosen device, the orbit camera on the
 mouse (left drag turns, right or middle drag pans, the wheel zooms, F frames the model), and a clock for animations
 and effects.
 
-``make_view(backend)`` is the entry: ``ModelView`` (a ``QOpenGLWidget`` on moderngl, the format of
-``render.glformat``) for ``gl``, ``RhiModelView`` (a ``render.rhiview.RhiView``) for a QRhi backend; both take
-``show_scene(scene)``, ``state`` (a ``modelrender.ViewState``) changed by the window, ``image()`` for a picture of
+``make_view(backend)`` is the entry: ``CModelView`` (a ``QOpenGLWidget`` on moderngl, the format of
+``render.glformat``) for ``gl``, ``CRhiModelView`` (a ``render.rhiview.CRhiView``) for a QRhi backend; both take
+``show_scene(scene)``, ``state`` (a ``modelrender.SViewState``) changed by the window, ``image()`` for a picture of
 the view. docs/viewer.md, "The renderer".
 """
 
@@ -13,13 +13,15 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QImage, QImageWriter
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
+from PySide6.QtWidgets import QFileDialog
 
+from ..infra.i18n import tr
 from ..render import rhiview
-from .modelfiles import ModelFiles
-from .modelrender import ModelCamera, ModelRenderer, ViewState
-from .modelscene import Scene
+from .modelfiles import CModelFiles
+from .modelrender import CModelCamera, CModelRenderer, SViewState
+from .modelscene import CScene
 
 TICK_MS = 33  # 30 frames a second while something plays or loads
 
@@ -27,166 +29,170 @@ TICK_MS = 33  # 30 frames a second while something plays or loads
 def _local_clock() -> tuple[int, int, int]:
     """The computer's local hour, minute and second (the clock alignments read it, engine-animation "Spinning
     parts")."""
-    t = time.localtime()
-    return t.tm_hour, t.tm_min, t.tm_sec
+    local_time = time.localtime()
+    return local_time.tm_hour, local_time.tm_min, local_time.tm_sec
 
 
-class _Controls:
+class _CControls:
     """What both views share: the scene, the camera on the mouse, the clock; a view draws with ``_frame``."""
 
     def _setup(self) -> None:
-        self.files: ModelFiles | None = None
-        self.renderer: ModelRenderer | None = None
-        self.scene: Scene | None = None
-        self._pending: Scene | None = None
-        self.camera = ModelCamera((0, 0, 0), 5.0)
-        self.state = ViewState()
-        self.playing = False
-        self.speed = 1.0
-        self._framed = False
-        self._press: QPoint | None = None
-        self._button = None
-        self._moved = 0
-        self._clock = time.monotonic()
+        self.m_files: CModelFiles | None = None
+        self.m_renderer: CModelRenderer | None = None
+        self.m_scene: CScene | None = None
+        self._m_pending: CScene | None = None
+        self.m_camera = CModelCamera((0, 0, 0), 5.0)
+        self.m_state = SViewState()
+        self.m_playing = False
+        self.m_speed = 1.0
+        self._m_framed = False
+        self._m_press: QPoint | None = None
+        self._m_button = None
+        self._m_moved = 0
+        self._m_clock = time.monotonic()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self._timer = QTimer(self, interval=TICK_MS, timeout=self._tick)
-        self._timer.start()
+        self._m_timer = QTimer(self, interval=TICK_MS, timeout=self._tick)
+        self._m_timer.start()
 
-    def show_scene(self, scene: Scene, files: ModelFiles, frame: bool = True) -> None:
+    def show_scene(self, scene: CScene, files: CModelFiles, frame: bool = True) -> None:
         """Draw ``scene`` (its files read through ``files``) and frame it once it is in (``frame``; a scene redrawn
         after an edit keeps the camera)."""
-        self.files, self.scene, self._pending = files, scene, scene
-        self._framed = not frame
+        self.m_files, self.m_scene, self._m_pending = files, scene, scene
+        self._m_framed = not frame
         self.update()
 
     def clear(self) -> None:
-        self.scene, self._pending = None, None
-        if self.renderer is not None:
+        self.m_scene, self._m_pending = None, None
+        if self.m_renderer is not None:
             with self._current():
-                self.renderer.release_scene()
+                self.m_renderer.release_scene()
         self.update()
 
     def frame_model(self) -> None:
-        if self.renderer is not None and self.renderer.box is not None:
-            self.camera.frame(*self.renderer.box)
-            self._framed = True
+        if self.m_renderer is not None and self.m_renderer.m_box is not None:
+            self.m_camera.frame(*self.m_renderer.m_box)
+            self._m_framed = True
             self.update()
 
     def set_time(self, seconds: float) -> None:
-        self.state.time = max(0.0, seconds)
+        self.m_state.time = max(0.0, seconds)
         self.update()
 
     def _tick(self) -> None:
         now = time.monotonic()
-        if self.playing:
-            self.state.time += (now - self._clock) * self.speed
+        if self.m_playing:
+            self.m_state.time += (now - self._m_clock) * self.m_speed
             self.update()
-        self._clock = now
-        r = self.renderer
-        if r is not None and (r.changed() or r.busy()):
+        self._m_clock = now
+        renderer = self.m_renderer
+        if renderer is not None and (renderer.changed() or renderer.busy()):
             self.update()
-        elif r is not None and (
-            self.state.fading(r.longest_fade) or (r.clock_parts and _local_clock() != self.state.clock)
+        elif renderer is not None and (
+            self.m_state.fading(renderer.m_longest_fade)
+            or (renderer.m_clock_parts and _local_clock() != self.m_state.clock)
         ):
             self.update()  # a time slice fading after View > Night, a clock hand's next tick
-        if r is not None and not self._framed and r.box is not None and not r.busy():
+        if renderer is not None and not self._m_framed and renderer.m_box is not None and not renderer.busy():
             self.frame_model()
 
-    def _frame(self, ctx, fbo, size: tuple[int, int]) -> None:
+    def _frame(self, ctx, fbo, size_px: tuple[int, int]) -> None:
         """One frame of the scene with the device ``ctx`` into ``fbo``."""
-        if self.renderer is None or self.renderer.files is not self.files:
-            if self.renderer is not None:
-                self.renderer.release()
-            self.renderer = ModelRenderer(ctx, self.files)
-        if self._pending is not None:
-            self.renderer.show(self._pending)
-            self._pending = None
-        self.state.now, self.state.clock = time.monotonic(), _local_clock()
-        self.renderer.render(fbo, size, self.camera, self.state)
-        for m in self.renderer.messages:
-            self.status.emit(m)
-        self.renderer.messages.clear()
+        if self.m_renderer is None or self.m_renderer.m_files is not self.m_files:
+            if self.m_renderer is not None:
+                self.m_renderer.release()
+            self.m_renderer = CModelRenderer(ctx, self.m_files)
+        if self._m_pending is not None:
+            self.m_renderer.show(self._m_pending)
+            self._m_pending = None
+        self.m_state.now, self.m_state.clock = time.monotonic(), _local_clock()
+        self.m_renderer.render(fbo, size_px, self.m_camera, self.m_state)
+        for message in self.m_renderer.m_messages:
+            self.status.emit(message)
+        self.m_renderer.m_messages.clear()
 
     def _pixels(self) -> tuple[int, int]:
-        dpr = self.devicePixelRatioF()
-        return max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr))
+        pixel_ratio = self.devicePixelRatioF()
+        return max(1, int(self.width() * pixel_ratio)), max(1, int(self.height() * pixel_ratio))
 
     def release(self) -> None:
-        if self.renderer is not None:
+        if self.m_renderer is not None:
             with self._current():
-                self.renderer.release()
-            self.renderer = None
+                self.m_renderer.release()
+            self.m_renderer = None
 
-    def closeEvent(self, e) -> None:
+    def closeEvent(self, event) -> None:
         self.release()
-        super().closeEvent(e)
+        super().closeEvent(event)
 
     # the mouse
-    def mousePressEvent(self, e) -> None:
-        self._press, self._button = e.position().toPoint(), e.button()
-        self._moved = 0
+    def mousePressEvent(self, event) -> None:
+        self._m_press, self._m_button = event.position().toPoint(), event.button()
+        self._m_moved = 0
 
-    def mouseMoveEvent(self, e) -> None:
-        if self._press is None:
+    def mouseMoveEvent(self, event) -> None:
+        if self._m_press is None:
             return
-        pos = e.position().toPoint()
-        dx, dy = pos.x() - self._press.x(), pos.y() - self._press.y()
-        self._moved += abs(dx) + abs(dy)
-        self._press = pos
-        if self._button == Qt.MouseButton.LeftButton:
-            self.camera.turn(dx, dy)
+        position = event.position().toPoint()
+        delta_x, delta_y = position.x() - self._m_press.x(), position.y() - self._m_press.y()
+        self._m_moved += abs(delta_x) + abs(delta_y)
+        self._m_press = position
+        if self._m_button == Qt.MouseButton.LeftButton:
+            self.m_camera.turn(delta_x, delta_y)
         else:
-            k = self.camera.distance * 0.0025
-            self.camera.target = self.camera.target + (
-                -self.camera.view()[0, :3] * dx * k + self.camera.view()[1, :3] * dy * k
+            k = self.m_camera.m_distance_m * 0.0025
+            self.m_camera.m_target = self.m_camera.m_target + (
+                -self.m_camera.view()[0, :3] * delta_x * k + self.m_camera.view()[1, :3] * delta_y * k
             ).astype("f4")
         self.update()
 
-    def mouseReleaseEvent(self, e) -> None:
-        clicked = self._press is not None and self._button == Qt.MouseButton.LeftButton and self._moved <= 3
-        self._press = None
+    def mouseReleaseEvent(self, event) -> None:
+        clicked = self._m_press is not None and self._m_button == Qt.MouseButton.LeftButton and self._m_moved <= 3
+        self._m_press = None
         if clicked:
-            self.pick_at(e.position().x(), e.position().y())
+            self.pick_at(event.position().x(), event.position().y())
 
     def pick_at(self, x: float, y: float) -> str:
         """Select the part under the widget's point (x, y): ``picked`` says which ("" for none)."""
-        if self.renderer is None:
+        if self.m_renderer is None:
             return ""
-        dpr = self.devicePixelRatioF()
+        pixel_ratio = self.devicePixelRatioF()
         with self._current():
-            node = self.renderer.pick(self._pixels(), self.camera, self.state, x * dpr, y * dpr) or ""
+            node = (
+                self.m_renderer.pick(self._pixels(), self.m_camera, self.m_state, x * pixel_ratio, y * pixel_ratio)
+                or ""
+            )
         self.picked.emit(node)
         return node
 
-    def wheelEvent(self, e) -> None:
-        self.camera.zoom(e.angleDelta().y() / 120)
+    def wheelEvent(self, event) -> None:
+        self.m_camera.zoom(event.angleDelta().y() / 120)
         self.update()
 
-    def keyPressEvent(self, e) -> None:
-        if e.key() == Qt.Key.Key_F:
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_F:
             self.frame_model()
         else:
-            super().keyPressEvent(e)
+            super().keyPressEvent(event)
 
     def image(self) -> QImage:
         """The view as a ``QImage``."""
         return self.grabFramebuffer()
 
 
-class _GlCurrent:
+class _CGlCurrent:
     """The OpenGL context made current around a renderer call outside a paint."""
 
     def __init__(self, widget: QOpenGLWidget) -> None:
-        self.widget = widget
+        self.m_widget = widget
 
     def __enter__(self) -> None:
-        self.widget.makeCurrent()
+        self.m_widget.makeCurrent()
 
     def __exit__(self, *exc) -> None:
-        self.widget.doneCurrent()
+        self.m_widget.doneCurrent()
 
 
-class _NoContext:
+class _CNoContext:
     def __enter__(self) -> None:
         pass
 
@@ -194,38 +200,38 @@ class _NoContext:
         pass
 
 
-class ModelView(_Controls, QOpenGLWidget):
+class CModelView(_CControls, QOpenGLWidget):
     """One model at a time on moderngl. ``status`` says what the renderer reports (a file that does not read);
     ``picked`` gives the node of the part clicked (a click without a drag), "" for none."""
 
     status = Signal(str)
     picked = Signal(str)
-    backend = "gl"
+    m_backend = "gl"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.ctx = None
+        self.m_ctx = None
         self._setup()
 
     def _current(self):
-        return _GlCurrent(self)
+        return _CGlCurrent(self)
 
     def initializeGL(self) -> None:
         import moderngl
 
-        self.ctx = moderngl.create_context()
+        self.m_ctx = moderngl.create_context()
 
     def paintGL(self) -> None:
-        fbo = self.ctx.detect_framebuffer(self.defaultFramebufferObject())
-        if self.files is None:
+        fbo = self.m_ctx.detect_framebuffer(self.defaultFramebufferObject())
+        if self.m_files is None:
             fbo.use()
             fbo.clear(0.2, 0.2, 0.2, 1.0)
             return
-        self._frame(self.ctx, fbo, self._pixels())
+        self._frame(self.m_ctx, fbo, self._pixels())
 
 
-class RhiModelView(_Controls, rhiview.RhiView):
-    """One model at a time on a QRhi backend (``ModelView``'s signals; ``frameSwapped`` after each frame, as the
+class CRhiModelView(_CControls, rhiview.CRhiView):
+    """One model at a time on a QRhi backend (``CModelView``'s signals; ``frameSwapped`` after each frame, as the
     OpenGL widget's)."""
 
     status = Signal(str)
@@ -238,53 +244,71 @@ class RhiModelView(_Controls, rhiview.RhiView):
         self.frameSubmitted.connect(self.frameSwapped.emit)
 
     def _current(self):
-        return _NoContext()
+        return _CNoContext()
 
     def ready(self, ctx) -> None:
-        if self.renderer is not None:  # its resources were the old device's
-            self.renderer = None
-            self._pending = self.scene
+        if self.m_renderer is not None:  # its resources were the old device's
+            self.m_renderer = None
+            self._m_pending = self.m_scene
 
     def released(self, ctx) -> None:
         """The device goes away: the renderer's resources are its own, let go while it still stands (the scene is
         shown again by the next device's first frame)."""
-        if self.renderer is not None:
-            renderer, self.renderer = self.renderer, None
-            self._pending = self.scene
+        if self.m_renderer is not None:
+            renderer, self.m_renderer = self.m_renderer, None
+            self._m_pending = self.m_scene
             renderer.release()
 
-    def draw(self, ctx, screen, size: tuple[int, int]) -> None:
-        if self.files is None:
+    def draw(self, ctx, screen, size_px: tuple[int, int]) -> None:
+        if self.m_files is None:
             screen.use()
             screen.clear(0.2, 0.2, 0.2, 1.0)
             return
-        self._frame(ctx, screen, size)
+        self._frame(ctx, screen, size_px)
 
 
-def make_view(backend: str, parent=None) -> ModelView | RhiModelView:
+def make_view(backend: str, parent=None) -> CModelView | CRhiModelView:
     """The 3D view for ``backend`` (``render.rhiview.BACKENDS``)."""
-    return RhiModelView(backend, parent) if rhiview.is_rhi(backend) else ModelView(parent)
+    return CRhiModelView(backend, parent) if rhiview.is_rhi(backend) else CModelView(parent)
 
 
-def rhi_picture(files: ModelFiles, scene: Scene, state: ViewState, size: tuple[int, int], backend: str,
-                wait: float = 30.0) -> QImage | None:  # fmt: skip
+def save_picture(window, make_image) -> None:
+    """Ask for a PNG file and write ``make_image()`` into it; a file that could not be written is said in the window's
+    status bar (a folder that takes no files, a suffix Qt writes no picture for)."""
+    name, _f = QFileDialog.getSaveFileName(window, tr("common.save_picture"), "", "PNG (*.png)")  # i18n: ok
+    if name:
+        writer = QImageWriter(name)
+        if not writer.write(make_image()):
+            window.statusBar().showMessage(
+                tr("viewer.could_not_write_name", name=name, error=writer.errorString()), 12000
+            )
+
+
+def rhi_picture(files: CModelFiles, scene: CScene, state: SViewState, size_px: tuple[int, int], backend: str,
+                wait_s: float = 30.0) -> QImage | None:  # fmt: skip
     """``scene`` drawn on a QRhi backend without showing a window, framed once the files of the parts ``state`` shows
     are in, as a ``QImage`` once two frames after the framing found nothing loading (the offscreen pictures and the
     tests; a ``QApplication`` must exist). Raises ``RuntimeError`` when a frame failed."""
-    view = RhiModelView(backend)
-    view.state = state
+    view = CRhiModelView(backend)
+    view.m_state = state
     view.show_scene(scene, files)
     start, image, framed, quiet = time.monotonic(), None, False, 0
     try:
-        while time.monotonic() - start < wait:
-            image = view.picture(*size)
-            r = view.renderer
-            if view.failed:
-                raise RuntimeError(view.failed)
+        while time.monotonic() - start < wait_s:
+            image = view.picture(*size_px)
+            renderer = view.m_renderer
+            if view.m_failed:
+                raise RuntimeError(view.m_failed)
             # a frame part asks for its files only once what it is made of is in (the old engines' skies: their
             # stages, then their maps), so one quiet frame is not enough: two in a row, nothing loaded in between
-            loaded = r.changed() if r is not None else False
-            if r is None or r.box is None or loaded or r.busy() or not r.shown_parts_in(state):
+            loaded = renderer.changed() if renderer is not None else False
+            if (
+                renderer is None
+                or renderer.m_box is None
+                or loaded
+                or renderer.busy()
+                or not renderer.shown_parts_in(state)
+            ):
                 quiet = 0
                 time.sleep(0.02)
             elif not framed:
@@ -294,7 +318,7 @@ def rhi_picture(files: ModelFiles, scene: Scene, state: ViewState, size: tuple[i
                 quiet += 1
                 if quiet == 2:
                     break
-        errors = list(view.ctx.errors) if view.ctx is not None else []
+        errors = list(view.m_ctx.m_errors) if view.m_ctx is not None else []
     finally:
         view.release()
         view.close()

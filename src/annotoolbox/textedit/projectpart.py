@@ -1,4 +1,4 @@
-"""The Texts app's share of a project's mod (``suite.project.Part``): the project's ``text-edits/<game>.json`` as the
+"""The Texts app's share of a project's mod (``suite.project.SPart``): the project's ``text-edits/<game>.json`` as the
 game's text files (``render``). ``PART`` is what ``suite.apps.parts`` lists. docs/text-editor.md, "How a mod adds or
 overrides a text".
 """
@@ -11,30 +11,30 @@ from pathlib import Path
 from ..assetedit import assetgame
 from ..assetedit.gamefiles import LAYOUTS, open_files
 from ..infra.i18n import N_
-from ..suite.project import Part, Project
+from ..suite.project import CProject, SPart
 from . import merged
 from . import render as render_texts
-from .editfile import FOLDER, EditFile
+from .editfile import FOLDER, CEditFile
 
 
-def edits_path(project: Project, game: str | None = None) -> Path:
+def edits_path(project: CProject, game: str | None = None) -> Path:
     return project.folder / FOLDER / f"{game or project.game}.json"
 
 
-def change_set_path(project: Project) -> Path:
+def change_set_path(project: CProject) -> Path:
     return project.asset_edits / f"{project.game}.json"
 
 
-def project_edits(project: Project) -> tuple[EditFile, list[merged.Conflict]]:
+def project_edits(project: CProject) -> tuple[CEditFile, list[merged.SConflict]]:
     """The Texts app's edits and the asset editor's texts as one set (this part is the project's only writer of texts)."""
     return merged.project_edits(project, edits_path(project), change_set_path(project))
 
 
-def has_work(project: Project) -> bool:
+def has_work(project: CProject) -> bool:
     return project_edits(project)[0].count() > 0
 
 
-def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, bytes]:
+def render(project: CProject, settings, log: Callable[[str], None]) -> dict[str, bytes]:
     edits, conflicts = project_edits(project)
     for conflict in conflicts:
         log(conflict.sentence())
@@ -44,4 +44,4 @@ def render(project: Project, settings, log: Callable[[str], None]) -> dict[str, 
     return out
 
 
-PART = Part("texts", N_("ui.texts"), has_work, render)
+PART = SPart("texts", N_("ui.texts"), has_work, render)

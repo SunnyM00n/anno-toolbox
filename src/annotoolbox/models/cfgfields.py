@@ -14,7 +14,7 @@ import re
 from collections.abc import Iterable
 
 from ..infra.i18n import N_, tr
-from .cfgdoc import Field
+from .cfgdoc import SField
 from .cfgmcf import FILE_ENDINGS
 
 # 117's shaders by id (engine-rendering "A model config names its shader by number"); the ids not named there are
@@ -83,7 +83,7 @@ def choices(name: str, part_kind: str, game: str) -> list[tuple[str, str]]:
         table = CHOICES.get(key)
         if table is not None:
             translate = tr if any(table is own for own in TRANSLATED) else str
-            return [(str(k), translate(v)) for k, v in table.items()]
+            return [(str(k), translate(label)) for k, label in table.items()]
     return []
 
 
@@ -103,45 +103,49 @@ def flags_value(text: str) -> int | None:
 # Colours
 
 
-def colour_groups(fields: list[Field]) -> dict[str, dict[str, Field]]:
+def colour_groups(fields: list[SField]) -> dict[str, dict[str, SField]]:
     """The colours of a part's fields: the prefix of ``X.r X.g X.b`` (and ``X.a``) -> channel -> field, in the order
     the groups start. A prefix without all of r, g and b is no colour."""
-    found: dict[str, dict[str, Field]] = {}
-    for f in fields:
-        prefix, _dot, channel = f.name.rpartition(".")
+    found: dict[str, dict[str, SField]] = {}
+    for field in fields:
+        prefix, _dot, channel = field.name.rpartition(".")
         if prefix and channel in CHANNELS and len(channel) == 1:
-            found.setdefault(prefix, {})[channel] = f
-    return {p: g for p, g in found.items() if all(c in g for c in "rgb")}
+            found.setdefault(prefix, {})[channel] = field
+    return {
+        key_prefix: group
+        for key_prefix, group in found.items()
+        if all(channel_letter in group for channel_letter in "rgb")
+    }
 
 
-def colour_scale(group: dict[str, Field]) -> int | None:
+def colour_scale(group: dict[str, SField]) -> int | None:
     """1 for a colour of floats 0 to 1, 255 for one of whole numbers up to 255, None for no picker (a value that is no
     number, negative, above 1 and not whole, or above 255)."""
     values = []
-    for f in group.values():
+    for field in group.values():
         try:
-            values.append(float(f.value))
+            values.append(float(field.value))
         except ValueError:
             return None
-    if any(v < 0 for v in values):
+    if any(value < 0 for value in values):
         return None
-    if all(v <= 1 for v in values):
+    if all(value <= 1 for value in values):
         return 1
-    return 255 if all(v <= 255 and v == int(v) for v in values) else None
+    return 255 if all(value <= 255 and value == int(value) for value in values) else None
 
 
-def colour_channels(group: dict[str, Field], scale: int) -> list[int]:
+def colour_channels(group: dict[str, SField], scale: int) -> list[int]:
     """The group's channels as 0 to 255 in the order r, g, b, a (the ones it has)."""
-    return [round(float(group[c].value) / scale * 255) for c in CHANNELS if c in group]
+    return [round(float(group[channel].value) / scale * 255) for channel in CHANNELS if channel in group]
 
 
-def colour_edits(group: dict[str, Field], picked: Iterable[int], scale: int) -> list[tuple[Field, str]]:
+def colour_edits(group: dict[str, SField], picked: Iterable[int], scale: int) -> list[tuple[SField, str]]:
     """(field, new text) for each channel the picked 8-bit colour changes; a channel it leaves keeps its text."""
     out = []
-    for channel, new in zip((c for c in CHANNELS if c in group), picked, strict=False):
-        f = group[channel]
-        if round(float(f.value) / scale * 255) != new:
-            out.append((f, format(new / 255, ".4g") if scale == 1 else str(new)))
+    for channel, new in zip((channel_name for channel_name in CHANNELS if channel_name in group), picked, strict=False):
+        colour_field = group[channel]
+        if round(float(colour_field.value) / scale * 255) != new:
+            out.append((colour_field, format(new / 255, ".4g") if scale == 1 else str(new)))
     return out
 
 
@@ -167,12 +171,12 @@ def file_candidates(
 ) -> list[str]:
     """The values the game's files give a field: the newer games name a texture by its source file (``x.psd`` for
     ``x_0.dds``), never by a lower quality level or a lower level of detail of a mesh."""
-    q, out, seen = query.strip().lower(), [], set()
+    needle, out, seen = query.strip().lower(), [], set()
     for path in paths:
         if suffixes and not path.endswith(suffixes):
             continue
         value = _named(path, suffixes, source_names)
-        if value and q in value and value not in seen:
+        if value and needle in value and value not in seen:
             seen.add(value)
             out.append(value)
             if len(out) >= limit:
@@ -195,7 +199,7 @@ def file_value(picked: str, current: str) -> str:
     if "\\" in current and "/" not in current:  # 1701 writes its paths with backslashes: keep the style
         picked = picked.replace("/", "\\")
     low = current.strip().lower()
-    source = next((s for s in SOURCE_SUFFIXES if low.endswith(s)), "")
+    source = next((suffix for suffix in SOURCE_SUFFIXES if low.endswith(suffix)), "")
     if picked.endswith(".psd") and source:
         return picked[: -len(".psd")] + source
     if picked.endswith(".rdm") and low.endswith(".fbx"):

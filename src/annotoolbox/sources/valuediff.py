@@ -41,15 +41,15 @@ def diff_data(old, new, path: str, out: list[tuple], full: bool = False) -> None
     are shortened by ``brief`` unless ``full``."""
     if isinstance(old, dict) and isinstance(new, dict):
         for key in sorted(set(old) | set(new)):
-            sub = f"{path}/{key}" if path else key
+            sub_path = f"{path}/{key}" if path else key
             if key not in old:
-                out.append((sub, None, shown(new[key], full)))
+                out.append((sub_path, None, shown(new[key], full)))
             elif key not in new:
-                out.append((sub, shown(old[key], full), None))
+                out.append((sub_path, shown(old[key], full), None))
             elif is_list(key, old[key], new[key]):
-                diff_lists(as_list(old[key]), as_list(new[key]), sub, out, full)
+                diff_lists(as_list(old[key]), as_list(new[key]), sub_path, out, full)
             else:
-                diff_data(old[key], new[key], sub, out, full)
+                diff_data(old[key], new[key], sub_path, out, full)
     elif canon(old) != canon(new):
         out.append((path, shown(old, full), shown(new, full)))
 
@@ -60,18 +60,18 @@ def diff_lists(old: list, new: list, path: str, out: list[tuple], full: bool = F
     balance = Counter(canon(x) for x in old)
     balance.subtract(Counter(canon(x) for x in new))
     gone, came = _unmatched(old, balance, 1), _unmatched(new, balance, -1)
-    for (_i, a), (j, b) in zip(gone, came, strict=False):
-        diff_data(a, b, f"{path}[{j}]", out, full)
-    for _i, a in gone[len(came) :]:
-        out.append((f"{path}[-]", shown(a, full), None))
-    for _j, b in came[len(gone) :]:
-        out.append((f"{path}[+]", None, shown(b, full)))
+    for (_i, before), (j, after) in zip(gone, came, strict=False):
+        diff_data(before, after, f"{path}[{j}]", out, full)
+    for _i, before in gone[len(came) :]:
+        out.append((f"{path}[-]", shown(before, full), None))
+    for _j, after in came[len(gone) :]:
+        out.append((f"{path}[+]", None, shown(after, full)))
 
 
 def _unmatched(items: list, balance: Counter, sign: int) -> list[tuple[int, object]]:
     """``(position, entry)`` of the entries of ``items`` the other list lacks: ``balance`` counts old minus new,
     ``sign`` picks the side."""
-    spare = Counter({k: v * sign for k, v in balance.items() if v * sign > 0})
+    spare = Counter({k: count * sign for k, count in balance.items() if count * sign > 0})
     out = []
     for k, item in enumerate(items):
         key = canon(item)

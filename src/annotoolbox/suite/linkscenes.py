@@ -16,7 +16,7 @@ DATA = Path(__file__).parent / "data" / "ui-states.txt"
 SCENE_SUFFIX = "scene"
 
 Resolver = Callable[[list[str]], Iterable[str]]  # changed UI file paths -> the names of the states that show them
-_resolvers: list[Resolver] = []
+_g_resolvers: list[Resolver] = []
 
 
 @cache
@@ -36,16 +36,16 @@ def scene_state(path: str) -> str:
 
 def register(resolver: Resolver) -> Callable[[], None]:
     """Let an app name the states of widget files it knows the users of; returns the remover."""
-    _resolvers.append(resolver)
-    return lambda: _resolvers.remove(resolver) if resolver in _resolvers else None
+    _g_resolvers.append(resolver)
+    return lambda: _g_resolvers.remove(resolver) if resolver in _g_resolvers else None
 
 
 def states_for(paths: Iterable[str]) -> list[str]:
     """The states to reload for the changed UI files ``paths``: scenes by their name, the rest by the resolvers; each
     once, in order."""
     paths = list(paths)
-    found = [scene_state(p) for p in paths]
-    rest = [p for p, state in zip(paths, found, strict=True) if not state]
-    for resolver in list(_resolvers):
+    found = [scene_state(path) for path in paths]
+    rest = [path for path, state in zip(paths, found, strict=True) if not state]
+    for resolver in list(_g_resolvers):
         found += list(resolver(rest))
-    return list(dict.fromkeys(s for s in found if s))
+    return list(dict.fromkeys(entry for entry in found if entry))

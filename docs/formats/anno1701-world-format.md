@@ -2,7 +2,7 @@
 
 This page describes how Anno 1701 (History Edition, data of the 2007 add-on) stores its worlds,
 random-map templates and islands. It was read from the files in the install's archives (`data0.rda`
-and the language archives, "Crypted Resource File V1.1", read by `rda.RdaArchive`). It is hand-written
+and the language archives, "Crypted Resource File V1.1", read by `rda.CRdaArchive`). It is hand-written
 from the files themselves. The counts are over every such file in the archives. Nothing here was
 written back and loaded by the game.
 
@@ -79,7 +79,7 @@ Root `WorldConfig`:
 
 ## World rules: `.wcf`
 
-The file sits beside the `.www` and has the same name. Its root is `GameData`:
+The file sits beside the `.www` and has the same name. Its root is `CGameData`:
 
 - `PlayerInfo` (four players: `m_PlayerId`, `m_Type`, `m_Profile`: an AI profile name);
 - `EnableUndiscovered` and `EasyMode`;
@@ -276,7 +276,7 @@ path is in two of the shipped archives, so the rule matters only for added archi
 `data/texts.xml`, the same set as 1404's `ahe/a4he0.rda`). It holds no island data and no path of the
 other archives, and its entries are stamped 0. `isd1701.source_tree` reproduces this and reads `a3he0`
 last, as 1404's tree reads `a4he0`. Every shipped island is in `data0.rda`. The History Edition's
-`ahe/file.db` indexes that archive in the new engine's FileDB tree (`othergames/index2205.ArchiveIndex`
+`ahe/file.db` indexes that archive in the new engine's FileDB tree (`othergames/index2205.CArchiveIndex`
 reads it, `filedb.md`).
 
 Note: `isd1701.source_tree` reads `a3he0` last since 2026-11-07.

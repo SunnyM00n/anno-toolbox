@@ -18,23 +18,23 @@ def read_banner(rdm: bytes) -> dict:
     loses each card's size): per vertex its card's centre, its corner offset in world units, the crown's outward
     direction and the uv; and the triangles. Its vertex block is the one of ``STRIDE`` bytes followed by the
     16-bit index block (``rdmwrite`` layout)."""
-    at = 0
-    while at + 8 <= len(rdm):
-        count, size = struct.unpack_from("<II", rdm, at)
-        end = at + 8 + count * size
-        if size == STRIDE and count and end + 8 <= len(rdm):
-            n_idx, idx_size = struct.unpack_from("<II", rdm, end)
-            if idx_size == 2 and n_idx % 3 == 0 and end + 8 + 2 * n_idx <= len(rdm):
+    block_offset = 0
+    while block_offset + 8 <= len(rdm):
+        count, size_bytes = struct.unpack_from("<II", rdm, block_offset)
+        end = block_offset + 8 + count * size_bytes
+        if size_bytes == STRIDE and count and end + 8 <= len(rdm):
+            index_count, index_size_bytes = struct.unpack_from("<II", rdm, end)
+            if index_size_bytes == 2 and index_count % 3 == 0 and end + 8 + 2 * index_count <= len(rdm):
                 break
-        at += 1
+        block_offset += 1
     else:
         raise ValueError("no banner vertex block")
     out = {"positions": [], "corners": [], "radial": [], "uvs": []}
     for k in range(count):
-        v = rdm[at + 8 + k * STRIDE : at + 8 + (k + 1) * STRIDE]
-        out["positions"] += struct.unpack_from("<3e", v)
-        out["corners"] += [round((b / 127.5 - 1) * BANNER_UNIT, 4) for b in v[8:10]]
-        out["radial"] += [round(b / 127.5 - 1, 4) for b in v[12:15]]
-        out["uvs"] += struct.unpack_from("<2e", v, 20)
-    out["indices"] = list(struct.unpack_from(f"<{n_idx}H", rdm, end + 8))
+        vertex = rdm[block_offset + 8 + k * STRIDE : block_offset + 8 + (k + 1) * STRIDE]
+        out["positions"] += struct.unpack_from("<3e", vertex)
+        out["corners"] += [round((byte / 127.5 - 1) * BANNER_UNIT, 4) for byte in vertex[8:10]]
+        out["radial"] += [round(byte / 127.5 - 1, 4) for byte in vertex[12:15]]
+        out["uvs"] += struct.unpack_from("<2e", vertex, 20)
+    out["indices"] = list(struct.unpack_from(f"<{index_count}H", rdm, end + 8))
     return out

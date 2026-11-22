@@ -2,7 +2,7 @@
 shaders: the viewer's forward pieces (``skyforward``, ``postforward``, the frame's cloud noise and sky cubes) fed by
 the island's ambient setting and the view's clock.
 
-``compile_parts`` and ``read_parts`` run in the background; ``IslandFinish(ctx, game, light, compiled, read,
+``compile_parts`` and ``read_parts`` run in the background; ``CIslandFinish(ctx, game, light, compiled, read,
 dummies)`` hands per frame the frame's ``maps`` and ``values(seconds)``, draws the ``sky`` and ``finish``es the
 frame; docs/rendering/island-1800-2205-view.md 14.
 """
@@ -17,10 +17,10 @@ from types import SimpleNamespace
 from ...infra.i18n import tr
 from ...models import ddsdecode
 from ...render import ambientforward, eyeadapt, eyeforward, fxcdraw, postforward, skyforward
-from ...render.nativepass import Composite
+from ...render.nativepass import CComposite
 from ...render.objects1800 import named_maps, plain_texture
 from ...viewer.forwardpass import CLOUDS as CLOUDS_2205
-from ...viewer.forwardpass import ForwardPass, sky_work
+from ...viewer.forwardpass import CForwardPass, sky_work
 
 # the cloud noise (white, the noise in alpha) the frame reads as cCloudTex: 2205's the viewer's; 1800's the
 # environment's cloud layer, its own noise of the same kind (constants.fxh "cloud shadows & cloud layer") [I]
@@ -69,28 +69,31 @@ def compile_parts(source, game: str) -> dict:
     """In the background: the sky's technique (``sky``), the post chain's stages (``post``) and 1800's eye
     adaptation (``eye``), each by key, or why it did not compile (a string: said once, the view's own sky or finish
     then, the chain without the eye adaptation)."""
-    makers = {"sky": lambda: sky_work(SimpleNamespace(shaders=source)),
+    makers = {"sky": lambda: sky_work(SimpleNamespace(m_shaders=source)),
               "post": lambda: postforward.compile_chain(source, postforward.CHAINS[game])}  # fmt: skip
     if EYE[game]:
         makers["eye"] = lambda: eyeforward.compile_stages(source)
     made = each_made(makers)
-    return {k: f"{type(v).__name__}: {v}" if isinstance(v, Exception) else v for k, v in made.items()}
+    return {
+        k: f"{type(outcome).__name__}: {outcome}" if isinstance(outcome, Exception) else outcome
+        for k, outcome in made.items()
+    }
 
 
-def _cube_paths(light: ambientforward.Light, game: str) -> list[str]:
+def _cube_paths(light: ambientforward.SLight, game: str) -> list[str]:
     paths = [*skyforward.box_maps(light, game).values(), light.skybox, *light.specular_cubes[:2]]
-    return list(dict.fromkeys(p for p in paths if p))
+    return list(dict.fromkeys(path for path in paths if path))
 
 
-def read_parts(files, light: ambientforward.Light, game: str) -> dict:
+def read_parts(files, light: ambientforward.SLight, game: str) -> dict:
     """In the background: the setting's cubes by path (``fxcdraw.cube_faces``; None: no cube), the cloud noise and
-    1800's specular table (``DdsFile``s), 1800's grade table (``postforward.lut_volume``); a file that does not read
+    1800's specular table (``CDdsFile``s), 1800's grade table (``postforward.lut_volume``); a file that does not read
     is left out (its stand-in then)."""
     out: dict = {"cubes": {}, "maps": {}}
     for path in _cube_paths(light, game):
         try:
-            dds = ddsdecode.DdsFile(files.read(path))
-            out["cubes"][path] = fxcdraw.cube_faces(dds, MIRROR_CUBES[game]) if dds.info.faces == 6 else None
+            dds = ddsdecode.CDdsFile(files.read(path))
+            out["cubes"][path] = fxcdraw.cube_faces(dds, MIRROR_CUBES[game]) if dds.m_info.faces == 6 else None
         except (OSError, KeyError, ValueError):
             out["cubes"][path] = None
     maps = {"cCloudTex": CLOUDS[game]}
@@ -121,28 +124,28 @@ def wind_values(strength: float, seconds: float, wind=WIND) -> dict:
     """The frame's clock and wind as the plants' and fields' vertex shaders read them (``ComputeWind``,
     ``ComputeFieldWind``): ``cTimer`` the view's seconds, the setting's strength along ``wind`` [E: the session's
     direction], ``cAccumulatedWind`` their integral at a steady wind (``constants.fxh``)."""
-    s = float(seconds)
-    return {"cTimer": [s, 0.0, s, 0.0], "cWindDirection": list(wind), "cWindStrength": float(strength),
-            "cAccumulatedWind": [wind[0] * strength * s, wind[1] * strength * s]}  # fmt: skip
+    clock = float(seconds)
+    return {"cTimer": [clock, 0.0, clock, 0.0], "cWindDirection": list(wind), "cWindStrength": float(strength),
+            "cAccumulatedWind": [wind[0] * strength * clock, wind[1] * strength * clock]}  # fmt: skip
 
 
-def cloud_deltas(light: ambientforward.Light, seconds: float, wind=WIND) -> list[float]:
+def cloud_deltas(light: ambientforward.SLight, seconds: float, wind=WIND) -> list[float]:
     """``cCloudShadowsDeltas``: how far each of the noise's two layers moved by ``seconds`` (``CalculateCloudShadowNoise``
     reads at ``positionWS.xz x 0.01 x scale - deltas.xy`` and ``x 0.015 x scale - deltas.zw``): the setting's speed
     (``CloudShadowParams.y``) along ``wind``, both layers moving the same distance over the ground [E: the engine's]."""
-    scale, speed = light.clouds[0], light.clouds[1]
-    far = seconds * speed * CLOUD_WIND
+    scale, speed_per_s = light.clouds[0], light.clouds[1]
+    far = seconds * speed_per_s * CLOUD_WIND
     out = []
     for k in (0.01, 0.015):
         out += [far * wind[0] * k * scale, far * wind[1] * k * scale]
     return out
 
 
-class _Pass:
-    """What the viewer's ``ForwardPass.view_light`` reads of its pass: the game, the post chain on, the setting."""
+class _CPass:
+    """What the viewer's ``CForwardPass.view_light`` reads of its pass: the game, the post chain on, the setting."""
 
-    def __init__(self, game: str, light: ambientforward.Light) -> None:
-        self.GAME, self._source = game, SimpleNamespace(light=light)
+    def __init__(self, game: str, light: ambientforward.SLight) -> None:
+        self.GAME, self._m_source = game, SimpleNamespace(m_light=light)
 
     def _on(self, _part: str) -> bool:
         return True
@@ -151,21 +154,21 @@ class _Pass:
         return ""
 
     def _ready(self):
-        return self._source
+        return self._m_source
 
 
-class IslandFinish:
+class CIslandFinish:
     """The look's sky, cloud noise and post chain (module docstring); ``compiled``: ``compile_parts``' result,
     ``read``: ``read_parts``'; ``said(text)`` says a part that did not compile once."""
 
     def __init__(self, ctx, game: str, light, compiled: dict, read: dict, said) -> None:
-        self.ctx, self.game, self.light, self.read = ctx, game, light, read
-        self.wind = read.get("wind", WIND_STRENGTH)  # the setting's (``read_wind``), kept past the uploads
-        self.dummies = dummies = fxcdraw.Dummies(ctx.rhi)
+        self.m_ctx, self.m_game, self.m_light, self.m_read = ctx, game, light, read
+        self.m_wind = read.get("wind", WIND_STRENGTH)  # the setting's (``read_wind``), kept past the uploads
+        self.m_dummies = dummies = fxcdraw.CDummies(ctx.m_rhi)
         sky, post = compiled.get("sky"), compiled.get("post")
-        self.sky = skyforward.SkyForward(ctx, *sky, dummies) if isinstance(sky, tuple) else None
-        self.chain = chain = postforward.CHAINS[game]
-        self.post = postforward.PostChain(ctx, post, dummies, chain) if isinstance(post, dict) else None
+        self.m_sky = skyforward.CSkyForward(ctx, *sky, dummies) if isinstance(sky, tuple) else None
+        self.m_chain = chain = postforward.CHAINS[game]
+        self.m_post = postforward.CPostChain(ctx, post, dummies, chain) if isinstance(post, dict) else None
         if isinstance(sky, str):  # the view's own sky then
             said(tr("islands.games_visible_sky_haze", reason=sky[:300]))
         if isinstance(post, str):  # the view's own finish then
@@ -173,122 +176,130 @@ class IslandFinish:
         eye = compiled.get("eye")
         if isinstance(eye, str):  # the chain without it then
             said(tr("islands.games_eye_adaptation", reason=eye[:300]))
-        self.eye = eyeforward.EyeAdaptation1800(ctx.rhi, eye) if isinstance(eye, dict) and self.post else None
-        self.eye_time: float | None = None  # when it last ran (its easing's time step)
-        self.again = False  # the exposure read back changed: the view draws once more
-        made = self.post is not None
-        self.decode = Composite(ctx, DECODE_FS) if made else None
-        self.saturate = Composite(ctx, SATURATE_FS) if made and LDR_TARGET[game] else None
-        self.targets: dict = {}  # name -> (texture, framebuffer, size): the clamped scene, the decoded picture
-        self.textures: dict = {}  # the frame's maps by the shaders' names, made with the first uploads
-        self.lut = None
-        self.keep: list = []
+        self.m_eye = eyeforward.CEyeAdaptation1800(ctx.m_rhi, eye) if isinstance(eye, dict) and self.m_post else None
+        self.m_eye_time: float | None = None  # when it last ran (its easing's time step)
+        self.m_again = False  # the exposure read back changed: the view draws once more
+        made = self.m_post is not None
+        self.m_decode = CComposite(ctx, DECODE_FS) if made else None
+        self.m_saturate = CComposite(ctx, SATURATE_FS) if made and LDR_TARGET[game] else None
+        self.m_targets: dict = {}  # name -> (texture, framebuffer, size): the clamped scene, the decoded picture
+        self.m_textures: dict = {}  # the frame's maps by the shaders' names, made with the first uploads
+        self.m_lut = None
+        self.m_keep: list = []
 
     def uploads(self, batch) -> None:
         """The cubes, the cloud noise, the specular table and the grade table onto the device, once."""
-        if self.textures or self.read is None:
+        if self.m_textures or self.m_read is None:
             return
-        cubes = {p: fxcdraw.cube_of(self.ctx, f) for p, f in self.read["cubes"].items() if f is not None}
-        light = self.light
-        for name, path in skyforward.box_maps(light, self.game).items():
+        cubes = {
+            path: fxcdraw.cube_of(self.m_ctx, faces)
+            for path, faces in self.m_read["cubes"].items()
+            if faces is not None
+        }
+        light = self.m_light
+        for name, path in skyforward.box_maps(light, self.m_game).items():
             if path in cubes:
-                self.textures[name] = cubes[path]
+                self.m_textures[name] = cubes[path]
         if light.skybox in cubes:
-            self.textures["cSkyRenderTarget"] = self.textures["cEnvironmentCubeTex"] = cubes[light.skybox]
-        spec = [cubes.get(p) for p in light.specular_cubes[:2]]
-        if spec and spec[0] is not None:
-            self.textures.update(
-                {"cPrefilteredSpecularCube0": spec[0], "cPrefilteredSpecularCube1": spec[-1] or spec[0]}
+            self.m_textures["cSkyRenderTarget"] = self.m_textures["cEnvironmentCubeTex"] = cubes[light.skybox]
+        specular = [cubes.get(path) for path in light.specular_cubes[:2]]
+        if specular and specular[0] is not None:
+            self.m_textures.update(
+                {"cPrefilteredSpecularCube0": specular[0], "cPrefilteredSpecularCube1": specular[-1] or specular[0]}
             )
-        for name, dds in self.read["maps"].items():
-            self.textures[name] = plain_texture(self.ctx.rhi, batch, dds)
-        self.keep = list({id(t): t for t in self.textures.values()}.values())
-        if "lut" in self.read:
-            n = postforward.LUT_SIZE
-            self.lut = self.ctx.texture3d((n, n, n), 4, self.read["lut"])
-        self.read = None
+        for name, dds in self.m_read["maps"].items():
+            self.m_textures[name] = plain_texture(self.m_ctx.m_rhi, batch, dds)
+        self.m_keep = list({id(texture): texture for texture in self.m_textures.values()}.values())
+        if "lut" in self.m_read:
+            lut_size = postforward.LUT_SIZE
+            self.m_lut = self.m_ctx.texture3d((lut_size, lut_size, lut_size), 4, self.m_read["lut"])
+        self.m_read = None
 
     def values(self, seconds: float) -> dict:
         """The frame's values that go with the maps: the clouds' drift at ``seconds``, the clock and the wind the
         plants sway in, 1800's cubes' turn and size."""
-        out = {"cCloudShadowsDeltas": cloud_deltas(self.light, seconds), **wind_values(self.wind, seconds)}
-        cube = self.textures.get("cPrefilteredSpecularCube0")
+        out = {"cCloudShadowsDeltas": cloud_deltas(self.m_light, seconds), **wind_values(self.m_wind, seconds)}
+        cube = self.m_textures.get("cPrefilteredSpecularCube0")
         if cube is not None:
             out["cPrefilteredSpecCubeSizeLog2"] = math.log2(max(1, cube.pixelSize().width()))
-            out["cMtxEnvironmentRotation"] = ambientforward.cube_turn(self.light)
+            out["cMtxEnvironmentRotation"] = ambientforward.cube_turn(self.m_light)
             out["cPrefilteredCubeMapLerpFac"] = 0.0  # noon: the first cube alone
         return out
 
-    def draw_sky(self, target, size: tuple[int, int], cam, values: dict) -> None:
+    def draw_sky(self, target, size_px: tuple[int, int], camera, values: dict) -> None:
         """The game's sky into ``target`` before the frame's models (over the view's own sky)."""
-        if self.sky is not None:
-            turn = skyforward.sky_values(self.light, True, MIRROR_CUBES[self.game])
-            boxes = {k: v for k, v in self.textures.items() if k in skyforward.BOXES}
-            self.sky.render(target, size, cam, {**values, **turn}, boxes)
+        if self.m_sky is not None:
+            turn = skyforward.sky_values(self.m_light, True, MIRROR_CUBES[self.m_game])
+            boxes = {name: texture for name, texture in self.m_textures.items() if name in skyforward.BOXES}
+            self.m_sky.render(target, size_px, camera, {**values, **turn}, boxes)
 
-    def view_light(self, lt: dict) -> dict:
+    def view_light(self, light_values: dict) -> dict:
         """The light the view draws its own parts with under the game's post chain (the viewer's rule,
-        ``ForwardPass.view_light``); ``lt`` as it is without the chain."""
-        return ForwardPass.view_light(_Pass(self.game, self.light), lt, False) if self.post is not None else lt
+        ``CForwardPass.view_light``); ``light_values`` as it is without the chain."""
+        return (
+            CForwardPass.view_light(_CPass(self.m_game, self.m_light), light_values, False)
+            if self.m_post is not None
+            else light_values
+        )
 
-    def finish(self, image, size: tuple[int, int], eye: bool = True):
+    def finish(self, image, size_px: tuple[int, int], eye_enabled: bool = True):
         """The game's post chain over the view's resolved colour (1800's eye adaptation first where ``eye``: the
         rendering quality's switch), as linear light for the view's final pass; None without the chain."""
-        if self.post is None:
+        if self.m_post is None:
             return None
-        values, extra = {**self.light.post, **self.light.lite, **self.chain.engine}, {}
-        if self.lut is not None:
+        values, extra = {**self.m_light.post, **self.m_light.lite, **self.m_chain.engine}, {}
+        if self.m_lut is not None:
             values.update({"cUsedLUTTextures": 1, "cLUTWeights": [1.0, 0.0, 0.0]})
-            extra["cLUTTexture0"] = self.lut.native
-        if self.saturate is not None:
-            scene, fbo = self._target("scene", size)
-            self.saturate.draw(fbo, {"picture": image}, {}, depth_test=False)
+            extra["cLUTTexture0"] = self.m_lut.native
+        if self.m_saturate is not None:
+            scene, framebuffer = self._target("scene", size_px)
+            self.m_saturate.draw(framebuffer, {"picture": image}, {}, depth_test=False)
             image = scene
-        values.update(self._exposure(image, size, eye))
-        graded = self.post.render(image, size, values, extra)
-        picture, fbo = self._target("picture", size)
-        self.decode.draw(fbo, {"picture": graded}, {}, depth_test=False)
+        values.update(self._exposure(image, size_px, eye_enabled))
+        graded = self.m_post.render(image, size_px, values, extra)
+        picture, framebuffer = self._target("picture", size_px)
+        self.m_decode.draw(framebuffer, {"picture": graded}, {}, depth_test=False)
         return picture
 
-    def _exposure(self, image, size: tuple[int, int], on: bool) -> dict:
-        """The eye adaptation over the scene (the viewer's ``ForwardPass._exposure``): the chain's values for the
+    def _exposure(self, image, size_px: tuple[int, int], is_enabled: bool) -> dict:
+        """The eye adaptation over the scene (the viewer's ``CForwardPass._exposure``): the chain's values for the
         exposure read back last frame, none while it is off or did not compile."""
-        if self.eye is None or self.eye.error or not on:
-            self.eye_time, self.again = None, False
+        if self.m_eye is None or self.m_eye.m_error or not is_enabled:
+            self.m_eye_time, self.m_again = None, False
             return {}
-        before = self.eye.value
-        self.again = settling(self.eye.take(), self.eye.readback is not None, before, self.eye.value)
+        before = self.m_eye.m_value
+        self.m_again = settling(self.m_eye.take(), self.m_eye.m_readback is not None, before, self.m_eye.m_value)
         now = time.monotonic()
-        step = None if self.eye_time is None else now - self.eye_time
+        step = None if self.m_eye_time is None else now - self.m_eye_time
         if step is None or step > eyeadapt.SETTLE:
-            self.eye.restart()
-        self.eye_time = now
-        self.eye.run(self.ctx, image, size, step)
-        return {"cUseEyeAdaptation": 1, "cExposureBuffer[0]": self.eye.value}
+            self.m_eye.restart()
+        self.m_eye_time = now
+        self.m_eye.run(self.m_ctx, image, size_px, step)
+        return {"cUseEyeAdaptation": 1, "cExposureBuffer[0]": self.m_eye.m_value}
 
-    def _target(self, name: str, size: tuple[int, int]) -> tuple:
-        """A half-float target of ``size`` (texture, framebuffer), made again with the size."""
-        found = self.targets.get(name)
-        if found is None or found[2] != tuple(size):
+    def _target(self, name: str, size_px: tuple[int, int]) -> tuple:
+        """A half-float target of ``size_px`` (texture, framebuffer), made again with the size."""
+        found = self.m_targets.get(name)
+        if found is None or found[2] != tuple(size_px):
             self._drop(name)
-            tex = self.ctx.texture(tuple(size), 4, dtype="f2")
-            found = self.targets[name] = (tex, self.ctx.framebuffer([tex]), tuple(size))
+            texture = self.m_ctx.texture(tuple(size_px), 4, dtype="f2")
+            found = self.m_targets[name] = (texture, self.m_ctx.framebuffer([texture]), tuple(size_px))
         return found[0], found[1]
 
     def _drop(self, name: str) -> None:
-        tex, fbo, _size = self.targets.pop(name, (None, None, None))
-        for t in (fbo, tex):
-            if t is not None:
-                t.release()
+        texture, framebuffer, _size = self.m_targets.pop(name, (None, None, None))
+        for target in (framebuffer, texture):
+            if target is not None:
+                target.release()
 
     def release(self) -> None:
-        for name in list(self.targets):
+        for name in list(self.m_targets):
             self._drop(name)
-        for part in (self.sky, self.post, self.decode, self.saturate, self.lut, self.eye):
+        for part in (self.m_sky, self.m_post, self.m_decode, self.m_saturate, self.m_lut, self.m_eye):
             if part is not None:
                 part.release()
-        for tex in self.keep:
-            self.ctx.later(tex)
-        self.dummies.release(self.ctx)
-        self.sky = self.post = self.decode = self.saturate = self.lut = self.eye = None
-        self.textures, self.keep = {}, []
+        for texture in self.m_keep:
+            self.m_ctx.later(texture)
+        self.m_dummies.release(self.m_ctx)
+        self.m_sky = self.m_post = self.m_decode = self.m_saturate = self.m_lut = self.m_eye = None
+        self.m_textures, self.m_keep = {}, []

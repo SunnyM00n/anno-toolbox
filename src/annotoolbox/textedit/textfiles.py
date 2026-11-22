@@ -2,7 +2,7 @@
 
 Two styles (docs/text-editor.md, "What each game's text files are"): ``xml`` (117, 1800, 2205: ``<Text>`` entries with a
 ``LineId`` or ``GUID``) and ``lines`` (2070, 1404, 1701: ``key=text`` lines, UTF-16 as a rule). ``parse`` reads one
-file, ``TextFile.render`` writes it with some texts replaced and some added, touching nothing else; one pass, so a
+file, ``STextFile.render`` writes it with some texts replaced and some added, touching nothing else; one pass, so a
 whole translation of a 7 MB file costs what reading it does.
 """
 
@@ -19,7 +19,7 @@ _NAMED = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'"}
 
 
 @dataclass(frozen=True)
-class Slot:
+class SSlot:
     """One text of a file: its key, its value as shown and the span in the decoded text a rewrite replaces."""
 
     key: str
@@ -29,13 +29,13 @@ class Slot:
 
 
 @dataclass
-class TextFile:
+class STextFile:
     path: str
     style: str
     raw: bytes
     text: str
     encoding: str  # how ``text`` becomes bytes again
-    slots: list[Slot] = field(default_factory=list)
+    slots: list[SSlot] = field(default_factory=list)
     key_tag: str = ""  # xml: LineId or GUID
 
     @property
@@ -46,14 +46,14 @@ class TextFile:
         """The file with ``changes`` (key -> text) put in where the key is (every slot of it; one that already holds the
         text stays as it is) and ``added`` appended; the original bytes when that changes nothing."""
         changes, added = changes or {}, added or {}
-        pieces, at = [], 0
-        for s in self.slots:  # in file order: the pieces are joined once
-            if s.key in changes and changes[s.key] != s.value:
-                pieces += [self.text[at : s.start], self._put(changes[s.key])]
-                at = s.end
+        pieces, cursor = [], 0
+        for slot in self.slots:  # in file order: the pieces are joined once
+            if slot.key in changes and changes[slot.key] != slot.value:
+                pieces += [self.text[cursor : slot.start], self._put(changes[slot.key])]
+                cursor = slot.end
         text = self.text
         if pieces:
-            text = "".join([*pieces, self.text[at:]])
+            text = "".join([*pieces, self.text[cursor:]])
         if added:
             text = self._append(text, added)
         return self.raw if text == self.text else encode(text, self.encoding)
@@ -118,31 +118,34 @@ def _escape(value: str) -> str:
 
 
 def _unescape(text: str) -> str:
-    def one(m: re.Match) -> str:
-        name = m.group(1)
+    def one(match: re.Match) -> str:
+        name = match.group(1)
         if name in _NAMED:
             return _NAMED[name]
         code = int(name[2:], 16) if name.startswith("#x") else int(name[1:])
-        return chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code < 0xE000 else m.group()  # no such character
+        return chr(code) if 0 < code <= 0x10FFFF and not 0xD800 <= code < 0xE000 else match.group()  # no such character
 
     return _ENTITY.sub(one, text).replace("\r\n", "\n")
 
 
-def parse(path: str, raw: bytes, style: str) -> TextFile:
+def parse(path: str, raw: bytes, style: str) -> STextFile:
     """A file's entries with their places (``style``: ``XML`` or ``LINES``)."""
     encoding = detect(raw)
     text = decode(raw, encoding)
     if style == LINES:
-        slots = [Slot(m.group(1), m.group(2).strip(), *_value_span(m)) for m in _LINE.finditer(text)]
-        return TextFile(path, style, raw, text, encoding, slots)
-    slots = [Slot(m.group(2), _unescape(m.group(4) or ""), m.start(3), m.end(3)) for m in _XML_ENTRY.finditer(text)]
+        slots = [SSlot(match.group(1), match.group(2).strip(), *_value_span(match)) for match in _LINE.finditer(text)]
+        return STextFile(path, style, raw, text, encoding, slots)
+    slots = [
+        SSlot(match.group(2), _unescape(match.group(4) or ""), match.start(3), match.end(3))
+        for match in _XML_ENTRY.finditer(text)
+    ]
     tag = "LineId" if "<LineId>" in text else "GUID"
-    return TextFile(path, style, raw, text, encoding, slots, tag)
+    return STextFile(path, style, raw, text, encoding, slots, tag)
 
 
-def _value_span(m: re.Match) -> tuple[int, int]:
+def _value_span(match: re.Match) -> tuple[int, int]:
     """The span of a line's text without the blanks round it, which a rewrite keeps."""
-    value = m.group(2)
+    value = match.group(2)
     if not value.strip():
-        return m.start(2), m.start(2)
-    return m.start(2) + len(value) - len(value.lstrip()), m.end(2) - (len(value) - len(value.rstrip()))
+        return match.start(2), match.start(2)
+    return match.start(2) + len(value) - len(value.lstrip()), match.end(2) - (len(value) - len(value.rstrip()))

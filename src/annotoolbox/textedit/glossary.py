@@ -1,7 +1,7 @@
 """The terms of a game per language: the game's own short names read from its texts, and the person's own (docs/text-editor.md,
 "The glossary"). A term is a hint for a translator, never an error.
 
-``Glossary.terms_in(text)`` finds the terms of a source text; ``game_terms(source, target)`` reads the game's pairs;
+``SGlossary.terms_in(text)`` finds the terms of a source text; ``game_terms(source, target)`` reads the game's pairs;
 ``hints`` says which terms a target text does not carry.
 """
 
@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..infra.i18n import tr
-from .texttable import Table
+from .texttable import STable
 
 MAX_WORDS, MAX_CHARS, MIN_CHARS = 3, 32, 4
 _WORD = re.compile(r"[^\W\d_][\w'-]*")
@@ -19,7 +19,7 @@ _SENTENCE = re.compile(r"[.!?:;{}<>\[\]()\d]")
 
 
 @dataclass
-class Glossary:
+class SGlossary:
     """Source term -> its translation, for one target language; ``own`` (the person's terms) win over ``game``."""
 
     game: dict[str, str] = field(default_factory=dict)
@@ -33,11 +33,11 @@ class Glossary:
         words = list(_WORD.finditer(text))
         found: list[str] = []
         for i in range(len(words)):
-            for n in range(MAX_WORDS, 0, -1):
-                if i + n > len(words):
+            for word_count in range(MAX_WORDS, 0, -1):
+                if i + word_count > len(words):
                     continue
-                term = " ".join(w.group() for w in words[i : i + n])
-                if text[words[i].start() : words[i + n - 1].end()] == term and self.translation(term):
+                term = " ".join(word.group() for word in words[i : i + word_count])
+                if text[words[i].start() : words[i + word_count - 1].end()] == term and self.translation(term):
                     found.append(term)
                     break
         return list(dict.fromkeys(found))
@@ -53,7 +53,7 @@ class Glossary:
         return out
 
 
-def game_terms(source: Table, target: Table) -> dict[str, str]:
+def game_terms(source: STable, target: STable) -> dict[str, str]:
     """The game's own names as a term list: the entries of one to three words with a capital letter and no markup, source
     text -> target text of the same id; a term the game translates two ways is left out."""
     pairs: dict[str, set[str]] = {}

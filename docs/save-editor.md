@@ -2,20 +2,25 @@
 
 The suite's **Saves** app finds the savegames of every Anno game on the computer. It shows what a save holds: the
 game's version, the mods it was saved with, the players, the sessions and their islands, money, population and quests.
-It shows this as a summary, as a tree of every part, and as forms. It lets you change the values whose layout is fully
-known, and writes the result as a **new file next to the original**. It never writes over a save. The app is based on
-the author's own saves (read-only copies) and the formats this repository already reads. The design and the checklist
-are in `tool-suite.md` section 29.
+It shows this as a summary, as a tree of every part, and as forms.
+
+It lets you change the values whose layout is fully known, and writes the result as a **new file next to the
+original**. It never writes over a save.
+
+The app is based on the author's own saves (read-only copies) and the formats this repository already reads. The design
+and the checklist are in `tool-suite.md` section 29.
 
 **Nothing the app writes has been loaded by a game yet.** The 117 edits are the ones the `save` command makes, and
-those were tried in the game (name, colour, logo and portrait on 2026-10-24, money on 2026-11-06,
-[`formats/save-format.md`](formats/save-format.md)). A save written by the app itself was not loaded. The 2070 edit
-was never tried. The list of what to check is at the end.
+those were tried in the game ([`formats/save-format.md`](formats/save-format.md)). A save written by the app itself was
+not loaded. The 2070 edit was never tried. The list of what to check is at the end.
+
+Note: the `save` command's edits were tried in the game for name, colour, logo and portrait on 2026-10-24, and for
+money on 2026-11-06.
 
 ## Where each game keeps its saves
 
 All saves are under the user's Documents folder (a moved Documents folder is followed). "Seen" means that saves of
-that kind were on the author's machine on 2026-11-13 and the reader was run over them.
+that kind were on the author's machine and the reader was run over them.
 
 | Game | Folder under Documents | Files | Seen |
 |---|---|---|---|
@@ -26,15 +31,20 @@ that kind were on the author's machine on 2026-11-13 and the reader was run over
 | Anno 1404 | `Anno 1404 History Edition/`, `Anno 1404 HE/`, `Anno 1404/` (each searched, below them any `Savegames` folder) | `*.sww` | no |
 | Anno 1701 | `Anno 1701 History Edition/`, `Anno 1701 HE/`, `Anno 1701/` (as 1404; also `Savegames_mp`) | `*.sww` | no |
 
-The 1800, 2205, 1404 and 1701 rows are where the games are expected to write. The app searches those folders, and the
-**Open a file...** button takes a save from anywhere. A 117 save group's profile is its folder. The load list of 117 is
-built from these folders each time, with no index ([`formats/save-format.md`](formats/save-format.md), "The load
-list"), so a new file in a profile folder is a new entry. The app writes next to the original, so a written 117 save
-appears in the game's list under its new file name.
+Seen on 2026-11-13: 117 (33 saves of two profiles) and 2070 (one save).
 
-Two places keep copies that the app does not touch: Ubisoft Connect's cloud slots (117 syncs `Session Backup.a8s` and
-`accountdata.a8s`; `engine-notes.md`, "Saves") and 2070's `AppData/Roaming/Ubisoft/ANNO 2070/Config`
-(`SavegamePreview.jpg`, the last save's picture).
+The 1800, 2205, 1404 and 1701 rows are where the games are expected to write. The app searches those folders, and the
+**Open a file...** button takes a save from anywhere. A 117 save group's profile is its folder.
+
+The load list of 117 is built from these folders each time, with no index ([`formats/save-format.md`](formats/save-format.md),
+"The load list"), so a new file in a profile folder is a new entry. The app writes next to the original, so a written
+117 save appears in the game's list under its new file name.
+
+Two places keep copies that the app does not touch:
+
+- Ubisoft Connect's cloud slots (117 syncs `Session Backup.a8s` and `accountdata.a8s`;
+  `engine-notes.md`, "Saves");
+- 2070's `AppData/Roaming/Ubisoft/ANNO 2070/Config` (`SavegamePreview.jpg`, the last save's picture).
 
 ## The containers
 
@@ -52,22 +62,26 @@ part is packed and which tree format it holds.
 
 The app's reader does not trust the expectations. It opens any RDA archive and unpacks each part by what its first
 bytes say (the 117 tail, a bare zlib stream, `ZZZZ`, stored). It reads a document by what it is (a FileDB tail, `BIN `,
-a `<` tag tree, a JPEG). A part it cannot read is shown as bytes. A 1800, 2205, 1404 or 1701 save therefore opens as a
-tree even though no sample pinned its layout. Only the games whose layout is pinned get a summary and forms.
+a `<` tag tree, a JPEG). A part it cannot read is shown as bytes.
+
+A 1800, 2205, 1404 or 1701 save therefore opens as a tree even though no sample pinned its layout. Only the games whose
+layout is pinned get a summary and forms.
 
 ### Anno 117 in detail
 
 The container, the parts, the player's three places and the money are described in
 [`formats/save-format.md`](formats/save-format.md). The list below is what the summary reads beyond that. It was read
-from the author's saves (game build of 2026-11). All of it is read-only unless the next section lists it.
+from the author's saves. All of it is read-only unless the section "What can be written, and how" lists it.
 
-- **Version**: `meta.a7s` `CorporationFileVersion` (80 in the November build; the game refuses a version above its
-  own), `CorporationVersionName`, `LastModTime`; `header.a7s` `SavegameHistory` (one entry per game build that saved
-  this game: `Timestamp`, `Changelist`), `CreationTimeStamp`, `WallTimeOnSave`, `SavedActivePlaytime` and
-  `CorporationTime` (milliseconds).
-- **Mods**: `header.a7s` `CorporationProfile/ModActivationInfo`: `Mods` holds one `#1` per mod with `ModID` and
-  `ModVersion` (UTF-8), `Options` one `#1` per option with `Option` and `Value`; `WasModded` is 1 once a mod was ever on.
-  On load the game compares the list with the active mods and asks ("Conflicting Mods") when they differ.
+- **Version**: `meta.a7s` `CorporationFileVersion` (80; the game refuses a version above its own),
+  `CorporationVersionName` and `LastModTime`. `header.a7s` `SavegameHistory` (one entry per game build that saved this
+  game: `Timestamp`, `Changelist`), `CreationTimeStamp`, `WallTimeOnSave`, `SavedActivePlaytime` and `CorporationTime`
+  (milliseconds).
+- **Mods**: `header.a7s` `CorporationProfile/ModActivationInfo`.
+  - `Mods` holds one `#1` per mod with `ModID` and `ModVersion` (UTF-8).
+  - `Options` holds one `#1` per option with `Option` and `Value`.
+  - `WasModded` is 1 once a mod was ever on.
+  - On load, the game compares the list with the active mods and asks ("Conflicting Mods") when they differ.
 - **DLCs**: `ActiveDLCs` (`count`, then `DLC` GUIDs), `RequiredAccountUnlocks`.
 - **Game setup**: `DifficultyPreset`, `GameSeed`, `DefaultStartProvince`, and one `Setup...` tag per option holding
   `value/id` (an enum index, u16); shown as numbers, the enum names are not resolved.
@@ -82,40 +96,50 @@ from the author's saves (game build of 2026-11). All of it is read-only unless t
   (`CreatedComponents`, `EndedComponents`), `CampaignHandler` (`ActiveChapter`, `CampaignProgress` as a float 0..1,
   `SolvedComponentGUIDs`).
 - **Sessions**: `data.a7s` `MetaGameManager/GameSessions`: per session a GUID and a `#1` with `SessionDesc`
-  (`SessionGUID`, `MapGeneratorSettings/MapTemplateType`, `RandomSeed`) and `SessionData/BinaryData`, **a FileDB v3
-  document of its own** (`SessionFileVersion`, `GameSessionManager`; 33 MB for the largest province of a 97 MB
-  `data.a7s`). In it: `MapTemplate` (`Size`, `PlayableArea`, `Filename` of the template, one `TemplateElement` per
-  island), `AreaInfo` (per island area, keyed by its area id: `CityNameGuid`, `OwnerProfile`, `WasEverOwned`,
-  `AreaEconomy/StorageTrends` per good GUID, `TradeStorage`), `IslandManager` (`Island<n>` per island). A session's
-  document is read when its node is opened in the tree or the summary asks for it (a whole read of the largest takes
-  about two seconds, off the window's thread).
-- **Goods per island**: `AreaEconomy/StorageTrends` lists each good the island tracks, with a ring of 120 points. The
-  **stock** is `AreaEconomy/StrgLrg` or `StrgSmll`, a sorted map from a good's GUID to its amount. Some areas also hold
-  a second one in `AreaEconomy/TradeStorage` ("trade storage"; the role is inferred from the name). The layout, the
-  examples and the evidence are in [`formats/save-format.md`](formats/save-format.md), "Storages". The summary's
-  Islands table has a **Stock** and a **Trade storage** column (the goods with an amount, named). A participant's meta
-  storage holds the money and other goods (permits), shown as **Other goods held**. (Decoded on 2026-11-14.)
+  (`SessionGUID`, `MapGeneratorSettings/MapTemplateType`, `RandomSeed`) and `SessionData/BinaryData`.
+  - `SessionData/BinaryData` is **a FileDB v3 document of its own** (`SessionFileVersion`, `GameSessionManager`). It is
+    33 MB for the largest province of a 97 MB `data.a7s`.
+  - In it: `MapTemplate` (`Size`, `PlayableArea`, `Filename` of the template, one `TemplateElement` per island).
+  - In it: `AreaInfo` (per island area, keyed by its area id: `CityNameGuid`, `OwnerProfile`, `WasEverOwned`,
+    `AreaEconomy/StorageTrends` per good GUID, `TradeStorage`).
+  - In it: `IslandManager` (`Island<n>` per island).
+  - A session's document is read when its node is opened in the tree or the summary asks for it. A whole read of the
+    largest takes about two seconds, off the window's thread.
+- **Goods per island**: `AreaEconomy/StorageTrends` lists each good the island tracks, with a ring of 120 points.
+  - The **stock** is `AreaEconomy/StrgLrg` or `StrgSmll`, a sorted map from a good's GUID to its amount.
+  - Some areas also hold a second one in `AreaEconomy/TradeStorage` ("trade storage"; the role is inferred from the
+    name).
+  - The layout, the examples and the evidence are in [`formats/save-format.md`](formats/save-format.md), "Storages".
+  - The summary's Islands table has a **Stock** and a **Trade storage** column (the goods with an amount, named).
+  - A participant's meta storage holds the money and other goods (permits), shown as **Other goods held**.
+
+Note: the goods per island were decoded on 2026-11-14. The 117 build read was that of November 2026 (file version 80).
 
 ### Anno 2070 in detail
 
-This was read from the author's one save (`Spielstand.sww`, 332 KB, a new endless game, 2026-11-01). The archive is a
-V2.0 RDA with one file per block, nothing compressed or encrypted at the archive level, and every time stamp 0. The
-archive's preamble (the 1,008 bytes after the magic that RDA readers skip) is not empty. At offset 520 it holds a u32
-20 and 20 bytes of a value that is **not** SHA-1, SHA-256 or MD5 of the file, of any part, or of any part unpacked.
-Apart from those 24 bytes, a repack of the five parts with `rda.write_v20` (flags 0) reproduces the file byte for
-byte. The app copies the 24 bytes from the original into what it writes. Whether the game checks them is the first
-thing the game must answer (see below).
+This was read from the author's one save (`Spielstand.sww`, 332 KB, a new endless game). The archive is a V2.0 RDA with
+one file per block, nothing compressed or encrypted at the archive level, and every time stamp 0.
+
+The archive's preamble (the 1,008 bytes after the magic that RDA readers skip) is not empty. At offset 520 it holds a
+u32 20 and 20 bytes of a value that is **not** SHA-1, SHA-256 or MD5 of the file, of any part, or of any part
+unpacked. Apart from those 24 bytes, a repack of the five parts with `rda.write_v20` (flags 0) reproduces the file
+byte for byte. The app copies the 24 bytes from the original into what it writes. Whether the game checks them is the
+first thing the game must answer (see below).
 
 A packed part is `ZZZZ`, the inflated size as u32, then a zlib stream (header `78 5E`) flushed with a sync flush. It
 ends in `00 00 FF FF` and has no final block, so a reader must inflate without expecting the stream's end. Python's
 zlib does not reproduce the game's bytes at any level. An unchanged part therefore keeps its stored bytes, and a
 changed part is a fresh stream of the same shape.
 
+Note: the save is from 2026-11-01.
+
 The **binary tag tree** (`BIN `) is laid out as follows:
 
-- After the magic come the nodes. A node is an int32 tag number (from 1) and an int32 length: -1 means a
-  NUL-terminated text follows, a positive length means that many bytes, and 0 means no value. Its children follow, and
-  every node is closed by an int32 -1 (a leaf too).
+- After the magic come the nodes. A node is an int32 tag number (from 1) and an int32 length.
+  - A length of -1 means a NUL-terminated text follows.
+  - A positive length means that many bytes follow.
+  - A length of 0 means no value.
+  - The node's children follow, and every node is closed by an int32 -1 (a leaf too).
 - After the last node come `MAP `, the tag count, and per tag a uint8 length (with the NUL), the name with its NUL and
   the int32 number. `END ` and the u32 offset of `MAP ` close the file.
 - Values are the tag tree's text values
@@ -137,11 +161,14 @@ The **binary tag tree** (`BIN `) is laid out as follows:
 ## Names for GUIDs and options
 
 Where the save has a number (a GUID, a `Setup...` option's value, a city's text id), the summary stores it as a
-`records.Ref` cell. The cell reads as the number, and `names.apply` gives it a label once the installed game's data is
-open. The labels come from what the asset editor already reads (`assetedit.assetgame`: the asset index, the schema and
-the texts). The index is the asset editor's own cache, `<workspace>/asset-cache` (`assetgame.open_installed`), so a
-game that was indexed there opens at once here. The first time it takes about 15 s for 117, off the window's thread.
-The table shows the reading with the author's 117 install (2026-11-14):
+`records.CRef` cell. The cell reads as the number, and `names.apply` gives it a label once the installed game's data is
+open.
+
+The labels come from what the asset editor already reads (`assetedit.assetgame`: the asset index, the schema and the
+texts). The index is the asset editor's own cache, `<workspace>/asset-cache` (`assetgame.open_installed`), so a game
+that was indexed there opens at once here. The first time it takes about 15 s for 117, off the window's thread.
+
+The table shows the reading with the author's 117 install:
 
 | Cell | Rule | Example (117) |
 |---|---|---|
@@ -152,25 +179,31 @@ The table shows the reading with the author's 117 install (2026-11-14):
 
 The numbers named are the DLCs, the difficulty preset, the start province, the players' colour, logo, portrait and rival
 profile, the participants, the quests' participants, the sessions and their map template type, the islands' owner, city
-name and goods, and 2070's players' profiles. Without an install folder in the settings, or for a game the asset editor
-does not open, the numbers stay as they are. The window opens the names after the summary is shown (a job off its
-thread) and then fills in the labels. It fills them in again when the sessions' islands arrive. Two things are **not**
-named: a population level or a quest's GUID inside the tree (the tree shows bytes), and 2070's colours (stored as
-colour values, not GUIDs).
+name and goods, and 2070's players' profiles.
+
+Without an install folder in the settings, or for a game the asset editor does not open, the numbers stay as they are.
+
+The window opens the names after the summary is shown (a job off its thread) and then fills in the labels. It fills
+them in again when the sessions' islands arrive.
+
+Two things are **not** named: a population level or a quest's GUID inside the tree (the tree shows bytes), and 2070's
+colours (stored as colour values, not GUIDs).
+
+Note: the table was made on 2026-11-14.
 
 ## The other games
 
-This part is built from documented formats and **synthetic samples**. No save of Anno 1800, 2205, 1404 or 1701 is on
-the author's machine, so none of this was run over a real file. Every row below is a theory until one is.
+This part is built from documented formats and **synthetic samples**. No save of Anno 1800, 2205, 1404 or 1701 is on the
+author's machine, so none of this was run over a real file. Every row below is a theory until one is.
 
 | Game | What is read | From |
 |---|---|---|
-| 1404, 1701 (`.sww`: the plain tag tree or the `ZZZZ` packed one) | `WorldConfig`: the world's name and size, each island (name, file, position, size), `GameData/PlayerInfos` (type, profile, colour); both games' tag names (`Width`, `m_Width`, `Name`, `m_Name`, `Filename`, `m_GOPFilename`, ...) | [`formats/anno1404-world-format.md`](formats/anno1404-world-format.md), [`formats/anno1701-world-format.md`](formats/anno1701-world-format.md): a save is a world file with `m_IsSaveGame` set (the two shipped developer saves) |
+| 1404, 1701 (`.sww`: the plain tag tree or the `ZZZZ` packed one) | `WorldConfig`: the world's name and size, each island (name, file, position, size), `CGameData/PlayerInfos` (type, profile, colour); both games' tag names (`Width`, `m_Width`, `Name`, `m_Name`, `Filename`, `m_GOPFilename`, ...) | [`formats/anno1404-world-format.md`](formats/anno1404-world-format.md), [`formats/anno1701-world-format.md`](formats/anno1701-world-format.md): a save is a world file with `m_IsSaveGame` set (the two shipped developer saves) |
 | 1800 (`.a7s` archive of FileDB parts) | an outline of every FileDB document (version, the tags at its top and what they hold); when `header.a7s` has a `CorporationProfile`, 117's load-list rows (version, mods, setup) | [`formats/filedb.md`](formats/filedb.md); the layout is **assumed** to be 117's (117 descends from it: same part names, same load list) |
 | 2205 (`.a6s`) | the outline only | [`formats/filedb.md`](formats/filedb.md); nothing is assumed of the layout |
 
-All four stay read-only (no editable value), and the tree shows everything else. What a real save would add (the
-economy of 1404 and 1701, the sessions of 1800) is exactly what these summaries cannot say.
+All four stay read-only (no editable value), and the tree shows everything else. These summaries cannot say what a
+real save would add, which is the economy of 1404 and 1701 and the sessions of 1800.
 
 Note: built on 2026-11-14.
 
@@ -181,7 +214,7 @@ bytes and nothing else. Everything else is shown and stays read-only.
 
 | Game | Editable | Written as | Tried in the game |
 |---|---|---|---|
-| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant; the emperor who reigns and each reputation with him ([`save-emperor.md`](save-emperor.md): `saveedit/emperoredit.py`, `emperor117.py`, `emperorzones.py`) | `formats/savegame117.py` (`set_save_name`, `set_player`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
+| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant; the emperor who reigns and each reputation with him ([`save-emperor.md`](save-emperor.md): `saveedit/emperoredit.py`, `emperor117.py`, `emperorzones.py`) | `formats/savegame117.py` (`set_save_name`, `set_participant`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
 | 2070 | the human player's money | `formats/savegame2070.py`: the text value of `Credits` (credits times 1,024) and `stats.xml` `GoldAmount` re-encoded in the binary tag tree, the two parts packed afresh, the other three parts' bytes and the preamble's 24 bytes kept | no |
 | 1800, 2205, 1404, 1701 | nothing | - | - |
 
@@ -189,11 +222,14 @@ bytes and nothing else. Everything else is shown and stays read-only.
   on when that exists), and never replaces a file. The original is read once into memory when it is opened, so nothing
   holds it open while the game runs. A 117 file written into a profile folder is listed by the game as a new save.
 - **Unchanged is byte for byte.** A save that is opened and written without a change, or with an edit to the value it
-  already has, is the original's bytes. 117 keeps the original file, because the game leaves stale blocks in its
-  archives: the author's 3.4 MB `Session Backup` holds 2.9 MB of them, and a rebuilt archive differs. 2070 keeps every
-  part whose tree writes the document that was read. A **changed** 117 save is rebuilt compact: the stale blocks are
-  dropped, and the archive's directory points only at the four parts. A changed 2070 part is packed anew. It is about
-  14 % larger than the game's own zlib output (no zlib setting reproduces it), which is valid for a reader.
+  already has, is the original's bytes.
+  - 117 keeps the original file, because the game leaves stale blocks in its archives. The author's 3.4 MB
+    `Session Backup` holds 2.9 MB of them, and a rebuilt archive differs.
+  - 2070 keeps every part whose tree writes the document that was read.
+  - A **changed** 117 save is rebuilt compact: the stale blocks are dropped, and the archive's directory points only at
+    the four parts.
+  - A changed 2070 part is packed anew. It is about 14 % larger than the game's own zlib output, which is valid for a
+    reader. No zlib setting reproduces the game's output.
 - **The name of the new file** is `<name> (edited).<ext>`, then `(edited 2)`. Editing an edited save counts on from its
   own number instead of nesting (`x (edited 2)`, not `x (edited) (edited)`). The file is reserved with an exclusive
   create before it is written, and is then written whole or not at all (`buildcache.write_atomic`, after the bytes were
@@ -206,10 +242,11 @@ bytes and nothing else. Everything else is shown and stays read-only.
   `1.0000` are refused), and a comma is refused with a sentence that says it is the decimal sign. So the same text is
   never read as two different numbers without the form saying so.
 - **A read can be stopped and replaced.** While a save is read, **Stop** at the right of the status line gives the read
-  up: the save shown before stays the open one and stays writable. A save picked meanwhile takes the place of the one
-  being read, and the status line says so ("reading B instead of A"). The read that was given up ends at its next
-  step (the file, the summary, the values) and its result is dropped. A save picked while a file is being written is
-  not opened: the status line says to open it when the write is done.
+  up. The save shown before stays the open one and stays writable.
+  - A save picked meanwhile takes the place of the one being read, and the status line says so ("reading B instead of
+    A").
+  - The read that was given up ends at its next step (the file, the summary, the values), and its result is dropped.
+  - A save picked while a file is being written is not opened. The status line says to open it when the write is done.
 - **The game must not be running** when you load the written file. It saves over its own files only, but a running
   117 rescans the folder only when the load screen opens.
 
@@ -230,11 +267,12 @@ bytes and nothing else. Everything else is shown and stays read-only.
 ## The window
 
 - **Left: the saves.** A game box (every game) and the saves found in its folders, grouped by profile (117, 1800) or
-  account, newest first, with size and time. **Open a file...** takes any other file; it is read as a save of the
-  game shown in the box where that game writes the file's extension (1404 and 1701 write `.sww` as 2070 does), else
-  as the game the extension belongs to. Opening reads the file once into memory off the window's thread, and the
-  summary is then made, also off it. A save whose editable values do not read (a damaged `data.a7s`, a layout the
-  reader does not know) still opens: its summary says why, the tree shows it, and the Edit tab is read-only.
+  account, newest first, with size and time.
+  - **Open a file...** takes any other file. It is read as a save of the game shown in the box where that game writes
+    the file's extension (1404 and 1701 write `.sww` as 2070 does), else as the game the extension belongs to.
+  - Opening reads the file once into memory off the window's thread, and the summary is then made, also off it.
+  - A save whose editable values do not read (a damaged `data.a7s`, a layout the reader does not know) still opens.
+    Its summary says why, the tree shows it, and the Edit tab is read-only.
 - **Summary** tab: version and file version, the save's name and profile, times, the mods and DLCs, the players with
   their money, the sessions with their islands (owner, goods tracked), the game setup, population and quests, and what
   the reader could not read.
@@ -250,7 +288,7 @@ bytes and nothing else. Everything else is shown and stays read-only.
 
 Every read and write runs off the window's thread (`suite.background`). The window shows "reading..." and stays usable.
 
-## What to check in the game (the owner's list)
+## What to check in the game (the list)
 
 - [ ] 117: a save written by the app without a change loads (it is the original's bytes, so this checks only the
   listing under the new name).
@@ -271,16 +309,18 @@ Every read and write runs off the window's thread (`suite.background`). The wind
 ## Status
 
 - Built: the finder, the reader of every container above, the 117 and 2070 summaries, the 117 and 2070 edits, the mods
-  list and the window. Also built: names for GUIDs, options and text ids ("Names for GUIDs and options"), in the
-  interface language; the decoded 117 storages and the goods of every island (`formats/storage117.py`,
-  `tests/test_saveedit_names.py`); and the summaries of the other games ("The other games", synthetic only). The three
-  archive readers are one read (`RdaArchive.read_all`), each with its own checks. The fixes of an audit are recorded in
-  `audit-2026-11.md`, "The Saves app".
-- Tests: synthetic saves (`tests/test_saveedit.py`), the window offscreen (`tests/test_saveedit_window.py`), and
-  read-only over the saves found on the machine when the game's variable is set (`tests/test_saveedit_installed.py`:
+  list and the window.
+- Also built:
+  - names for GUIDs, options and text ids ("Names for GUIDs and options"), in the interface language;
+  - the decoded 117 storages and the goods of every island (`formats/storage117.py`, `tests/saveedit/test_saveedit_names.py`);
+  - the summaries of the other games ("The other games", synthetic only).
+- The three archive readers are one read (`CRdaArchive.read_all`), each with its own checks. The fixes of an audit are
+  recorded in `audit-2026-11.md`, "The Saves app".
+- Tests: synthetic saves (`tests/saveedit/test_saveedit.py`), the window offscreen (`tests/saveedit/test_saveedit_window.py`), and
+  read-only over the saves found on the machine when the game's variable is set (`tests/saveedit/test_saveedit_installed.py`:
   the originals are only read; the unchanged write goes from a copy into the test's own folder).
 - Run on the author's machine: 117 (31 saves found; the newest, oldest and largest read, the islands of a 97 MB
-  `data.a7s`) and 2070 (one save) pass. 1800, 2205, 1404 and 1701 skip (no saves). `tests/test_saveedit_installed.py`
+  `data.a7s`) and 2070 (one save) pass. 1800, 2205, 1404 and 1701 skip (no saves). `tests/saveedit/test_saveedit_installed.py`
   also decodes and names the stocks of the newest save against the installed 117 (the storage evidence is in
   `formats/save-format.md`).
 - In the game: nothing yet (see the list above).

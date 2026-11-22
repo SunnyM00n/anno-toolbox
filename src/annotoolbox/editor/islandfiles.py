@@ -4,7 +4,7 @@ each mesh and texture it names through the editor's own loaders (``texture_png``
 is the editor's ``file_problems``, by reason (``models.fileresolve``).
 
 ``check_islands(key, folder, cache, count)`` is the entry; the ``viewer-files --islands`` command prints its
-``IslandsReport`` beside the viewer's files check. docs/island-editor.md "How the models find their files".
+``SIslandsReport`` beside the viewer's files check. docs/island-editor.md "How the models find their files".
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ MAX_DEPTH = 4  # nested configs followed this deep (render.modellibrary)
 
 
 @dataclass
-class IslandsReport:
+class SIslandsReport:
     """The islands opened (and those that did not open), the configs they place, the parts and textures drawn, and
     what did not draw: (kind, reason) -> count, with examples."""
 
@@ -47,7 +47,7 @@ class IslandsReport:
 
 
 def island_paths(key: str, tree) -> list[str]:
-    """The game's island files, as game paths (117's through ``Files``, which reads a mod first, the others by their
+    """The game's island files, as game paths (117's through ``CFiles``, which reads a mod first, the others by their
     record: ``installs.islands``)."""
     from ..othergames.installs import GAMES, islands
 
@@ -57,14 +57,14 @@ def island_paths(key: str, tree) -> list[str]:
 
 
 def game_tree(key: str, folder: Path, cache: Path):
-    """The install's files as the island editor reads them (117's behind ``Files``, which a mod folder joins)."""
+    """The install's files as the island editor reads them (117's behind ``CFiles``, which a mod folder joins)."""
     from ..othergames.installs import GAMES
 
     index = GAMES[key].index(folder, cache / "index")
     if key == "anno117":
-        from ..islands.islandview import Files
+        from ..islands.islandview import CFiles
 
-        return Files(index)
+        return CFiles(index)
     return index
 
 
@@ -75,13 +75,13 @@ def open_island(key: str, tree, path: str, cache: Path):
 
     game = GAMES[key]
     if game.editor == "117":
-        from .formats.a7m.edit117 import VanillaEditor
+        from .formats.a7m.edit117 import CVanillaEditor
 
-        return VanillaEditor(tree, path, cache)
+        return CVanillaEditor(tree, path, cache)
     if game.editor == "2070":
-        from .formats.isd.edit import Island2070Editor
+        from .formats.isd.edit import CIsland2070Editor
 
-        return Island2070Editor(tree, path, cache)
+        return CIsland2070Editor(tree, path, cache)
     from .editorapp import viewer_class
 
     return viewer_class(game.editor)(game, tree, path, cache)
@@ -100,7 +100,7 @@ def placed_configs(editor) -> list[str]:
     return sorted({c for c in found if isinstance(c, str) and c})
 
 
-def _draw(editor, cfg: str, report: IslandsReport, depth: int, seen: set[str]) -> None:
+def _draw(editor, cfg: str, report: SIslandsReport, depth: int, seen: set[str]) -> None:
     """One config as the view's model library flattens it (``render.modellibrary``): its parts' meshes and maps
     loaded through the editor, its nested configs followed."""
     if cfg in seen:
@@ -120,7 +120,7 @@ def _draw(editor, cfg: str, report: IslandsReport, depth: int, seen: set[str]) -
                     seen.add(name)
                     report.textures += 1
                     try:
-                        editor.texture_png(name, normal=slot == "normal")
+                        editor.texture_png(name, is_normal=slot == "normal")
                     except Exception:  # kept by the editor's texture_failures, counted below
                         continue
     if depth < MAX_DEPTH:
@@ -130,10 +130,10 @@ def _draw(editor, cfg: str, report: IslandsReport, depth: int, seen: set[str]) -
 
 def check_islands(
     key: str, folder: Path, cache: Path, count: int = 3, progress: Callable[[str], None] | None = None
-) -> IslandsReport:
+) -> SIslandsReport:
     """Open ``count`` islands of the game (picked evenly), draw what each places the editor's way, count what
     does not draw."""
-    report = IslandsReport(key)
+    report = SIslandsReport(key)
     tree = game_tree(key, Path(folder), cache)
     paths = island_paths(key, tree)
     picked = [paths[int(k * len(paths) / count)] for k in range(min(count, len(paths)))]

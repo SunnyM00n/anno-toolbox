@@ -56,7 +56,7 @@ QUEST_POOL = "QuestPool"
 
 
 @dataclass(frozen=True)
-class Finding:
+class SFinding:
     code: str
     where: str  # a path inside the mod, with ``:line`` for an operation
     message: str
@@ -70,126 +70,128 @@ class Finding:
 
 
 @dataclass
-class LintResult:
+class SLintResult:
     files: int = 0  # ModOps documents read
-    ops: int = 0
-    findings: list[Finding] = field(default_factory=list)
+    op_count: int = 0
+    findings: list[SFinding] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # checks that could not run
 
     @property
     def ok(self) -> bool:
-        return all(f.level == "info" for f in self.findings)
+        return all(finding.level == "info" for finding in self.findings)
 
     def lines(self, per_code: int = 5) -> list[str]:
         """A summary: the count per rule, then the first ``per_code`` findings of each."""
-        out = [f"{self.files} ModOps files, {self.ops} operations: {len(self.findings)} finding(s)", *self.notes]
-        counts = Counter(f.code for f in self.findings)
-        for code, n in sorted(counts.items()):
-            shown = [f for f in self.findings if f.code == code][:per_code]
-            out += [f"  {f.line()}" for f in shown]
-            if n > per_code:
-                out.append(f"  {code}: ... and {n - per_code} more")
+        out = [f"{self.files} ModOps files, {self.op_count} operations: {len(self.findings)} finding(s)", *self.notes]
+        counts = Counter(finding.code for finding in self.findings)
+        for code, count in sorted(counts.items()):
+            shown = [finding for finding in self.findings if finding.code == code][:per_code]
+            out += [f"  {finding.line()}" for finding in shown]
+            if count > per_code:
+                out.append(f"  {code}: ... and {count - per_code} more")
         return out
 
 
-def _add_hint(attr: str, known: frozenset[str] | tuple[str, ...]) -> str:
-    near = [k for k in known if k.lower() == attr.lower()]
+def _add_hint(attribute: str, known: frozenset[str] | tuple[str, ...]) -> str:
+    near = [k for k in known if k.lower() == attribute.lower()]
     return f" (names are case-sensitive: {near[0]})" if near else ""
 
 
-def lint_modinfo(mod: Path) -> list[Finding]:
+def lint_modinfo(mod: Path) -> list[SFinding]:
     """The folder name, the file, ``Anno``, ``ModID``, ``Version`` and where the load-order keys sit."""
-    out: list[Finding] = []
+    out: list[SFinding] = []
     if mod.name.startswith(("-", ".")):
         out.append(
-            Finding("I04", mod.name, "a folder name starting with '-' or '.' is skipped by the loader without a line")
+            SFinding("I04", mod.name, "a folder name starting with '-' or '.' is skipped by the loader without a line")
         )
-    path = next((p for p in (mod / "modinfo.json", mod / "modinfo.jsonc") if p.is_file()), None)
+    path = next((candidate for candidate in (mod / "modinfo.json", mod / "modinfo.jsonc") if candidate.is_file()), None)
     if path is None:
-        return [*out, Finding("I01", mod.name, "no modinfo.json: the mod is disabled")]
+        return [*out, SFinding("I01", mod.name, "no modinfo.json: the mod is disabled")]
     try:
-        info = json.loads(strip_jsonc(path.read_text(encoding="utf-8-sig")))
+        modinfo = json.loads(strip_jsonc(path.read_text(encoding="utf-8-sig")))
     except (ValueError, OSError) as exc:
-        return [*out, Finding("I01", path.name, f"not valid JSON ({exc}): the mod is disabled")]
-    if not isinstance(info, dict):
-        return [*out, Finding("I01", path.name, "the top level is not an object: the mod is disabled")]
-    anno = info.get("Anno")
+        return [*out, SFinding("I01", path.name, f"not valid JSON ({exc}): the mod is disabled")]
+    if not isinstance(modinfo, dict):
+        return [*out, SFinding("I01", path.name, "the top level is not an object: the mod is disabled")]
+    anno = modinfo.get("Anno")
     if isinstance(anno, bool) or anno != 8:
-        out.append(Finding("I02", path.name, f'"Anno" is {anno!r}, must be the number 8: the mod is disabled'))
+        out.append(SFinding("I02", path.name, f'"Anno" is {anno!r}, must be the number 8: the mod is disabled'))
     for key in DEPENDENCY_KINDS:  # only valid inside "Dependencies" (a top-level "Optional" is no order key)
-        if key != "Optional" and key in info:
+        if key != "Optional" and key in modinfo:
             out.append(
-                Finding("I03", path.name, f'"{key}" belongs inside "Dependencies": at the top level it is ignored')
+                SFinding("I03", path.name, f'"{key}" belongs inside "Dependencies": at the top level it is ignored')
             )
-    deps = info.get("Dependencies")
+    deps = modinfo.get("Dependencies")
     if deps is not None and not isinstance(deps, dict):
-        out.append(Finding("I03", path.name, '"Dependencies" must be an object'))
-    mod_id = info.get("ModID")
+        out.append(SFinding("I03", path.name, '"Dependencies" must be an object'))
+    mod_id = modinfo.get("ModID")
     if not isinstance(mod_id, str) or not MODID_FORMAT.match(mod_id):
         out.append(
-            Finding("I05", path.name, f'"ModID" {mod_id!r} is missing or not lower-case letters, digits and dashes')
+            SFinding("I05", path.name, f'"ModID" {mod_id!r} is missing or not lower-case letters, digits and dashes')
         )
-    if not isinstance(info.get("Version"), str) or not VERSION_FORMAT.match(info["Version"]):
-        out.append(Finding("I05", path.name, '"Version" is missing or not a.b.c (the mod loads, shown as unversioned)'))
-    return out + _lint_setup(info, path.name)
+    if not isinstance(modinfo.get("Version"), str) or not VERSION_FORMAT.match(modinfo["Version"]):
+        out.append(
+            SFinding("I05", path.name, '"Version" is missing or not a.b.c (the mod loads, shown as unversioned)')
+        )
+    return out + _lint_setup(modinfo, path.name)
 
 
-def _lint_setup(info: dict, name: str) -> list[Finding]:
+def _lint_setup(modinfo: dict, name: str) -> list[SFinding]:
     """``Difficulty`` (mandatory for 117) and the ``GameSetup`` booleans."""
-    out: list[Finding] = []
-    difficulty = info.get("Difficulty")
+    out: list[SFinding] = []
+    difficulty = modinfo.get("Difficulty")
     if difficulty not in DIFFICULTIES:
         what = "missing" if difficulty is None else f"{difficulty!r}"
         out.append(
-            Finding(
+            SFinding(
                 "I06",
                 name,
                 f'"Difficulty" is {what}, must be one of {", ".join(DIFFICULTIES)}: the loader logs an error',
             )
         )
-    setup = info.get("GameSetup")
+    setup = modinfo.get("GameSetup")
     if setup is not None and not isinstance(setup, dict):
-        return [*out, Finding("I07", name, '"GameSetup" must be an object')]
+        return [*out, SFinding("I07", name, '"GameSetup" must be an object')]
     for flag in SETUP_FLAGS:
         if flag in (setup or {}) and not isinstance(setup[flag], bool):
-            out.append(Finding("I07", name, f'"GameSetup.{flag}" is {setup[flag]!r}, must be true or false', True))
+            out.append(SFinding("I07", name, f'"GameSetup.{flag}" is {setup[flag]!r}, must be true or false', True))
     return out
 
 
 @dataclass
-class _Op:
+class _SOp:
     line: int
     attrs: dict[str, str]
     depth: int  # len(stack) at its start tag
     content: list[str] = field(default_factory=list)  # names of its direct child elements
 
 
-class _PatchLint:
+class _CPatchLint:
     """Streams one patch file through expat and collects the findings of the operation rules."""
 
     def __init__(
-        self, rel: str, mod: Path, parser: expat.XMLParserType, slot_types: frozenset[str] = SLOT_TYPES
+        self, relative_path: str, mod: Path, parser: expat.XMLParserType, slot_types: frozenset[str] = SLOT_TYPES
     ) -> None:
-        self.rel, self.mod, self.parser = rel, mod, parser
+        self.rel, self.mod, self.parser = relative_path, mod, parser
         self.stack: list[str] = []
-        self.findings: list[Finding] = []
+        self.findings: list[SFinding] = []
         self.ops = 0
-        self.op: _Op | None = None
+        self.op: _SOp | None = None
         self.group_ready = False
         self.dead = False  # the root is wrong: nothing below counts
-        self.data = _DataLint(self, slot_types)
+        self.data = _CDataLint(self, slot_types)
 
     def at(self) -> str:
         return f"{self.rel}:{self.parser.CurrentLineNumber}"
 
     def add(self, code: str, message: str, unverified: bool = False) -> None:
-        self.findings.append(Finding(code, self.at(), message, unverified))
+        self.findings.append(SFinding(code, self.at(), message, unverified))
 
     def ops_level(self) -> bool:
         """The current element is a direct operation slot: under ModOps, or under Groups under it."""
-        return bool(self.stack) and self.stack[0] == "ModOps" and all(n == "Group" for n in self.stack[1:])
+        return bool(self.stack) and self.stack[0] == "ModOps" and all(name == "Group" for name in self.stack[1:])
 
-    def start(self, name: str, attrs: dict[str, str]) -> None:
+    def start(self, name: str, attributes: dict[str, str]) -> None:
         if not self.stack:
             if name != "ModOps":
                 self.add("X02", f"the root is <{name}>, not <ModOps>: the whole file is skipped")
@@ -197,11 +199,11 @@ class _PatchLint:
         elif self.dead:
             pass
         elif self.ops_level():
-            self.operation(name, attrs)
+            self.operation(name, attributes)
         elif self.op and len(self.stack) == self.op.depth + 1:
             self.op.content.append(name)
         if self.stack and not self.dead:
-            self.data.start(name, attrs)
+            self.data.start(name, attributes)
         self.stack.append(name)
 
     def end(self, name: str) -> None:
@@ -217,17 +219,19 @@ class _PatchLint:
         if not self.dead and data.strip() and self.ops_level():
             self.add("X04", "text between operations is ignored")
 
-    def operation(self, name: str, attrs: dict[str, str]) -> None:
+    def operation(self, name: str, attributes: dict[str, str]) -> None:
         if name == "ModOp":
-            self.modop(attrs)
+            self.modop(attributes)
         elif name in ("Asset", "Assets"):
             self.ops += 1
             self.default_route(f"<{name}>")
         elif name == "Group":
-            if "Skip" in attrs:
-                self.add("O07", f'Skip="{attrs["Skip"]}" on a Group: any value skips it, only the attribute counts')
+            if "Skip" in attributes:
+                self.add(
+                    "O07", f'Skip="{attributes["Skip"]}" on a Group: any value skips it, only the attribute counts'
+                )
         elif name == "Include":
-            self.include(attrs.get("File"))
+            self.include(attributes.get("File"))
         else:
             self.add(
                 "X04",
@@ -243,14 +247,14 @@ class _PatchLint:
         if not (base / file.lstrip("/\\")).is_file():
             self.add("X05", f"Include {file!r} is not a file here (the path rules were not tried)", unverified=True)
 
-    def modop(self, attrs: dict[str, str]) -> None:
+    def modop(self, attributes: dict[str, str]) -> None:
         self.ops += 1
-        self.op = _Op(self.parser.CurrentLineNumber, attrs, len(self.stack))
-        for name in attrs:
+        self.op = _SOp(self.parser.CurrentLineNumber, attributes, len(self.stack))
+        for name in attributes:
             if name not in MODOP_ATTRS:
                 self.add("O06", f"unknown attribute {name}: ignored" + _add_hint(name, MODOP_ATTRS))
-        shorthand = [s for s in SHORTHANDS if s in attrs]
-        kind = attrs.get("Type")
+        shorthand = [shorthand_name for shorthand_name in SHORTHANDS if shorthand_name in attributes]
+        kind = attributes.get("Type")
         if kind is None and not shorthand:
             self.add("O05", "ModOp with no Type and no Add/Append/Prepend/Remove/Replace/Merge: it does nothing")
         elif kind is not None and kind not in TYPES:
@@ -258,40 +262,48 @@ class _PatchLint:
                 "O08",
                 f'Type="{kind}" is unknown (lower case except addNextSibling/addPrevSibling): the operation is dead',
             )
-        if "Skip" in attrs:
-            self.add("O07", f'Skip="{attrs["Skip"]}": any value skips the operation, only the attribute counts')
-        if attrs.get("AllowNoMatch", "x").strip().lower() in FALSE_LOOKING:
-            self.add("O07", f'AllowNoMatch="{attrs["AllowNoMatch"]}" still allows a miss: only the attribute counts')
-        self.check_base(attrs, shorthand)
-        if self.rel.lower().endswith("camera.xml") and attrs.get("Path") == "/":
+        if "Skip" in attributes:
+            self.add("O07", f'Skip="{attributes["Skip"]}": any value skips the operation, only the attribute counts')
+        if attributes.get("AllowNoMatch", "x").strip().lower() in FALSE_LOOKING:
+            self.add(
+                "O07", f'AllowNoMatch="{attributes["AllowNoMatch"]}" still allows a miss: only the attribute counts'
+            )
+        self.check_base(attributes, shorthand)
+        if self.rel.lower().endswith("camera.xml") and attributes.get("Path") == "/":
             self.add("O09", 'Path="/" selects both roots of camera.xml (Normal and Simple)', unverified=True)
 
-    def check_base(self, attrs: dict[str, str], shorthand: list[str]) -> None:
+    def check_base(self, attributes: dict[str, str], shorthand: list[str]) -> None:
         """A shorthand path starts at <Values>; a Type= path with a GUID starts at the <Asset> (F10)."""
-        if "GUID" not in attrs:
+        if "GUID" not in attributes:
             return
-        for s in shorthand:
-            if attrs[s].lstrip("/").startswith("Values"):
-                self.add("O10", f'{s}="{attrs[s]}" with GUID starts at <Values>, so "Values/..." selects nothing')
+        for shorthand_name in shorthand:
+            if attributes[shorthand_name].lstrip("/").startswith("Values"):
+                self.add(
+                    "O10",
+                    f'{shorthand_name}="{attributes[shorthand_name]}" with GUID starts at <Values>, so "Values/..." selects nothing',
+                )
 
-    def finish_op(self, op: _Op) -> None:
-        attrs = op.attrs
-        kind = attrs.get("Type")
-        target = attrs.get("Path", "") or attrs.get("Add", "")
-        if "Group" in op.content and GROUP_PATH in target and (kind == "add" or "Add" in attrs):
+    def finish_op(self, operation: _SOp) -> None:
+        attributes = operation.attrs
+        kind = attributes.get("Type")
+        target = attributes.get("Path", "") or attributes.get("Add", "")
+        if "Group" in operation.content and GROUP_PATH in target and (kind == "add" or "Add" in attributes):
             self.group_ready = True
-        elif kind == "assets" or (kind == "add" and not any(k in attrs for k in TARGET_ATTRS)):
-            self.default_route("an add with no path", op.line)
+        elif kind == "assets" or (kind == "add" and not any(k in attributes for k in TARGET_ATTRS)):
+            self.default_route("an add with no path", operation.line)
 
     def default_route(self, what: str, line: int | None = None) -> None:
         """Assets go to the last <Assets> of the vanilla file, which the game drops until a new group exists (G01)."""
         if self.rel.lower().endswith("assets.xml") and not self.group_ready:
             where = f"{self.rel}:{line or self.parser.CurrentLineNumber}"
-            msg = f"{what} adds assets to the vanilla quest-object group before any new empty group was added (harmless by the loader's reading of 2026-11-06)"
-            self.findings.append(Finding("G01", where, msg, level="info"))
+            message = (
+                f"{what} adds assets to the vanilla quest-object group before any new empty group was added "
+                "(harmless by the loader's reading of 2026-11-06)"
+            )
+            self.findings.append(SFinding("G01", where, message, level="info"))
 
 
-class _DataLint:
+class _CDataLint:
     """The silent data mistakes inside operations: list entries, fixed lists, retired fields (D01-D06).
 
     Keeps its own stack of ``[name, target path, text]`` frames, so a direct child of a ``ModOp`` knows its container
@@ -299,7 +311,7 @@ class _DataLint:
     widens the list by (``lint_mod``'s ``slot_types``).
     """
 
-    def __init__(self, lint: _PatchLint, slot_types: frozenset[str] = SLOT_TYPES) -> None:
+    def __init__(self, lint: _CPatchLint, slot_types: frozenset[str] = SLOT_TYPES) -> None:
         self.lint = lint
         self.slot_types = slot_types
         self.op_type = ""
@@ -325,13 +337,13 @@ class _DataLint:
         return path[-1]
 
     def in_slot_menu(self) -> bool:
-        return any(f[0] == "SlotTypes" or "SlotTypes" in f[1] for f in self.frames)
+        return any(frame[0] == "SlotTypes" or "SlotTypes" in frame[1] for frame in self.frames)
 
-    def start(self, name: str, attrs: dict[str, str]) -> None:
-        target = next((attrs[k] for k in TARGET_KEYS if k in attrs), "") if name == "ModOp" else ""
+    def start(self, name: str, attributes: dict[str, str]) -> None:
+        target = next((attributes[k] for k in TARGET_KEYS if k in attributes), "") if name == "ModOp" else ""
         if name == "ModOp":
-            self.check_path(target, attrs)
-            self.op_type = attrs.get("Type", "").lower()
+            self.check_path(target, attributes)
+            self.op_type = attributes.get("Type", "").lower()
         parent = self.container(name)
         if (parent in LIST_CONTAINERS or (parent == "Buildings" and self.in_slot_menu())) and name not in (
             "Item",
@@ -374,8 +386,8 @@ class _DataLint:
             template, flags = self.asset_templates.pop(), self.asset_flags.pop()
             if template != QUEST_POOL:
                 for where in flags:
-                    msg = f"DisabledByDefault on a {template or 'template-less'} asset: only a QuestPool reads it"
-                    self.lint.findings.append(Finding("D06", where, msg))
+                    message = f"DisabledByDefault on a {template or 'template-less'} asset: only a QuestPool reads it"
+                    self.lint.findings.append(SFinding("D06", where, message))
 
     def old_terrain(self) -> None:
         self.lint.add(
@@ -384,8 +396,8 @@ class _DataLint:
 
     def check_value(self, value: str, known: frozenset[str], what: str, *, where: str) -> None:
         if value and value not in known:
-            msg = f"{where}: {value!r} is not a {what} ({', '.join(sorted(known))}): the game keeps the default"
-            self.lint.add("D02", msg)
+            message = f"{where}: {value!r} is not a {what} ({', '.join(sorted(known))}): the game keeps the default"
+            self.lint.add("D02", message)
 
     def check_gate(self, name: str, text: str) -> None:
         if text in VANILLA_REGION_TECHS:
@@ -393,23 +405,25 @@ class _DataLint:
         elif not text.isdigit():
             self.lint.add("D05", f"{name} {text!r} names no tech unlock (a GUID, or 0 for none)")
 
-    def check_path(self, target: str, attrs: dict[str, str]) -> None:
+    def check_path(self, target: str, attributes: dict[str, str]) -> None:
         """The same rules for a name inside a path attribute: ``StartCredits/Plenty``, ``SlotTypes/Coast``."""
         for key in FIXED_CHILDREN:
             known, what = self.fixed(FIXED_CHILDREN, key)
-            for m in re.finditer(rf"\b{key}/(\w+)", target):
-                self.check_value(m.group(1), known, what, where=f"path {key}/")
-        if re.search(r"\bBuilding/TerrainType\b", target) or attrs.get("Property") == "Building/TerrainType":
+            for match in re.finditer(rf"\b{key}/(\w+)", target):
+                self.check_value(match.group(1), known, what, where=f"path {key}/")
+        if re.search(r"\bBuilding/TerrainType\b", target) or attributes.get("Property") == "Building/TerrainType":
             self.old_terrain()
 
 
-def lint_patch(path: Path, rel: str, mod: Path, slot_types: frozenset[str] = SLOT_TYPES) -> tuple[list[Finding], int]:
+def lint_patch(
+    path: Path, relative_path: str, mod: Path, slot_types: frozenset[str] = SLOT_TYPES
+) -> tuple[list[SFinding], int]:
     """The operation rules of one ``.xml`` of the mod: the findings and the number of operations."""
     data = path.read_bytes()
     if not data.strip():
-        return [Finding("X01", rel, "an empty file: 'Failed to get root element', the file is skipped")], 0
+        return [SFinding("X01", relative_path, "an empty file: 'Failed to get root element', the file is skipped")], 0
     parser = expat.ParserCreate()
-    lint = _PatchLint(rel, mod, parser, slot_types)
+    lint = _CPatchLint(relative_path, mod, parser, slot_types)
     parser.StartElementHandler = lint.start
     parser.EndElementHandler = lint.end
     parser.CharacterDataHandler = lint.text
@@ -417,28 +431,36 @@ def lint_patch(path: Path, rel: str, mod: Path, slot_types: frozenset[str] = SLO
         parser.Parse(data, True)
     except expat.ExpatError as exc:
         lint.findings.append(
-            Finding("X01", f"{rel}:{exc.lineno}", f"does not parse ({exc}): the whole file is skipped")
+            SFinding("X01", f"{relative_path}:{exc.lineno}", f"does not parse ({exc}): the whole file is skipped")
         )
     return lint.findings, lint.ops
 
 
-def lint_patch_name(rel: str, mod: Path, has_base: Callable[[str], bool] | None) -> list[Finding]:
+def lint_patch_name(relative_path: str, mod: Path, has_base: Callable[[str], bool] | None) -> list[SFinding]:
     """Whether the loader has a game file to apply this patch file to."""
-    low = rel.lower()
+    low = relative_path.lower()
     if low.endswith(".include.xml"):
         return []
     stem = low[:-4]
-    ext = stem.rsplit(".", 1)[-1] if "." in stem.rsplit("/", 1)[-1] else ""
-    if ext in WHOLE_ONLY:
+    extension = stem.rsplit(".", 1)[-1] if "." in stem.rsplit("/", 1)[-1] else ""
+    if extension in WHOLE_ONLY:
         return [
-            Finding("P02", rel, f".{ext} can only be replaced whole: there is no .{ext}.xml rule, the file is skipped")
+            SFinding(
+                "P02",
+                relative_path,
+                f".{extension} can only be replaced whole: there is no .{extension}.xml rule, the file is skipped",
+            )
         ]
     if has_base is None:
         return []
-    target = rel[:-4] if low.endswith(PATCH_SUFFIXES) else rel
-    if has_base(target) or (target != rel and (mod / target).is_file()):  # a plain .xml is its own file
+    target = relative_path[:-4] if low.endswith(PATCH_SUFFIXES) else relative_path
+    if has_base(target) or (target != relative_path and (mod / target).is_file()):  # a plain .xml is its own file
         return []
-    return [Finding("P01", rel, f"no game file {target} to patch: 'Can't find file to patch', the file is skipped")]
+    return [
+        SFinding(
+            "P01", relative_path, f"no game file {target} to patch: 'Can't find file to patch', the file is skipped"
+        )
+    ]
 
 
 def lint_mod(
@@ -448,48 +470,65 @@ def lint_mod(
     slot_types: frozenset[str] = frozenset(),
     folders: list[Path] | None = None,
     profile: Path | None = None,
-) -> LintResult:
+) -> SLintResult:
     """Lint a built mod folder. ``has_base(path)`` says whether the game has a file at that mod-relative path (117's
     files); ``slot_types`` are slot types the game takes beyond its own list for this mod (a caller that widens it).
     The mods nested inside are linted as mods of their own (their paths are relative to their folder). ``folders``
     (the mods folders) and ``profile`` switch on the dependency checks (``modlintdeps``)."""
     from .modlintdeps import lint_dependencies
 
-    res = _lint_tree(mod, has_base, slot_types)
+    result = _lint_tree(mod, has_base, slot_types)
     found, notes = lint_dependencies(mod, folders, profile)
-    res.findings += found
-    res.notes += notes
-    return res
+    result.findings += found
+    result.notes += notes
+    return result
 
 
 def _lint_tree(
     mod: Path, has_base: Callable[[str], bool] | None, slot_types: frozenset[str], where: str = ""
-) -> LintResult:
-    res = LintResult()
-    res.findings += [replace(f, where=where + f.where) for f in lint_modinfo(mod)]
-    info, _ = read_mod(mod)
-    nested = info.nested if info else []
-    if has_base is None and not where:
-        res.notes.append("patch targets not checked (give the 117 install)")
-    if has_base is not None and not where:
-        from .phxrefs import missing_refs
-
-        res.findings += [Finding("U01", where, message) for where, message in missing_refs(mod, has_base)]
-    if slot_types and not where:
-        res.notes.append(f"slot types this mod adds, accepted: {', '.join(sorted(slot_types))}")
-    inside = {child.folder.resolve() for child in nested}
-    for path in sorted(p for p in mod.rglob("*") if p.suffix.lower() == ".xml" and p.is_file()):
+) -> SLintResult:
+    """The findings of ``mod`` and, below it, of each nested mod (``where``: the nested mod's folder in the one linted)."""
+    result = SLintResult()
+    result.findings += [replace(finding, where=where + finding.where) for finding in lint_modinfo(mod)]
+    modinfo, _ = read_mod(mod)
+    nested = modinfo.nested if modinfo else []
+    if not where:
+        result.findings += _top_checks(result, mod, has_base, slot_types)
+    inside = {child.m_folder.resolve() for child in nested}
+    for path in sorted(
+        candidate for candidate in mod.rglob("*") if candidate.suffix.lower() == ".xml" and candidate.is_file()
+    ):
         if any(parent in inside for parent in path.resolve().parents):
             continue
-        rel = path.relative_to(mod).as_posix()
-        res.findings += [replace(f, where=where + f.where) for f in lint_patch_name(rel, mod, has_base)]
-        found, ops = lint_patch(path, rel, mod, SLOT_TYPES | slot_types)
-        res.findings += [replace(f, where=where + f.where) for f in found]
-        res.files += 1
-        res.ops += ops
+        relative_path = path.relative_to(mod).as_posix()
+        result.findings += [
+            replace(finding, where=where + finding.where) for finding in lint_patch_name(relative_path, mod, has_base)
+        ]
+        found, operation_count = lint_patch(path, relative_path, mod, SLOT_TYPES | slot_types)
+        result.findings += [replace(finding, where=where + finding.where) for finding in found]
+        result.files += 1
+        result.op_count += operation_count
     for child in nested:
-        sub = _lint_tree(child.folder, has_base, slot_types, f"{where}{child.folder.relative_to(mod).as_posix()}/")
-        res.findings += sub.findings
-        res.files += sub.files
-        res.ops += sub.ops
-    return res
+        nested_result = _lint_tree(
+            child.m_folder, has_base, slot_types, f"{where}{child.m_folder.relative_to(mod).as_posix()}/"
+        )
+        result.findings += nested_result.findings
+        result.files += nested_result.files
+        result.op_count += nested_result.op_count
+    return result
+
+
+def _top_checks(
+    result: SLintResult, mod: Path, has_base: Callable[[str], bool] | None, slot_types: frozenset[str]
+) -> list[SFinding]:
+    """What is checked once for the whole mod: the notes of checks that did not run (added to ``res``) and, with the
+    117 files at hand, the references of its UI files."""
+    if has_base is None:
+        result.notes.append("patch targets not checked (give the 117 install)")
+    if slot_types:
+        result.notes.append(f"slot types this mod adds, accepted: {', '.join(sorted(slot_types))}")
+    if has_base is None:
+        return []
+    from .phxrefs import missing_refs
+
+    return [SFinding("U01", file, message) for file, message in missing_refs(mod, has_base)]

@@ -2,7 +2,7 @@
 the engine's own text put in front of it (semantic macros, the sampler declarations it writes), compiled by the
 compiler the game ships (FXC, shader model 5.0), one technique's pass at a time, kept in the build cache.
 
-``ForwardSource(files, compiler, game)`` is the entry: ``model_pass(values, technique)`` compiles the pass of a model
+``CForwardSource(files, compiler, game)`` is the entry: ``model_pass(values, technique)`` compiles the pass of a model
 material (``values``: the config's material fields as a dict). The graphics defines, the material options and what the
 engine writes into a shader's text: docs/rendering/shader-compile.md section 11.
 """
@@ -12,11 +12,11 @@ from __future__ import annotations
 import re
 
 from ..formats import fx11effect, fxeffect, fxlink
-from ..infra.fxc import GAME_FLAGS, Fxc
+from ..infra.fxc import GAME_FLAGS, CFxc
 from ..render import rawbuffers
 from ..sources.assetdb import number
 from . import fxstage
-from .fxstage import Built, Stage, State
+from .fxstage import SBuilt, SStage, SState
 
 NAMESPACE = "shaders-forward"
 FX_DIR = "data/shaders/fx/"
@@ -105,9 +105,11 @@ def prelude_1800() -> str:
     """117's prelude for 1800 under FXC: its semantic macros renamed (``semantic_calls``), its samplers left out (1800
     declares the same ones itself, ``DEFINESAMPLER`` in ``constants.fxh``)."""
     lines = fxeffect.prelude().splitlines()
-    kept = [ln for ln in lines if not re.match(r"#define \w+\(index\)|Sampler(Comparison)?State ", ln)]
-    renamed = [f"#define {SEMANTIC_PREFIX}{s}(index) {s}##index" for s in fxeffect.INDEXED_SEMANTICS]
-    return "".join(f"{ln}{chr(10)}" for ln in renamed + kept)
+    kept = [line for line in lines if not re.match(r"#define \w+\(index\)|Sampler(Comparison)?State ", line)]
+    renamed = [
+        f"#define {SEMANTIC_PREFIX}{semantic}(index) {semantic}##index" for semantic in fxeffect.INDEXED_SEMANTICS
+    ]
+    return "".join(f"{line}{chr(10)}" for line in renamed + kept)
 
 
 # a structured buffer's elements as a constant buffer holds them: at most 64 KB (1800's model matrices, its light
@@ -126,21 +128,25 @@ _TEMPLATED_RE = re.compile(r"\b(\w+)\.(Load|Store)<(\w+)>\(")
 def sm5_raw(hlsl: str) -> str:
     """``rawbuffers.rewrite``'s templated loads and stores (shader model 6.2) as shader model 5 has them, for scalar
     elements: ``b.Load<float>(a)`` -> ``asfloat(b.Load(a))``, ``b.Store<float>(a, v)`` -> ``b.Store(a, asuint(v))``."""
-    out, at = [], 0
-    for m in _TEMPLATED_RE.finditer(hlsl):
-        if m.start() < at:
+    out, cursor = [], 0
+    for match in _TEMPLATED_RE.finditer(hlsl):
+        if match.start() < cursor:
             continue
-        name, op, kind = m.groups()
-        close = fxeffect.matching(hlsl, m.end() - 1, "()")
-        args = fxeffect.split_args(hlsl[m.end() : close]) if op == "Store" else [sm5_raw(hlsl[m.end() : close])]
-        if op == "Load":
-            call = f"{name}.Load({args[0]})"
+        name, operation, kind = match.groups()
+        close = fxeffect.matching(hlsl, match.end() - 1, "()")
+        arguments = (
+            fxeffect.split_arguments(hlsl[match.end() : close])
+            if operation == "Store"
+            else [sm5_raw(hlsl[match.end() : close])]
+        )
+        if operation == "Load":
+            call = f"{name}.Load({arguments[0]})"
             text = call if kind == "uint" else f"as{kind}({call})"
         else:
-            text = f"{name}.Store({sm5_raw(args[0])}, asuint({sm5_raw(args[1])}))"
-        out += [hlsl[at : m.start()], text]
-        at = close + 1
-    return "".join(out) + hlsl[at:]
+            text = f"{name}.Store({sm5_raw(arguments[0])}, asuint({sm5_raw(arguments[1])}))"
+        out += [hlsl[cursor : match.start()], text]
+        cursor = close + 1
+    return "".join(out) + hlsl[cursor:]
 
 
 # compute effects whose storage textures the engine binds one slice each (shader-compile.md 11 "1800's ambient
@@ -162,9 +168,9 @@ def slice_targets(hlsl: str) -> str:
         lambda m: "RWTexture2DArray<float> cOutQuarterSizeViewDepthTex;" if m.group(1) == "0" else "", hlsl
     )
 
-    def write(m: re.Match) -> str:
-        name, k = ("cOutQuarterSizeViewDepthTex", m.group(2)) if m.group(2) else ("cOutQuarterSizeAOTex", "0")
-        return f"{name}[uint3({m.group(3)}, (uint)cSliceIndex + {k})]"
+    def write(match: re.Match) -> str:
+        name, k = ("cOutQuarterSizeViewDepthTex", match.group(2)) if match.group(2) else ("cOutQuarterSizeAOTex", "0")
+        return f"{name}[uint3({match.group(3)}, (uint)cSliceIndex + {k})]"
 
     hlsl = _SLICE_WRITE_RE.sub(write, hlsl)
     hlsl = _PAIR_DECL_RE.sub("RWTexture2D<float4> cOutAOZTex", hlsl)
@@ -192,8 +198,8 @@ def structured_as_cbuffers(hlsl: str) -> str:
     cb_name { T name[n]; }``: QRhi binds no structured view, and FXC has no templated raw-buffer load to read one as
     a raw buffer (117's way); the reads ``name[i]`` stay as they are."""
 
-    def one(m: re.Match) -> str:
-        words, element, name = m.groups()
+    def one(match: re.Match) -> str:
+        words, element, name = match.groups()
         return f"{words}cbuffer cb_{name} {{ {element} {name}[{STRUCTURED_LENGTHS.get(element, 16)}]; }};"
 
     return _STRUCTURED_RE.sub(one, hlsl)
@@ -205,26 +211,26 @@ def without_declaration(hlsl: str, entry: str) -> str:
     return re.sub(rf"^[^\n{{}}]*\b{re.escape(entry)}\s*\([^{{}};]*\)\s*;[ \t]*$", "", hlsl, flags=re.M)
 
 
-class NoPass(ValueError):
+class CNoPass(ValueError):
     """The material's effect is not one this reader draws, or has no such technique."""
 
 
-def sampler_blocks(hlsl: str) -> tuple[str, dict[str, fxstage.Sampler]]:
+def sampler_blocks(hlsl: str) -> tuple[str, dict[str, fxstage.SSampler]]:
     """The effect's ``samplerstateblock name { Filter = ...; Address = ...; }`` declarations as plain ``SamplerState``
     ones (``SamplerComparisonState`` with a comparison function), and their states by name; a parameter of that type
     becomes ``SamplerState``."""
-    found: dict[str, fxstage.Sampler] = {}
+    found: dict[str, fxstage.SSampler] = {}
 
-    def one(m: re.Match) -> str:
-        v = {k.lower(): x.upper() for k, x in re.findall(r"(\w+)\s*=\s*([\w.]+)\s*;", m.group(2))}
-        both = _ADDRESS.get(v.get("address", ""), "WRAP")
-        aniso = v.get("maxanisotropy", "1")
-        compares = v.get("comparisonfunc", "NEVER") != "NEVER"  # 1800 gives every sampler NEVER
-        found[m.group(1)] = fxstage.Sampler(
-            "MIN_MAG_MIP_" + v.get("filter", "LINEAR"), _ADDRESS.get(v.get("addressu", ""), both),
-            _ADDRESS.get(v.get("addressv", ""), both), both, int(aniso) if aniso.isdigit() else 16, compares,
+    def one(match: re.Match) -> str:
+        values = {k.lower(): x.upper() for k, x in re.findall(r"(\w+)\s*=\s*([\w.]+)\s*;", match.group(2))}
+        both = _ADDRESS.get(values.get("address", ""), "WRAP")
+        aniso = values.get("maxanisotropy", "1")
+        compares = values.get("comparisonfunc", "NEVER") != "NEVER"  # 1800 gives every sampler NEVER
+        found[match.group(1)] = fxstage.SSampler(
+            "MIN_MAG_MIP_" + values.get("filter", "LINEAR"), _ADDRESS.get(values.get("addressu", ""), both),
+            _ADDRESS.get(values.get("addressv", ""), both), both, int(aniso) if aniso.isdigit() else 16, compares,
         )  # fmt: skip
-        return f"Sampler{'Comparison' if compares else ''}State {m.group(1)};"
+        return f"Sampler{'Comparison' if compares else ''}State {match.group(1)};"
 
     text = _BLOCK_RE.sub(one, hlsl)
     return _PARAM_RE.sub("SamplerState", text), found
@@ -234,27 +240,27 @@ def preprocessor_switches(source: str) -> tuple[str, ...]:
     """The names an effect's text tests with the preprocessor (``#ifdef X``, ``#if defined(X)``) that a material can
     switch: ``..._ENABLED`` and ``SEPARATE_AO_TEXTURE`` (for an effect without an ``OPTIONS`` entry)."""
     names = set()
-    for m in _SWITCH_RE.finditer(source):
-        names.update([m.group(1)] if m.group(1) else re.findall(r"defined\s*\(?\s*(\w+)", m.group(2) or ""))
-    return tuple(sorted(n for n in names if n.endswith("_ENABLED") or n == "SEPARATE_AO_TEXTURE"))
+    for match in _SWITCH_RE.finditer(source):
+        names.update([match.group(1)] if match.group(1) else re.findall(r"defined\s*\(?\s*(\w+)", match.group(2) or ""))
+    return tuple(sorted(name for name in names if name.endswith("_ENABLED") or name == "SEPARATE_AO_TEXTURE"))
 
 
 def pass_of(technique: str) -> tuple[str, int]:
     """A technique's name and the index of its pass: ``Default`` is its first pass, ``Default#1`` its second."""
-    name, _, n = technique.partition("#")
-    return name, int(n or 0)
+    name, _, pass_index = technique.partition("#")
+    return name, int(pass_index or 0)
 
 
-def block_state(block: dict[str, str]) -> State:
+def block_state(block: dict[str, str]) -> SState:
     """A ``renderstateblock``'s states as the pipeline's: what it does not name keeps the engine's default (depth
     tested with LESS_EQUAL and written, back faces culled, no blend)."""
-    s = {k.lower(): v.upper() for k, v in block.items()}
-    cull = {"CW": "front", "CCW": "back", "NONE": "none"}.get(s.get("cullmode", "CCW"), "back")
-    return State(
-        cull=cull, depth_test=s.get("zenable", "TRUE") == "TRUE", depth_write=s.get("zwriteenable", "TRUE") == "TRUE",
-        depth_func=s.get("zfunc", "LESS_EQUAL").lower(), blend=s.get("alphablendenable", "FALSE") == "TRUE",
-        source=s.get("srcblend", "ONE").lower(), dest=s.get("dstblend", "ZERO").lower(),
-        source_alpha=s.get("srcblendalpha", "").lower(), dest_alpha=s.get("dstblendalpha", "").lower(),
+    state = {k.lower(): value.upper() for k, value in block.items()}
+    cull = {"CW": "front", "CCW": "back", "NONE": "none"}.get(state.get("cullmode", "CCW"), "back")
+    return SState(
+        cull=cull, depth_test=state.get("zenable", "TRUE") == "TRUE", depth_write=state.get("zwriteenable", "TRUE") == "TRUE",
+        depth_func=state.get("zfunc", "LESS_EQUAL").lower(), blend=state.get("alphablendenable", "FALSE") == "TRUE",
+        source=state.get("srcblend", "ONE").lower(), dest=state.get("dstblend", "ZERO").lower(),
+        source_alpha=state.get("srcblendalpha", "").lower(), dest_alpha=state.get("dstblendalpha", "").lower(),
     )  # fmt: skip
 
 
@@ -282,12 +288,12 @@ def material_defines(values: dict, effect: str, game: str = "anno2205", names=No
     return out + [(name, "") for name in names if switched_on(values.get(name))]
 
 
-def _technique(built: Built, name: str) -> fxeffect.Technique | None:
+def _technique(built: SBuilt, name: str) -> fxeffect.STechnique | None:
     """The effect's technique of that name, None without one."""
-    return next((t for t in built.effect.techniques if t.name == name), None)
+    return next((candidate for candidate in built.effect.techniques if candidate.name == name), None)
 
 
-GAME = fxstage.FxcGame(
+GAME = fxstage.SFxcGame(
     NAMESPACE,
     GAME_FLAGS,
     lambda call: f"{call.stage}_5_0",
@@ -295,28 +301,28 @@ GAME = fxstage.FxcGame(
 )
 
 
-class ForwardSource(fxstage.FxcSource):
+class CForwardSource(fxstage.CFxcSource):
     """A forward-lit game's effects, compiled one pass at a time; thread-safe."""
 
-    def __init__(self, files, compiler: Fxc, game: str = "anno2205") -> None:
+    def __init__(self, files, compiler: CFxc, game: str = "anno2205") -> None:
         super().__init__(files, compiler, GAME)
-        self.game = game
-        self._switches: dict[str, tuple] = {}
+        self.m_game = game
+        self._m_switches: dict[str, tuple] = {}
 
     def _read(self, path: str) -> bytes | None:
-        return self.files.read(path) if self.files.exists(path) else None
+        return self.m_files.read(path) if self.m_files.exists(path) else None
 
-    def _preprocess(self, fx: str, defines: tuple) -> Built:
+    def _preprocess(self, fx: str, defines: tuple) -> SBuilt:
         intrinsics = INCLUDE_DIR + "intrinsics_dx.fxh"
-        if self.game == "anno1800":  # 1800 writes its semantics as 117 does: the 117 reader's prelude
-            head = fxeffect.define_lines([*GRAPHICS[self.game], *defines]) + prelude_1800()
+        if self.m_game == "anno1800":  # 1800 writes its semantics as 117 does: the 117 reader's prelude
+            head = fxeffect.define_lines([*GRAPHICS[self.m_game], *defines]) + prelude_1800()
         else:
-            head = fxeffect.define_lines([*SEMANTICS, *GRAPHICS[self.game], *defines])
+            head = fxeffect.define_lines([*SEMANTICS, *GRAPHICS[self.m_game], *defines])
         head += fxeffect.expand_includes(self._read, intrinsics) if self._read(intrinsics) else ""
         body = fxeffect.expand_includes(self._read, fx)
-        if self.game == "anno1800":
+        if self.m_game == "anno1800":
             body = semantic_calls(body)
-        text, messages = self.compiler.preprocess(head + body, name=fx)
+        text, messages = self.m_compiler.preprocess(head + body, name=fx)
         if not text:
             raise RuntimeError(f"{fx}: {messages[:1500]}")
         text, samplers = sampler_blocks(text)
@@ -329,34 +335,36 @@ class ForwardSource(fxstage.FxcSource):
             hlsl = sm5_raw(rawbuffers.rewrite(hlsl, raw))
         if stem in SLICED:
             hlsl = slice_targets(hlsl)
-        return Built(found, text, fxlink.Program(structured_as_cbuffers(hlsl)), samplers)
+        return SBuilt(found, text, fxlink.CProgram(structured_as_cbuffers(hlsl)), samplers)
 
-    def _pick(self, built: Built, technique: str, fx: str) -> fxstage.Picked:
-        name, n = pass_of(technique)
+    def _pick(self, built: SBuilt, technique: str, fx: str) -> fxstage.Picked:
+        name, pass_index = pass_of(technique)
         tech = _technique(built, name)
-        vs = [c for c in tech.calls if c.stage == "vs"] if tech else []
-        ps = [c for c in tech.calls if c.stage == "ps"] if tech else []
-        if n >= min(len(vs), len(ps)):
-            raise NoPass(f"{fx} has no pass with a vertex and a pixel shader in {technique}")
-        return vs[n], ps[n], None
+        vertex_calls = [call for call in tech.calls if call.stage == "vs"] if tech else []
+        pixel_calls = [call for call in tech.calls if call.stage == "ps"] if tech else []
+        if pass_index >= min(len(vertex_calls), len(pixel_calls)):
+            raise CNoPass(f"{fx} has no pass with a vertex and a pixel shader in {technique}")
+        return vertex_calls[pass_index], pixel_calls[pass_index], None
 
     def pass_count(self, values: dict, technique: str = G_BUFFER) -> int:
         """How many passes with a vertex and a pixel shader the material's ``technique`` has (the planet: its
         atmosphere and its surface); pass ``n`` > 0 is asked for as ``f"{technique}#{n}"``."""
         tech = _technique(self.effect(*self._material(values)), technique)
-        return min(sum(c.stage == s for c in tech.calls) for s in ("vs", "ps")) if tech else 0
+        return min(sum(call.stage == stage for call in tech.calls) for stage in ("vs", "ps")) if tech else 0
 
-    def _geometry(self, built: Built, technique: str) -> fxeffect.ShaderCall | None:
+    def _geometry(self, built: SBuilt, technique: str) -> fxeffect.SShaderCall | None:
         """The technique's geometry shader, when its function is in the text: model_arctic names ``gsDefault`` but
         leaves ``USE_GEOMETRY_SHADER`` off, so the function is not there and the engine draws without one."""
-        name, n = pass_of(technique)
+        name, pass_index = pass_of(technique)
         tech = _technique(built, name)
-        gs = next((c for c in tech.calls if c.stage == "gs"), None) if tech and n == 0 else None
-        if gs is None or not re.search(rf"\bvoid\s+{gs.function}\s*\(", built.text):
+        geometry_call = (
+            next((call for call in tech.calls if call.stage == "gs"), None) if tech and pass_index == 0 else None
+        )
+        if geometry_call is None or not re.search(rf"\bvoid\s+{geometry_call.function}\s*\(", built.text):
             return None
-        return gs
+        return geometry_call
 
-    def effect_pass(self, fx: str, defines: tuple, technique: str) -> tuple[Stage, ...]:
+    def effect_pass(self, fx: str, defines: tuple, technique: str) -> tuple[SStage, ...]:
         """The vertex and pixel shader of ``technique`` of ``fx`` with ``defines`` (and its geometry shader, third,
         where it has one), compiled once and kept in the build cache."""
         stages, _state = super().effect_pass(fx, defines, technique)
@@ -364,69 +372,73 @@ class ForwardSource(fxstage.FxcSource):
 
     def _material(self, values: dict) -> tuple[str, tuple]:
         """The effect file and the defines of a model material (``values``: its fields as a dict)."""
-        stem = SHADER_FILES.get(self.game, {}).get(number(values.get("ShaderID"), -1))
+        stem = SHADER_FILES.get(self.m_game, {}).get(number(values.get("ShaderID"), -1))
         if stem is None:
-            raise NoPass(f"the ShaderID {values.get('ShaderID')} is not a shader this reader draws")
+            raise CNoPass(f"the ShaderID {values.get('ShaderID')} is not a shader this reader draws")
         fx = f"{FX_DIR}{stem}.fx"
-        with self._lock:
-            if fx not in self._switches:
-                self._switches[fx] = preprocessor_switches(fxeffect.expand_includes(self._read, fx))
-        defines = material_defines(values, stem, self.game, self._switches[fx])
+        with self._m_lock:
+            if fx not in self._m_switches:
+                self._m_switches[fx] = preprocessor_switches(fxeffect.expand_includes(self._read, fx))
+        defines = material_defines(values, stem, self.m_game, self._m_switches[fx])
         # the planet's parallax makes it the orbit scene's backdrop, carried along under the camera: a viewer shows
         # it as an object (ours; shader-compile.md section 11 "Planet")
-        return fx, tuple(d for d in defines if not (stem == "model_planet" and d[0] == "PARALLAX_ENABLED"))
+        return fx, tuple(
+            define for define in defines if not (stem == "model_planet" and define[0] == "PARALLAX_ENABLED")
+        )
 
-    def call_stage(self, fx: str, defines: tuple, technique: str, stage: str = "cs") -> Stage:
+    def call_stage(self, fx: str, defines: tuple, technique: str, stage: str = "cs") -> SStage:
         """One shader of ``technique`` of ``fx`` by its stage (``cs``, ``hs``, ``ds``: ``<stage>_5_0``), compiled
         once and kept in the build cache; the passes of a vertex and a pixel shader are ``effect_pass``'s."""
         built = self.effect(fx, defines)
         tech = _technique(built, technique)
-        call = next((c for c in tech.calls if c.stage == stage), None) if tech else None
+        call = next((candidate for candidate in tech.calls if candidate.stage == stage), None) if tech else None
         if call is None:
-            raise NoPass(f"{fx} has no {stage} shader in {technique}")
+            raise CNoPass(f"{fx} has no {stage} shader in {technique}")
         hlsl, entry = built.program.entry_source(call)
         text = (without_declaration(hlsl, entry), entry)
         return self.compiled(self.prepare(built, call, profile=f"{stage}_5_0", text=text), fx)
 
     def colour_technique(self, values: dict) -> str:
         """The technique a model material's colour pass takes (``TECHNIQUES``: 1800's water its own)."""
-        stem = SHADER_FILES.get(self.game, {}).get(number(values.get("ShaderID"), -1), "")
-        return TECHNIQUES.get(f"{self.game}/{stem}", TECHNIQUES[self.game])
+        stem = SHADER_FILES.get(self.m_game, {}).get(number(values.get("ShaderID"), -1), "")
+        return TECHNIQUES.get(f"{self.m_game}/{stem}", TECHNIQUES[self.m_game])
 
-    def model_pass(self, values: dict, technique: str = G_BUFFER) -> tuple[Stage, ...]:
+    def model_pass(self, values: dict, technique: str = G_BUFFER) -> tuple[SStage, ...]:
         """The pass of a model material's effect (``values``: the material's fields as a dict)."""
         return self.effect_pass(*self._material(values), technique)
 
-    def prepass(self, values: dict) -> tuple[tuple[Stage, ...], State] | None:
+    def prepass(self, values: dict) -> tuple[tuple[SStage, ...], SState] | None:
         """1800's depth pre-pass of a model material with its face normals (``PREPASS``): its stages and states, None
         when the effect has none (shader-compile.md 11 "1800's ambient occlusion")."""
         fx, defines = self._material(values)
         defines = (*defines, PREZ_NORMALS)
         tech = _technique(self.effect(fx, defines), PREPASS)
-        if tech is None or not {c.stage for c in tech.calls} >= {"vs", "ps"}:
+        if tech is None or not {call.stage for call in tech.calls} >= {"vs", "ps"}:
             return None
         return self.effect_pass(fx, defines, PREPASS), self.technique_state(fx, defines, PREPASS)
 
     def has_technique(self, values: dict, technique: str) -> bool:
         """Whether the material's effect has ``technique`` with a vertex and a pixel shader (a shadow caster)."""
         tech = _technique(self.effect(*self._material(values)), technique)
-        return tech is not None and {c.stage for c in tech.calls} >= {"vs", "ps"}
+        return tech is not None and {call.stage for call in tech.calls} >= {"vs", "ps"}
 
-    def model_state(self, values: dict, technique: str = G_BUFFER) -> State:
+    def model_state(self, values: dict, technique: str = G_BUFFER) -> SState:
         """The render states the engine draws a material with: the first ``SetStateBlock`` of the technique, its
         blended one (the second but the planar reflection's: 2205's ``sbModelAlpha``, 1800's water's
         ``sbModelWaterAlpha``) for a material of the blended pass (``blended``)."""
         fx, defines = self._material(values)
         return self.technique_state(fx, defines, technique, 1 if blended(values, fx.rsplit("/", 1)[-1][:-3]) else 0)
 
-    def technique_state(self, fx: str, defines: tuple, technique: str, slot: int = 0) -> State:
+    def technique_state(self, fx: str, defines: tuple, technique: str, slot: int = 0) -> SState:
         """The render states of the ``slot``-th ``SetStateBlock`` of ``technique``'s pass (``name#n``: its n-th; the
         first block when it has fewer), the planar reflection's blocks (``...Reflection``, front faces) not counted:
         the viewer draws no reflection pass."""
         built = self.effect(fx, defines)
-        name, n = pass_of(technique)
-        m = re.search(rf"\btechnique\s+{name}\s*\{{(.*?)\n\}}", built.text, re.S)
-        passes = _PASS_RE.findall(m.group(1)) if m else []
-        found = _SET_BLOCK_RE.findall(passes[n] if n < len(passes) else m.group(1) if m else "")
-        names = [b for b in found if not b.endswith("Reflection")] or found
+        name, pass_index = pass_of(technique)
+        match = re.search(rf"\btechnique\s+{name}\s*\{{(.*?)\n\}}", built.text, re.S)
+        passes = _PASS_RE.findall(match.group(1)) if match else []
+        found = _SET_BLOCK_RE.findall(
+            passes[pass_index] if pass_index < len(passes) else match.group(1) if match else ""
+        )
+        names = [candidate for candidate in found if not candidate.endswith("Reflection")] or found
         return block_state(built.effect.blocks.get(names[slot if slot < len(names) else 0], {}) if names else {})

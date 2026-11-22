@@ -116,20 +116,25 @@ Sampler* Device::sampler(const std::string& filter, const std::string& address, 
     desc.reductionType = compare.empty() ? nvrhi::SamplerReductionType::Standard
                                          : nvrhi::SamplerReductionType::Comparison;
     desc.borderColor = nvrhi::Color(0.0f);
+    auto address_d3d = address_of(address);  // these raise before anything is allocated
+    auto func = compare.empty() ? D3D12_COMPARISON_FUNC_NEVER : D3D12_COMPARISON_FUNC(int(compare_named(compare)));
     auto* s = new Sampler();
     s->device = this;
     s->handle = nv->createSampler(desc);
+    if (!s->handle) {
+        delete s;
+        throw Error("the sampler was not made");
+    }
     D3D12_SAMPLER_DESC& x = s->exact;
     D3D12_FILTER base = aniso                        ? D3D12_FILTER_ANISOTROPIC
                         : filter == "point"            ? D3D12_FILTER_MIN_MAG_MIP_POINT
                         : filter == "point_mip_linear" ? D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR
                                                        : D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     x.Filter = compare.empty() ? base : D3D12_FILTER(int(base) | 0x80);
-    x.AddressU = x.AddressV = x.AddressW = address_of(address);
+    x.AddressU = x.AddressV = x.AddressW = address_d3d;
     x.MipLODBias = mip_bias;
     x.MaxAnisotropy = aniso ? UINT(anisotropy) : 1;
-    x.ComparisonFunc = compare.empty() ? D3D12_COMPARISON_FUNC_NEVER
-                                       : D3D12_COMPARISON_FUNC(int(compare_named(compare)));
+    x.ComparisonFunc = func;
     x.MinLOD = 0.0f;
     x.MaxLOD = D3D12_FLOAT32_MAX;
     s->patched = !compare.empty() && compare != "less";  // NVRHI writes LESS for every comparison
@@ -297,9 +302,14 @@ Set* Device::binding_set(Layout& layout, const std::vector<Binding>& items) {
         patch = patch || (b.kind == "sampler" && b.sampler && b.sampler->patched);
         desc.bindings.push_back(item_of(b));
     }
+    // a static constant buffer as a root view (one slot of it a draw: cbModel's, ``Draw::root_offset``) is a use
+    // NVRHI's validation refuses (it asks a volatile one), so such a set is made on the device beneath it
+    bool root_view = false;
+    for (const auto& b : items)
+        root_view = root_view || (b.kind == "volatile" && b.buffer && !b.buffer->get()->getDesc().isVolatile);
     auto* s = new Set();
     s->device = this;
-    s->handle = nv->createBindingSet(desc, layout.get());
+    s->handle = root_view ? native->createBindingSet(desc, layout.get()) : nv->createBindingSet(desc, layout.get());
     if (!s->handle) {
         delete s;
         throw Error("the binding set was not made");
@@ -368,6 +378,10 @@ InputLayout* Device::input_layout(const std::vector<std::tuple<std::string, uint
 }
 
 Framebuffer* Device::framebuffer(const std::vector<Texture*>& colors, Texture* depth, uint32_t mip, uint32_t layer) {
+    if (colors.empty() && !depth) throw Error("a framebuffer needs a colour or a depth target");
+    for (auto* c : colors)
+        if (!c || !c->handle) throw Error("a released or missing colour target in a framebuffer");
+    if (depth && !depth->handle) throw Error("a released depth target in a framebuffer");
     nvrhi::FramebufferDesc desc;
     nvrhi::TextureSubresourceSet sub(mip, 1, layer, 1);
     for (auto* c : colors) desc.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(c->get()).setSubresources(sub));
@@ -408,9 +422,22 @@ static nvrhi::BlendFactor factor_named(const std::string& name) {
         {"zero", F::Zero},           {"one", F::One},                   {"src_color", F::SrcColor},
         {"inv_src_color", F::InvSrcColor}, {"src_alpha", F::SrcAlpha},  {"inv_src_alpha", F::InvSrcAlpha},
         {"dst_alpha", F::DstAlpha},  {"inv_dst_alpha", F::InvDstAlpha}, {"dst_color", F::DstColor},
-        {"inv_dst_color", F::InvDstColor}, {"blend_factor", F::ConstantColor}, {"inv_blend_factor", F::InvConstantColor}};
+        {"inv_dst_color", F::InvDstColor}, {"blend_factor", F::ConstantColor}, {"inv_blend_factor", F::InvConstantColor},
+        {"src1_color", F::Src1Color}, {"inv_src1_color", F::InvSrc1Color}, {"src1_alpha", F::Src1Alpha},
+        {"inv_src1_alpha", F::InvSrc1Alpha}};  // dual source: the flow map's raster (native-backend.md 16.9)
     auto it = names.find(name);
     if (it == names.end()) throw Error("unknown blend factor " + name);
+    return it->second;
+}
+
+static nvrhi::StencilOp stencil_op_named(const std::string& name) {
+    using S = nvrhi::StencilOp;
+    static const std::map<std::string, S> names = {
+        {"keep", S::Keep},       {"zero", S::Zero},          {"replace", S::Replace},
+        {"incr_sat", S::IncrementAndClamp}, {"decr_sat", S::DecrementAndClamp}, {"invert", S::Invert},
+        {"incr", S::IncrementAndWrap},      {"decr", S::DecrementAndWrap}};
+    auto it = names.find(name);
+    if (it == names.end()) throw Error("unknown stencil operation " + name);
     return it->second;
 }
 
@@ -444,7 +471,12 @@ Pipeline* graphics_pipeline(Device& device, Shader* vs, Shader* hs, Shader* ds, 
                     : state.topology == "points" ? nvrhi::PrimitiveType::PointList
                     : state.topology.rfind("patch", 0) == 0 ? nvrhi::PrimitiveType::PatchList
                                                  : nvrhi::PrimitiveType::TriangleList;
-    if (desc.primType == nvrhi::PrimitiveType::PatchList) desc.patchControlPoints = std::stoi(state.topology.substr(5));
+    if (desc.primType == nvrhi::PrimitiveType::PatchList) {
+        const std::string points = state.topology.substr(5);
+        int n = points.empty() || points.find_first_not_of("0123456789") != std::string::npos ? 0 : std::stoi(points);
+        if (n < 1 || n > 32) throw Error("a patch topology names 1 to 32 control points: " + state.topology);
+        desc.patchControlPoints = uint32_t(n);
+    }
     if ((desc.HS || desc.DS) && desc.primType != nvrhi::PrimitiveType::PatchList)
         throw Error("a tessellated pipeline draws patches: topology patch<n>");
     for (auto* l : layouts) desc.bindingLayouts.push_back(l->get());
@@ -463,6 +495,17 @@ Pipeline* graphics_pipeline(Device& device, Shader* vs, Shader* hs, Shader* ds, 
     d.depthWriteEnable = state.depth_write && !state.depth.empty();
     d.depthFunc = compare_named(state.depth_func);
     d.stencilEnable = state.stencil;
+    if (state.stencil) {
+        nvrhi::DepthStencilState::StencilOpDesc face;
+        face.stencilFunc = compare_named(state.stencil_func);
+        face.passOp = stencil_op_named(state.stencil_pass);
+        face.failOp = stencil_op_named(state.stencil_fail);
+        face.depthFailOp = stencil_op_named(state.stencil_depth_fail);
+        d.frontFaceStencil = d.backFaceStencil = face;
+        d.stencilReadMask = uint8_t(state.stencil_read_mask);
+        d.stencilWriteMask = uint8_t(state.stencil_write_mask);
+        d.stencilRefValue = uint8_t(state.stencil_ref);
+    }
     for (size_t i = 0; i < state.blends.size() && i < nvrhi::c_MaxRenderTargets; i++) {
         const auto& [on, src, dst, op, srca, dsta, opa, mask] = state.blends[i];
         auto& t = desc.renderState.blendState.targets[i];

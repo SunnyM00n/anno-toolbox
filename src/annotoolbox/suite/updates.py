@@ -41,18 +41,18 @@ NET_ERRORS = (OSError, http.client.HTTPException)
 log = logging.getLogger(__name__)
 
 
-class UpdateError(Exception):
+class CUpdateError(Exception):
     """A check or download that did not work: offline, a refused request, an answer that does not read, a bad file."""
 
 
-class Net(NamedTuple):
+class SNet(NamedTuple):
     """The network call, so a test can stand in for it: ``get(url) -> bytes`` (the updater downloads the rest)."""
 
     get: Callable[[str], bytes]
 
 
 @dataclass(frozen=True)
-class Release:
+class SRelease:
     version: str  # "0.1.1"
     notes: str  # the release's text, plain
     sums_url: str
@@ -81,8 +81,8 @@ def parse_version(text: str) -> tuple[tuple[int, int, int], int]:
     match = _VERSION.match(text.strip())
     if not match:
         raise ValueError(f"not a version: {text!r}")
-    a, b, c, rest = match.groups()
-    return (int(a), int(b), int(c)), 0 if rest.strip() else 1
+    major, minor, patch, rest = match.groups()
+    return (int(major), int(minor), int(patch)), 0 if rest.strip() else 1
 
 
 def is_newer(candidate: str, current: str) -> bool:
@@ -99,7 +99,7 @@ def due(last: str, today: date) -> bool:
 
 def _request(url: str) -> urllib.request.Request:
     if urlparse(url).scheme != "https":
-        raise UpdateError(f"refused a request that is not https: {url}")
+        raise CUpdateError(f"refused a request that is not https: {url}")
     return urllib.request.Request(url, headers={"User-Agent": f"anno-toolbox/{__version__}"})  # nothing else is sent
 
 
@@ -107,7 +107,7 @@ def _opened(answer):
     """``answer`` unless a redirect left https (urllib follows one to http): its body is then not read."""
     if urlparse(answer.geturl()).scheme != "https":
         answer.close()
-        raise UpdateError(f"refused a redirect that is not https: {answer.geturl()}")
+        raise CUpdateError(f"refused a redirect that is not https: {answer.geturl()}")
     return answer
 
 
@@ -116,10 +116,10 @@ def http_get(url: str) -> bytes:
         with urllib.request.urlopen(_request(url), timeout=TIMEOUT) as answer:
             return _opened(answer).read()
     except NET_ERRORS as exc:
-        raise UpdateError(str(exc) or type(exc).__name__) from exc
+        raise CUpdateError(str(exc) or type(exc).__name__) from exc
 
 
-NET = Net(http_get)
+NET = SNet(http_get)
 
 
 def windows() -> bool:
@@ -132,71 +132,71 @@ def sums_name() -> str:
     return SUMS if windows() else SUMS_LINUX
 
 
-def parse_release(raw: bytes) -> Release:
-    """The release record from the release page's answer; ``UpdateError`` when it is not one we can use (on Linux also
+def parse_release(raw: bytes) -> SRelease:
+    """The release record from the release page's answer; ``CUpdateError`` when it is not one we can use (on Linux also
     a release that has no Linux build: the Linux files come from the first release after 0.2.0)."""
     try:
         data = json.loads(raw)
         version = parse_version(data["tag_name"])[0]
         text = ".".join(map(str, version))
-        assets = {a["name"]: a["browser_download_url"] for a in data["assets"]}
+        assets = {asset["name"]: asset["browser_download_url"] for asset in data["assets"]}
         notes = data.get("body") or ""
         sums = assets[sums_name()]
         page = data.get("html_url") or ""
     except (ValueError, KeyError, TypeError) as exc:
-        raise UpdateError(f"the release page's answer is not usable: {exc!r}") from exc
+        raise CUpdateError(f"the release page's answer is not usable: {exc!r}") from exc
     if not (isinstance(notes, str) and isinstance(sums, str) and isinstance(page, str)):
-        raise UpdateError("the release page's answer is not usable")
+        raise CUpdateError("the release page's answer is not usable")
     helper = assets.get(HELPER_SUMS, "") if windows() else ""  # the link helper is a Windows library
-    return Release(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], sums, page, helper)
+    return SRelease(text, notes.replace("\r\n", "\n").strip()[:MAX_NOTES], sums, page, helper)
 
 
-def latest(net: Net = NET) -> Release | None:
-    """The latest release, newer or not (None without a release page). ``UpdateError`` when it cannot be read."""
+def latest(net: SNet = NET) -> SRelease | None:
+    """The latest release, newer or not (None without a release page). ``CUpdateError`` when it cannot be read."""
     if not enabled():
         return None
     return parse_release(net.get(f"https://api.github.com/repos/{RELEASES}/releases/latest"))
 
 
-def check(current: str = __version__, net: Net = NET) -> Release | None:
-    """The latest release when it is newer than ``current``, else None. ``UpdateError`` when the page cannot be read."""
+def check(current: str = __version__, net: SNet = NET) -> SRelease | None:
+    """The latest release when it is newer than ``current``, else None. ``CUpdateError`` when the page cannot be read."""
     release = latest(net)
     return release if release is not None and is_newer(release.version, current) else None
 
 
 def checksum_for(sums_text: str, name: str) -> str:
-    """The hash of ``name`` in a ``sha256sum`` listing; ``UpdateError`` when the file is not in it."""
+    """The hash of ``name`` in a ``sha256sum`` listing; ``CUpdateError`` when the file is not in it."""
     for line in sums_text.splitlines():
         parts = line.split(None, 1)
         if len(parts) == 2 and parts[1].strip().lstrip("*") == name:
             return parts[0].lower()
-    raise UpdateError(f"{name} is not in {sums_name()}")
+    raise CUpdateError(f"{name} is not in {sums_name()}")
 
 
-def verify_feed(info, sums_text: str, version: str) -> None:
-    """``UpdateError`` unless the installer's update (``info``, from its ``check_for_updates``) is the release's
+def verify_feed(update_info, sums_text: str, version: str) -> None:
+    """``CUpdateError`` unless the installer's update (``update_info``, from its ``check_for_updates``) is the release's
     ``version`` and every package it will download (the full one, the deltas) has the SHA256 that ``SHA256SUMS`` lists.
     The installer then checks each download against its own hashes; the two lists must agree."""
-    target = info.TargetFullRelease
+    target = update_info.TargetFullRelease
     if parse_version(target.Version)[0] != parse_version(version)[0]:
-        raise UpdateError(f"the update feed offers {target.Version}, the release is {version}")
-    for asset in (target, *info.DeltasToTarget):
+        raise CUpdateError(f"the update feed offers {target.Version}, the release is {version}")
+    for asset in (target, *update_info.DeltasToTarget):
         have = (asset.SHA256 or "").lower()
         if not have:
-            raise UpdateError(f"{asset.FileName}: the update feed carries no SHA256")
+            raise CUpdateError(f"{asset.FileName}: the update feed carries no SHA256")
         if have != checksum_for(sums_text, asset.FileName):
-            raise UpdateError(f"{asset.FileName} does not match its checksum in {sums_name()}")
+            raise CUpdateError(f"{asset.FileName} does not match its checksum in {sums_name()}")
 
 
 def manager():
-    """The installer's update manager on this program's GitHub releases; ``UpdateError`` when this program has none
+    """The installer's update manager on this program's GitHub releases; ``CUpdateError`` when this program has none
     (the module is absent, or the program was not put there by the installer)."""
     try:
         import velopack
 
         return velopack.UpdateManager(velopack.GithubSource(source_url()))
     except Exception as exc:  # ImportError, or the manager's refusal outside an install
-        raise UpdateError(f"no installer to update with: {exc}") from exc
+        raise CUpdateError(f"no installer to update with: {exc}") from exc
 
 
 def can_self_update(make: Callable[[], object] = manager) -> bool:
@@ -205,40 +205,40 @@ def can_self_update(make: Callable[[], object] = manager) -> bool:
         return False
     try:
         make()
-    except UpdateError:
+    except CUpdateError:
         return False
     return True
 
 
-def stage(release: Release, mgr=None, net: Net = NET, progress: Callable[[int], None] | None = None):
+def stage(release: SRelease, update_manager=None, net: SNet = NET, progress: Callable[[int], None] | None = None):
     """Check the feed against ``SHA256SUMS``, then download the changed parts (a delta when one fits). Nothing is
     fetched before this call, which the person starts. Returns the update to ``apply``."""
-    mgr = mgr or manager()
+    update_manager = update_manager or manager()
     try:
-        info = mgr.check_for_updates()
-        if info is None:
-            raise UpdateError("the installer's update feed has no newer version")
-        verify_feed(info, net.get(release.sums_url).decode("utf-8", "replace"), release.version)
-        mgr.download_updates(info, progress)
-    except UpdateError:
+        update_info = update_manager.check_for_updates()
+        if update_info is None:
+            raise CUpdateError("the installer's update feed has no newer version")
+        verify_feed(update_info, net.get(release.sums_url).decode("utf-8", "replace"), release.version)
+        update_manager.download_updates(update_info, progress)
+    except CUpdateError:
         raise
     except Exception as exc:  # the updater's own errors (network, a package that fails its hash)
-        raise UpdateError(str(exc)) from exc
-    return info
+        raise CUpdateError(str(exc)) from exc
+    return update_info
 
 
-def apply(info, mgr=None) -> None:
+def apply(update_info, update_manager=None) -> None:
     """Quit and restart into the downloaded version; the installer's updater swaps the files in between.
-    ``UpdateError`` when the updater refuses (its own errors are ours, as in ``stage``)."""
-    mgr = mgr or manager()
+    ``CUpdateError`` when the updater refuses (its own errors are ours, as in ``stage``)."""
+    update_manager = update_manager or manager()
     try:
-        mgr.apply_updates_and_restart(info)
+        update_manager.apply_updates_and_restart(update_info)
     except Exception as exc:  # the updater's own errors: the window says them
-        raise UpdateError(str(exc) or type(exc).__name__) from exc
+        raise CUpdateError(str(exc) or type(exc).__name__) from exc
 
 
 @dataclass(frozen=True)
-class HelperCheck:
+class SHelperCheck:
     sha256: str  # the release's helper
     changed: bool  # differs from the reference: the installed helper of ours, else the last release's
     installed: bool  # an installed helper of ours was the reference
@@ -250,8 +250,8 @@ def helper_path(game_dir: str) -> Path:
 
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(1 << 20):
+    with path.open("rb") as file:
+        while chunk := file.read(1 << 20):
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -267,7 +267,7 @@ def is_our_helper(path: Path, seen: str = "") -> bool:
         return False
 
 
-def helper_check(release: Release, game_dir: str, seen: str = "", net: Net = NET) -> HelperCheck | None:
+def helper_check(release: SRelease, game_dir: str, seen: str = "", net: SNet = NET) -> SHelperCheck | None:
     """Whether the release brings a new link helper: its hash against ``seen``, the one the last checked release had,
     so a helper uploaded again unchanged is no news; an installed helper (``<game_dir>/Bin/Win64``) that already is
     the new one is none either. The first look has nothing to compare and only records. None: no helper on the
@@ -278,4 +278,4 @@ def helper_check(release: Release, game_dir: str, seen: str = "", net: Net = NET
     path = helper_path(game_dir) if game_dir else None
     ours = path is not None and path.is_file() and is_our_helper(path, seen)
     already = ours and file_sha256(path) == new
-    return HelperCheck(new, bool(seen) and seen != new and not already, ours)
+    return SHelperCheck(new, bool(seen) and seen != new and not already, ours)

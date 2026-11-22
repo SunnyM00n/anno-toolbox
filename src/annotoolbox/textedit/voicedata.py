@@ -1,4 +1,4 @@
-"""Which texts each game speaks, and by whom: the readers behind ``voices.Voices`` (docs/text-editor.md, "Speakers and
+"""Which texts each game speaks, and by whom: the readers behind ``voices.CVoices`` (docs/text-editor.md, "Speakers and
 voices"). No Qt.
 
 Two shapes. The older games keep a speech file per text (``speech/<speaker folder>/<text id>.mp3``: 2070, 1404, 1701,
@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
-from ..assetedit.gamefiles import GameFiles, Layout, asset_files
+from ..assetedit.gamefiles import CGameFiles, SLayout, asset_files
 
 SPEECH_FILES = {
     "anno2070": ("data/loca/{code}/speech/*.mp3",),
@@ -32,13 +32,12 @@ _MESSAGE = re.compile(r"<Message>\s*<ID>(\d+)</ID>(.*?)</Message>", re.S)
 _AI_MESSAGE = re.compile(r"<MESSAGE>(.*?)</MESSAGE>", re.S)
 _AI_TEXT = re.compile(r"<Text>(\d+)</Text>")
 _SPEECH_GUIDS = re.compile(r"<SpeachGuid>(\d+)</SpeachGuid>")
-_SOUND_GUIDS = re.compile(r"<GUID>(\d+)</GUID>")
 _VARIANT = re.compile(r"(\d+)_\d+$")
 _ASSET = re.compile(r"<AudioAsset>(\d+)</AudioAsset>")
 
 
 @dataclass(frozen=True)
-class Voice:
+class SVoice:
     """One spoken line: who speaks it (the label of the speaker), the mood the game gives it, and where it is (117,
     1800, 2205: the voice bank's event; the older games: the speech file)."""
 
@@ -49,17 +48,17 @@ class Voice:
     variants: int = 1  # how many speech files the text has (1701: an AI message has several of one text)
 
 
-def read_speech_files(files: GameFiles, game: str, code: str) -> dict[str, Voice]:
+def read_speech_files(files: CGameFiles, game: str, code: str) -> dict[str, SVoice]:
     """Text id -> its speech file, for a language code; the speaker is the folder the file is in."""
-    out: dict[str, Voice] = {}
+    out: dict[str, SVoice] = {}
     for pattern in SPEECH_FILES.get(game, ()):
         for path in files.glob(pattern.format(code=code)):
             folder, name = path.split("/speech/", 1)[1].rsplit("/", 1)
-            out[name.removesuffix(".mp3")] = Voice(_folder_label(folder), path=path)
+            out[name.removesuffix(".mp3")] = SVoice(_folder_label(folder), path=path)
     owners = read_speech_owners(files, game)
     groups: dict[str, list[str]] = {}
     for speech in sorted(out, key=_numbered):
-        owner = owners.get(speech) or (m.group(1) if (m := _VARIANT.match(speech)) else "")
+        owner = owners.get(speech) or (match.group(1) if (match := _VARIANT.match(speech)) else "")
         if owner and owner not in out:
             groups.setdefault(owner, []).append(speech)
     for owner, speeches in groups.items():  # a text with no file of its own: its first speech file, the others counted
@@ -72,7 +71,7 @@ def _numbered(speech: str) -> tuple[int, str]:
     return (int(digits.group()) if digits else -1, speech)
 
 
-def read_speech_owners(files: GameFiles, game: str) -> dict[str, str]:
+def read_speech_owners(files: CGameFiles, game: str) -> dict[str, str]:
     """Speech file id -> the id of the text it speaks, for the files that no text names itself (1701: ``messages.xml``
     lists a message's speech files, an AI profile's messages their sounds)."""
     out: dict[str, str] = {}
@@ -86,7 +85,7 @@ def read_speech_owners(files: GameFiles, game: str) -> dict[str, str]:
                 continue
             for body in _AI_MESSAGE.findall(text):
                 owner = _AI_TEXT.search(body)
-                for speech in _SOUND_GUIDS.findall(body) if owner else ():
+                for speech in _GUID.findall(body) if owner else ():
                     out.setdefault(speech, owner.group(1))
     return out
 
@@ -96,7 +95,7 @@ def _folder_label(folder: str) -> str:
     return folder.removeprefix("addon/").removeprefix("addon01/").replace("_", " ")
 
 
-def read_audio_texts(files: GameFiles, layout: Layout) -> dict[str, Voice]:
+def read_audio_texts(files: CGameFiles, layout: SLayout) -> dict[str, SVoice]:
     """Text key -> its voice, from the ``AudioText`` assets of 1800 and 2205: the text of an asset is the one whose key
     is the asset's own GUID (the Wwise id is 0 where the asset's audio is missing)."""
     game = layout.key
@@ -115,22 +114,22 @@ def read_audio_texts(files: GameFiles, layout: Layout) -> dict[str, Voice]:
                 name = _NAME.search(block)
                 speaker = groups.get(path) or (_speaker_1800(name.group(1)) if name else "")
                 pending.append((key, asset.group(1), speaker, path))
-    return {key: Voice(speaker, event=events.get(asset, 0)) for key, asset, speaker, _ in pending}
+    return {key: SVoice(speaker, event=events.get(asset, 0)) for key, asset, speaker, _ in pending}
 
 
 def _blocks(text: str, marker: str):
     """The assets of a template, each from its template line to its end."""
-    at = text.find(marker)
-    while at >= 0:
-        end = text.find("</Asset>", at)
-        yield text[at:end]
-        at = text.find(marker, end)
+    start = text.find(marker)
+    while start >= 0:
+        end = text.find("</Asset>", start)
+        yield text[start:end]
+        start = text.find(marker, end)
 
 
 def _field(block: str, name: str) -> str:
     """The value of ``<name>`` in a block (an AudioText's ``GUID``)."""
-    m = re.search(rf"<{name}>(-?\d+)</{name}>", block)
-    return m.group(1) if m else ""
+    match = re.search(rf"<{name}>(-?\d+)</{name}>", block)
+    return match.group(1) if match else ""
 
 
 def _audio_events(text: str) -> dict[str, int]:
@@ -146,13 +145,13 @@ def _audio_events(text: str) -> dict[str, int]:
 def _speaker_1800(name: str) -> str:
     """1800 names no speaker: the asset's name (``AT_DLC03_OldNate_ArcticQ201_01``) starts with the add-on and the
     one that talks, so the first part after those is what is shown."""
-    parts = [p for p in name.split("_") if p and p != "AT"]
+    parts = [part for part in name.split("_") if part and part != "AT"]
     while len(parts) > 1 and _PREFIX.match(parts[0]):
         parts.pop(0)
     return parts[0] if parts else ""
 
 
-def _groups_2205(files: GameFiles) -> dict[str, str]:
+def _groups_2205(files: CGameFiles) -> dict[str, str]:
     """2205's text file -> the name of the character group that owns it (``audio_texts.xml``)."""
     if not files.exists(GROUPS_2205):
         return {}

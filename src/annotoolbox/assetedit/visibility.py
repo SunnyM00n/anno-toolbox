@@ -2,7 +2,7 @@
 secondary. Stdlib only.
 
 1800's ``properties-toolone.xml`` has a ``ValueVisibilityConditions`` block: per property and value a list of
-conditions on the *other values of the same property* (``Condition`` items with the value it looks at, a constraint
+conditions on the *other values of the same property* (``SCondition`` items with the value it looks at, a constraint
 type and its operand); a value is shown when all of them hold. A template may also list ``HiddenValues``, the
 values an asset of it rarely sets; ToolOne's View menu calls them "secondary template values". Neither changes an
 asset: a hidden value is only left out of the form until the view is told to show it (``docs/asset-editor.md``).
@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 from .xmltree import text
 
 if TYPE_CHECKING:
-    from .schema import Schema
-    from .values import Layers
+    from .schema import SSchema
+    from .values import CLayers
 
 EQUALS, MIN, FLAGSET, OVERRIDDEN, DEFAULT = "equals", "min", "flagset", "overridden", "default"
 KINDS = {
@@ -33,7 +33,7 @@ FALSE = ("", "0", "false", "False")
 
 
 @dataclass(frozen=True)
-class Condition:
+class SCondition:
     """One condition on a sibling value: ``value`` of ``watches`` must stand in ``kind`` to ``operand``."""
 
     watches: str
@@ -41,29 +41,29 @@ class Condition:
     operand: str = ""
 
 
-Conditions = dict[tuple[str, str], tuple[Condition, ...]]  # (property, value) -> its conditions, all to hold
+Conditions = dict[tuple[str, str], tuple[SCondition, ...]]  # (property, value) -> its conditions, all to hold
 
 
 def read_conditions(root: ET.Element) -> Conditions:
     """The ``ValueVisibilityConditions`` of a properties file (empty where it has none)."""
     out: Conditions = {}
     block = root.find("ValueVisibilityConditions")
-    for prop in block if block is not None else ():
-        for value in prop:
+    for property_element in block if block is not None else ():
+        for value in property_element:
             items = []
             for item in value.findall("Item"):
                 kind = KINDS.get(text(item, "ValueConstraintType"))
                 if kind is not None and text(item, "ValueDefinition"):
-                    items.append(Condition(text(item, "ValueDefinition"), kind, text(item, "ValueConstraint")))
+                    items.append(SCondition(text(item, "ValueDefinition"), kind, text(item, "ValueConstraint")))
             if items:
-                out[(prop.tag, value.tag)] = tuple(items)
+                out[(property_element.tag, value.tag)] = tuple(items)
     return out
 
 
 def read_hidden(template: ET.Element) -> tuple[str, ...]:
     """The value names a template's ``HiddenValues`` lists."""
     hidden = template.find("HiddenValues")
-    return tuple(c.tag for c in hidden) if hidden is not None else ()
+    return tuple(child.tag for child in hidden) if hidden is not None else ()
 
 
 def _number(raw: str) -> float | None:
@@ -73,7 +73,7 @@ def _number(raw: str) -> float | None:
         return None
 
 
-def holds(cond: Condition, current: str, overridden: bool, first_choice: str = "") -> bool:
+def holds(cond: SCondition, current: str, overridden: bool, first_choice: str = "") -> bool:
     """Whether ``cond`` is met by the watched value: its ``current`` text (empty: nothing is set anywhere), whether
     the asset or a base asset sets it, and the first item of its data set (a choice nobody set is that item)."""
     shown = current or first_choice
@@ -89,21 +89,21 @@ def holds(cond: Condition, current: str, overridden: bool, first_choice: str = "
         return shown in FALSE
     if shown in FALSE and cond.operand in FALSE:
         return True
-    a, b = _number(shown), _number(cond.operand)
-    return shown == cond.operand if a is None or b is None else a == b
+    shown_value, operand_value = _number(shown), _number(cond.operand)
+    return shown == cond.operand if shown_value is None or operand_value is None else shown_value == operand_value
 
 
-def visible(conditions: tuple[Condition, ...], watched: Callable[[str], tuple[str, bool, str]]) -> bool:
+def visible(conditions: tuple[SCondition, ...], watched: Callable[[str], tuple[str, bool, str]]) -> bool:
     """All of ``conditions`` hold; ``watched(name)`` answers (text, overridden, first choice) of a sibling value."""
-    return all(holds(c, *watched(c.watches)) for c in conditions)
+    return all(holds(condition, *watched(condition.watches)) for condition in conditions)
 
 
-def watcher(schema: Schema, layers: Layers, prop: str) -> Callable[[str], tuple[str, bool, str]]:
+def watcher(schema: SSchema, layers: CLayers, property_name: str) -> Callable[[str], tuple[str, bool, str]]:
     """The sibling lookup of ``visible`` for the values of ``prop`` in one asset: the value is looked for in ``prop``
     first, then in the asset's other properties (a few conditions watch a value that lives elsewhere)."""
 
     def watched(name: str) -> tuple[str, bool, str]:
-        for owner in [prop, *(p for p in layers.property_names() if p != prop)]:
+        for owner in [property_name, *(other for other in layers.property_names() if other != property_name)]:
             spec = schema.properties[owner].child(name) if owner in schema.properties else None
             if spec is None:
                 continue
@@ -116,7 +116,7 @@ def watcher(schema: Schema, layers: Layers, prop: str) -> Callable[[str], tuple[
     return watched
 
 
-def is_shown(schema: Schema, layers: Layers, prop: str, name: str) -> bool:
+def is_shown(schema: SSchema, layers: CLayers, property_name: str, name: str) -> bool:
     """Whether the form shows value ``name`` of ``prop`` for this asset: no condition, or every one holds."""
-    conditions = schema.conditions.get((prop, name))
-    return not conditions or visible(conditions, watcher(schema, layers, prop))
+    conditions = schema.conditions.get((property_name, name))
+    return not conditions or visible(conditions, watcher(schema, layers, property_name))

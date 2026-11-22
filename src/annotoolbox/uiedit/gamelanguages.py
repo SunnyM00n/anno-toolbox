@@ -29,10 +29,10 @@ def installed(tree) -> list[str]:
         except (OSError, KeyError, AttributeError):
             continue
         for path in paths:
-            m = _TABLE.search(path.lower())
-            if m and m.group(1) not in NOT_LANGUAGES:
-                found.add(m.group(1))
-    return sorted(found, key=lambda n: (n != DEFAULT, n))
+            match = _TABLE.search(path.lower())
+            if match and match.group(1) not in NOT_LANGUAGES:
+                found.add(match.group(1))
+    return sorted(found, key=lambda language: (language != DEFAULT, language))
 
 
 def chosen(defaults, available: list[str] | None = None) -> str:
@@ -61,7 +61,7 @@ def title(name: str) -> str:
 
 
 def live_note(held, shown: str) -> str:
-    """The language live values were taken in when it is not the one shown (``liverecord.Held.language`` where the
+    """The language live values were taken in when it is not the one shown (``liverecord.SHeld.language`` where the
     recording carries one), else ""."""
     taken = str(getattr(held, "language", "") or "") if held is not None else ""
     return title(taken) if taken and _flat(taken) != _flat(shown) else ""

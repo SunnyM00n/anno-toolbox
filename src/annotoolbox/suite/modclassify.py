@@ -66,7 +66,7 @@ _PATCH_OWNERS = {"assets.xml": ASSETS}
 
 
 @dataclass(frozen=True)
-class Class:
+class SClass:
     """What a file is: ``kind`` the loader's, ``owner`` the app that edits it or ``CARRIED``, ``understood`` whether
     the table knows the kind (else the file is carried and reported as not understood)."""
 
@@ -75,13 +75,13 @@ class Class:
     understood: bool = True
 
 
-OTHER = Class("other", CARRIED, False)
+OTHER = SClass("other", CARRIED, False)
 
 
-def extension(rel: str) -> str:
+def extension(relative_path: str) -> str:
     """The extension a report counts a file under: lower case with the dot (``.cfg.xml``, ``.include.xml``), the
     folder's scene files (no extension) as ``(no extension)``."""
-    name = rel.rsplit("/", 1)[-1].lower()
+    name = relative_path.rsplit("/", 1)[-1].lower()
     for double in (".cfg.xml", ".fc.xml", ".include.xml", ".bin.xml"):
         if name.endswith(double):
             return double
@@ -89,34 +89,34 @@ def extension(rel: str) -> str:
     return name[dot:] if dot > 0 else "(none)"
 
 
-def classify(game: str, rel: str) -> Class:
+def classify(game: str, relative_path: str) -> SClass:
     """The class of the mod-relative path ``rel`` (forward slashes) for ``game``."""
-    low = rel.replace("\\", "/").lower()
+    low = relative_path.replace("\\", "/").lower()
     name = low.rsplit("/", 1)[-1]
     if low in MODINFO_NAMES:
-        return Class("modinfo", CARRIED)
+        return SClass("modinfo", CARRIED)
     if name.endswith(".xml"):
         return _xml(low, name)
     if game == "anno117" and low.startswith(UI_FOLDER) and "." not in name:
-        return Class("ui scene", UI)
+        return SClass("ui scene", UI)
     if GAMEDATA in low and not name.endswith(".xml"):
-        return Class("terrain", ISLANDS)  # the pages and files that move with an island (its _gamedata folder)
+        return SClass("terrain", ISLANDS)  # the pages and files that move with an island (its _gamedata folder)
     for suffix, (kind, owner) in _BY_SUFFIX.items():
         if name.endswith(suffix):
-            return Class(kind, owner)
+            return SClass(kind, owner)
     return OTHER
 
 
-def _xml(low: str, name: str) -> Class:
+def _xml(low: str, name: str) -> SClass:
     """A ``.xml`` of a mod: a patch of the game file of the same path, a config patch or an include."""
     for suffix in (".cfg.xml", ".fc.xml", ".include.xml"):
         if name.endswith(suffix):
             kind, owner = _BY_SUFFIX[suffix]
-            return Class(kind, owner)
+            return SClass(kind, owner)
     if name.startswith("texts_"):
-        return Class("patch", TEXTS)
+        return SClass("patch", TEXTS)
     if name in _PATCH_OWNERS:
-        return Class("patch", _PATCH_OWNERS[name])
+        return SClass("patch", _PATCH_OWNERS[name])
     if name == "export.bin.xml":
-        return Class("infotips", CARRIED)
-    return Class("patch", CARRIED)
+        return SClass("infotips", CARRIED)
+    return SClass("patch", CARRIED)

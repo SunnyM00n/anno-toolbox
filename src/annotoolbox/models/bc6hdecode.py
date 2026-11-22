@@ -5,7 +5,7 @@ texture (117's sky and light maps) reads without an extra package and with its v
 mode (2 or 5 bits), one or two subsets of two RGB endpoints (the later ones stored as signed deltas from the first in
 the transformed modes) and 3- or 4-bit indices; the endpoints are unquantized to 16 bits, blended with the format's
 weights and halved into half-float bits. The format: the public BC6H specification (Khronos Data Format, "BC6H");
-checked byte for byte against another decoder (``tests/test_bc6hdecode.py``).
+checked byte for byte against another decoder (``tests/models/test_bc6hdecode.py``).
 """
 
 from __future__ import annotations
@@ -65,31 +65,35 @@ _NAMES = ("rw", "gw", "bw", "rx", "gx", "bx", "ry", "gy", "by", "rz", "gz", "bz"
 def _parse(layout: str) -> dict[str, list[tuple[int, int]]]:
     """A layout as {field: [(stream bit, bit of the field)]}."""
     fields: dict[str, list[tuple[int, int]]] = {}
-    at = 0
+    bit_offset = 0
     for token in layout.split():
         name, span = token[:-1].split("[")
         high, _, low = span.partition(":")
         high, low = int(high), int(low or high)
         order = range(low, high + 1) if low <= high else range(low, high - 1, -1)
         for bit in order:
-            fields.setdefault(name, []).append((at, bit))
-            at += 1
+            fields.setdefault(name, []).append((bit_offset, bit))
+            bit_offset += 1
     return fields
 
 
 PARSED = {mode: _parse(layout) for mode, layout in LAYOUTS.items()}
 
 
-def decode_bc6h(data: bytes, width: int, height: int, offset: int = 0, signed: bool = False) -> np.ndarray:
+def decode_bc6h(data: bytes, width_px: int, height_px: int, offset: int = 0, signed: bool = False) -> np.ndarray:
     """``(height, width, 3)`` float32 RGB of the BC6H blocks at ``offset`` of ``data`` (rows of blocks, the edges cut
     off), the values as stored: they pass 1, and a signed format's go below 0."""
-    bw, bh = -(-width // 4), -(-height // 4)
-    blocks = np.frombuffer(data, np.uint8, bw * bh * 16, offset).reshape(-1, 16)
+    block_columns, block_rows = -(-width_px // 4), -(-height_px // 4)
+    blocks = np.frombuffer(data, np.uint8, block_columns * block_rows * 16, offset).reshape(-1, 16)
     texels = np.empty((len(blocks), 16, 3), np.float32)
     for start in range(0, len(blocks), CHUNK):
         texels[start : start + CHUNK] = decode_blocks(blocks[start : start + CHUNK], signed)
-    image = texels.reshape(bh, bw, 4, 4, 3).transpose(0, 2, 1, 3, 4).reshape(bh * 4, bw * 4, 3)
-    return np.ascontiguousarray(image[:height, :width])
+    image = (
+        texels.reshape(block_rows, block_columns, 4, 4, 3)
+        .transpose(0, 2, 1, 3, 4)
+        .reshape(block_rows * 4, block_columns * 4, 3)
+    )
+    return np.ascontiguousarray(image[:height_px, :width_px])
 
 
 def decode_blocks(blocks: np.ndarray, signed: bool = False) -> np.ndarray:
@@ -110,8 +114,8 @@ def _fields(mode: int, bits: np.ndarray) -> dict[str, np.ndarray]:
     values = {name: np.zeros(len(bits), np.int64) for name in _NAMES}
     for name, places in PARSED[mode].items():
         if name in values:
-            for at, bit in places:
-                values[name] |= bits[:, at] << bit
+            for bit_offset, bit in places:
+                values[name] |= bits[:, bit_offset] << bit
     return values
 
 
@@ -123,20 +127,20 @@ def _endpoints(mode: int, bits: np.ndarray, signed: bool) -> np.ndarray:
     """The endpoints ``(n, 4, 3)`` (subset 0 start and end, subset 1 start and end) before unquantizing; a 1-subset
     block repeats its pair."""
     base, delta = PRECISION[mode]
-    f = _fields(mode, bits)
+    fields = _fields(mode, bits)
     ends = np.zeros((len(bits), 4, 3), np.int64)
-    for c, channel in enumerate("rgb"):
-        ends[:, 0, c] = f[channel + "w"]
-        for e, tag in enumerate("xyz", 1):
-            ends[:, e, c] = f[channel + tag]
+    for channel_index, channel in enumerate("rgb"):
+        ends[:, 0, channel_index] = fields[channel + "w"]
+        for tag_index, tag in enumerate("xyz", 1):
+            ends[:, tag_index, channel_index] = fields[channel + tag]
     if signed:
         ends[:, 0] = _sign_extend(ends[:, 0], base)
     if delta:
-        for c in range(3):
-            moved = _sign_extend(ends[:, 1:, c], delta[c]) + ends[:, :1, c]
-            ends[:, 1:, c] = moved & ((1 << base) - 1)
+        for channel_index in range(3):
+            moved = _sign_extend(ends[:, 1:, channel_index], delta[channel_index]) + ends[:, :1, channel_index]
+            ends[:, 1:, channel_index] = moved & ((1 << base) - 1)
             if signed:
-                ends[:, 1:, c] = _sign_extend(ends[:, 1:, c], base)
+                ends[:, 1:, channel_index] = _sign_extend(ends[:, 1:, channel_index], base)
     elif signed:
         ends[:, 1:] = _sign_extend(ends[:, 1:], base)
     return ends
@@ -157,11 +161,11 @@ def _unquantize(values: np.ndarray, base: int, signed: bool) -> np.ndarray:
     return np.where(values < 0, -wide, wide)
 
 
-def _indices(bits: np.ndarray, at: int, size: int, anchors: np.ndarray) -> np.ndarray:
-    """Sixteen indices of ``size`` bits each from bit ``at``, an anchor texel's one bit shorter."""
-    widths = size - anchors.astype(np.int64)
-    starts = at + np.cumsum(widths, axis=1) - widths
-    k = np.arange(size)
+def _indices(bits: np.ndarray, bit_offset: int, size_bits: int, anchors: np.ndarray) -> np.ndarray:
+    """Sixteen indices of ``size_bits`` bits each from ``bit_offset``, an anchor texel's one bit shorter."""
+    widths = size_bits - anchors.astype(np.int64)
+    starts = bit_offset + np.cumsum(widths, axis=1) - widths
+    k = np.arange(size_bits)
     where = np.clip(starts[..., None] + k, 0, 127)
     taken = bits[np.arange(len(bits))[:, None, None], where]
     taken = np.where(k < widths[..., None], taken, 0)
@@ -183,18 +187,18 @@ def _mode(mode: int, bits: np.ndarray, signed: bool) -> np.ndarray:
     two = mode <= 10
     ends = _endpoints(mode, bits, signed)
     ends = _unquantize(ends, base, signed)
-    n = len(bits)
+    block_count = len(bits)
     if two:
         partition = _fields(mode, bits)["d"]
         subset = _SUBSET[partition]
         anchors = (_TEXEL[None] == 0) | (_TEXEL[None] == _ANCHOR[partition][:, None])
-        size, weights, at = 3, WEIGHTS3, 82
+        size, weights, bit_offset = 3, WEIGHTS3, 82
     else:
-        subset = np.zeros((n, 16), np.int64)
-        anchors = np.repeat((_TEXEL == 0)[None], n, axis=0)
-        size, weights, at = 4, WEIGHTS4, 65
-    index = _indices(bits, at, size, anchors)
-    rows = np.arange(n)[:, None]
-    e0, e1 = ends[rows, 2 * subset], ends[rows, 2 * subset + 1]
-    w = np.asarray(weights, np.int64)[index][..., None]
-    return _to_float(((64 - w) * e0 + w * e1 + 32) >> 6, signed)
+        subset = np.zeros((block_count, 16), np.int64)
+        anchors = np.repeat((_TEXEL == 0)[None], block_count, axis=0)
+        size, weights, bit_offset = 4, WEIGHTS4, 65
+    index = _indices(bits, bit_offset, size, anchors)
+    rows = np.arange(block_count)[:, None]
+    endpoint_start, endpoint_end = ends[rows, 2 * subset], ends[rows, 2 * subset + 1]
+    weight = np.asarray(weights, np.int64)[index][..., None]
+    return _to_float(((64 - weight) * endpoint_start + weight * endpoint_end + 32) >> 6, signed)

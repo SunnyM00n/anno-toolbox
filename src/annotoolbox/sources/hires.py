@@ -14,47 +14,58 @@ KINDS = (ICONS,)
 SUFFIXES = (".png", ".tga", ".tif", ".tiff")  # pictures with alpha that Pillow reads
 
 
-class HiresSource:
+class CHiresSource:
     """The files of one folder of higher-resolution art, looked up by kind and key."""
 
     def __init__(self, root: Path) -> None:
-        self.root = Path(root)
-        self._found: dict[tuple[str, str], Path | None] = {}
-        self._images: dict[Path, object] = {}
+        self.m_root = Path(root)
+        self._m_found: dict[tuple[str, str], Path | None] = {}
+        self._m_images: dict[Path, object] = {}
 
     def find(self, kind: str, key) -> Path | None:
         """The file for ``key`` (a GUID, a name) of art ``kind``, or None; the first suffix of ``SUFFIXES`` found."""
-        at = (kind, str(key))
-        if at not in self._found:
-            folder = self.root / kind
-            self._found[at] = next((p for s in SUFFIXES if (p := folder / f"{key}{s}").is_file()), None)
-        return self._found[at]
+        cache_key = (kind, str(key))
+        if cache_key not in self._m_found:
+            self._m_found[cache_key] = self._lookup(kind, str(key))
+        return self._m_found[cache_key]
+
+    def _lookup(self, kind: str, key: str) -> Path | None:
+        """The file named ``key`` under any casing of its suffix (``A.PNG`` too, also on a case-sensitive disk)."""
+        folder = self.m_root / kind
+        if not folder.is_dir():
+            return None
+        files = [
+            candidate
+            for candidate in folder.iterdir()
+            if candidate.stem == key and candidate.suffix.lower() in SUFFIXES and candidate.is_file()
+        ]
+        return min(files, key=lambda candidate: SUFFIXES.index(candidate.suffix.lower()), default=None)
 
     def image(self, kind: str, key):
         """The file for ``key`` as an RGBA picture (Pillow), read once; None without one."""
         path = self.find(kind, key)
         if path is None:
             return None
-        if path not in self._images:
+        if path not in self._m_images:
             from PIL import Image
 
-            with Image.open(path) as img:
-                self._images[path] = img.convert("RGBA")
-        return self._images[path]
+            with Image.open(path) as image:
+                self._m_images[path] = image.convert("RGBA")
+        return self._m_images[path]
 
     def keys(self, kind: str) -> list[str]:
         """Every key the folder holds for ``kind`` (file names without suffix), sorted."""
-        folder = self.root / kind
+        folder = self.m_root / kind
         if not folder.is_dir():
             return []
-        return sorted({p.stem for p in folder.iterdir() if p.suffix.lower() in SUFFIXES and p.is_file()})
+        return sorted({path.stem for path in folder.iterdir() if path.suffix.lower() in SUFFIXES and path.is_file()})
 
 
-def from_option(path: Path | None) -> HiresSource | None:
+def from_option(path: Path | None) -> CHiresSource | None:
     """The folder named by the option, else by ``ANNO_HIRES_DIR``; None when neither names a folder."""
     chosen = path or (Path(os.environ[ENV]) if os.environ.get(ENV) else None)
     if chosen is None:
         return None
     if not Path(chosen).is_dir():
         raise FileNotFoundError(f"higher-resolution sources: {chosen} is not a folder")
-    return HiresSource(Path(chosen))
+    return CHiresSource(Path(chosen))

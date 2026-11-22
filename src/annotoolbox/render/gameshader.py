@@ -2,7 +2,7 @@
 filled by name from its reflection, a material's maps uploaded as they are stored, and the draw into a G-buffer.
 
 ``adapt(hlsl, entry)`` rewrites a pass shader's text before it is compiled (the caller's, by the game's compiler);
-``Constants`` is one constant buffer written by member path, ``fill_*`` the engine's inputs; ``gamedraw`` draws with
+``CConstants`` is one constant buffer written by member path, ``fill_*`` the engine's inputs; ``gamedraw`` draws with
 them. No Qt here. docs/tool-suite.md section 21, "The game-shader path"; the engine's bindings:
 docs/rendering/shader-compile.md section 4.
 """
@@ -44,8 +44,8 @@ RAW_BUFFERS = (
     "cMergedHistogramIn",
     "cExposureBuffer",
 )
-# the model shaders' instance data as the engine feeds it, one buffer a frame for all draws (``adapt(frame=True)``:
-# raw buffers; the island view, ``gameinstances.FrameInstances``; island-117-view.md "Speed", part 5)
+# the model shaders' instance data as the engine feeds it, one buffer a frame for all draws (``adapt(is_frame=True)``:
+# raw buffers; the island view, ``gameinstances.CFrameInstances``; island-117-view.md "Speed", part 5)
 FRAME_INSTANCES = ("cModelPerFrameDataBuffer", "cModelInstanceDataBuffer", "cCurrBoneMatrixBuffer",
                    "cLastBoneMatrixBuffer", "cModelGPUCulledInstanceData")  # fmt: skip
 SYSTEM_INPUTS = ("SV_VertexID", "SV_InstanceID", "SV_PrimitiveID")
@@ -64,16 +64,16 @@ def _bindless_text() -> str:
         cases = "".join(f" case {k}: {result} cBindless{k}.{call};" for k in range(CLASSES))
         return f"switch (Class) {{{cases} }}"
 
-    c3 = "float3(uv, Layer)"
+    coordinates = "float3(uv, Layer)"
     methods = [
-        f"float4 Sample(SamplerState s, float2 uv) {{ {each(f'Sample(s, {c3})')} return 0; }}",
-        f"float4 SampleLevel(SamplerState s, float2 uv, float l) {{ {each(f'SampleLevel(s, {c3}, l)')} return 0; }}",
-        f"float4 SampleBias(SamplerState s, float2 uv, float b) {{ {each(f'SampleBias(s, {c3}, b)')} return 0; }}",
-        f"float4 SampleGrad(SamplerState s, float2 uv, float2 x, float2 y) {{ {each(f'SampleGrad(s, {c3}, x, y)')} "
+        f"float4 Sample(SamplerState s, float2 uv) {{ {each(f'Sample(s, {coordinates})')} return 0; }}",
+        f"float4 SampleLevel(SamplerState s, float2 uv, float l) {{ {each(f'SampleLevel(s, {coordinates}, l)')} return 0; }}",
+        f"float4 SampleBias(SamplerState s, float2 uv, float b) {{ {each(f'SampleBias(s, {coordinates}, b)')} return 0; }}",
+        f"float4 SampleGrad(SamplerState s, float2 uv, float2 x, float2 y) {{ {each(f'SampleGrad(s, {coordinates}, x, y)')} "
         "return 0; }",
         *(
-            f"float4 Gather{ch}(SamplerState s, float2 uv) {{ {each(f'Gather{ch}(s, {c3})')} return 0; }}"
-            for ch in ("", "Red", "Green", "Blue", "Alpha")
+            f"float4 Gather{channel}(SamplerState s, float2 uv) {{ {each(f'Gather{channel}(s, {coordinates})')} return 0; }}"
+            for channel in ("", "Red", "Green", "Blue", "Alpha")
         ),
         f"float4 Load(int3 p) {{ {each('Load(int4(p.xy, Layer, p.z))')} return 0; }}",
         "float CalculateLevelOfDetailUnclamped(SamplerState s, float2 uv) "
@@ -96,22 +96,30 @@ def _bindless_text() -> str:
     )
 
 
-def _structured(hlsl: str, frame: bool = False) -> str:
+def _structured(hlsl: str, has_frame_instances: bool = False) -> str:
     """Each ``StructuredBuffer<T>`` as a constant buffer of ``T[n]`` (QRhi binds no structured views), a function
-    parameter of that type as the same array; ``RAW_BUFFERS`` and the read-write ones (and with ``frame`` the
-    instance data, ``FRAME_INSTANCES``) as raw buffers."""
+    parameter of that type as the same array; ``RAW_BUFFERS`` and the read-write ones (and with
+    ``has_frame_instances`` the instance data, ``FRAME_INSTANCES``) as raw buffers."""
 
-    def length(t: str) -> int:
-        return LENGTHS.get(t, DEFAULT_LENGTH)
+    def length(type_name: str) -> int:
+        return LENGTHS.get(type_name, DEFAULT_LENGTH)
 
-    hlsl = rawbuffers.rewrite(hlsl, RAW_BUFFERS + (FRAME_INSTANCES if frame else ()))
+    hlsl = rawbuffers.rewrite(hlsl, RAW_BUFFERS + (FRAME_INSTANCES if has_frame_instances else ()))
     # a read-only raw buffer (the planar clouds') read and written alike: QRhi binds storage as unordered access
     hlsl = re.sub(r"(?<!\w)ByteAddressBuffer(\s+\w+\s*;)", r"RWByteAddressBuffer\1", hlsl)
 
-    hlsl = re.sub(r"(?m)^\s*StructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)\s*;",
-                  lambda m: f"cbuffer cb_{m.group(2)} {{ {m.group(1)} {m.group(2)}[{length(m.group(1))}]; }};", hlsl)  # fmt: skip
-    return re.sub(r"\bStructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)(?=\s*[,)])",
-                  lambda m: f"{m.group(1)} {m.group(2)}[{length(m.group(1))}]", hlsl)  # fmt: skip
+    hlsl = re.sub(
+        r"(?m)^\s*StructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)\s*;",
+        lambda match: (
+            f"cbuffer cb_{match.group(2)} {{ {match.group(1)} {match.group(2)}[{length(match.group(1))}]; }};"
+        ),
+        hlsl,
+    )
+    return re.sub(
+        r"\bStructuredBuffer\s*<\s*(\w+)\s*>\s*(\w+)(?=\s*[,)])",
+        lambda match: f"{match.group(1)} {match.group(2)}[{length(match.group(1))}]",
+        hlsl,
+    )
 
 
 def _bindless(hlsl: str) -> str:
@@ -119,30 +127,30 @@ def _bindless(hlsl: str) -> str:
     that takes a ``Texture2D`` taking the stand-in instead (HLSL picks the copy by the argument's type)."""
     for table in BINDLESS_TABLES:
         hlsl = re.sub(rf"(?m)^\s*Texture2D(?:\s*<\s*\w+\s*>)?\s+{table}\s*\[\s*\d*\s*\]\s*;", "", hlsl)
-        while (at := hlsl.find(table)) >= 0:
-            bracket = hlsl.index("[", at)
+        while (table_start := hlsl.find(table)) >= 0:
+            bracket = hlsl.index("[", table_start)
             close = fxeffect.matching(hlsl, bracket)
-            hlsl = hlsl[:at] + "BindlessAt(" + hlsl[bracket + 1 : close] + ")" + hlsl[close + 1 :]
+            hlsl = hlsl[:table_start] + "BindlessAt(" + hlsl[bracket + 1 : close] + ")" + hlsl[close + 1 :]
     hlsl = re.sub(TEXTURE2D + r"(\s+\w+\s*=\s*BindlessAt\()", r"BindlessTex\1", hlsl)
     # a structure's texture member given a table entry (the bake's SplatTextures) holds the stand-in
     for member in set(re.findall(r"\b\w+\.(\w+)\s*=\s*BindlessAt\(", hlsl)):
         hlsl = re.sub(TEXTURE2D + rf"(\s+{member}\s*;)", r"BindlessTex\1", hlsl)
-    out, pos, made = [], 0, set()
+    out, position, made = [], 0, set()
     header = re.compile(r"(?m)^[\w][\w<>, ]*\s+(\w+)\s*\(([^()]*" + TEXTURE2D + r"[^()]*)\)\s*(;|\n\{)")
-    for m in header.finditer(hlsl):
-        if m.start() < pos:
+    for match in header.finditer(hlsl):
+        if match.start() < position:
             continue
-        end = m.end() if m.group(3) == ";" else fxeffect.matching(hlsl, m.end() - 1, "{}") + 1
-        original = hlsl[m.start() : end]
-        params = re.sub(TEXTURE2D, "BindlessTex", m.group(2))
-        copy = original[: m.start(2) - m.start()] + params + original[m.end(2) - m.start() :]
+        end = match.end() if match.group(3) == ";" else fxeffect.matching(hlsl, match.end() - 1, "{}") + 1
+        original = hlsl[match.start() : end]
+        parameters = re.sub(TEXTURE2D, "BindlessTex", match.group(2))
+        copy = original[: match.start(2) - match.start()] + parameters + original[match.end(2) - match.start() :]
         # overloads by the texture's element type (TexelFetch's float .. float4) give one copy: HLSL cannot
         # overload by return type alone
-        signature = (m.group(1), re.sub(r"\s+|\b\w+\s*(?=[,)]|$)", "", params), m.group(3))
-        out += [hlsl[pos:end]] + (["\n", copy] if signature not in made else [])
+        signature = (match.group(1), re.sub(r"\s+|\b\w+\s*(?=[,)]|$)", "", parameters), match.group(3))
+        out += [hlsl[position:end]] + (["\n", copy] if signature not in made else [])
         made.add(signature)
-        pos = end
-    out.append(hlsl[pos:])
+        position = end
+    out.append(hlsl[position:])
     return _bindless_text() + "".join(out)
 
 
@@ -154,7 +162,7 @@ def declared_types(hlsl: str) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
-class Input:
+class SInput:
     """One vertex input of the entry: its member name, HLSL type and the engine's semantic; ``location`` is where
     QRhi feeds it (the Direct3D backends name every attribute ``TEXCOORD<location>``)."""
 
@@ -165,119 +173,125 @@ class Input:
 
 
 @dataclass
-class Adapted:
+class SAdapted:
+    """The text ``adapt`` returns and the vertex inputs it found (empty for any shader but a vertex one)."""
+
     hlsl: str
-    inputs: list[Input] = field(default_factory=list)
+    inputs: list[SInput] = field(default_factory=list)
 
 
 def _input_structs(hlsl: str, entry: str) -> list[str]:
     """The structures the entry takes as inputs, in order (2205's cloth reads three vertex streams)."""
-    m = re.search(rf"\b{re.escape(entry)}\s*\(", hlsl)
-    if not m:
+    match = re.search(rf"\b{re.escape(entry)}\s*\(", hlsl)
+    if not match:
         return []
-    params = hlsl[m.end() : fxeffect.matching(hlsl, m.end() - 1, "()")]
-    found = re.findall(r"(?:^|,)\s*(?:in\s+)?(\w+)\s+\w+", params)
-    return [t for t in found if t not in ("out", "inout", "uniform") and re.search(rf"\bstruct\s+{t}\s*\{{", hlsl)]
+    parameters = hlsl[match.end() : fxeffect.matching(hlsl, match.end() - 1, "()")]
+    found = re.findall(r"(?:^|,)\s*(?:in\s+)?(\w+)\s+\w+", parameters)
+    return [
+        struct_name
+        for struct_name in found
+        if struct_name not in ("out", "inout", "uniform") and re.search(rf"\bstruct\s+{struct_name}\s*\{{", hlsl)
+    ]
 
 
-def vertex_inputs(hlsl: str, entry: str) -> tuple[str, list[Input]]:
+def vertex_inputs(hlsl: str, entry: str) -> tuple[str, list[SInput]]:
     """The text with the entry's input structures under the semantics QRhi feeds (``TEXCOORD<location>``, numbered
     over all of them), and the inputs with the semantics they had."""
-    inputs: list[Input] = []
+    inputs: list[SInput] = []
 
-    def rename(f: re.Match) -> str:
-        if f.group(3) in SYSTEM_INPUTS:
-            return f.group(0)
-        inputs.append(Input(f.group(2), f.group(1), f.group(3), len(inputs)))
-        return f"{f.group(1)} {f.group(2)} : TEXCOORD{len(inputs) - 1}"
+    def rename(match: re.Match) -> str:
+        if match.group(3) in SYSTEM_INPUTS:
+            return match.group(0)
+        inputs.append(SInput(match.group(2), match.group(1), match.group(3), len(inputs)))
+        return f"{match.group(1)} {match.group(2)} : TEXCOORD{len(inputs) - 1}"
 
     for name in _input_structs(hlsl, entry):
-        s = re.search(rf"\bstruct\s+{name}\s*\{{", hlsl)
-        close = fxeffect.matching(hlsl, s.end() - 1, "{}")
-        body = re.sub(r"\b(\w+)\s+(\w+)\s*:\s*(\w+)", rename, hlsl[s.end() : close])
-        hlsl = hlsl[: s.end()] + body + hlsl[close:]
+        struct_match = re.search(rf"\bstruct\s+{name}\s*\{{", hlsl)
+        close = fxeffect.matching(hlsl, struct_match.end() - 1, "{}")
+        body = re.sub(r"\b(\w+)\s+(\w+)\s*:\s*(\w+)", rename, hlsl[struct_match.end() : close])
+        hlsl = hlsl[: struct_match.end()] + body + hlsl[close:]
     return hlsl, inputs
 
 
-def adapt(hlsl: str, entry: str, vertex: bool = False, frame: bool = False) -> Adapted:
+def adapt(hlsl: str, entry: str, is_vertex: bool = False, is_frame: bool = False) -> SAdapted:
     """One pass shader's text bound the way QRhi binds: every register in space 0 and placed by the compiler (the
     reflection says where), root constants as constant buffers, structured buffers as constant-buffer arrays (with
-    ``frame`` the instance data as the frame's raw buffers), the bindless table as texture arrays, unbounded arrays
-    sized, and (``vertex``) the entry's input structure under the semantics QRhi feeds."""
+    ``is_frame`` the instance data as the frame's raw buffers), the bindless table as texture arrays, unbounded arrays
+    sized, and (``is_vertex``) the entry's input structure under the semantics QRhi feeds."""
     hlsl = re.sub(r":\s*register\s*\(\s*[btu]\d+\s*,\s*space\d+\s*\)", "", hlsl)
     hlsl = re.sub(r":\s*register\s*\(\s*b\d+\s*\)", "", hlsl)
-    hlsl = _structured(hlsl, frame)
+    hlsl = _structured(hlsl, is_frame)
     hlsl = _bindless(hlsl)
     hlsl = re.sub(r"(?m)^(\s*\w+(?:<[^>;]*>)?\s+\w+)\s*\[\s*\]\s*;", r"\1[1];", hlsl)
-    inputs: list[Input] = []
-    if vertex:
+    inputs: list[SInput] = []
+    if is_vertex:
         hlsl, inputs = vertex_inputs(hlsl, entry)
-    return Adapted(hlsl, inputs)
+    return SAdapted(hlsl, inputs)
 
 
 # the inputs by name
 
 
-def _one_size(var) -> int:
+def _one_size(variable) -> int:
     """The bytes one element of a variable takes in a constant buffer: a structure up to its last member's end, a
     matrix as its columns (rows when ``row_major``) of 16 bytes but the last, a vector its components."""
-    if var.members:
-        return max((m.offset + size_of(m) for m in var.members), default=0)
-    rows, cols = max(var.rows, 1), max(var.columns, 1)
+    if variable.members:
+        return max((member.offset + size_of(member) for member in variable.members), default=0)
+    rows, columns = max(variable.rows, 1), max(variable.columns, 1)
     if rows > 1:
-        lines, length = (rows, cols) if getattr(var, "row_major", False) else (cols, rows)
-        return (lines - 1) * 16 + length * 4
-    return cols * 4
+        lines, component_count = (rows, columns) if getattr(variable, "row_major", False) else (columns, rows)
+        return (lines - 1) * 16 + component_count * 4
+    return columns * 4
 
 
-def size_of(var) -> int:
+def size_of(variable) -> int:
     """A variable's size: the reflection's for a buffer's variable, worked out by the packing rules for a
     structure's member (the reflection gives a member none)."""
-    if var.size:
-        return var.size
-    one = _one_size(var)
-    return (var.elements - 1) * math.ceil(one / 16) * 16 + one if var.elements else one
+    if variable.size:
+        return variable.size
+    one = _one_size(variable)
+    return (variable.elements - 1) * math.ceil(one / 16) * 16 + one if variable.elements else one
 
 
-def _stride(var) -> int:
-    if not var.elements:
-        return size_of(var)
-    if not var.size:  # a member array: each element starts on a 16-byte row
-        return max(16, math.ceil(_one_size(var) / 16) * 16)
-    return max(16, math.ceil(var.size / var.elements / 16) * 16)
+def _stride(variable) -> int:
+    if not variable.elements:
+        return size_of(variable)
+    if not variable.size:  # a member array: each element starts on a 16-byte row
+        return max(16, math.ceil(_one_size(variable) / 16) * 16)
+    return max(16, math.ceil(variable.size / variable.elements / 16) * 16)
 
 
-def _matrix(a: np.ndarray, rows: int, cols: int) -> np.ndarray:
-    """``a`` as the ``rows`` x ``cols`` matrix a member declares: a wider value (the fills write 4x4) gives its
+def _matrix(values: np.ndarray, rows: int, columns: int) -> np.ndarray:
+    """``values`` as the ``rows`` x ``columns`` matrix a member declares: a wider value (the fills write 4x4) gives its
     top-left block instead of failing."""
-    if a.size == rows * cols:
-        return a.reshape(rows, cols).astype(np.float32)
-    side = math.isqrt(a.size)
-    square = a.reshape(side, side) if side * side == a.size else a.reshape(a.shape[0], -1)
-    out = np.zeros((rows, cols), np.float32)
-    block = square[:rows, :cols]
+    if values.size == rows * columns:
+        return values.reshape(rows, columns).astype(np.float32)
+    side = math.isqrt(values.size)
+    square = values.reshape(side, side) if side * side == values.size else values.reshape(values.shape[0], -1)
+    out = np.zeros((rows, columns), np.float32)
+    block = square[:rows, :columns]
     out[: block.shape[0], : block.shape[1]] = block
     return out
 
 
 @functools.lru_cache(maxsize=256)
 def _matrix_shape(type_name: str) -> tuple[int, int] | None:
-    m = re.match(r"(?:float|half)(\d)x(\d)", type_name)
-    return (int(m.group(1)), int(m.group(2))) if m else None
+    match = re.match(r"(?:float|half)(\d)x(\d)", type_name)
+    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
-def _pack(value, type_name: str, row_major: bool = False) -> bytes:
-    a = np.asarray(value)
+def _pack(value, type_name: str, is_row_major: bool = False) -> bytes:
+    array = np.asarray(value)
     shape = _matrix_shape(type_name)
     if shape is not None:  # each column (each row of a row_major member) padded to four
-        mat = _matrix(a, *shape)
-        lines = mat if row_major else mat.T
+        matrix = _matrix(array, *shape)
+        lines = matrix if is_row_major else matrix.T
         out = np.zeros((lines.shape[0], 4), np.float32)
         out[:, : lines.shape[1]] = lines
         return out.tobytes()
     if type_name.startswith(("dword", "uint", "int", "bool")):
-        return a.astype(np.int64).astype(np.uint32).tobytes()
-    return a.astype(np.float32).tobytes()
+        return array.astype(np.int64).astype(np.uint32).tobytes()
+    return array.astype(np.float32).tobytes()
 
 
 _PATHS: dict[int, tuple] = {}  # a layout's id -> (its reflection, member path -> its slot): the lookups made once
@@ -294,17 +308,17 @@ def _keep(cache: dict, key, value: tuple) -> tuple:
     return value
 
 
-class Constants:
+class CConstants:
     """One constant buffer laid out by the shader's reflection (``infra``'s ``Reflection.cbuffers`` entry), written by
     member path: ``cCameraBuffer[2].MtxView``."""
 
     def __init__(self, reflection) -> None:
-        self.reflection = reflection
-        self.data = bytearray(max(16, reflection.size))
+        self.m_reflection = reflection
+        self.m_data = bytearray(max(16, reflection.size))
         kept = _PATHS.get(id(reflection))
         if kept is None or kept[0] is not reflection:
             kept = _keep(_PATHS, id(reflection), (reflection, {}))
-        self._slots: dict = kept[1]
+        self._m_slots: dict = kept[1]
 
     def find(self, path: str):
         """(offset, variable) of a member path, or None."""
@@ -314,20 +328,20 @@ class Constants:
     def _slot(self, path: str):
         """(offset, variable, its size, its type, row major) of a member path, or None; looked up once per layout."""
         try:
-            return self._slots[path]
+            return self._m_slots[path]
         except KeyError:
             pass
-        level, offset, var, slot = self.reflection.variables, 0, None, None
+        level, offset, variable, slot = self.m_reflection.variables, 0, None, None
         for part in path.replace("]", "").split("."):
             name, _, index = part.partition("[")
-            var = next((v for v in level if v.name == name), None)
-            if var is None:
+            variable = next((candidate for candidate in level if candidate.name == name), None)
+            if variable is None:
                 break
-            offset += var.offset + (int(index) * _stride(var) if index else 0)
-            level = var.members
+            offset += variable.offset + (int(index) * _stride(variable) if index else 0)
+            level = variable.members
         else:
-            slot = (offset, var, size_of(var), var.type, getattr(var, "row_major", False))
-        self._slots[path] = slot
+            slot = (offset, variable, size_of(variable), variable.type, getattr(variable, "row_major", False))
+        self._m_slots[path] = slot
         return slot
 
     def set(self, path: str, value) -> bool:
@@ -336,8 +350,8 @@ class Constants:
             return False
         offset, _var, size, type_name, row_major = slot
         # no further than the member: a wider value must not overwrite its neighbour
-        raw = _pack(value, type_name, row_major)[: max(0, min(size, len(self.data) - offset))]
-        self.data[offset : offset + len(raw)] = raw
+        raw = _pack(value, type_name, row_major)[: max(0, min(size, len(self.m_data) - offset))]
+        self.m_data[offset : offset + len(raw)] = raw
         return True
 
     def set_elements(self, path: str, values: np.ndarray, member: str = "") -> int:
@@ -346,95 +360,100 @@ class Constants:
         found = self.find(path)
         if found is None or (member and self.find(f"{path}[0].{member}") is None):
             return 0
-        offset, var = found
-        stride = _stride(var)
+        offset, variable = found
+        stride = _stride(variable)
         if member:
             offset = self.find(f"{path}[0].{member}")[0]
         raw = np.ascontiguousarray(values)
-        n = min(len(raw), max(var.elements, 1), max(0, (len(self.data) - offset) // stride))
-        if n == 0:
+        element_count = min(len(raw), max(variable.elements, 1), max(0, (len(self.m_data) - offset) // stride))
+        if element_count == 0:
             return 0
-        rows = raw[:n].reshape(n, -1).view(np.uint8)
-        width = min(rows.shape[1], stride, len(self.data) - offset - (n - 1) * stride)
-        view = np.frombuffer(self.data, np.uint8)
-        block = np.lib.stride_tricks.as_strided(view[offset:], (n, width), (stride, 1), writeable=True)
+        rows = raw[:element_count].reshape(element_count, -1).view(np.uint8)
+        width = min(rows.shape[1], stride, len(self.m_data) - offset - (element_count - 1) * stride)
+        view = np.frombuffer(self.m_data, np.uint8)
+        block = np.lib.stride_tricks.as_strided(view[offset:], (element_count, width), (stride, 1), writeable=True)
         block[:] = rows[:, :width]
-        return n
+        return element_count
 
     def set_rows(self, path: str, values) -> bool:
         """An array's elements from 0 on, one value each (a bone palette)."""
         found = self.find(path)
         if found is None:
             return False
-        offset, var = found
-        stride = _stride(var)
-        for k, value in enumerate(values[: max(var.elements, 1)]):
-            raw = _pack(value, var.type, getattr(var, "row_major", False))[: min(stride, size_of(var))]
-            at = offset + k * stride
-            self.data[at : at + len(raw)] = raw[: max(0, len(self.data) - at)]
+        offset, variable = found
+        stride = _stride(variable)
+        for k, value in enumerate(values[: max(variable.elements, 1)]):
+            raw = _pack(value, variable.type, getattr(variable, "row_major", False))[: min(stride, size_of(variable))]
+            byte_offset = offset + k * stride
+            self.m_data[byte_offset : byte_offset + len(raw)] = raw[: max(0, len(self.m_data) - byte_offset)]
         return True
 
 
 _replayed: dict[tuple, tuple] = {}  # (a layout's id, a writer's name) -> (its reflection, token, bytes' places, bytes)
 
 
-def _same(a: tuple, b: tuple) -> bool:
+def _same(first: tuple, second: tuple) -> bool:
     plain = (int, float, str, bool, type(None))
-    return len(a) == len(b) and all(x is y or (type(x) is type(y) and isinstance(x, plain) and x == y)
-                                    for x, y in zip(a, b, strict=True))  # fmt: skip
+    return len(first) == len(second) and all(
+        left is right or (type(left) is type(right) and isinstance(left, plain) and left == right)
+        for left, right in zip(first, second, strict=True)
+    )
 
 
-def replay(c: Constants, name: str, token: tuple, write) -> None:
+def replay(constants: CConstants, name: str, token: tuple, write) -> None:
     """``write(c)`` worked out once per layout while ``token`` stays the same (its items compared by identity, plain
     values by value) and its bytes copied into every buffer of that layout: what many draws of a frame share."""
-    key = (id(c.reflection), name)
+    key = (id(constants.m_reflection), name)
     kept = _replayed.get(key)
-    if kept is None or kept[0] is not c.reflection or not _same(kept[1], token):
-        low, high = Constants(c.reflection), Constants(c.reflection)
-        high.data[:] = b"\xff" * len(high.data)
+    if kept is None or kept[0] is not constants.m_reflection or not _same(kept[1], token):
+        low, high = CConstants(constants.m_reflection), CConstants(constants.m_reflection)
+        high.m_data[:] = b"\xff" * len(high.m_data)
         write(low)
         write(high)
-        a, b = np.frombuffer(low.data, np.uint8), np.frombuffer(high.data, np.uint8)
-        places = np.flatnonzero((a != 0) | (b != 0xFF))  # what the writer wrote, whatever was there
-        kept = _keep(_replayed, key, (c.reflection, token, places, a[places].copy()))
+        low_bytes, high_bytes = np.frombuffer(low.m_data, np.uint8), np.frombuffer(high.m_data, np.uint8)
+        places = np.flatnonzero((low_bytes != 0) | (high_bytes != 0xFF))  # what the writer wrote, whatever was there
+        kept = _keep(_replayed, key, (constants.m_reflection, token, places, low_bytes[places].copy()))
     if len(kept[2]):
-        np.frombuffer(c.data, np.uint8)[kept[2]] = kept[3]
+        np.frombuffer(constants.m_data, np.uint8)[kept[2]] = kept[3]
 
 
 def look_at(eye: np.ndarray, target: np.ndarray) -> np.ndarray:
     """A right-handed view matrix for row vectors (v' = v M), as the engine's ``MUL(v, M)`` takes it."""
-    f = (target - eye) / np.linalg.norm(target - eye)
-    r = np.cross(f, [0.0, 1.0, 0.0])
-    r /= np.linalg.norm(r)
-    u = np.cross(r, f)
-    m = np.identity(4)
-    m[:3, 0], m[:3, 1], m[:3, 2] = r, u, -f
-    m[3, :3] = [-r @ eye, -u @ eye, f @ eye]
-    return m
+    forward = (target - eye) / np.linalg.norm(target - eye)
+    right = np.cross(forward, [0.0, 1.0, 0.0])
+    right /= np.linalg.norm(right)
+    up = np.cross(right, forward)
+    matrix = np.identity(4)
+    matrix[:3, 0], matrix[:3, 1], matrix[:3, 2] = right, up, -forward
+    matrix[3, :3] = [-right @ eye, -up @ eye, forward @ eye]
+    return matrix
 
 
-def perspective(fov_y: float, aspect: float, near: float, far: float, reverse: bool = False) -> np.ndarray:
-    """Depth 0 at the near plane, 1 at the far one (row vectors, right-handed); ``reverse``: 1 near and 0 far, as
+def perspective(fov_y_rad: float, aspect: float, near: float, far: float, is_reversed: bool = False) -> np.ndarray:
+    """Depth 0 at the near plane, 1 at the far one (row vectors, right-handed); ``is_reversed``: 1 near and 0 far, as
     the game's own projection (rendering/camera.md; its deferred shading takes 0 as nothing drawn)."""
-    ys = 1.0 / math.tan(fov_y / 2)
-    m = np.zeros((4, 4))
-    m[0, 0], m[1, 1] = ys / aspect, ys
-    m[2, 3] = -1.0
-    if reverse:
-        m[2, 2], m[3, 2] = near / (far - near), near * far / (far - near)
+    y_scale = 1.0 / math.tan(fov_y_rad / 2)
+    matrix = np.zeros((4, 4))
+    matrix[0, 0], matrix[1, 1] = y_scale / aspect, y_scale
+    matrix[2, 3] = -1.0
+    if is_reversed:
+        matrix[2, 2], matrix[3, 2] = near / (far - near), near * far / (far - near)
     else:
-        m[2, 2], m[3, 2] = far / (near - far), near * far / (near - far)
-    return m
+        matrix[2, 2], matrix[3, 2] = far / (near - far), near * far / (near - far)
+    return matrix
 
 
 @dataclass(frozen=True)
-class Camera:
+class SCamera:
+    """One view for the forward games (``direct_camera`` makes it): the eye, the view and projection matrices, the
+    clip planes and the image size in pixels."""
+
     eye: np.ndarray
     view: np.ndarray
-    proj: np.ndarray
+    projection: np.ndarray
     near: float
     far: float
-    size: tuple[int, int]
+    size_px: tuple[int, int]
     shadow_far: float = 0.0  # where the sun's cascades end when not at the far plane (0: at it)
     mirror: bool = False  # in the game's own axes: the projection starts with the view's x mirror (``X_MIRROR``)
 
@@ -447,62 +466,67 @@ class Camera:
 X_MIRROR = np.diag([-1.0, 1.0, 1.0, 1.0])  # the view's axes are the game's mirrored in x (render.camera.MIRROR)
 
 
-def direct_camera(size: tuple[int, int], eye, target, fov: float, near: float, far: float,
-                  game_axes: bool = False) -> Camera:  # fmt: skip
-    """The forward games' and 2070's camera for ``size``: depth 0 near and 1 far, the image the way Direct3D draws it
-    (their composites turn it over where the device stores images upside down against OpenGL). ``game_axes``: the
+def direct_camera(
+    size_px: tuple[int, int], eye, target, fov_rad: float, near: float, far: float, use_game_axes: bool = False
+) -> SCamera:
+    """The forward games' and 2070's camera for ``size_px``: depth 0 near and 1 far, the image the way Direct3D draws it
+    (their composites turn it over where the device stores images upside down against OpenGL). ``use_game_axes``: the
     view's eye and target mirrored back into the game's axes and the mirror put into the projection, the same clip
     positions to the bit (shader-compile.md 11, "The game's own axes")."""
     eye, target = np.asarray(eye, float), np.asarray(target, float)
-    proj = perspective(fov, size[0] / max(1, size[1]), near, far)
-    if game_axes:
-        eye, target, proj = X_MIRROR[:3, :3] @ eye, X_MIRROR[:3, :3] @ target, X_MIRROR @ proj
-    return Camera(eye, look_at(eye, target), proj, near, far, size, mirror=game_axes)
+    projection = perspective(fov_rad, size_px[0] / max(1, size_px[1]), near, far)
+    if use_game_axes:
+        eye, target, projection = X_MIRROR[:3, :3] @ eye, X_MIRROR[:3, :3] @ target, X_MIRROR @ projection
+    return SCamera(eye, look_at(eye, target), projection, near, far, size_px, mirror=use_game_axes)
 
 
-def as_columns(m: np.ndarray) -> np.ndarray:
+def as_columns(matrix: np.ndarray) -> np.ndarray:
     """A matrix of ours (row vectors, ``v M``, as Direct3D's) as a shader's ``mul(M, v)`` takes it: the old engine's
     setter hands the matrix's memory over as the shader matrix's columns (2070's and 1404's effects)."""
-    return np.asarray(m, float).T
+    return np.asarray(matrix, float).T
 
 
-def camera_values(cam: Camera, matrix=lambda m: m) -> dict:
+def camera_values(camera: SCamera, matrix=lambda value: value) -> dict:
     """The camera members the FXC games' buffers share, by name; ``matrix`` turns ours (row vectors) into the
     shader's (2070's ``mul(M, v)`` takes them transposed)."""
-    view_proj = cam.view @ cam.proj
-    w, h = cam.size
-    ahead = -cam.view[:3, 2]
+    view_proj = camera.view @ camera.projection
+    width, height = camera.size_px
+    ahead = -camera.view[:3, 2]
     return {
-        "cCamPosition": [*cam.eye, 1], "cCamDirection": [*ahead, 0], "cCamLookAt": [*(cam.eye + ahead), 1],
-        "cMtxView": matrix(cam.view), "cMtxViewInv": matrix(np.linalg.inv(cam.view)), "cMtxProj": matrix(cam.proj),
-        "cMtxProjInv": matrix(np.linalg.inv(cam.proj)), "cMtxViewProj": matrix(view_proj),
-        "cMtxViewProjInv": matrix(np.linalg.inv(view_proj)), "cProjDesc": [cam.near, cam.far, 0.75, w / max(1, h)],
+        "cCamPosition": [*camera.eye, 1], "cCamDirection": [*ahead, 0], "cCamLookAt": [*(camera.eye + ahead), 1],
+        "cMtxView": matrix(camera.view), "cMtxViewInv": matrix(np.linalg.inv(camera.view)), "cMtxProj": matrix(camera.projection),
+        "cMtxProjInv": matrix(np.linalg.inv(camera.projection)), "cMtxViewProj": matrix(view_proj),
+        "cMtxViewProjInv": matrix(np.linalg.inv(view_proj)), "cProjDesc": [camera.near, camera.far, 0.75, width / max(1, height)],
     }  # fmt: skip
 
 
-def left_handed(cam: Camera) -> Camera:
-    """``cam`` with a left-handed view (view space z ahead) and the same product of view and projection: what the
+def left_handed(camera: SCamera) -> SCamera:
+    """``camera`` with a left-handed view (view space z ahead) and the same product of view and projection: what the
     forward games' shaders read view-space depth with (soft particles, 1800's cascades; shader-compile.md 11)."""
     turn = np.diag([1.0, 1.0, -1.0, 1.0])
-    return replace(cam, view=cam.view @ turn, proj=turn @ cam.proj)
+    return replace(camera, view=camera.view @ turn, projection=turn @ camera.projection)
 
 
-def left_handed_values(cam: Camera) -> dict:
-    """The view and projection members of ``left_handed(cam)``."""
-    lh = left_handed(cam)
-    return {"cMtxView": lh.view, "cMtxViewInv": np.linalg.inv(lh.view), "cMtxProj": lh.proj,
-            "cMtxProjInv": np.linalg.inv(lh.proj)}  # fmt: skip
+def left_handed_values(camera: SCamera) -> dict:
+    """The view and projection members of ``left_handed(camera)``."""
+    left_handed_camera = left_handed(camera)
+    return {
+        "cMtxView": left_handed_camera.view,
+        "cMtxViewInv": np.linalg.inv(left_handed_camera.view),
+        "cMtxProj": left_handed_camera.projection,
+        "cMtxProjInv": np.linalg.inv(left_handed_camera.projection),
+    }
 
 
 def set_values(buffers, values: dict, rows=()) -> None:
-    """``values`` (member name -> value) into every buffer of ``buffers`` (``Constants``) that has a member of that
-    name; a name in ``rows`` is an array written element by element (``Constants.set_rows``)."""
-    for c in buffers:
+    """``values`` (member name -> value) into every buffer of ``buffers`` (``CConstants``) that has a member of that
+    name; a name in ``rows`` is an array written element by element (``CConstants.set_rows``)."""
+    for constants in buffers:
         for name, value in values.items():
             if name in rows:
-                c.set_rows(name, value)
+                constants.set_rows(name, value)
             else:
-                c.set(name, value)
+                constants.set(name, value)
 
 
 CAMERAS = 3  # CAMERA_MAIN, CAMERA_REFLECTION, CAMERA_JITTERED
@@ -511,66 +535,69 @@ CAMERAS = 3  # CAMERA_MAIN, CAMERA_REFLECTION, CAMERA_JITTERED
 FRAME_NAMES = frozenset({"cCameraBuffer", "cRenderBufferSize", "cBackBufferSize", "cViewportCropFactor",
                          "cUpscaleFactor", "cExposure", "cGammaAdjust", "cCurrWindDirection", "cLastWindDirection",
                          "cCurrWindStrength", "cLastWindStrength"})  # fmt: skip
-_framed: dict[tuple, tuple] = {}  # a frame layout -> (the camera, the filled bytes)
+_g_framed: dict[tuple, tuple] = {}  # a frame layout -> (the camera, the filled bytes)
 _frame_layouts: dict[int, tuple] = {}  # a layout's id -> (its reflection, its frame layout: the spans and members)
 
 
-def _members(var) -> tuple:
-    return tuple((m.name, m.offset, m.type, m.elements, _members(m)) for m in var.members)
+def _members(variable) -> tuple:
+    return tuple(
+        (member.name, member.offset, member.type, member.elements, _members(member)) for member in variable.members
+    )
 
 
 def _frame_layout(reflection) -> tuple:
     """The frame members' spans and their layout: buffers alike in it take the same frame bytes."""
     kept = _frame_layouts.get(id(reflection))
     if kept is None or kept[0] is not reflection:
-        frame = [v for v in reflection.variables if v.name in FRAME_NAMES]
-        spans = tuple((v.offset, v.offset + size_of(v)) for v in frame)
-        kept = _frame_layouts[id(reflection)] = (
-            reflection,
-            (spans, tuple((v.name, v.type, _members(v)) for v in frame)),
+        frame = [variable for variable in reflection.variables if variable.name in FRAME_NAMES]
+        spans = tuple((variable.offset, variable.offset + size_of(variable)) for variable in frame)
+        kept = _keep(
+            _frame_layouts,
+            id(reflection),
+            (reflection, (spans, tuple((variable.name, variable.type, _members(variable)) for variable in frame))),
         )
     return kept[1]
 
 
-def fill_frame(c: Constants, cam: Camera) -> None:
+def fill_frame(constants: CConstants, camera: SCamera) -> None:
     """The per-frame values and the three cameras (all one camera here): worked out once per frame layout and
     camera, copied into every buffer of that layout (a frame of many draws shares one)."""
-    layout = _frame_layout(c.reflection)
+    layout = _frame_layout(constants.m_reflection)
     if not layout[0]:
         return
-    kept = _framed.get(layout)
-    if kept is None or kept[0] is not cam:
-        scratch = Constants(c.reflection)
-        _fill_frame(scratch, cam)
-        kept = _framed[layout] = (cam, scratch.data)
-    for a, b in layout[0]:
-        c.data[a:b] = kept[1][a:b]
+    kept = _g_framed.get(layout)
+    if kept is None or kept[0] is not camera:
+        scratch = CConstants(constants.m_reflection)
+        _fill_frame(scratch, camera)
+        kept = _g_framed[layout] = (camera, scratch.m_data)
+    for start, end in layout[0]:
+        constants.m_data[start:end] = kept[1][start:end]
 
 
-def _fill_frame(c: Constants, cam: Camera) -> None:
-    ident = np.identity(4)
-    fov = 2 * math.atan(1 / abs(cam.proj[1, 1]))
-    aspect = abs(cam.proj[1, 1] / cam.proj[0, 0])
-    ahead = np.linalg.inv(cam.view)[2, :3]  # the view's +z in the world
-    view_proj = cam.view @ cam.proj
+def _fill_frame(constants: CConstants, camera: SCamera) -> None:
+    identity = np.identity(4)
+    fov = 2 * math.atan(1 / abs(camera.projection[1, 1]))
+    aspect = abs(camera.projection[1, 1] / camera.projection[0, 0])
+    ahead = np.linalg.inv(camera.view)[2, :3]  # the view's +z in the world
+    view_proj = camera.view @ camera.projection
     for i in range(CAMERAS):
-        k = f"cCameraBuffer[{i}]"
-        c.set(f"{k}.CamPosition", [*cam.eye, 1])
-        c.set(f"{k}.CamLookAt", [*(cam.eye + ahead), 1])
-        c.set(f"{k}.CamDirection", [*ahead, 0])
-        c.set(f"{k}.ProjDesc", [cam.near, cam.far, fov, aspect])
-        c.set(f"{k}.FOV", [fov, 1 / fov, math.tan(fov / 2), 1])
-        for key, m in (("MtxView", cam.view), ("MtxProj", cam.proj), ("MtxViewPrev", cam.view),
-                       ("MtxProjPrev", cam.proj), ("MtxProjInv", np.linalg.inv(cam.proj)),
-                       ("MtxViewUnmirrored", cam.view), ("MtxViewProjUnmirrored", view_proj),
+        buffer_path = f"cCameraBuffer[{i}]"
+        constants.set(f"{buffer_path}.CamPosition", [*camera.eye, 1])
+        constants.set(f"{buffer_path}.CamLookAt", [*(camera.eye + ahead), 1])
+        constants.set(f"{buffer_path}.CamDirection", [*ahead, 0])
+        constants.set(f"{buffer_path}.ProjDesc", [camera.near, camera.far, fov, aspect])
+        constants.set(f"{buffer_path}.FOV", [fov, 1 / fov, math.tan(fov / 2), 1])
+        for key, matrix in (("MtxView", camera.view), ("MtxProj", camera.projection), ("MtxViewPrev", camera.view),
+                       ("MtxProjPrev", camera.projection), ("MtxProjInv", np.linalg.inv(camera.projection)),
+                       ("MtxViewUnmirrored", camera.view), ("MtxViewProjUnmirrored", view_proj),
                        ("MtxViewProjPrevMotionBlur", view_proj)):  # fmt: skip
-            c.set(f"{k}.{key}", m)
+            constants.set(f"{buffer_path}.{key}", matrix)
         for key in ("MtxJitterInv", "MtxJitterInvPrev", "MtxViewProjTex", "MtxDepthProjection"):
-            c.set(f"{k}.{key}", ident)
-    w, h = cam.size
-    for key, value in (("cRenderBufferSize", [w, h]), ("cBackBufferSize", [w, h]), ("cViewportCropFactor", [1, 1]),
+            constants.set(f"{buffer_path}.{key}", identity)
+    width, height = camera.size_px
+    for key, value in (("cRenderBufferSize", [width, height]), ("cBackBufferSize", [width, height]), ("cViewportCropFactor", [1, 1]),
                        ("cUpscaleFactor", 1.0), ("cExposure", 1.0), ("cGammaAdjust", 1.0), *STILL_AIR):  # fmt: skip
-        c.set(key, value)
+        constants.set(key, value)
 
 
 # the wind the plants and trees sway in: still, from +x (the tree shader normalises the direction: a zero one would
@@ -585,39 +612,39 @@ def light_travel(sun) -> np.ndarray:
     return -sun / max(np.linalg.norm(sun), 1e-9)
 
 
-def fill_sun(c: Constants, sun, night: bool) -> None:
+def fill_sun(constants: CConstants, sun, is_night: bool) -> None:
     """The sun's constants of the sky and the shading by name: the light's travel and the day/night weights."""
     travel = light_travel(sun)
     for key, value in (("cSunDirection", travel), ("cLgtDirection", travel), ("cLgtDirectionUncapped", travel),
-                       ("cDayNight", [0, 1, 0, 1] if night else [1, 0, 1, 0]),
-                       ("cTimeOfDay", [0.0, 0, 0, 1] if night else [0.5, 1, 0.5, 0])):  # fmt: skip
-        c.set(key, value)
+                       ("cDayNight", [0, 1, 0, 1] if is_night else [1, 0, 1, 0]),
+                       ("cTimeOfDay", [0.0, 0, 0, 1] if is_night else [0.5, 1, 0.5, 0])):  # fmt: skip
+        constants.set(key, value)
 
 
-def fill_instance(c: Constants, world=None, palette=None, colour: int = 0xFFF) -> None:
+def fill_instance(constants: CConstants, world=None, palette=None, colour: int = 0xFFF) -> None:
     """One instance: the per-frame word (instance 0, alpha 15/15, bone matrices from 0), the object colour (12 bits
     of ``Data.x``; 0 is black), and its place as the engine's bone matrices hold it: ``world`` (column vectors) for
     a rigid model, ``world`` times each joint's skin matrix of ``palette`` for a skin (docs/tool-suite.md section 21)."""
-    c.set("cModelPerFrameDataBuffer[0]", [15 << 22, 0, 0, 0])
-    c.set("cModelInstanceDataBuffer[0].LastIndex", 0xFFFFFFFF)
-    c.set("cModelInstanceDataBuffer[0].Data", [colour << 4, 0, 0])
-    w = np.identity(4) if world is None else np.asarray(world, float)
-    bones = [w] if palette is None else [w @ m for m in palette]
-    rows = [b.T[:, :3] for b in bones]  # the engine's row vectors: v' = [v, 1] M
+    constants.set("cModelPerFrameDataBuffer[0]", [15 << 22, 0, 0, 0])
+    constants.set("cModelInstanceDataBuffer[0].LastIndex", 0xFFFFFFFF)
+    constants.set("cModelInstanceDataBuffer[0].Data", [colour << 4, 0, 0])
+    world_matrix = np.identity(4) if world is None else np.asarray(world, float)
+    bones = [world_matrix] if palette is None else [world_matrix @ skin_matrix for skin_matrix in palette]
+    rows = [bone.T[:, :3] for bone in bones]  # the engine's row vectors: v' = [v, 1] M
     for key in ("cCurrBoneMatrixBuffer", "cLastBoneMatrixBuffer"):
-        c.set_rows(key, rows)
+        constants.set_rows(key, rows)
 
 
-def fill_material(c: Constants, fields: dict[str, dict[str, float | list]], slots: dict[str, int]) -> None:
+def fill_material(constants: CConstants, fields: dict[str, dict[str, float | list]], slots: dict[str, int]) -> None:
     """The material's structures (``fields``: structure -> field -> value, the fxm defaults with the config over
     them; a texture field is its bindless index from ``slots``, absent: 0, the null texture) and the index table
     pointing at element 0 of each structure the shader reads."""
-    for v in c.reflection.variables:
-        if v.name == "cMaterialComponentIndices":
-            for m in v.members:
-                used = m.name.removesuffix("Index") in {s.removesuffix("Struct") for s in fields}
-                c.set(f"cMaterialComponentIndices[0].{m.name}", 0 if used else 0xFFFFFFFF)
+    for variable in constants.m_reflection.variables:
+        if variable.name == "cMaterialComponentIndices":
+            for member in variable.members:
+                used = member.name.removesuffix("Index") in {structure.removesuffix("Struct") for structure in fields}
+                constants.set(f"cMaterialComponentIndices[0].{member.name}", 0 if used else 0xFFFFFFFF)
     for struct, values in fields.items():
         name = "c" + struct.removesuffix("Struct")
         for key, value in {**values, **slots}.items():
-            c.set(f"{name}[0].{key}", value)
+            constants.set(f"{name}[0].{key}", value)

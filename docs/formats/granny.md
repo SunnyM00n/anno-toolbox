@@ -59,7 +59,7 @@ The section table has 44 bytes (eleven u32) per section:
 
 **Fixups** (pointer relocations) are 12 bytes each, stored uncompressed: source offset in this section, target
 section, target offset. A pointer field holds nothing useful in the file; a fixup says where it points. A pointer
-without a fixup is null. `GrannyFile.pointer_at((section, offset))` answers from the table. Nothing is patched.
+without a fixup is null. `CGrannyFile.pointer_at((section, offset))` answers from the table. Nothing is patched.
 
 In the files looked at, section 0 holds the root object and the mesh records, and section 6 holds the type tree. The
 vertex and index arrays sit in the sections in between.
@@ -74,9 +74,9 @@ are packed the same way: a member takes the size below times its array width (at
 | Kind | Member | Size in a record | Read as |
 |---|---|---|---|
 | 0 | end of the type | - | - |
-| 1 | inline record | the target type's size | `GrannyObject` at the same place |
+| 1 | inline record | the target type's size | `CGrannyObject` at the same place |
 | 2 | reference | pointer | the target type's record, or None |
-| 3 | reference to array | i32 count, pointer | `GrannyArray` when the target type is plain numbers, else a list of records |
+| 3 | reference to array | i32 count, pointer | `SGrannyArray` when the target type is plain numbers, else a list of records |
 | 4 | array of references | i32 count, pointer to pointers | list of records |
 | 5 | variant reference | pointer to its type, pointer | the record in the type it names |
 | 6 | (removed) | 0 | - |
@@ -133,7 +133,7 @@ four bytes of size model capacities.
   match's offset is coded as low 2 bits, high bits (above 10, alphabet limited by what the run has decoded) and
   middle 8 bits (one model per high value). The copy may overlap itself.
 
-The stream is read one byte ahead: the decoder fills it out with four zero bytes. `tests/test_granny.py` holds an
+The stream is read one byte ahead: the decoder fills it out with four zero bytes. `tests/editor/test_granny.py` holds an
 encoder for exactly this scheme, so the decoder is tested on files built in the test.
 
 ## Model configs that name the files
@@ -313,7 +313,7 @@ after the mesh and the material. glTF to `.gr2` and back: [`../rdm-gltf.md`](../
 - the object builder opening 1701's `.ocf` / `.mcf` / `.info`;
 - the writer (64-bit, tangent frames), glTF both ways, and the config and info file that place a written file;
 - `.gr2` to `.rdm` for 2070, 2205, 1800 and 117, without a glTF ([`../rdm-gltf.md`](../rdm-gltf.md), "Granny to RDM"; 2026-11-17);
-- tests in `tests/test_granny_rig.py` and `tests/test_efc1701.py` (synthetic, and gated on `ANNO1404_DIR` /
+- tests in `tests/formats/test_granny_rig.py` and `tests/formats/test_efc1701.py` (synthetic, and gated on `ANNO1404_DIR` /
   `ANNO1701_DIR`).
 
 Open:

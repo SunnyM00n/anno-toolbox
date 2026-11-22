@@ -13,7 +13,7 @@ import copy
 import re
 
 from ..formats import isd2070
-from .cfgdoc import Doc, Edit, Node, insert, is_config, kind_of, restyled, strip
+from .cfgdoc import SDoc, SEdit, SNode, insert, is_config, kind_of, restyled, strip
 
 # The lists of a config and the studio's titles (the 1404 diary's tree: toolone-public-sources "Names seen")
 TITLES = {
@@ -67,14 +67,14 @@ COMPONENT = re.compile(r"\.(x|y|z|w|xf|yf|zf|wf)$")
 COLOUR = re.compile(r"\.(r|g|b|a)$")
 
 
-def family(doc: Doc) -> str:
+def family(doc: SDoc) -> str:
     """``new`` (117, 1800, 2205), ``old`` (2070, 1404), ``mcf`` (1701), ``info`` (``.ifo``), ``feedback`` (``.fc``)."""
     path = doc.path.lower()
     if path.endswith(".ifo"):
         return "info"
     if path.endswith(".fc"):
         return "feedback"
-    names = {c.name for c in doc.root.children}
+    names = {child.name for child in doc.root.children}
     if "m_MeshConfig" in names:
         return "mcf"
     return "old" if "m_Config" in names else "new"
@@ -88,25 +88,29 @@ def kinds_for(section: str) -> tuple[str, ...]:
     return KINDS.get(strip(section), ())
 
 
-def lists_of(node: Node) -> tuple[str, ...]:
+def lists_of(node: SNode) -> tuple[str, ...]:
     """The lists a config part of this kind may hold (``HOLDS``), the ones it has first."""
-    own = tuple(strip(c.name) for c in node.children if c.children and all(is_config(g) for g in c.children))
-    return own + tuple(s for s in HOLDS.get(kind_of(node), ()) if s not in own)
+    own = tuple(
+        strip(child.name)
+        for child in node.children
+        if child.children and all(is_config(grandchild) for grandchild in child.children)
+    )
+    return own + tuple(list_name for list_name in HOLDS.get(kind_of(node), ()) if list_name not in own)
 
 
-def list_node(doc: Doc, part: Node, section: str) -> tuple[Node, Edit | None]:
+def list_node(doc: SDoc, part: SNode, section: str) -> tuple[SNode, SEdit | None]:
     """The list ``section`` of a part, and the edit that makes it when the part has none yet (in the family's spelling,
     before the part's closing ``ConfigType`` in 2070's files)."""
     for child in part.children:
         if strip(child.name) == section:
             return child, None
     old = family(doc) == "old"
-    node = Node(_name(section, old), tail=doc.newline)
-    at = len(part.children) - (1 if old and part.children and part.children[-1].name == "m_ConfigType" else 0)
-    return node, insert(part, at, [node], f"add the list {section}")
+    node = SNode(_name(section, old), tail=doc.newline)
+    insert_index = len(part.children) - (1 if old and part.children and part.children[-1].name == "m_ConfigType" else 0)
+    return node, insert(part, insert_index, [node], f"add the list {section}")
 
 
-def first_of(doc: Doc, kind: str) -> Node | None:
+def first_of(doc: SDoc, kind: str) -> SNode | None:
     """The file's first config part of a kind (or plain block of that name: ``Track``)."""
     for node in doc.root.iter():
         if (is_config(node) and kind_of(node) == kind) or (not is_config(node) and node.name == kind and node.children):
@@ -114,7 +118,7 @@ def first_of(doc: Doc, kind: str) -> Node | None:
     return None
 
 
-def new_part(doc: Doc, kind: str, other: Doc | None = None) -> Node | None:
+def new_part(doc: SDoc, kind: str, other: SDoc | None = None) -> SNode | None:
     """A new part of ``kind``: a copy of the first one of this file (or of ``other``, made in this file's line ends),
     else a template in the file's family, else None."""
     for source in (doc, other):
@@ -124,7 +128,7 @@ def new_part(doc: Doc, kind: str, other: Doc | None = None) -> Node | None:
     return template_part(doc, kind)
 
 
-def template_part(doc: Doc, kind: str) -> Node | None:
+def template_part(doc: SDoc, kind: str) -> SNode | None:
     """A new part of ``kind`` from the template alone (none of the file's own values), in the file's style."""
     spec = TEMPLATES.get(kind)
     if spec is None:

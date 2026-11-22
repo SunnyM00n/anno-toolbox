@@ -19,19 +19,19 @@ ALPHA_FLAG = 0x00100000  # a video flag of the header (BINKALPHA)
 AUDIO_STEREO = 0x2000  # sound flags of a track (0x1000: DCT; the PCM is 16 bit)
 
 
-class BinkError(ValueError):
+class CBinkError(ValueError):
     """The bytes are no Bink file (or, for ``infra.binkdll``, a movie cannot be decoded)."""
 
 
 @dataclass(frozen=True)
-class AudioTrack:
+class SAudioTrack:
     sample_rate: int
     channels: int
     track_id: int
 
 
 @dataclass(frozen=True)
-class Header:
+class SHeader:
     """The fields of a Bink file's header (the same in Bink 1 and 2)."""
 
     version: int  # 1 or 2
@@ -40,44 +40,44 @@ class Header:
     height: int
     fps: float
     alpha: bool
-    tracks: tuple[AudioTrack, ...]
+    tracks: tuple[SAudioTrack, ...]
 
 
-def read_header(head: bytes) -> Header:
+def read_header(head: bytes) -> SHeader:
     """The header of a Bink file's first bytes: magic ``BIK``/``KB2`` + a revision letter, file size, frame count
     (offset 8), largest frame, frames again, width, height, rate and divisor, video flags (36), the sound track count
     (40), a maximum size per track, then per track its sample rate and flags and (after them all) its id. A header
     cut after the rate has no flags and no tracks."""
     if len(head) < CORE_SIZE or head[:3] not in MAGIC.values():
-        raise BinkError("not a Bink file")
-    frames, _largest, _again, width, height, rate, scale = struct.unpack_from("<7I", head, 8)
+        raise CBinkError("not a Bink file")
+    frames, _largest, _again, width_px, height_px, rate, scale = struct.unpack_from("<7I", head, 8)
     flags, count = struct.unpack_from("<2I", head, CORE_SIZE) if len(head) >= HEADER_SIZE else (0, 0)
-    tracks: list[AudioTrack] = []
+    tracks: list[SAudioTrack] = []
     if 0 < count <= 32 and len(head) >= HEADER_SIZE + 12 * count:
         base = HEADER_SIZE + 4 * count
         ids = struct.unpack_from(f"<{count}I", head, base + 4 * count)
         for i in range(count):
-            hz, kind = struct.unpack_from("<HH", head, base + 4 * i)
-            tracks.append(AudioTrack(hz, 2 if kind & AUDIO_STEREO else 1, ids[i]))
+            sample_rate_hz, kind = struct.unpack_from("<HH", head, base + 4 * i)
+            tracks.append(SAudioTrack(sample_rate_hz, 2 if kind & AUDIO_STEREO else 1, ids[i]))
     version = 1 if head[:3] == MAGIC[1] else 2
-    return Header(
-        version, frames, width, height, rate / scale if scale else 0.0, bool(flags & ALPHA_FLAG), tuple(tracks)
+    return SHeader(
+        version, frames, width_px, height_px, rate / scale if scale else 0.0, bool(flags & ALPHA_FLAG), tuple(tracks)
     )
 
 
-def header_of(path: Path) -> Header:
-    """The header of a Bink file; ``BinkError`` when it is none, ``OSError`` when it cannot be read."""
-    with open(path, "rb") as f:
-        return read_header(f.read(HEAD_BYTES))
+def header_of(path: Path) -> SHeader:
+    """The header of a Bink file; ``CBinkError`` when it is none, ``OSError`` when it cannot be read."""
+    with open(path, "rb") as file:
+        return read_header(file.read(HEAD_BYTES))
 
 
 def is_whole(path: Path, versions: tuple[int, ...] = (1, 2), by_size: bool = True) -> bool:
     """Whether ``path`` is a Bink file of one of ``versions`` that was written to the end: its header's size field (the
     file size less 8) matches the file. ``by_size=False`` asks for the magic alone."""
     try:
-        with open(path, "rb") as f:
-            head = f.read(8)
-        if head[:3] not in (MAGIC[v] for v in versions) or len(head) != 8:
+        with open(path, "rb") as file:
+            head = file.read(8)
+        if head[:3] not in (MAGIC[version] for version in versions) or len(head) != 8:
             return False
         return not by_size or struct.unpack_from("<I", head, 4)[0] + 8 == Path(path).stat().st_size
     except OSError:

@@ -3,7 +3,7 @@ codec, embedded or streamed, the media file; each event's sounds, walked through
 and state choices of its containers), a clip (``.wem``,
 ``.wav``, ``.mp3``) described and played.
 
-``SoundView(parent, cache)`` is the entry: ``show_bank(path, data, files)``, ``show_clip(path, data)``. Playing goes
+``CSoundView(parent, cache)`` is the entry: ``show_bank(path, data, files)``, ``show_clip(path, data)``. Playing goes
 through Qt's media player; ``banks.playable`` says what cannot be decoded. A clip is written to ``cache`` to play.
 """
 
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from ..exporting import banks
 from ..infra.i18n import N_, tr
-from ..suite.clipplayer import ClipPlayer
+from ..suite.clipplayer import CClipPlayer
 from ..suite.widgets import add_row, read_only_table
 
 COLUMNS = {
@@ -58,76 +58,78 @@ TABLE_TITLES = {
 }
 
 
-class SoundView(QWidget):
+class CSoundView(QWidget):
     """A bank's tables or one clip, with Play and Stop."""
 
     def __init__(self, parent=None, cache: Path | None = None) -> None:
         super().__init__(parent)
-        self.cache = cache
-        self.files = None
-        self.bank = ""
-        self.listing: banks.BankListing | None = None
-        self.info = banks.BankInfo()
-        self.clips: list[tuple[str, bytes]] = []  # per sound row: (name, the clip's bytes or b"" to read the file)
-        self.event_rows: list[int] = []
-        self.choices: dict[int, int] = {}  # the group -> value picked for the selected event
-        self.music_rows: list[tuple[str, bytes]] = []
-        self.summary = QLabel(wordWrap=True)
-        self.tables = {name: read_only_table(columns) for name, columns in COLUMNS.items()}
-        self.table = self.tables["Sounds"]
-        self.tabs = QTabWidget()
-        for name, table in self.tables.items():
-            self.tabs.tabBar().setTabData(self.tabs.addTab(table, tr(TABLE_TITLES[name])), name)
+        self.m_cache = cache
+        self.m_files = None
+        self.m_bank = ""
+        self.m_listing: banks.SBankListing | None = None
+        self.m_bank_info = banks.SBankInfo()
+        self.m_clips: list[tuple[str, bytes]] = []  # per sound row: (name, the clip's bytes or b"" to read the file)
+        self.m_event_rows: list[int] = []
+        self.m_choices: dict[int, int] = {}  # the group -> value picked for the selected event
+        self.m_music_rows: list[tuple[str, bytes]] = []
+        self.m_summary = QLabel(wordWrap=True)
+        self.m_tables = {name: read_only_table(columns) for name, columns in COLUMNS.items()}
+        self.m_table = self.m_tables["Sounds"]
+        self.m_tabs = QTabWidget()
+        for name, table in self.m_tables.items():
+            self.m_tabs.tabBar().setTabData(self.m_tabs.addTab(table, tr(TABLE_TITLES[name])), name)
             table.cellDoubleClicked.connect(lambda _r, _c: self._play_selected())
-        self.play = QPushButton(tr("common.play"))
-        self.stop = QPushButton(tr("viewer.stop"))
-        self.status = QLabel()
-        bar = QHBoxLayout()
-        for w in (self.play, self.stop):
-            bar.addWidget(w)
-        bar.addWidget(self.status, 1)
-        lay = QVBoxLayout(self)
-        lay.addWidget(self.summary)
-        lay.addLayout(bar)
-        lay.addWidget(self.tabs, 1)
-        self.choice_form = QFormLayout()
-        self.choice_note = QLabel(wordWrap=True)
-        lay.addWidget(self.choice_note)
-        lay.addLayout(self.choice_form)
-        self.tables["Events"].currentCellChanged.connect(lambda row, *_rest: self._show_choices(row, reset=True))
-        self.play.clicked.connect(self._play_selected)
-        self.stop.clicked.connect(self._stop)
-        self._player = ClipPlayer(self)
-        self._clip: tuple[str, bytes] | None = None
+        self.m_play = QPushButton(tr("common.play"))
+        self.m_stop = QPushButton(tr("viewer.stop"))
+        self.m_status = QLabel()
+        button_row = QHBoxLayout()
+        for w in (self.m_play, self.m_stop):
+            button_row.addWidget(w)
+        button_row.addWidget(self.m_status, 1)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.m_summary)
+        layout.addLayout(button_row)
+        layout.addWidget(self.m_tabs, 1)
+        self.m_choice_form = QFormLayout()
+        self.m_choice_note = QLabel(wordWrap=True)
+        layout.addWidget(self.m_choice_note)
+        layout.addLayout(self.m_choice_form)
+        self.m_tables["Events"].currentCellChanged.connect(lambda row, *_rest: self._show_choices(row, reset=True))
+        self.m_play.clicked.connect(self._play_selected)
+        self.m_stop.clicked.connect(self._stop)
+        self._m_player = CClipPlayer(self)
+        self._m_clip: tuple[str, bytes] | None = None
 
     def show_bank(self, path: str, data: bytes, files) -> None:
         """A bank: its header and objects above, its sounds, events and music tracks in the tables."""
-        self.files, self._clip, self.bank = files, None, path
-        self.listing = listing = banks.bank_listing(data)
-        self.info = info = banks.read_info(path, files.exists, lambda p: files.read(p).decode("utf-8", "replace"))
-        kinds = ", ".join(f"{n} {k}" for k, n in sorted(listing.objects.items(), key=lambda kv: -kv[1]))
-        self.summary.setText(
+        self.m_files, self._m_clip, self.m_bank = files, None, path
+        self.m_listing = listing = banks.bank_listing(data)
+        self.m_bank_info = bank_info = banks.read_info(
+            path, files.exists, lambda file_path: files.read(file_path).decode("utf-8", "replace")
+        )
+        kinds = ", ".join(f"{count} {k}" for k, count in sorted(listing.objects.items(), key=lambda entry: -entry[1]))
+        self.m_summary.setText(
             tr(
                 "viewer.bank_version_id_sounds_embedded",
-                name=info.name or path,
+                name=bank_info.name or path,
                 version=listing.version,
                 id=listing.bank_id,
                 sounds=len(listing.sounds),
                 media=len(listing.media),
                 events=len(listing.events),
-                named=len(info.events),
+                named=len(bank_info.events),
                 objects=kinds,
             )
         )
-        self._fill_sounds(path, listing, info, files)
-        self._fill_events(listing, info)
-        self._fill_music(path, listing, info, files)
-        self.status.setText(tr("viewer.double_click_row_select_press"))
+        self._fill_sounds(path, listing, bank_info, files)
+        self._fill_events(listing, bank_info)
+        self._fill_music(path, listing, bank_info, files)
+        self.m_status.setText(tr("viewer.double_click_row_select_press"))
 
-    def _clip_of(self, path: str, media: int, stream: str, info, files) -> tuple[str, tuple[str, bytes]]:
+    def _clip_of(self, path: str, media: int, stream: str, bank_info, files) -> tuple[str, tuple[str, bytes]]:
         """(where the media is, (name, bytes or b"" to read the file)) of one media id."""
-        listing = self.listing
-        streamed = banks.media_file(path, media, info, files.exists) if stream != "embedded" else ""
+        listing = self.m_listing
+        streamed = banks.media_file(path, media, bank_info, files.exists) if stream != "embedded" else ""
         if streamed:  # the whole clip; a bank holds only its first part (the prefetch)
             return streamed, (streamed, b"")
         if media in listing.media:
@@ -135,49 +137,58 @@ class SoundView(QWidget):
             return where, (f"{media}.wem", listing.embedded(media))
         return tr("viewer.not_found"), ("", b"")
 
-    def _fill_sounds(self, path: str, listing, info, files) -> None:
-        table = self.tables["Sounds"]
+    def _fill_sounds(self, path: str, listing, bank_info, files) -> None:
+        table = self.m_tables["Sounds"]
         table.setRowCount(0)
-        self.clips = []
-        for s in listing.sounds:
-            where, clip = self._clip_of(path, s.media, s.stream, info, files)
-            add_row(table, [str(s.id), info.media.get(s.media, ("", ""))[0], s.codec, f"{s.media} ({s.stream})", where])
-            self.clips.append(clip)
+        self.m_clips = []
+        for sound in listing.sounds:
+            where, clip = self._clip_of(path, sound.media, sound.stream, bank_info, files)
+            add_row(
+                table,
+                [
+                    str(sound.id),
+                    bank_info.media.get(sound.media, ("", ""))[0],
+                    sound.codec,
+                    f"{sound.media} ({sound.stream})",
+                    where,
+                ],
+            )
+            self.m_clips.append(clip)
         table.resizeColumnsToContents()
 
-    def _fill_events(self, listing, info) -> None:
-        table = self.tables["Events"]
+    def _fill_events(self, listing, bank_info) -> None:
+        table = self.m_tables["Events"]
         table.setRowCount(0)
-        self.event_rows = []
-        for event in sorted(listing.events, key=lambda e: info.events.get(e, "~")):
-            add_row(table, [str(event), info.events.get(event, ""), "", "", ""])
-            self.event_rows.append(event)
+        self.m_event_rows = []
+        for event in sorted(listing.events, key=lambda event_id: bank_info.events.get(event_id, "~")):
+            add_row(table, [str(event), bank_info.events.get(event, ""), "", "", ""])
+            self.m_event_rows.append(event)
         table.resizeColumnsToContents()
 
-    def _fill_music(self, path: str, listing, info, files) -> None:
-        table = self.tables["Music"]
+    def _fill_music(self, path: str, listing, bank_info, files) -> None:
+        table = self.m_tables["Music"]
         table.setRowCount(0)
-        self.music_rows = []
+        self.m_music_rows = []
         for track in banks.music_tracks(listing):
             for media, stream in track.sources or ((0, ""),):
                 where, clip = (
-                    self._clip_of(path, media, stream, info, files)
+                    self._clip_of(path, media, stream, bank_info, files)
                     if media
                     else (tr("viewer.no_source_read"), ("", b""))
                 )
                 add_row(table, [str(track.id), str(track.segment or ""), f"{track.seconds:.1f}" if track.seconds else "",
                                   f"{media} ({stream})" if media else "", where])  # fmt: skip
-                self.music_rows.append(clip)
+                self.m_music_rows.append(clip)
         table.resizeColumnsToContents()
 
     def event_clips(self, event: int) -> tuple[list[tuple[str, bytes]], bool]:
         """The clips an event can play (its sounds and music tracks, walked) and whether the walk read every step."""
-        walk = banks.walk_event(self.listing, event, self.choices)
+        walk = banks.walk_event(self.m_listing, event, self.m_choices)
         found, exact = walk.sounds, walk.exact
         clips = []
         for item in found:
-            media, stream = (item.media, item.stream) if isinstance(item, banks.BankSound) else (item, "streamed")
-            _where, clip = self._clip_of(self.bank, media, stream, self.info, self.files)
+            media, stream = (item.media, item.stream) if isinstance(item, banks.SBankSound) else (item, "streamed")
+            _where, clip = self._clip_of(self.m_bank, media, stream, self.m_bank_info, self.m_files)
             if clip[0]:
                 clips.append(clip)
         return clips, exact
@@ -186,95 +197,101 @@ class SoundView(QWidget):
         """The selected event's switch and state groups as drop-downs (``every value`` plays every branch), and the
         switches and states the event sets itself."""
         if reset:
-            self.choices = {}
-        while self.choice_form.rowCount():  # taken, not removed: this runs inside a drop-down's own signal
-            taken = self.choice_form.takeRow(0)
+            self.m_choices = {}
+        while self.m_choice_form.rowCount():  # taken, not removed: this runs inside a drop-down's own signal
+            taken = self.m_choice_form.takeRow(0)
             for item in (taken.labelItem, taken.fieldItem):
                 if item is not None and item.widget() is not None:
                     item.widget().hide()
                     item.widget().deleteLater()
-        if not 0 <= row < len(self.event_rows) or self.listing is None:
-            self.choice_note.setText("")
+        if not 0 <= row < len(self.m_event_rows) or self.m_listing is None:
+            self.m_choice_note.setText("")
             return
-        walk = banks.walk_event(self.listing, self.event_rows[row], self.choices)
+        walk = banks.walk_event(self.m_listing, self.m_event_rows[row], self.m_choices)
         for group, found in walk.groups.items():
             box = QComboBox()
             box.addItem(tr("viewer.every_value"), None)
             for value in found.values:
-                name = self.info.group_label(group, value)
+                name = self.m_bank_info.group_label(group, value)
                 box.addItem(tr("viewer.value_start", value=name) if value == found.default else name, value)
-            box.setCurrentIndex(max(0, box.findData(self.choices.get(group))))
+            box.setCurrentIndex(max(0, box.findData(self.m_choices.get(group))))
             box.currentIndexChanged.connect(lambda _i, g=group, b=box: self._pick(row, g, b.currentData()))
-            group_name = self.info.group_label(group)
+            group_name = self.m_bank_info.group_label(group)
             label = (
                 tr("viewer.state_name", name=group_name)
                 if found.state_group
                 else tr("viewer.switch_name", name=group_name)
             )
-            self.choice_form.addRow(label, box)
-        sets = [f"{self.info.group_label(a.group)} = {self.info.group_label(a.group, a.value)}" for a in walk.sets]
-        self.choice_note.setText(tr("viewer.event_sets", sets=", ".join(sets)) if sets else "")
+            self.m_choice_form.addRow(label, box)
+        sets = [
+            f"{self.m_bank_info.group_label(assignment.group)} = {self.m_bank_info.group_label(assignment.group, assignment.value)}"
+            for assignment in walk.sets
+        ]
+        self.m_choice_note.setText(tr("viewer.event_sets", sets=", ".join(sets)) if sets else "")
 
     def _pick(self, row: int, group: int, value: int | None) -> None:
         if value is None:
-            self.choices.pop(group, None)
+            self.m_choices.pop(group, None)
         else:
-            self.choices[group] = value
-        clips, exact = self.event_clips(self.event_rows[row])
-        table = self.tables["Events"]
+            self.m_choices[group] = value
+        clips, exact = self.event_clips(self.m_event_rows[row])
+        table = self.m_tables["Events"]
         table.item(row, 2).setText(str(len(clips)))
         self._show_choices(row)
 
     def show_clip(self, path: str, data: bytes) -> None:
         """One clip: its facts in the summary, Play plays it."""
-        for table in self.tables.values():
+        for table in self.m_tables.values():
             table.setRowCount(0)
-        self.clips, self.event_rows, self.music_rows, self._clip = [], [], [], (path, data)
+        self.m_clips, self.m_event_rows, self.m_music_rows, self._m_clip = [], [], [], (path, data)
         try:
-            info = banks.wave_info(data) if not path.lower().endswith((".mp3", ".ogg")) else {"format": path[-3:]}
-            facts = ", ".join(f"{k} {round(v, 2) if isinstance(v, float) else v}" for k, v in info.items())
-        except banks.Unplayable as exc:
+            wave_facts = banks.wave_info(data) if not path.lower().endswith((".mp3", ".ogg")) else {"format": path[-3:]}
+            facts = ", ".join(
+                f"{k} {round(value, 2) if isinstance(value, float) else value}" for k, value in wave_facts.items()
+            )
+        except banks.CUnplayable as exc:
             facts = str(exc)
-        self.summary.setText(f"{path}: {facts}")
-        self.status.setText("")
+        self.m_summary.setText(f"{path}: {facts}")
+        self.m_status.setText("")
 
     def _selected_clip(self) -> tuple[str, bytes] | None:
-        tab = self.tabs.tabBar().tabData(self.tabs.currentIndex())
-        row = self.tables[tab].currentRow()
-        if tab == "Sounds" and 0 <= row < len(self.clips):
-            return self.clips[row]
-        if tab == "Music" and 0 <= row < len(self.music_rows):
-            return self.music_rows[row]
-        if tab == "Events" and 0 <= row < len(self.event_rows):
-            clips, exact = self.event_clips(self.event_rows[row])
-            table = self.tables["Events"]
+        tab = self.m_tabs.tabBar().tabData(self.m_tabs.currentIndex())
+        row = self.m_tables[tab].currentRow()
+        if tab == "Sounds" and 0 <= row < len(self.m_clips):
+            return self.m_clips[row]
+        if tab == "Music" and 0 <= row < len(self.m_music_rows):
+            return self.m_music_rows[row]
+        if tab == "Events" and 0 <= row < len(self.m_event_rows):
+            clips, exact = self.event_clips(self.m_event_rows[row])
+            table = self.m_tables["Events"]
             table.item(row, 2).setText(str(len(clips)))
             table.item(row, 3).setText(tr("viewer.exactly") if exact else tr("viewer.partly_guessed"))
             table.item(row, 4).setText(
                 ", ".join(
-                    f"{self.info.group_label(g)} = {self.info.group_label(g, v)}" for g, v in self.choices.items()
+                    f"{self.m_bank_info.group_label(g)} = {self.m_bank_info.group_label(g, v)}"
+                    for g, v in self.m_choices.items()
                 )
             )
             return random.choice(clips) if clips else ("", b"")  # a random container picks one, so does the view
-        return self._clip
+        return self._m_clip
 
     def _play_selected(self) -> None:
         clip = self._selected_clip()
         if clip is None:
             return
         name, data = clip
-        if not data and self.files is not None and name and self.files.exists(name):
-            data = self.files.read(name)
+        if not data and self.m_files is not None and name and self.m_files.exists(name):
+            data = self.m_files.read(name)
         if data:
             self.play_clip(name, data)
         else:
-            self.status.setText(tr("viewer.nothing_play_media_file_not"))
+            self.m_status.setText(tr("viewer.nothing_play_media_file_not"))
 
     def play_clip(self, name: str, data: bytes) -> None:
         """Decode a clip into the cache and play it; the status says why when it cannot."""
-        why = self._player.play(name, data, self.cache / "sounds" if self.cache is not None else None)
-        self.status.setText(why or tr("viewer.playing_name", name=name))
+        why = self._m_player.play(name, data, self.m_cache / "sounds" if self.m_cache is not None else None)
+        self.m_status.setText(why or tr("viewer.playing_name", name=name))
 
     def _stop(self) -> None:
-        self._player.stop()
-        self.status.setText(tr("viewer.stopped"))
+        self._m_player.stop()
+        self.m_status.setText(tr("viewer.stopped"))

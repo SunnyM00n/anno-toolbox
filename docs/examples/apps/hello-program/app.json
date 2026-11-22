@@ -1,0 +1,8 @@
+{
+  "api_version": 1,
+  "name": "Notepad",
+  "summary": "Windows' Notepad, started from the Toolbox; opens text and XML files.",
+  "command": ["notepad.exe", "{file}"],
+  "file_types": [".txt", ".xml", ".json"],
+  "games": ["anno117", "anno2070", "anno1800"]
+}

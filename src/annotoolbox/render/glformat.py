@@ -10,11 +10,11 @@ def surface_format():
     """OpenGL 3.3 core with depth, as a ``QSurfaceFormat``."""
     from PySide6.QtGui import QSurfaceFormat
 
-    fmt = QSurfaceFormat()
-    fmt.setVersion(3, 3)
-    fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
-    fmt.setDepthBufferSize(24)
-    return fmt
+    surface = QSurfaceFormat()
+    surface.setVersion(3, 3)
+    surface.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    surface.setDepthBufferSize(24)
+    return surface
 
 
 def prepare() -> None:

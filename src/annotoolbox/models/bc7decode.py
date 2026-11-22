@@ -4,7 +4,7 @@ BC7 (117's and 1800's textures) reads without an extra package.
 ``decode_bc7(data, width, height)`` is the entry; it decodes whole blocks (the mode in the lowest set bit, then the
 partition, the endpoints with their shared or unique bits, the indices with their anchor texels) a chunk at a time,
 all blocks of one mode together. The format: the public BC7 specification (Khronos Data Format, "BC7"); checked
-byte for byte against another decoder on real files (``tests/test_bc7decode.py``).
+byte for byte against another decoder on real files (``tests/models/test_bc7decode.py``).
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ CHUNK = 1 << 14  # blocks decoded at once: 16 MB of bits
 
 
 def _table(rows) -> np.ndarray:
-    return np.array([[int(c) for c in row] for row in rows], np.int64)
+    return np.array([[int(digit) for digit in row] for row in rows], np.int64)
 
 
 _SUBSETS = {1: np.zeros((1, 16), np.int64), 2: _table(PARTITIONS2), 3: _table(PARTITIONS3)}
@@ -86,16 +86,20 @@ _ANCHORS = {
 _ANCHORS[1][0, 0] = True
 
 
-def decode_bc7(data: bytes, width: int, height: int, offset: int = 0) -> np.ndarray:
+def decode_bc7(data: bytes, width_px: int, height_px: int, offset: int = 0) -> np.ndarray:
     """``(height, width, 4)`` uint8 RGBA of the BC7 blocks at ``offset`` of ``data`` (rows of blocks, the edges cut
     off)."""
-    bw, bh = -(-width // 4), -(-height // 4)
-    blocks = np.frombuffer(data, np.uint8, bw * bh * 16, offset).reshape(-1, 16)
+    block_columns, block_rows = -(-width_px // 4), -(-height_px // 4)
+    blocks = np.frombuffer(data, np.uint8, block_columns * block_rows * 16, offset).reshape(-1, 16)
     texels = np.empty((len(blocks), 16, 4), np.uint8)
     for start in range(0, len(blocks), CHUNK):
         texels[start : start + CHUNK] = decode_blocks(blocks[start : start + CHUNK])
-    image = texels.reshape(bh, bw, 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(bh * 4, bw * 4, 4)
-    return np.ascontiguousarray(image[:height, :width])
+    image = (
+        texels.reshape(block_rows, block_columns, 4, 4, 4)
+        .transpose(0, 2, 1, 3, 4)
+        .reshape(block_rows * 4, block_columns * 4, 4)
+    )
+    return np.ascontiguousarray(image[:height_px, :width_px])
 
 
 def decode_blocks(blocks: np.ndarray) -> np.ndarray:
@@ -105,100 +109,113 @@ def decode_blocks(blocks: np.ndarray) -> np.ndarray:
     head = bits[:, :8]
     mode = np.where(head.any(axis=1), head.argmax(axis=1), 8)
     out = np.zeros((len(blocks), 16, 4), np.uint8)
-    for m in MODES:
-        chosen = mode == m
+    for mode_spec in MODES:
+        chosen = mode == mode_spec
         if chosen.any():
-            out[chosen] = _mode(m, bits[chosen])
+            out[chosen] = _mode(mode_spec, bits[chosen])
     return out
 
 
-def _field(bits: np.ndarray, at: int, count: int) -> np.ndarray:
+def _field(bits: np.ndarray, bit_offset: int, count: int) -> np.ndarray:
     """An unsigned field of ``count`` bits at bit ``at`` of every block (least significant bit first)."""
     if not count:
         return np.zeros(len(bits), np.int64)
-    return bits[:, at : at + count] @ (1 << np.arange(count, dtype=np.int64))
+    return bits[:, bit_offset : bit_offset + count] @ (1 << np.arange(count, dtype=np.int64))
 
 
-def _indices(bits: np.ndarray, at: int, size: int, anchors: np.ndarray) -> tuple[np.ndarray, int]:
-    """Sixteen indices of ``size`` bits each from bit ``at``, an anchor texel's one bit shorter; (indices, next bit)."""
-    widths = size - anchors.astype(np.int64)
-    starts = at + np.cumsum(widths, axis=1) - widths
-    k = np.arange(size)
+def _indices(bits: np.ndarray, bit_offset: int, size_bits: int, anchors: np.ndarray) -> tuple[np.ndarray, int]:
+    """Sixteen indices of ``size_bits`` bits each from ``bit_offset``, an anchor texel's one bit shorter; (indices, next bit)."""
+    widths = size_bits - anchors.astype(np.int64)
+    starts = bit_offset + np.cumsum(widths, axis=1) - widths
+    k = np.arange(size_bits)
     where = np.clip(starts[..., None] + k, 0, 127)
     taken = bits[np.arange(len(bits))[:, None, None], where]
     taken = np.where(k < widths[..., None], taken, 0)
-    return taken @ (1 << k), at + 16 * size - int(anchors[0].sum())
+    return taken @ (1 << k), bit_offset + 16 * size_bits - int(anchors[0].sum())
 
 
 def _unquantize(values: np.ndarray, bits: int) -> np.ndarray:
     return (values << (8 - bits)) | (values >> (2 * bits - 8)) if bits < 8 else values
 
 
-def _endpoints(bits: np.ndarray, at: int, spec: tuple) -> tuple[np.ndarray, int]:
+def _endpoints(bits: np.ndarray, bit_offset: int, spec: tuple) -> tuple[np.ndarray, int]:
     """The endpoints [n, 2 x subsets, 4] expanded to 8 bits (a missing alpha 255); (endpoints, next bit)."""
-    ns, _pb, _rb, _isb, cb, ab, epb, spb, _ib, _ib2 = spec
-    count, n = 2 * ns, len(bits)
-    ends = np.zeros((n, count, 4), np.int64)
-    for channel in range(4 if ab else 3):
-        size = ab if channel == 3 else cb
-        for e in range(count):
-            ends[:, e, channel] = _field(bits, at, size)
-            at += size
-    if epb or spb:
-        p = np.zeros((n, count), np.int64)
-        for e in range(count if epb else ns):
-            got = _field(bits, at, 1)
-            at += 1
-            if epb:
-                p[:, e] = got
+    subset_count, _pb, _rb, _isb, colour_bits, alpha_bits, endpoint_pbits, shared_pbits, _ib, _ib2 = spec
+    count, block_count = 2 * subset_count, len(bits)
+    ends = np.zeros((block_count, count, 4), np.int64)
+    for channel in range(4 if alpha_bits else 3):
+        size = alpha_bits if channel == 3 else colour_bits
+        for endpoint_index in range(count):
+            ends[:, endpoint_index, channel] = _field(bits, bit_offset, size)
+            bit_offset += size
+    if endpoint_pbits or shared_pbits:
+        endpoints = np.zeros((block_count, count), np.int64)
+        for endpoint_index in range(count if endpoint_pbits else subset_count):
+            got = _field(bits, bit_offset, 1)
+            bit_offset += 1
+            if endpoint_pbits:
+                endpoints[:, endpoint_index] = got
             else:
-                p[:, 2 * e], p[:, 2 * e + 1] = got, got
-        ends = (ends << 1) | p[..., None]
-        cb, ab = cb + 1, ab + 1 if ab else 0
-    ends[..., :3] = _unquantize(ends[..., :3], cb)
-    ends[..., 3] = _unquantize(ends[..., 3], ab) if ab else 255
-    return ends, at
+                endpoints[:, 2 * endpoint_index], endpoints[:, 2 * endpoint_index + 1] = got, got
+        ends = (ends << 1) | endpoints[..., None]
+        colour_bits, alpha_bits = colour_bits + 1, alpha_bits + 1 if alpha_bits else 0
+    ends[..., :3] = _unquantize(ends[..., :3], colour_bits)
+    ends[..., 3] = _unquantize(ends[..., 3], alpha_bits) if alpha_bits else 255
+    return ends, bit_offset
 
 
-def _blend(e0: np.ndarray, e1: np.ndarray, index: np.ndarray, size: int) -> np.ndarray:
-    w = np.asarray(WEIGHTS[size], np.int64)[index]
-    return ((64 - w) * e0 + w * e1 + 32) >> 6
+def _blend(endpoint_start: np.ndarray, endpoint_end: np.ndarray, index: np.ndarray, size_bits: int) -> np.ndarray:
+    weight = np.asarray(WEIGHTS[size_bits], np.int64)[index]
+    return ((64 - weight) * endpoint_start + weight * endpoint_end + 32) >> 6
 
 
-def _mode(m: int, bits: np.ndarray) -> np.ndarray:
-    spec = MODES[m]
-    ns, pb, rb, isb, _cb, ab, _epb, _spb, ib, ib2 = spec
-    at = m + 1
-    partition = _field(bits, at, pb)
-    rotation = _field(bits, at + pb, rb)
-    select = _field(bits, at + pb + rb, isb)
-    ends, at = _endpoints(bits, at + pb + rb + isb, spec)
-    subset = _SUBSETS[ns][partition] if ns > 1 else np.zeros((len(bits), 16), np.int64)
-    anchors = _ANCHORS[ns][partition] if ns > 1 else np.repeat(_ANCHORS[1], len(bits), axis=0)
-    first, at = _indices(bits, at, ib, anchors)
+def _mode(mode: int, bits: np.ndarray) -> np.ndarray:
+    spec = MODES[mode]
+    (
+        subset_count,
+        partition_bits,
+        rotation_bits,
+        index_selection_bits,
+        _cb,
+        alpha_bits,
+        _epb,
+        _spb,
+        index_bits,
+        second_index_bits,
+    ) = spec
+    bit_offset = mode + 1
+    partition = _field(bits, bit_offset, partition_bits)
+    rotation = _field(bits, bit_offset + partition_bits, rotation_bits)
+    select = _field(bits, bit_offset + partition_bits + rotation_bits, index_selection_bits)
+    ends, bit_offset = _endpoints(bits, bit_offset + partition_bits + rotation_bits + index_selection_bits, spec)
+    subset = _SUBSETS[subset_count][partition] if subset_count > 1 else np.zeros((len(bits), 16), np.int64)
+    anchors = _ANCHORS[subset_count][partition] if subset_count > 1 else np.repeat(_ANCHORS[1], len(bits), axis=0)
+    first, bit_offset = _indices(bits, bit_offset, index_bits, anchors)
     rows = np.arange(len(bits))[:, None]
-    e0, e1 = ends[rows, 2 * subset], ends[rows, 2 * subset + 1]
-    if not ib2:
-        texels = _blend(e0, e1, first[..., None], ib)
-        if not ab:
+    endpoint_start, endpoint_end = ends[rows, 2 * subset], ends[rows, 2 * subset + 1]
+    if not second_index_bits:
+        texels = _blend(endpoint_start, endpoint_end, first[..., None], index_bits)
+        if not alpha_bits:
             texels[..., 3] = 255
     else:  # modes 4 and 5: colour and alpha by index sets of their own; mode 4's selection bit swaps the two
-        second, _end = _indices(bits, at, ib2, np.repeat(_ANCHORS[1], len(bits), axis=0))
+        second, _end = _indices(bits, bit_offset, second_index_bits, np.repeat(_ANCHORS[1], len(bits), axis=0))
         swap = select == 1
         colour = np.where(
             swap[:, None, None],
-            _blend(e0[..., :3], e1[..., :3], second[..., None], ib2),
-            _blend(e0[..., :3], e1[..., :3], first[..., None], ib),
+            _blend(endpoint_start[..., :3], endpoint_end[..., :3], second[..., None], second_index_bits),
+            _blend(endpoint_start[..., :3], endpoint_end[..., :3], first[..., None], index_bits),
         )
         alpha = np.where(
-            swap[:, None], _blend(e0[..., 3], e1[..., 3], first, ib), _blend(e0[..., 3], e1[..., 3], second, ib2)
+            swap[:, None],
+            _blend(endpoint_start[..., 3], endpoint_end[..., 3], first, index_bits),
+            _blend(endpoint_start[..., 3], endpoint_end[..., 3], second, second_index_bits),
         )
         texels = np.concatenate([colour, alpha[..., None]], axis=2)
-    if rb:
-        for r in (1, 2, 3):  # 1 swaps alpha and red, 2 green, 3 blue
-            hit = rotation == r
+    if rotation_bits:
+        for swap_channel in (1, 2, 3):  # 1 swaps alpha and red, 2 green, 3 blue
+            hit = rotation == swap_channel
             if hit.any():
-                texels[hit] = texels[hit][..., _swap(r - 1)]
+                texels[hit] = texels[hit][..., _swap(swap_channel - 1)]
     return texels.astype(np.uint8)
 
 

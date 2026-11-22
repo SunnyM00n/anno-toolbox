@@ -3,7 +3,7 @@ view's own terrain and models: the island's water info map built as the game bui
 scene mirrored into the planar reflection, the island's own ambient set; the view's own sea while they compile, where
 they fail and on OpenGL.
 
-``GameSea2070(renderer)`` is the entry, one per ``desktoprender.Renderer``, on ``desktopsea.IslandSea``'s seam;
+``CGameSea2070(renderer)`` is the entry, one per ``desktoprender.CRenderer``, on ``desktopsea.CIslandSea``'s seam;
 docs/island-editor-view.md "2070's sea by the game's shaders".
 """
 
@@ -14,8 +14,8 @@ import numpy as np
 from ...render import coast2070, frame2070, ocean2070, sky2070
 from ...render import gameshader as gs
 from ...render.frameforward import DEPTH_COPY_FS
-from ...render.fxcdraw import Dummies
-from .desktopsea import Files, IslandSea, by_folder, sun_direction, upload
+from ...render.fxcdraw import CDummies
+from .desktopsea import CFiles, CIslandSea, by_folder, sun_direction, upload
 
 JOB = "game-sea-2070"
 INFO_JOB = "game-sea-2070-info"
@@ -58,19 +58,19 @@ def _compile(tree, source: str) -> tuple:
     from ...models import shader2070
     from ...sources import ambient2070
 
-    files = Files(tree)
-    shaders = shader2070.Source2070(files, files.compiler("anno2070"))
+    files = CFiles(tree)
+    shaders = shader2070.CSource2070(files, files.compiler("anno2070"))
     wanted = {**ocean2070.STAGES, "ocean": (ocean2070.FX, ocean2070.ISLAND_DEFINES, ocean2070.TECHNIQUE),
               **coast2070.STAGES}  # fmt: skip
-    stages = {k: shaders.effect_pass(*v) for k, v in wanted.items()}
+    stages = {stage_name: shaders.effect_pass(*stage_arguments) for stage_name, stage_arguments in wanted.items()}
     ambient = ambient2070.parse(files.read(ambient2070.AMBIENT_MAP).decode("latin-1"))
     setting = ambient.setting(ambient.area(area_of(source)).setting, VARIANT)
     paths = (*ocean2070.WAVES.values(), ocean2070.RIPPLES, ocean2070.CAUSTICS, coast2070.COAST)
-    maps = {p: files.level0(p) for p in paths}
+    maps = {path: files.level0(path) for path in paths}
     return stages, setting, sky2070.read_volume(files), maps
 
 
-class GameSea2070(IslandSea):
+class CGameSea2070(CIslandSea):
     """The 2070 island's sea by the game's shaders (module docstring)."""
 
     GAMES = ("anno2070",)
@@ -78,90 +78,93 @@ class GameSea2070(IslandSea):
 
     def __init__(self, renderer) -> None:
         super().__init__(renderer)
-        self.ocean: ocean2070.Ocean2070 | None = None
-        self.coast: coast2070.CoastWaves | None = None
-        self.setting = None
-        self.maps: dict = {}  # path -> the engine's water maps on the device
-        self.shadow_map = None
+        self.m_ocean: ocean2070.COcean2070 | None = None
+        self.m_coast: coast2070.CCoastWaves | None = None
+        self.m_setting = None
+        self.m_maps: dict = {}  # path -> the engine's water maps on the device
+        self.m_shadow_map = None
 
     def _ready(self) -> bool:
         """The ocean made once its shaders and maps are in; False while they load or when they failed (said once)."""
-        if self.ocean is not None:
+        if self.m_ocean is not None:
             return True
         got = self._compiled(JOB, _compile)
         if got is None:
             return False
-        stages, self.setting, volume, maps = got
-        ctx = self.r.ctx
-        self.ocean = ocean2070.Ocean2070(ctx, stages, Dummies(ctx.rhi), self.setting.water)
-        self.ocean.cube.set_volume(volume)
-        self.maps = {path: upload(ctx, px) for path, px in maps.items()}
-        coast = self.maps[coast2070.COAST].native
-        self.coast = coast2070.CoastWaves(ctx, stages, self.ocean.dummies, coast, self.ocean.cube.volume)
+        stages, self.m_setting, volume, maps = got
+        ctx = self.m_renderer.m_ctx
+        self.m_ocean = ocean2070.COcean2070(ctx, stages, CDummies(ctx.m_rhi), self.m_setting.water)
+        self.m_ocean.m_cube.set_volume(volume)
+        self.m_maps = {path: upload(ctx, pixels) for path, pixels in maps.items()}
+        coast = self.m_maps[coast2070.COAST].native
+        self.m_coast = coast2070.CCoastWaves(ctx, stages, self.m_ocean.m_dummies, coast, self.m_ocean.m_cube.m_volume)
         return True
 
-    def _record(self, f, t: dict, camera, opts) -> bool:
+    def _record(self, frame, targets: dict, camera, options) -> bool:
         """The view's scene mirrored, the copies of the view's frame, the coast waves' step, the sea into its layer
         over the view's depth, the layer into the frame; False without the info map yet."""
-        ctx, s = self.r.ctx, self.r.session
-        info = self._heights_map(
-            f.game_heights if f.game_heights is not None else s.heights, ocean2070.info_map, point=True
+        ctx, session = self.m_renderer.m_ctx, self.m_renderer.m_session
+        info_map = self._heights_map(
+            frame.game_heights if frame.game_heights is not None else session.m_heights, ocean2070.info_map, point=True
         )
-        if info is None:
+        if info_map is None:
             return False
-        own, reflection = self._begin(f, opts, t)
-        self._pass("half", HALF_COPY_FS).draw(own["refraction_fbo"], {"gLit": t["color"]}, {}, depth_test=False)
-        self._pass("depth", DEPTH_COPY_FS).draw(own["read_fbo"], {"gDepth": t["depth"]}, {}, depth_test=False)
-        sun = frame2070.sun_of(self.setting, sun_direction(f), float(f.lt.get("uwTime", 0.0)))
-        half, maps = float(s.size) / 2, {p: m.native for p, m in self.maps.items()}
-        texel = (0.5 / info[2], 0.5 / info[2])
-        sea = ocean2070.Sea((half, half), half + MARGIN, maps, info[1].native, texel, self.coast, reflection)
+        own, reflection = self._begin(frame, options, targets)
+        self._pass("half", HALF_COPY_FS).draw(own["refraction_fbo"], {"gLit": targets["color"]}, {}, depth_test=False)
+        self._pass("depth", DEPTH_COPY_FS).draw(own["read_fbo"], {"gDepth": targets["depth"]}, {}, depth_test=False)
+        sun = frame2070.sun_of(self.m_setting, sun_direction(frame), float(frame.lt.get("uwTime", 0.0)))
+        half, maps = (
+            float(session.m_size_tiles) / 2,
+            {path: map_texture.native for path, map_texture in self.m_maps.items()},
+        )
+        texel = (0.5 / info_map[2], 0.5 / info_map[2])
+        sea = ocean2070.SSea((half, half), half + MARGIN, maps, info_map[1].native, texel, self.m_coast, reflection)
         # the game's sea takes no sun shadow: its shader hands the lookup a distance of 0 (shader-compile.md 10)
-        self.shadow_map, shadow = frame2070.unshadowed(ctx, self.shadow_map)
+        self.m_shadow_map, shadow = frame2070.unshadowed(ctx, self.m_shadow_map)
         copies = {"cTexture5": own["refraction"].native, "cTexture6": own["read"].native}
-        cam = self._camera(camera, t["size"])
-        waves = frame2070.ocean_waves(self.ocean, sea, sun.seconds)
-        coast = {"cTexture1": own["read"].native, "cTexture3": info[1].native, "cTexture4": waves["cTexture0"]}
-        self._coast_waves(cam, sun.seconds, coast, texel, still=opts.particle_time is not None)
-        inputs = frame2070.SeaInputs(copies, shadow, waves)
-        frame2070.ocean_pass(ctx, own["sea_fbo"], t["size"], cam, sun, self.ocean, sea, inputs)
-        self._end(t, SEA_FS)
+        view_camera = self._camera(camera, targets["size"])
+        waves = frame2070.ocean_waves(self.m_ocean, sea, sun.seconds)
+        coast = {"cTexture1": own["read"].native, "cTexture3": info_map[1].native, "cTexture4": waves["cTexture0"]}
+        self._coast_waves(view_camera, sun.seconds, coast, texel, still=options.particle_time is not None)
+        inputs = frame2070.SSeaInputs(copies, shadow, waves)
+        frame2070.ocean_pass(ctx, own["sea_fbo"], targets["size"], view_camera, sun, self.m_ocean, sea, inputs)
+        self._end(targets, SEA_FS)
         return True
 
-    def _coast_waves(self, cam: gs.Camera, seconds: float, maps: dict, texel: tuple, still: bool) -> None:
-        """The coast waves stepped to ``seconds`` round what ``cam`` sees (``coast2070``): the first time, and for a
+    def _coast_waves(self, camera: gs.SCamera, seconds: float, maps: dict, texel: tuple, still: bool) -> None:
+        """The coast waves stepped to ``seconds`` round what ``camera`` sees (``coast2070``): the first time, and for a
         still picture's clock (``still``) set back, from ``WARM`` seconds before it, so that a picture shows them
         settled and two pictures of one moment agree."""
-        coast = self.coast
-        view = (cam.eye, -np.asarray(cam.view, float)[:3, 2], cam.view @ cam.proj)
+        coast = self.m_coast
+        view = (camera.eye, -np.asarray(camera.view, float)[:3, 2], camera.view @ camera.projection)
 
-        def fill(at: float):
-            def put(c: dict) -> None:
-                frame2070.fill_camera(c, cam, at)
-                gs.set_values(c.values(), {**frame2070.water_values(cam, (1.0, 1.0, 1.0, 1.0)),
+        def fill(time_s: float):
+            def put(constants: dict) -> None:
+                frame2070.fill_camera(constants, camera, time_s)
+                gs.set_values(constants.values(), {**frame2070.water_values(camera, (1.0, 1.0, 1.0, 1.0)),
                                            "cWaterConfig": [*texel, 1.0 / ocean2070.TILE, 0.0]})  # fmt: skip
 
             return put
 
-        if coast.last is None or (still and seconds < coast.last):
+        if coast.m_last is None or (still and seconds < coast.m_last):
             coast.restart()
-            at = seconds - WARM
-            while at < seconds:
-                coast.step(at, view, maps, fill(at))
-                at += coast2070.STEP * 1.0001  # a hair past the step: each of them is due
+            time_s = seconds - WARM
+            while time_s < seconds:
+                coast.step(time_s, view, maps, fill(time_s))
+                time_s += coast2070.STEP * 1.0001  # a hair past the step: each of them is due
         coast.step(seconds, view, maps, fill(seconds))
 
     def release(self) -> None:
         super().release()
-        if self.coast is not None:
-            self.coast.release()
-            self.coast = None
-        for tex in self.maps.values():
-            tex.release()
-        self.maps = {}
-        if self.ocean is not None:
-            self.ocean.release()
-            self.ocean = None
-        if self.shadow_map is not None:
-            self.shadow_map.release()
-            self.shadow_map = None
+        if self.m_coast is not None:
+            self.m_coast.release()
+            self.m_coast = None
+        for texture in self.m_maps.values():
+            texture.release()
+        self.m_maps = {}
+        if self.m_ocean is not None:
+            self.m_ocean.release()
+            self.m_ocean = None
+        if self.m_shadow_map is not None:
+            self.m_shadow_map.release()
+            self.m_shadow_map = None

@@ -8,16 +8,18 @@ of ``suite.links``). docs/particle-editor.md, "The app".
 from __future__ import annotations
 
 from ..sources.overlay import normalize
-from .modelscene import Scene
+from .modelscene import CScene
 
 
-def effect_to_edit(scene: Scene | None, node: str) -> tuple[str, str] | None:
+def effect_to_edit(scene: CScene | None, node: str) -> tuple[str, str] | None:
     """(effect file, model config or "" when the scene is the effect alone) for the part ``node``; None when the
     part places no effect and the scene has not exactly one."""
-    if scene is None or not scene.effects:
+    if scene is None or not scene.m_effects:
         return None
-    found = [e for e in scene.effects if node and e.node == node] or (scene.effects if len(scene.effects) == 1 else [])
+    found = [scene_effect for scene_effect in scene.m_effects if node and scene_effect.node == node] or (
+        scene.m_effects if len(scene.m_effects) == 1 else []
+    )
     if not found:
         return None
     effect = normalize(found[0].file)
-    return effect, "" if normalize(scene.config) == effect else normalize(scene.config)
+    return effect, "" if normalize(scene.m_config) == effect else normalize(scene.m_config)

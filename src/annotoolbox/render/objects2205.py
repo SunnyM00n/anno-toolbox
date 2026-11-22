@@ -1,8 +1,8 @@
 """Anno 2205's objects by its own model and prop shaders, many instances a draw as its engine draws a batch: a
 model draw's ``cbModel`` words (colour, effects, time, the index of its matrix) over the frame's three matrix
-textures, a prop draw's four float4 an instance in ``cbProp``; each draw a model of ``frameforward.ForwardFrame``.
+textures, a prop draw's four float4 an instance in ``cbProp``; each draw a model of ``frameforward.CForwardFrame``.
 
-``ObjectSource2205`` compiles; ``FrameMatrices`` holds the frame's matrices; ``Run2205`` / ``PropRun2205`` are a
+``CObjectSource2205`` compiles; ``CFrameMatrices`` holds the frame's matrices; ``CRun2205`` / ``CPropRun2205`` are a
 draw of instances; ``place_runs`` places a frame's instance data at once. The draws, the frame's rows and the maps are
 1800's (``objects1800``). docs/rendering/island-1800-2205-view.md section 18.
 """
@@ -35,7 +35,7 @@ WHITE = -1  # a word's x: the object's colour ARGB, white and opaque
 MATRIX_NAMES = tuple(f"cModelConstantsMatrix{r}" for r in range(3))
 
 
-class ObjectSource2205(objects1800.ObjectSource):
+class CObjectSource2205(objects1800.CObjectSource):
     """2205's model and prop effects as the viewer compiles them (``shaderforward``)."""
 
     GAME, PROPS = "anno2205", PROPS
@@ -50,15 +50,15 @@ def instance_words(count: int, first: int, bones: int = 1) -> np.ndarray:
     return out
 
 
-def terrain_heights(heights: np.ndarray, step: float) -> np.ndarray:
+def terrain_heights(heights: np.ndarray, step_tiles: float) -> np.ndarray:
     """``HEIGHT_MAP``'s texels ([z, x] float32) from the terrain's heights (rows z, the island's x, ``step`` apart):
     a texel a world unit in the view's axes, each the height at its centre (``PlaceOnTerrain`` reads the map at
     ``positionWS.xz / its size``, linearly) [ours: the engine's map is not read]."""
-    size = (heights.shape[1] - 1) * step
-    at = decalmesh.heights_sampler(heights, step, size)
+    size = (heights.shape[1] - 1) * step_tiles
+    sample_height = decalmesh.heights_sampler(heights, step_tiles, size)
     centres = np.arange(int(round(size))) + 0.5
-    xs, zs = np.meshgrid(centres, centres)
-    return np.ascontiguousarray(at(xs, zs), np.float32)
+    grid_x, grid_z = np.meshgrid(centres, centres)
+    return np.ascontiguousarray(sample_height(grid_x, grid_z), np.float32)
 
 
 def prop_rows(worlds: np.ndarray, colours: np.ndarray | None = None) -> np.ndarray:
@@ -70,104 +70,104 @@ def prop_rows(worlds: np.ndarray, colours: np.ndarray | None = None) -> np.ndarr
     return out
 
 
-class FrameMatrices:
+class CFrameMatrices:
     """The frame's matrices of every model draw in the three textures 2205's model shaders read (row r of each
     matrix at texel ``index & 4095, index >> 12``): ``begin`` a frame, ``add`` a draw's worlds, ``upload`` once."""
 
     def __init__(self, rhi) -> None:
-        self.rhi, self.textures, self.rows = rhi, [], 0
+        self.m_rhi, self.m_textures, self.m_rows = rhi, [], 0
         self.begin()
 
     def begin(self) -> None:
-        self._parts: list[np.ndarray] = []
-        self.count, self._sent = 0, False
+        self._m_parts: list[np.ndarray] = []
+        self.m_count, self._m_sent = 0, False
 
     def add(self, worlds: np.ndarray, bones: int = 1) -> int:
         """A draw's matrices (each world ``bones`` times: a skin at rest): the index of its first."""
-        first = self.count
+        first = self.m_count
         rows = frameforward.matrix_rows(list(np.repeat(np.asarray(worlds, float), max(1, bones), axis=0)))
-        self._parts.append(rows)
-        self.count += rows.shape[1]
+        self._m_parts.append(rows)
+        self.m_count += rows.shape[1]
         return first
 
     def named(self) -> dict:
         """The textures by the shaders' names (made with the frame's first ``add``s: room for its matrices)."""
-        need = max(1, -(-self.count // WIDTH))
-        if need > self.rows:
-            for tex in self.textures:
-                tex.destroy()
-            self.textures = []
+        need = max(1, -(-self.m_count // WIDTH))
+        if need > self.m_rows:
+            for texture in self.m_textures:
+                texture.destroy()
+            self.m_textures = []
             for _ in MATRIX_NAMES:
-                tex = self.rhi.newTexture(QRhiTexture.Format.RGBA32F, QSize(WIDTH, need))
-                tex.create()
-                self.textures.append(tex)
-            self.rows, self._sent = need, False
-        return dict(zip(MATRIX_NAMES, self.textures, strict=True))
+                texture = self.m_rhi.newTexture(QRhiTexture.Format.RGBA32F, QSize(WIDTH, need))
+                texture.create()
+                self.m_textures.append(texture)
+            self.m_rows, self._m_sent = need, False
+        return dict(zip(MATRIX_NAMES, self.m_textures, strict=True))
 
     def upload(self, batch) -> None:
         """The frame's matrices into the textures (once a frame)."""
-        if self._sent or not self._parts:
+        if self._m_sent or not self._m_parts:
             return
-        self._sent = True
+        self._m_sent = True
         self.named()
-        every = np.concatenate(self._parts, axis=1)
-        for r, tex in enumerate(self.textures):
-            data = np.zeros((self.rows * WIDTH, 4), np.float32)
-            data[: every.shape[1]] = every[r]
-            gamedraw.upload_level(batch, tex, data.tobytes())
+        every = np.concatenate(self._m_parts, axis=1)
+        for row, texture in enumerate(self.m_textures):
+            data = np.zeros((self.m_rows * WIDTH, 4), np.float32)
+            data[: every.shape[1]] = every[row]
+            gamedraw.upload_level(batch, texture, data.tobytes())
 
     def release(self) -> None:
-        for tex in self.textures:
-            tex.destroy()
-        self.textures, self.rows = [], 0
+        for texture in self.m_textures:
+            texture.destroy()
+        self.m_textures, self.m_rows = [], 0
         self.begin()
 
 
-class Run2205(objects1800.Run):
-    """Up to ``CHUNK`` instances of a mesh (``objects1800.Run``'s shape): its words in its ``cbModel`` slot of the
-    frame's rows, its matrices in the frame's ``FrameMatrices``; its caster (2205's one map) shares both."""
+class CRun2205(objects1800.CRun):
+    """Up to ``CHUNK`` instances of a mesh (``objects1800.CRun``'s shape): its words in its ``cbModel`` slot of the
+    frame's rows, its matrices in the frame's ``CFrameMatrices``; its caster (2205's one map) shares both."""
 
-    matrices: FrameMatrices | None = None
+    m_matrices: CFrameMatrices | None = None
 
     def _matrices(self) -> dict:
-        return self.matrices.named() if self.matrices is not None else {}
+        return self.m_matrices.named() if self.m_matrices is not None else {}
 
     def textures(self) -> dict:
-        return {**self.part.textures(None), **self._matrices()}
+        return {**self.m_part.textures(None), **self._matrices()}
 
-    def prepare(self, rp, signature, batch, cam, light: dict, extra: dict | None = None, draw=None) -> None:
-        super().prepare(rp, signature, batch, cam, light, {**self._matrices(), **(extra or {})}, draw)
+    def prepare(self, render_pass, signature, batch, camera, light: dict, extra: dict | None = None, draw=None) -> None:
+        super().prepare(render_pass, signature, batch, camera, light, {**self._matrices(), **(extra or {})}, draw)
 
-    def _hand(self, rows: objects1800.FrameRows, name: str, path: str, data: np.ndarray, fill=None) -> None:
+    def _hand(self, rows: objects1800.CFrameRows, name: str, path: str, data: np.ndarray, fill=None) -> None:
         """``data`` into a slot of ``name`` its colour and caster draws share."""
-        slot = objects1800.place_slot(rows, self.draw_call.program, name, path, data, fill)
-        objects1800.hand_slots([self.draw_call, self.shadow.draw_call if self.shadow else None], slot, {})
+        slot = objects1800.place_slot(rows, self.m_draw_call.m_program, name, path, data, fill)
+        objects1800.hand_slots([self.m_draw_call, self.m_shadow.m_draw_call if self.m_shadow else None], slot, {})
 
-    def place(self, rows: objects1800.FrameRows, matrices: FrameMatrices) -> None:
+    def place(self, rows: objects1800.CFrameRows, matrices: CFrameMatrices) -> None:
         """Its matrices into ``matrices``, its words into a ``cbModel`` slot its colour and caster draws share."""
-        self.matrices = matrices
-        first = matrices.add(self.worlds, self.bones)
-        self._hand(rows, "cbModel", "cModelInstanceData", instance_words(len(self.worlds), first, self.bones))
+        self.m_matrices = matrices
+        first = matrices.add(self.m_worlds, self.m_bones)
+        self._hand(rows, "cbModel", "cModelInstanceData", instance_words(len(self.m_worlds), first, self.m_bones))
 
 
-class PropRun2205(Run2205):
+class CPropRun2205(CRun2205):
     """A run of props (``PROP_CHUNK`` at most): their rows (``prop_rows``) in a ``cbProp`` slot with the fade (shown)
     its colour and caster draws share, no matrices; ``colours`` the island's stored colours (rgba floats; None:
     white)."""
 
-    colours: np.ndarray | None = None
+    m_colours: np.ndarray | None = None
 
-    def place(self, rows: objects1800.FrameRows, matrices: FrameMatrices | None = None) -> None:
-        data = prop_rows(self.worlds, self.colours).reshape(-1, 4)
+    def place(self, rows: objects1800.CFrameRows, matrices: CFrameMatrices | None = None) -> None:
+        data = prop_rows(self.m_worlds, self.m_colours).reshape(-1, 4)
         self._hand(rows, "cbProp", "cPropInstanceData", data, objects1800.shown_fade)
 
 
-def place_runs(ctx, rows: objects1800.FrameRows, matrices: FrameMatrices, runs: list) -> None:
+def place_runs(ctx, rows: objects1800.CFrameRows, matrices: CFrameMatrices, runs: list) -> None:
     """The frame's instance data of every run at once: each run's words or props into the rows, the models'
     matrices into ``matrices``, sent ahead of the frame's passes (the shadow pass reads them first)."""
     rows.begin()
     matrices.begin()
-    for r in runs:
-        r.place(rows, matrices)
+    for run in runs:
+        run.place(rows, matrices)
     matrices.named()  # made at their size before the draws bind them
-    ctx.native_pass(lambda cb, batch: (matrices.upload(batch), cb.resourceUpdate(batch)))
+    ctx.native_pass(lambda command_buffer, batch: (matrices.upload(batch), command_buffer.resourceUpdate(batch)))

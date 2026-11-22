@@ -23,7 +23,7 @@ INLAND = 255  # lakes and rivers: the flattest water, as vanilla paints them
 
 
 @dataclass(frozen=True)
-class SurfLine:
+class SSurfLine:
     setting: str
     points: list[tuple[float, float, float]]  # island tiles: x, z, width (the band's full width in tiles)
 
@@ -40,20 +40,20 @@ def read_settings(tree) -> dict[str, float]:
     return out
 
 
-def surf_lines(isl) -> list[SurfLine]:
+def surf_lines(island) -> list[SSurfLine]:
     """The island's surf lines: a setting and the points (x, z, width) of each."""
-    node = isl.root.path("SurfLines")
+    node = island.m_root.path("SurfLines")
     out = []
     for item in node.children if node is not None else []:
         points = item.path("SurfLinePoints")
-        pts = []
-        for pt in points.children if points is not None else []:
-            pos = pt.find("Position")
-            if pos is not None and pos.data and len(pos.data) == 12:
-                x, _, z = struct.unpack("<3f", pos.data)
-                pts.append((x, z, pt.float("Width", 1.0)))
-        if pts:
-            out.append(SurfLine(item.value("SurfSetting", "Default"), pts))
+        line_points = []
+        for point in points.children if points is not None else []:
+            position = point.find("Position")
+            if position is not None and position.data and len(position.data) == 12:
+                x, _, z = struct.unpack("<3f", position.data)
+                line_points.append((x, z, point.float("Width", 1.0)))
+        if line_points:
+            out.append(SSurfLine(item.value("SurfSetting", "Default"), line_points))
     return out
 
 
@@ -62,16 +62,16 @@ def grade(factor: float) -> int:
     return int(round(255 * min(max(factor, 0.0), 1.0)))
 
 
-def band(shape, cell: float, pts, offset: tuple[float, float]):
+def band(shape, cell: float, points, offset: tuple[float, float]):
     """Per-cell distance-in-half-widths test: a boolean grid of the cells (``cell`` tiles wide, centres at
-    ``(i + 0.5) * cell``) within half the line's interpolated width of the polyline ``pts`` (x, z, width)."""
+    ``(i + 0.5) * cell``) within half the line's interpolated width of the polyline ``points`` (x, z, width)."""
     import numpy as np
 
     px, pz = offset
     hit = np.zeros(shape, bool)
     xs = (np.arange(shape[1]) + 0.5) * cell
     zs = (np.arange(shape[0]) + 0.5) * cell
-    nodes = [(x + px, z + pz, w) for x, z, w in pts]
+    nodes = [(x + px, z + pz, node_width) for x, z, node_width in points]
     if len(nodes) == 1:
         nodes = nodes * 2
     for (x0, z0, w0), (x1, z1, w1) in zip(nodes, nodes[1:], strict=False):
@@ -83,9 +83,9 @@ def band(shape, cell: float, pts, offset: tuple[float, float]):
         gx, gz = np.meshgrid(xs[ix], zs[iz])
         dx, dz = x1 - x0, z1 - z0
         length2 = dx * dx + dz * dz
-        t = np.clip(((gx - x0) * dx + (gz - z0) * dz) / length2, 0, 1) if length2 else np.zeros_like(gx)
-        width = (w0 + (w1 - w0) * t) / 2
-        dist = np.hypot(gx - (x0 + t * dx), gz - (z0 + t * dz))
+        fraction = np.clip(((gx - x0) * dx + (gz - z0) * dz) / length2, 0, 1) if length2 else np.zeros_like(gx)
+        width = (w0 + (w1 - w0) * fraction) / 2
+        dist = np.hypot(gx - (x0 + fraction * dx), gz - (z0 + fraction * dz))
         hit[np.ix_(iz, ix)] |= dist <= np.maximum(width, cell / 2)
     return hit
 
@@ -118,8 +118,13 @@ def inland_cells(builder, shape, cell: float):
                 cx, cz = centres[ix], centres[iz]
                 if point_in_polygon(cx, cz, poly) or dist_to_polygon(cx, cz, poly) <= 1.0:
                     out[iz, ix] = True
-    for pts, widths in getattr(builder, "rivers", []):
-        out |= band(shape, cell, [(p[0], p[2], w + 2) for p, w in zip(pts, widths, strict=False)], (0.0, 0.0))
+    for points, widths in getattr(builder, "rivers", []):
+        out |= band(
+            shape,
+            cell,
+            [(point[0], point[2], width + 2) for point, width in zip(points, widths, strict=False)],
+            (0.0, 0.0),
+        )
     return out
 
 
@@ -128,22 +133,22 @@ def apply(builder) -> dict:
     the report entry. Without lines, or with ``SURF_LINES`` off, the 255 constant stays."""
     import numpy as np
 
-    isl = getattr(builder, "isl", None)
-    if getattr(isl, "root", None) is None:  # a vanilla island of the editor has no surf lines to read
+    island = getattr(builder, "island", None)
+    if getattr(island, "m_root", None) is None:  # a vanilla island of the editor has no surf lines to read
         return {"surf lines": 0}
-    wi = builder.rd.path("WaterInfos")
-    lines = surf_lines(isl) if SURF_LINES else []
-    if wi is None or not lines:
+    water_infos = builder.rd3d.path("WaterInfos")
+    lines = surf_lines(island) if SURF_LINES else []
+    if water_infos is None or not lines:
         return {"surf lines": 0}
-    w = wi.find("width").u32()
-    cell = builder.size / w
-    info = np.frombuffer(wi.find("map").data, np.uint8).reshape(w, w, 4).copy()
+    width = water_infos.find("width").u32()
+    cell = builder.size / width
+    water_map = np.frombuffer(water_infos.find("map").data, np.uint8).reshape(width, width, 4).copy()
     factors = getattr(builder, "surf_settings", None) or SETTINGS_FALLBACK
-    surf = surf_map((w, w), cell, lines, factors, (builder.pad_x, builder.pad_z))
-    inland = inland_cells(builder, (w, w), cell)
-    info[..., 1] = np.where(inland, INLAND, surf)
-    wi.find("map").data = info.tobytes()
-    covered = float(np.count_nonzero(info[..., 1])) / info[..., 1].size
+    surf = surf_map((width, width), cell, lines, factors, (builder.pad_x, builder.pad_z))
+    inland = inland_cells(builder, (width, width), cell)
+    water_map[..., 1] = np.where(inland, INLAND, surf)
+    water_infos.find("map").data = water_map.tobytes()
+    covered = float(np.count_nonzero(water_map[..., 1])) / water_map[..., 1].size
     report = {"surf lines": len(lines), "surf share of the map": round(covered, 3)}
     builder.report.update(report)
     return report

@@ -7,7 +7,7 @@ island's, ``check`` names what the game has no island of, ``apply`` writes them 
 
 from __future__ import annotations
 
-from ....formats.isd2070 import Node
+from ....formats.isd2070 import SNode
 from ....infra.i18n import tr
 
 NODES = {"clime": "Clime", "difficulty": "Difficulty", "sea_level": "SeaLevel"}
@@ -17,7 +17,7 @@ RANGES_1701 = {**RANGES, "difficulty": (0, 2)}
 AFTER = ("RiverGrid", "Rivers", "Lakes", "CoastBuildingLines")  # a missing SeaLevel goes after the first of these
 
 
-def editable(root: Node, only: tuple[str, ...] | None = None) -> list[str]:
+def editable(root: SNode, only: tuple[str, ...] | None = None) -> list[str]:
     """The properties this island can set: those it has (limited to ``only``), and a ``SeaLevel`` when it is in 2070's
     layout (it has a ``Clime``; 1404's files have none of the three, so nothing is invented for them)."""
     has_clime = root.find("Clime") is not None
@@ -28,7 +28,7 @@ def editable(root: Node, only: tuple[str, ...] | None = None) -> list[str]:
     ]
 
 
-def read(root: Node) -> dict:
+def read(root: SNode) -> dict:
     """The island's own values: its size (tiles, not editable) and the three properties."""
     return {
         "width": root.int("Width"),
@@ -57,11 +57,11 @@ def check(props: dict, ranges: dict | None = None) -> list[str]:
     return out
 
 
-def _like(name: str, text: str, ref: Node) -> Node:
-    return Node(name, text, short=ref.short, tail=ref.tail, head=ref.head)
+def _like(name: str, text: str, ref: SNode) -> SNode:
+    return SNode(name, text, short=ref.short, tail=ref.tail, head=ref.head)
 
 
-def apply(root: Node, props: dict, only: tuple[str, ...] | None = None, ranges: dict | None = None) -> int:
+def apply(root: SNode, props: dict, only: tuple[str, ...] | None = None, ranges: dict | None = None) -> int:
     """Set the properties of the parsed island ``root`` (1701: its header, ``only`` ``HEADER_1701``); returns how many
     were set. A missing ``SeaLevel`` is added where the islands that have one keep it; a value not in ``check``'s
     range is left out."""
@@ -71,7 +71,7 @@ def apply(root: Node, props: dict, only: tuple[str, ...] | None = None, ranges: 
             continue
         node = root.find(NODES[key])
         if node is None:
-            after = next((root.find(n) for n in AFTER if root.find(n) is not None), None)
+            after = next((root.find(anchor_name) for anchor_name in AFTER if root.find(anchor_name) is not None), None)
             ref = root.find("Clime")
             if after is None:
                 continue

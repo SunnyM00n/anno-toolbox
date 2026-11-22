@@ -33,7 +33,7 @@ LOD_COUNT = 5  # the newer games' baked levels: _lod0.rdm to _lod4.rdm
 
 
 @dataclass
-class Node:
+class SNode:
     """One part of a config: its ``kind`` (MAIN, MODEL, MATERIAL, FILE, ...), the list it sits in (``section``: Models,
     Materials, ...) and its place there (``index``: what a sequence's ``ModelID`` counts), its fields in file order,
     the structured values that are not parts (``blocks``, the first of each name: ``MaterialLODInfos``, ``AABBMin``),
@@ -45,7 +45,7 @@ class Node:
     path: str = ""
     fields: list[tuple[str, str]] = field(default_factory=list)
     blocks: dict[str, ET.Element] = field(default_factory=dict)
-    children: list[Node] = field(default_factory=list)
+    children: list[SNode] = field(default_factory=list)
     element: ET.Element | None = field(default=None, repr=False)
 
     def get(self, name: str, default: str = "") -> str:
@@ -65,9 +65,9 @@ class Node:
     def name(self) -> str:
         return self.get("Name")
 
-    def section_of(self, section: str) -> list[Node]:
+    def section_of(self, section: str) -> list[SNode]:
         """The children in one list (``Models``, ``Materials`` ...), in order."""
-        return [c for c in self.children if c.section == section]
+        return [child for child in self.children if child.section == section]
 
     def walk(self):
         """This node and every node below it, depth first."""
@@ -75,36 +75,36 @@ class Node:
         for child in self.children:
             yield from child.walk()
 
-    def find(self, path: str) -> Node | None:
-        return next((n for n in self.walk() if n.path == path), None)
+    def find(self, path: str) -> SNode | None:
+        return next((node for node in self.walk() if node.path == path), None)
 
 
-def _is_config_el(el: ET.Element) -> bool:
-    return is_config_tag(el.tag)
+def _is_config_element(element: ET.Element) -> bool:
+    return is_config_tag(element.tag)
 
 
 def parse(text: str) -> ET.Element:
     """The config's XML element: group headings kept, tag suffixes cut, ``</>`` closed."""
     text = BARE_AMP.sub("&amp;", CONTROL.sub("", text))
-    text = _GROUP.sub(lambda m: f"<{GROUP}>{m.group(1)} [{m.group(2)}]</{GROUP}>", text)
+    text = _GROUP.sub(lambda match: f"<{GROUP}>{match.group(1)} [{match.group(2)}]</{GROUP}>", text)
     root = ET.fromstring(close_tags(_TAG.sub(r"<\1\2\3>", text.lstrip(BOM))))
-    if not _is_config_el(root):  # a wrapper around the main config
-        root = next((el for el in root.iter() if _is_config_el(el)), root)
+    if not _is_config_element(root):  # a wrapper around the main config
+        root = next((element for element in root.iter() if _is_config_element(element)), root)
     return root
 
 
-def read_tree(text: str) -> Node:
-    """The whole config as a tree of ``Node``s; raises ``ET.ParseError`` for a file that is not one."""
+def read_tree(text: str) -> SNode:
+    """The whole config as a tree of ``SNode``s; raises ``ET.ParseError`` for a file that is not one."""
     return _node(parse(text), "", 0, "")
 
 
-def _node(el: ET.Element, section: str, index: int, path: str) -> Node:
-    node = Node("", section, index, path, element=el)
-    for child in el:
+def _node(element: ET.Element, section: str, index: int, path: str) -> SNode:
+    node = SNode("", section, index, path, element=element)
+    for child in element:
         tag = strip(child.tag)
         if tag == "ConfigType":
             node.kind = (child.text or "").strip()
-        elif len(child) and all(_is_config_el(c) for c in child):
+        elif len(child) and all(_is_config_element(part) for part in child):
             for k, sub in enumerate(child):
                 node.children.append(_node(sub, tag, k, f"{path}/{tag}/{k}".lstrip("/")))
         elif len(child):
@@ -118,69 +118,81 @@ def _node(el: ET.Element, section: str, index: int, path: str) -> Node:
 
 
 @dataclass(frozen=True)
-class Placement:
+class SPlacement:
     position: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
 
-def transforms(node: Node) -> list[Node]:
+def transforms(node: SNode) -> list[SNode]:
     """A part's transformers (ORIENTATION_TRANSFORM, ANIMATION_TRANSFORM, BONELINK_TRANSFORM ...), in order."""
     return node.section_of("Transformer")
 
 
-def placement(node: Node) -> Placement:
+def placement(node: SNode) -> SPlacement:
     """Where a part sits: its ORIENTATION_TRANSFORMs nested in order, the first outermost (scale per axis: Scale x
     NonUniformScale), those with conditions (a state's pose) left out. The other transformers animate or switch a
     part; without an orientation an ANIMATION_TRANSFORM's offset places it (rendering/material-fields.md)."""
     found = transforms(node)
-    orients = [t for t in found if t.kind == "ORIENTATION_TRANSFORM" and not t.number("Conditions")]
-    if not orients:
-        anim = next((t for t in found if t.kind == "ANIMATION_TRANSFORM"), None)
-        if anim is not None:
-            return Placement(tuple(anim.number(f"PositionOffset.{a}") for a in "xyz"))
-        return Placement()
-    pos, rot, scale = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0)
-    for t in orients:
-        p = tuple(t.number(f"Position.{a}") for a in "xyz")
-        q = (*(t.number(f"Rotation.{a}") for a in "xyz"), t.number("Rotation.w", 1.0))
-        if not any(q):
-            q = (0.0, 0.0, 0.0, 1.0)
-        k = t.number("Scale", 1.0)
-        s = tuple(k * t.number(f"NonUniformScale.{a}", 1.0) for a in "xyz")
-        moved = meshxform.qrotate(rot, tuple(c * v for c, v in zip(scale, p, strict=True)))
-        pos = tuple(a + b for a, b in zip(pos, moved, strict=True))
-        rot, scale = meshxform.qmul(rot, q), tuple(a * b for a, b in zip(scale, s, strict=True))
-    return Placement(pos, rot, scale)
+    orientations = [
+        transformer
+        for transformer in found
+        if transformer.kind == "ORIENTATION_TRANSFORM" and not transformer.number("Conditions")
+    ]
+    if not orientations:
+        animation = next((transformer for transformer in found if transformer.kind == "ANIMATION_TRANSFORM"), None)
+        if animation is not None:
+            return SPlacement(tuple(animation.number(f"PositionOffset.{axis}") for axis in "xyz"))
+        return SPlacement()
+    position, rotation, scale = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0)
+    for transformer in orientations:
+        local_position = tuple(transformer.number(f"Position.{axis}") for axis in "xyz")
+        local_rotation = (
+            *(transformer.number(f"Rotation.{axis}") for axis in "xyz"),
+            transformer.number("Rotation.w", 1.0),
+        )
+        if not any(local_rotation):
+            local_rotation = (0.0, 0.0, 0.0, 1.0)
+        uniform_scale = transformer.number("Scale", 1.0)
+        local_scale = tuple(uniform_scale * transformer.number(f"NonUniformScale.{axis}", 1.0) for axis in "xyz")
+        moved = meshxform.qrotate(
+            rotation, tuple(factor * value for factor, value in zip(scale, local_position, strict=True))
+        )
+        position = tuple(old + step for old, step in zip(position, moved, strict=True))
+        rotation, scale = (
+            meshxform.qmul(rotation, local_rotation),
+            tuple(old * factor for old, factor in zip(scale, local_scale, strict=True)),
+        )
+    return SPlacement(position, rotation, scale)
 
 
-def shown_always(node: Node, on_joints: bool = False) -> bool:
+def shown_always(node: SNode, on_joints: bool = False) -> bool:
     """False for a part shown only in some state of the object (a VISIBILITY_TRANSFORM with conditions) or, unless
     ``on_joints``, hung on a joint (a BONELINK_TRANSFORM): the rest pose leaves those out."""
-    for t in transforms(node):
-        if (t.kind == "BONELINK_TRANSFORM" and not on_joints) or (
-            t.kind == "VISIBILITY_TRANSFORM" and t.number("Conditions")
+    for transformer in transforms(node):
+        if (transformer.kind == "BONELINK_TRANSFORM" and not on_joints) or (
+            transformer.kind == "VISIBILITY_TRANSFORM" and transformer.number("Conditions")
         ):
             return False
     return True
 
 
-def shown_when(node: Node) -> int:
+def shown_when(node: SNode) -> int:
     """The condition bits a part's VISIBILITY_TRANSFORM shows it under (shown while one of them is on); 0: always
     (engine-animation "Bone links, conditions and the other sequences")."""
-    return next((int(t.number("Conditions")) for t in transforms(node)
-                 if t.kind == "VISIBILITY_TRANSFORM" and t.number("Conditions")), 0)  # fmt: skip
+    return next((int(transformer.number("Conditions")) for transformer in transforms(node)
+                 if transformer.kind == "VISIBILITY_TRANSFORM" and transformer.number("Conditions")), 0)  # fmt: skip
 
 
-def day_night(node: Node) -> tuple[int, int, float] | None:
+def day_night(node: SNode) -> tuple[int, int, float] | None:
     """A part's DAYNIGHT_TRANSFORM as (its ``TimeSlice``, its ``Conditions`` bits, its ``FadeTime`` in seconds), None
     without one (engine-animation "Time of day and the states of effects, lights and decals")."""
-    return next(((int(t.number("TimeSlice")), int(t.number("Conditions")), t.number("FadeTime"))
-                 for t in transforms(node) if t.kind == "DAYNIGHT_TRANSFORM"), None)  # fmt: skip
+    return next(((int(transformer.number("TimeSlice")), int(transformer.number("Conditions")), transformer.number("FadeTime"))
+                 for transformer in transforms(node) if transformer.kind == "DAYNIGHT_TRANSFORM"), None)  # fmt: skip
 
 
 @dataclass(frozen=True)
-class AnimSpec:
+class SAnimSpec:
     """An ANIMATION_TRANSFORM's fields (engine-animation "Spinning parts"): the spin (``rotation`` Euler radians,
     ``speed``, ``oscillation`` degrees), the position motion (``offset`` x, y, z, ``position_speed``,
     ``position_rotate``), the ``alignment`` (1 the light, 2 the wind, 3 and 4 the camera, 5 to 7 the clock) and the
@@ -196,14 +208,14 @@ class AnimSpec:
     alignment: int = 0
 
 
-def animation_transforms(node: Node) -> list[AnimSpec]:
+def animation_transforms(node: SNode) -> list[SAnimSpec]:
     """A part's ANIMATION_TRANSFORMs, in order."""
     return [
-        AnimSpec(tuple(t.number(f"Rotation.{a}") for a in "xyz"), t.number("RotationSpeed", 1.0),
-                 t.number("Oscillation"), int(t.number("Conditions")),
-                 tuple(t.number(f"PositionOffset.{a}") for a in "xyz"), t.number("PositionSpeed", 1.0),
-                 t.number("PositionRotate") != 0, int(t.number("Alignment")))
-        for t in transforms(node) if t.kind == "ANIMATION_TRANSFORM"
+        SAnimSpec(tuple(transformer.number(f"Rotation.{axis}") for axis in "xyz"), transformer.number("RotationSpeed", 1.0),
+                 transformer.number("Oscillation"), int(transformer.number("Conditions")),
+                 tuple(transformer.number(f"PositionOffset.{axis}") for axis in "xyz"), transformer.number("PositionSpeed", 1.0),
+                 transformer.number("PositionRotate") != 0, int(transformer.number("Alignment")))
+        for transformer in transforms(node) if transformer.kind == "ANIMATION_TRANSFORM"
     ]  # fmt: skip
 
 
@@ -213,7 +225,7 @@ def fnv1a32(text: str) -> int:
 
 
 @dataclass(frozen=True)
-class BoneLink:
+class SBoneLink:
     """A part hung on a joint of ``Models[model]``'s skeleton: 117 names the joint by its name's hash, 2070 by its
     number (engine-animation "Bone links")."""
 
@@ -222,18 +234,18 @@ class BoneLink:
     index: int | None = None
 
 
-def bone_link(node: Node) -> BoneLink | None:
+def bone_link(node: SNode) -> SBoneLink | None:
     """The joint a part hangs on (its BONELINK_TRANSFORM), None for a part that hangs on none."""
-    found = next((t for t in transforms(node) if t.kind == "BONELINK_TRANSFORM"), None)
+    found = next((transformer for transformer in transforms(node) if transformer.kind == "BONELINK_TRANSFORM"), None)
     if found is None:
         return None
     if found.get("BoneHash"):
-        return BoneLink(int(found.number("ModelID")), int(found.number("BoneHash")) & 0xFFFFFFFF)
-    return BoneLink(int(found.number("ModelID")), index=int(found.number("BoneID")))
+        return SBoneLink(int(found.number("ModelID")), int(found.number("BoneHash")) & 0xFFFFFFFF)
+    return SBoneLink(int(found.number("ModelID")), index=int(found.number("BoneID")))
 
 
 @dataclass(frozen=True)
-class SpinSpec:
+class SSpinSpec:
     """An ANIMATION_TRANSFORM: ``rotation`` Euler radians, ``speed``, ``oscillation`` degrees, the ``conditions`` bits
     it runs under (0: always) (engine-animation "Spinning parts")."""
 
@@ -243,20 +255,25 @@ class SpinSpec:
     conditions: int = 0
 
 
-def spins(node: Node) -> list[SpinSpec]:
+def spins(node: SNode) -> list[SSpinSpec]:
     """A part's ANIMATION_TRANSFORMs that turn it, in order."""
     out = []
-    for t in transforms(node):
-        rot = tuple(t.number(f"Rotation.{a}") for a in "xyz")
-        if t.kind == "ANIMATION_TRANSFORM" and any(rot):
+    for transformer in transforms(node):
+        rotation = tuple(transformer.number(f"Rotation.{axis}") for axis in "xyz")
+        if transformer.kind == "ANIMATION_TRANSFORM" and any(rotation):
             out.append(
-                SpinSpec(rot, t.number("RotationSpeed", 1.0), t.number("Oscillation"), int(t.number("Conditions")))
+                SSpinSpec(
+                    rotation,
+                    transformer.number("RotationSpeed", 1.0),
+                    transformer.number("Oscillation"),
+                    int(transformer.number("Conditions")),
+                )
             )
     return out
 
 
 @dataclass(frozen=True)
-class Clip:
+class SClip:
     """One of a model's animations: the file, the time ``scale`` (5 plays it five times slower; 0 plays nothing) and
     ``loops`` (0 for ever) (engine-animation "Skinned meshes")."""
 
@@ -265,17 +282,19 @@ class Clip:
     loops: int = 0
 
 
-def animations(model: Node) -> list[Clip]:
+def animations(model: SNode) -> list[SClip]:
     """A MODEL's ANIMATION blocks as clips (the files as the game loads them), in the config's order."""
     return [
-        Clip(mesh_file(a), a.number("Scale", 1.0), int(a.number("LoopCount"))) for a in model.section_of("Animations")
+        SClip(mesh_file(clip_node), clip_node.number("Scale", 1.0), int(clip_node.number("LoopCount")))
+        for clip_node in model.section_of("Animations")
     ]
 
 
 @dataclass(frozen=True)
-class TrackElement:
+class STrackElement:
     """One element of a sequence's track: ``kind`` 0 plays ``Models[model]``'s ``Animations[animation]``, 1 starts
-    ``Particles[effect]``, 2 sets condition bits (docs/engine-animation.md "Sequences")."""
+    the effect in slot ``effect`` (the newer games' ``ParticleID``: its place in ``Particles``; 2070's ``m_EffectID``:
+    the ``m_Index`` of one of its ``m_Effects``), 2 sets condition bits (docs/engine-animation.md "Sequences")."""
 
     kind: int
     start_ms: int
@@ -287,39 +306,46 @@ class TrackElement:
 
 
 @dataclass
-class Sequence:
+class SSequence:
     node: str
     sequence_id: int
     looped: bool
     speed: float
-    tracks: list[list[TrackElement]] = field(default_factory=list)
+    tracks: list[list[STrackElement]] = field(default_factory=list)
 
     @property
     def duration_ms(self) -> int:
-        return max((e.end_ms for track in self.tracks for e in track), default=0)
+        return max((element.end_ms for track in self.tracks for element in track), default=0)
 
     @property
     def label(self) -> str:
         """The id, a newer game's packed one spelled out: action, info, variant (100691457 is 6 / 110 / 1)."""
-        i = self.sequence_id
-        return f"{i} ({i >> 24} / {(i >> 8) & 0xFFFF} / {i & 0xFF})" if i >= 1 << 24 else str(i)
+        packed_id = self.sequence_id
+        return (
+            f"{packed_id} ({packed_id >> 24} / {(packed_id >> 8) & 0xFFFF} / {packed_id & 0xFF})"
+            if packed_id >= 1 << 24
+            else str(packed_id)
+        )
 
 
-def _int(el: ET.Element, name: str) -> int:
-    child = next((c for c in el if strip(c.tag) == name), None)
+def _int(element: ET.Element, name: str) -> int:
+    child = next((child for child in element if strip(child.tag) == name), None)
     return number(child.text if child is not None else None)
 
 
-def sequences(tree: Node) -> list[Sequence]:
+def sequences(tree: SNode) -> list[SSequence]:
     """The config's sequences with their tracks, in file order."""
     out = []
     for node in tree.section_of("Sequences"):
-        seq = Sequence(node.path, int(node.number("SequenceID")), node.get("Looped") == "1", node.number("Speed", 1.0))
-        for track in [c for c in node.element if strip(c.tag) == "Track"] if node.element is not None else []:
+        seq = SSequence(node.path, int(node.number("SequenceID")), node.get("Looped") == "1", node.number("Speed", 1.0))
+        for track in (
+            [child for child in node.element if strip(child.tag) == "Track"] if node.element is not None else []
+        ):
             seq.tracks.append([
-                TrackElement(_int(te, "Type"), _int(te, "StartTime"), _int(te, "EndTime"), _int(te, "ModelID"),
-                             _int(te, "AnimationID"), _int(te, "EffectID"), _int(te, "Condition"))
-                for te in track if strip(te.tag) == "TrackElement"
+                STrackElement(_int(track_element, "Type"), _int(track_element, "StartTime"), _int(track_element, "EndTime"), _int(track_element, "ModelID"),
+                             _int(track_element, "AnimationID"), _int(track_element, "ParticleID") or _int(track_element, "EffectID"),
+                             _int(track_element, "Condition"))
+                for track_element in track if strip(track_element.tag) == "TrackElement"
             ])  # fmt: skip
         out.append(seq)
     return out
@@ -336,10 +362,10 @@ def config_suffixes(game: str) -> tuple[str, ...]:
 def model_configs(paths: Iterable[str], game: str) -> list[str]:
     """The model configs among ``paths`` of a game, in their order."""
     suffixes = config_suffixes(game)
-    return [p for p in paths if p.endswith(suffixes)]
+    return [path for path in paths if path.endswith(suffixes)]
 
 
-def mesh_file(node: Node) -> str:
+def mesh_file(node: SNode) -> str:
     """The mesh a MODEL or CLOTH loads: the configs name the source ``.fbx``, the game loads the ``.rdm``."""
     return re.sub(r"\.fbx$", ".rdm", normalize(node.get("FileName")))
 
@@ -352,23 +378,26 @@ def lod_files(
     pattern = r"_lod\d+\.rdm$" if any_level else r"_lod0\.rdm$"
     if not re.search(pattern, mesh):
         return [mesh]
-    levels = [re.sub(pattern, f"_lod{n}.rdm", mesh) for n in range(count)]
+    levels = [re.sub(pattern, f"_lod{level}.rdm", mesh) for level in range(count)]
     if any_level:
-        return [p for p in levels if exists(p)] or [mesh]
-    return [mesh] + [p for p in levels[1:] if exists(p)]
+        return [path for path in levels if exists(path)] or [mesh]
+    return [mesh] + [path for path in levels[1:] if exists(path)]
 
 
-def material_lods(model: Node) -> list[list[int]]:
+def material_lods(model: SNode) -> list[list[int]]:
     """Per level of detail, the config's material index of each of the mesh's materials (``MaterialLODInfos``); empty
     when the config gives none (the mesh names the config's materials directly)."""
     block = model.blocks.get("MaterialLODInfos")
     if block is None:
         return []
-    return [[number(i.text) for i in level.iter("i") if i is not level and not len(i)] for level in block.findall("i")]
+    return [
+        [number(item.text) for item in level.iter("i") if item is not level and not len(item)]
+        for level in block.findall("i")
+    ]
 
 
 @dataclass(frozen=True)
-class MaterialFields:
+class SMaterialFields:
     """A MATERIAL as its config writes it (texture names as written, slashes forward; "" for a map switched off):
     the albedo or diffuse map and colour, the normal, metal and dye maps, the shader, the gloss factor, the glow
     (``cEmissiveColor`` when ``GLOW_ENABLED``), the opacity, the water's flow and a flipbook's frames
@@ -388,30 +417,30 @@ class MaterialFields:
     flipbook: dict | None = None
 
 
-def _map(node: Node, name: str, switch: str, default: str = "1") -> str:
+def _map(node: SNode, name: str, switch: str, default: str = "1") -> str:
     found = node.get(name).replace("\\", "/") if node.get(switch, default) != "0" else ""
     return "" if "default_" in found else found
 
 
-def material_fields(node: Node) -> MaterialFields:
+def material_fields(node: SNode) -> SMaterialFields:
     """A MATERIAL node's fields (the banner slot names its map and colour as albedo, the others as diffuse)."""
-    albedo = any(k == "cAlbedoTexture" for k, _v in node.fields)
-    tex, col = ("cAlbedoTexture", "cAlbedoColor") if albedo else ("cModelDiffTex", "cDiffuseColor")
+    albedo = any(key == "cAlbedoTexture" for key, _value in node.fields)
+    texture_field, color_field = ("cAlbedoTexture", "cAlbedoColor") if albedo else ("cModelDiffTex", "cDiffuseColor")
     flipbook = None
     if node.get("FLIPBOOK_ENABLED") == "1":  # an atlas of frames the shader steps through (water effects: 8 x 8)
         flipbook = {"x": int(node.number("cNumSubImagesX", 1)), "y": int(node.number("cNumSubImagesY", 1)),
                     "frames": int(node.number("cNumFrames", 1)), "duration": node.number("cFrameDuration", 0.1),
                     "tiling": [node.number("cFlipbookTiling.x", 1), node.number("cFlipbookTiling.y", 1)]}  # fmt: skip
-    return MaterialFields(
-        node.name, _map(node, tex, "DIFFUSE_ENABLED"), _map(node, "cModelNormalTex", "NORMAL_ENABLED"),
+    return SMaterialFields(
+        node.name, _map(node, texture_field, "DIFFUSE_ENABLED"), _map(node, "cModelNormalTex", "NORMAL_ENABLED"),
         _map(node, "cModelMetallicTex", "METALLIC_TEX_ENABLED", "0"), _map(node, "cDyeMask", "DYE_MASK_ENABLED", "0"),
-        tuple(node.number(f"{col}.{c}", 1.0) for c in "rgb"), int(node.number("ShaderID", 8)),
+        tuple(node.number(f"{color_field}.{channel}", 1.0) for channel in "rgb"), int(node.number("ShaderID", 8)),
         node.number("cGlossinessFactor", 1.0), node.number("cEmissiveColor", 2.0) if node.get("GLOW_ENABLED") == "1" else 0.0,
         _opacity(node), node.number("cFlowSpeed"), flipbook,
     )  # fmt: skip
 
 
-def _opacity(node: Node) -> float:
+def _opacity(node: SNode) -> float:
     """How much of its colour a material lays down: ``cOpacity``, a terrain decal's ``cDiffuseOpacity`` (0 lays
     only its normal map on the ground; island-editor-view "Decals on the terrain")."""
     return node.number("cOpacity", 1.0) * node.number("cDiffuseOpacity", 1.0)
@@ -425,13 +454,13 @@ def first_values(fields) -> dict[str, str]:
     return out
 
 
-def materials_at(model: Node, level: int = 0) -> dict[int, Node]:
+def materials_at(model: SNode, level: int = 0) -> dict[int, SNode]:
     """The mesh's material number -> the config's MATERIAL node at a level of detail (``MaterialLODInfos``; the
     numbers in order without it)."""
     nodes = model.section_of("Materials")
     lods = material_lods(model)
     order = lods[level] if level < len(lods) and lods[level] else list(range(len(nodes)))
-    return {k: nodes[i] for k, i in enumerate(order) if 0 <= i < len(nodes)}
+    return {k: nodes[material_index] for k, material_index in enumerate(order) if 0 <= material_index < len(nodes)}
 
 
 def shared_config(cfg: str) -> str:

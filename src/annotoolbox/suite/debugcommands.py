@@ -1,13 +1,16 @@
 """The debug-command catalogue of the palette: which commands a game offers its modders, their typed arguments, and
 the checks that keep the live link's message set closed (only these ids, only values of these types, no free text).
 
-``commands(game)`` is the catalogue, ``check_values`` types a command's values or says why not, ``preview`` shows the
-call the game side builds from its fixed template, ``find`` is the search, ``push_history`` / ``toggle_favourite`` keep
-the palette's remembered state. The window is ``linkpalette``. docs/debug-palette.md.
+``commands(game)`` is the catalogue (the game's own commands, ``baseline``, and what an extension registers at
+``features.DEBUG_COMMANDS``), ``check_values`` types a command's values or says why not, ``preview`` shows the call the
+game side builds from its fixed template, ``find`` is the search, ``push_history`` / ``toggle_favourite`` keep the
+palette's remembered state. The debug pages' actions are ``debugpages``; the window is ``linkpalette``.
+docs/debug-palette.md.
 """
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 from ..infra.i18n import N_, english, tr
@@ -19,17 +22,22 @@ FAVOURITES = "favourites"
 
 PERCENT, GUID, FLAG = "percent", "guid", "flag"  # the argument kinds: 0 to 100, an asset's GUID, on or off
 ECONOMY, VIEWS, SELECTION, SPAWN = "economy", "views", "selection", "spawn"
+RESEARCH, QUESTS, TOOLS = "research", "quests", "tools"  # the debug pages' actions (docs/debug-palette.md 1.4)
 CATEGORIES = {
     ECONOMY: N_("common.economy_build"),
     VIEWS: N_("common.views_display"),
     SELECTION: N_("common.selected_objects"),
     SPAWN: N_("common.spawn_test"),
+    RESEARCH: N_("common.research_unlocks"),
+    QUESTS: N_("common.quests_seasons_scenarios"),
+    TOOLS: N_("common.debug_tools"),
 }
-TAG_USED, TAG_LISTED = "used", "listed"  # called by a mod of ours in a game, or only declared (debug-palette 1)
+# called by a mod of ours in a game, only declared, or bound to a button of one of the game's debug pages
+TAG_USED, TAG_LISTED, TAG_PAGE = "used", "listed", "page"
 
 
 @dataclass(frozen=True)
-class ArgSpec:
+class SArgSpec:
     """One typed argument: ``kind`` is ``PERCENT``, ``GUID`` or ``FLAG``; ``name`` is the template's placeholder."""
 
     name: str
@@ -38,7 +46,7 @@ class ArgSpec:
 
 
 @dataclass(frozen=True)
-class Command:
+class SCommand:
     """One command: the id the wire carries, where it sits, what it does, the call the game side makes from it."""
 
     id: str
@@ -46,24 +54,25 @@ class Command:
     title: str
     effect: str
     call: str  # the fixed template; ``{name}`` is replaced by a typed value (docs/debug-palette.md 1)
-    args: tuple[ArgSpec, ...] = ()
+    args: tuple[SArgSpec, ...] = ()
     state: str = ""  # the game's field that holds a toggle's state ("" = no state to read back)
     confirm: bool = False  # destructive: the palette asks first
     tag: str = TAG_LISTED
+    net: bool = False  # synced: the game sends it to every player (the cheat registry's "works in multiplayer")
 
 
-_PERCENT = ArgSpec("percentage", PERCENT, N_("common.percent"))
-_GUID = ArgSpec("guid", GUID, N_("common.asset_guid"))
-_ON = ArgSpec("value", FLAG, N_("common.on"))
+_PERCENT = SArgSpec("percentage", PERCENT, N_("common.percent"))
+_GUID = SArgSpec("guid", GUID, N_("common.asset_guid"))
+_ON = SArgSpec("value", FLAG, N_("common.on"))
 _G = "Cheat.GlobalCheats:"
 _S = "Cheats:"
 
 
-def _toggle(id_, category, title, effect, method, state="", tag=TAG_LISTED) -> Command:
-    return Command(id_, category, title, effect, f"{_G}{method}()", (), state, False, tag)
+def _toggle(id_, category, title, effect, method, state="", tag=TAG_LISTED) -> SCommand:
+    return SCommand(id_, category, title, effect, f"{_G}{method}()", (), state, False, tag)
 
 
-_COMMANDS: tuple[Command, ...] = (
+_COMMANDS: tuple[SCommand, ...] = (
     _toggle("ignore_building_costs", ECONOMY, N_("common.ignore_building_costs"), N_("common.building_costs_not_charged"),
         "ToggleIgnoreBuildingCosts", "IgnoreBuildingCosts"),
     _toggle("ignore_fertilities", ECONOMY, N_("common.ignore_fertilities"), N_("common.every_building_produces_any_ground"),
@@ -91,46 +100,82 @@ _COMMANDS: tuple[Command, ...] = (
     _toggle("letterboxing", VIEWS, N_("common.no_letterboxing"), N_("common.cinematic_black_bars_switched_off"), "ToggleLetterboxingDisabled"),
     _toggle("banners", VIEWS, N_("common.block_banners"), N_("common.banner_notifications_blocked"), "ToggleBlockBannerNotifications"),
     _toggle("debug_drawings", VIEWS, N_("common.hide_debug_drawings"), N_("common.debug_drawings_suppressed"), "ToggleSuppressDebugDrawings"),
-    Command("heal_selected", SELECTION, N_("common.heal_selected"), N_("common.heals_selected_objects_percentage"),
+    SCommand("heal_selected", SELECTION, N_("common.heal_selected"), N_("common.heals_selected_objects_percentage"),
         f"{_S}HealSelectedObjects({{percentage}})", (_PERCENT,)),
-    Command("damage_selected", SELECTION, N_("common.damage_selected"), N_("common.damages_selected_objects_percentage"),
+    SCommand("damage_selected", SELECTION, N_("common.damage_selected"), N_("common.damages_selected_objects_percentage"),
         f"{_S}DamageSelectedObjects({{percentage}})", (_PERCENT,)),
-    Command("invincible_selected", SELECTION, N_("common.invincible_selected"), N_("common.makes_selected_objects_invincible_mortal"),
+    SCommand("invincible_selected", SELECTION, N_("common.invincible_selected"), N_("common.makes_selected_objects_invincible_mortal"),
         f"{_S}SetSelectedObjectsInvincible({{value}})", (_ON,)),
-    Command("destroy_selected", SELECTION, N_("common.destroy_selected"), N_("common.destroys_selected_objects"),
+    SCommand("destroy_selected", SELECTION, N_("common.destroy_selected"), N_("common.destroys_selected_objects"),
         f"{_S}DestroySelectedObjects()", (), "", True),
-    Command("spawn_object", SPAWN, N_("common.spawn_object"), N_("common.spawns_asset_player"), f"{_S}SpawnGameObject({{guid}})", (_GUID,)),
-    Command("build_mode", SPAWN, N_("common.build_mode_asset"), N_("common.starts_build_mode_building"),
+    SCommand("spawn_object", SPAWN, N_("common.spawn_object"), N_("common.spawns_asset_player"), f"{_S}SpawnGameObject({{guid}})", (_GUID,)),
+    SCommand("build_mode", SPAWN, N_("common.build_mode_asset"), N_("common.starts_build_mode_building"),
         f"{_S}StartBuildMode({{guid}})", (_GUID,)),
-    Command("show_notification", SPAWN, N_("common.show_notification"), N_("common.plays_notification_asset"), f"{_S}ShowNotification({{guid}})", (_GUID,)),
-    Command("show_text_popup", SPAWN, N_("common.show_text_popup"), N_("common.opens_text_popup_asset"), f"{_S}ShowTextPopup({{guid}})", (_GUID,)),
-    Command("show_collectables", SPAWN, N_("common.show_all_collectables"), N_("common.shows_hides_every_collectable"),
+    SCommand("show_notification", SPAWN, N_("common.show_notification"), N_("common.plays_notification_asset"), f"{_S}ShowNotification({{guid}})", (_GUID,)),
+    SCommand("show_text_popup", SPAWN, N_("common.show_text_popup"), N_("common.opens_text_popup_asset"), f"{_S}ShowTextPopup({{guid}})", (_GUID,)),
+    SCommand("show_collectables", SPAWN, N_("common.show_all_collectables"), N_("common.shows_hides_every_collectable"),
         f"{_S}ShowAllCollectables({{value}})", (_ON,)),
-    Command("fps_view", VIEWS, N_("common.frame_rate_view"), N_("common.shows_hides_frame_rate"), f"{_S}ToggleFpsView()"),
-    Command("debug_ui", VIEWS, N_("common.debug_ui"), N_("common.shows_hides_debug_ui"), f"{_S}ToggleDebugUI()"),
-    Command("version_label", VIEWS, N_("common.version_label"), N_("common.shows_hides_version_label"), f"{_S}ToggleVersionLabel()"),
+    SCommand("fps_view", VIEWS, N_("common.frame_rate_view"), N_("common.shows_hides_frame_rate"), f"{_S}ToggleFpsView()"),
+    SCommand("debug_ui", VIEWS, N_("common.debug_ui"), N_("common.shows_hides_debug_ui"), f"{_S}ToggleDebugUI()"),
+    SCommand("version_label", VIEWS, N_("common.version_label"), N_("common.shows_hides_version_label"), f"{_S}ToggleVersionLabel()"),
 )  # fmt: skip
-_BY_GAME = {GAME: {c.id: c for c in _COMMANDS}}
+ARG_PERCENT, ARG_GUID, ARG_ON = _PERCENT, _GUID, _ON  # the shared argument fields, for the other catalogues
 
 
-def commands(game: str = GAME) -> dict[str, Command]:
-    """The catalogue of a game by id (empty for a game that has none yet)."""
-    return _BY_GAME.get(game, {})
+@functools.cache
+def _base() -> dict[str, dict[str, SCommand]]:
+    from . import debugpages  # the debug pages' actions; it builds on the types above
+
+    return {GAME: {command.id: command for command in (*_COMMANDS, *debugpages.COMMANDS)}}
 
 
-def category_title(category: str) -> str:
+def baseline(game: str = GAME) -> dict[str, SCommand]:
+    """The game's own commands by id (what the link helper's table holds), without any extension's."""
+    return _base().get(game, {})
+
+
+def _extensions(game: str) -> list:
+    from . import features
+
+    return [spec for spec in features.extensions(features.DEBUG_COMMANDS).values() if spec.game == game]
+
+
+def commands(game: str = GAME) -> dict[str, SCommand]:
+    """The catalogue of a game by id: its own commands, then those an extension registered for it (empty for a game
+    that has none yet)."""
+    found = dict(baseline(game))
+    for spec in _extensions(game):
+        found.update({command.id: command for command in spec.commands if command.id not in found})
+    return found
+
+
+def categories(game: str = GAME) -> dict[str, str]:
+    """The categories of a game's catalogue in order, key to its title's id: the shared ones, then the extensions'."""
+    found = dict(CATEGORIES)
+    for spec in _extensions(game):
+        found.update({key: title for key, title in spec.categories if key not in found})
+    return found
+
+
+def category_title(category: str, game: str = GAME) -> str:
     """The category's name in the interface language."""
     if category == FAVOURITES:
         return tr("common.favourites")
     if category == CHEATS:
         return tr("common.games_own_cheats")
-    return tr(CATEGORIES[category])
+    return tr(categories(game).get(category, category))
 
 
-def check_values(command: Command, values: dict) -> tuple[dict, str]:
+def safety_text(command: SCommand) -> str:
+    """Whether the command reaches every player (a synced command) or acts on this computer only; the palette sends
+    either in a single-player game only (docs/debug-palette.md section 2)."""
+    return tr("common.synced_works_multiplayer") if command.net else tr("common.this_client_only_multiplayer")
+
+
+def check_values(command: SCommand, values: dict) -> tuple[dict, str]:
     """The typed values of ``command`` and "" , or ``({}, why)``: every argument present, of its kind and in range,
     nothing else (the closed message set, docs/debug-palette.md section 2)."""
-    names = {a.name for a in command.args}
+    names = {argument.name for argument in command.args}
     extra = sorted(set(values) - names)
     if extra:
         return {}, tr("common.command_unexpected_argument_name", command=command.id, name=extra[0])
@@ -151,16 +196,16 @@ def check_values(command: Command, values: dict) -> tuple[dict, str]:
     return typed, ""
 
 
-def preview(command: Command, values: dict) -> str:
+def preview(command: SCommand, values: dict) -> str:
     """The call the game side makes (its fixed template with the values put in); a value not given shows as its name."""
-    shown = {a.name: "{" + a.name + "}" for a in command.args}
+    shown = {argument.name: "{" + argument.name + "}" for argument in command.args}
     for name, value in values.items():
         if name in shown:
             shown[name] = str(value).lower() if isinstance(value, bool) else str(value)
     return command.call.format(**shown)
 
 
-def find(game: str, text: str = "", category: str = "", favourites: tuple[str, ...] = ()) -> list[Command]:
+def find(game: str, text: str = "", category: str = "", favourites: tuple[str, ...] = ()) -> list[SCommand]:
     """The commands matching the search ``text`` (id, title, effect, in the interface language and in English) in a
     ``category`` ("" all; ``FAVOURITES`` the starred ones), in catalogue order."""
     words = text.lower().split()
@@ -187,7 +232,7 @@ def push_history(state: dict, entry: dict) -> None:
 
 def toggle_favourite(state: dict, command_id: str) -> bool:
     """Star or unstar a command; True when it is a favourite now."""
-    stars = [c for c in state.get("favourites", []) if c != command_id]
+    stars = [favourite_id for favourite_id in state.get("favourites", []) if favourite_id != command_id]
     starred = len(stars) == len(state.get("favourites", []))
     state["favourites"] = [*stars, command_id] if starred else stars
     return starred

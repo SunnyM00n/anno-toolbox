@@ -2,13 +2,39 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
-import struct
 from pathlib import Path
 
 import pytest
 from tests import hangguard, memorygate, qtcleanup
+from tests.ddsfiles import make_bc7_dds
+from tests.models.modelfakes import BAKERY_CFG, TREE_CFG
+
+from annotoolbox.models import textures
+from annotoolbox.sources import gametree
+from annotoolbox.sources.overlay import CSourceTree
+from annotoolbox.uiedit import layout as layout_uiedit
+from annotoolbox.uiedit import uifiles
+
+from tests.models.feedbackfakes import BUILDING_CFG, DUMMIES, PLAY, UNIT_CFG, WALK, fc2070, item
+from tests.uiedit.uieditfakes import (
+    GEN,
+    IMAGE,
+    INNER,
+    LIST,
+    OUTER,
+    WIDGET,
+    composed_scene_file,
+    image_file,
+    inner_file,
+    list_file,
+    outer_file,
+    scene_file,
+    settle_window,
+    widget_file,
+)
 
 # numpy's and scipy's own OpenBLAS each commit about 750 MB at import, one buffer per core; in every xdist worker that
 # ran the machine out of commit (Errno 22, dead workers): one BLAS thread a test process (CONTRIBUTING "Parallel runs")
@@ -121,6 +147,12 @@ def _private_game_backups(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_language_override(tmp_path_factory, monkeypatch):
+    """The user's own language files (``i18n.override_dir``) are not read: a test sees the shipped languages only."""
+    monkeypatch.setenv("ANNO_TOOLBOX_LANG_DIR", str(tmp_path_factory.mktemp("lang-override")))
+
+
+@pytest.fixture(autouse=True)
 def _no_game_detection(monkeypatch):
     """The editor's settings look for installed games on the machine (registry, Steam, the drives) when a game
     folder is unset: a test finds none, whatever this computer has."""
@@ -137,25 +169,8 @@ def _english_interface(monkeypatch):
     monkeypatch.delenv(i18n.ENV_VAR, raising=False)
     i18n.use("en")
     yield
+    monkeypatch.undo()  # a test's patched os.name would make the override folder a PosixPath on Windows
     i18n.use("en")
-
-
-def make_dxt1_dds(width: int = 4, height: int = 4) -> bytes:
-    """A legacy DXT1 file (one red block repeated), the kind 2070 ships."""
-    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000
-    head = struct.pack("<4sIIIIIII", b"DDS ", 124, flags, height, width, 8, 0, 1) + bytes(44)
-    head += struct.pack("<II4s5I", 32, 0x4, b"DXT1", 0, 0, 0, 0, 0) + struct.pack("<5I", 0x1000, 0, 0, 0, 0)
-    return head + struct.pack("<HHI", 0xF800, 0, 0) * (-(-width // 4) * -(-height // 4))
-
-
-def make_bc7_dds(width: int, height: int, mips: int = 1, srgb: bool = False) -> bytes:
-    """A DX10 BC7 header (UNORM, or UNORM_SRGB) with a stand-in payload: the layout of 117's UI textures."""
-    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000 | (0x20000 if mips > 1 else 0)
-    head = struct.pack("<4sIIIIIII", b"DDS ", 124, flags, height, width, 0, 0, mips) + bytes(44)
-    head += struct.pack("<II4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)
-    head += struct.pack("<5I", 0x1000 | (0x400008 if mips > 1 else 0), 0, 0, 0, 0)
-    head += struct.pack("<5I", 99 if srgb else 98, 3, 0, 1, 0)
-    return head + bytes(16)
 
 
 @pytest.fixture
@@ -165,35 +180,42 @@ def bc7_dds():
 
 @pytest.fixture
 def fake_bc7(monkeypatch):
-    """``textures.png_to_bc7`` without texconv: a BC7 header for the PNG's size with the format and mips asked
-    for, the calls recorded as ``(srgb, mips)``."""
+    """``textures.png_to_bc7`` without texconv: a BC7 header for the PNG's size with the format and mip count asked
+    for, the calls recorded as ``(is_srgb, mip_count)``."""
     from annotoolbox.models import textures
 
     calls: list[tuple[bool, int]] = []
 
     def encode(
-        src: Path, dst: Path, srgb: bool = False, cache: bool = True, mips: int = 0, srgb_in: bool = False
+        src: Path,
+        dst: Path,
+        is_srgb: bool = False,
+        use_cache: bool = True,
+        mip_count: int = 0,
+        is_srgb_input: bool = False,
     ) -> Path:
         from PIL import Image
 
         with Image.open(src) as img:
             width, height = img.size
-        calls.append((srgb, mips))
-        assert srgb_in == srgb  # the PNG holds the stored values: no second gamma step
+        calls.append((is_srgb, mip_count))
+        assert is_srgb_input == is_srgb  # the PNG holds the stored values: no second gamma step
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(make_bc7_dds(width, height, mips or max(width, height).bit_length(), srgb))
+        dst.write_bytes(make_bc7_dds(width, height, mip_count or max(width, height).bit_length(), is_srgb))
         return dst
 
-    def encode_pixels(px, srgb: bool = False, srgb_in: bool = False, mips: int = 0) -> bytes:
+    def encode_pixels(px, is_srgb: bool = False, is_srgb_input: bool = False, mip_count: int = 0) -> bytes:
         height, width = px.shape[:2]
-        calls.append((srgb, mips))
-        assert srgb_in == srgb  # the pixels hold the stored values: no second gamma step
-        return make_bc7_dds(width, height, mips or max(width, height).bit_length(), srgb)
+        calls.append((is_srgb, mip_count))
+        assert is_srgb_input == is_srgb  # the pixels hold the stored values: no second gamma step
+        return make_bc7_dds(width, height, mip_count or max(width, height).bit_length(), is_srgb)
 
     monkeypatch.setattr(textures, "png_to_bc7", encode)
     monkeypatch.setattr(textures, "rgba_to_bc7", encode_pixels)
     monkeypatch.setattr(
-        textures, "_encode", lambda px, srgb, srgb_in, mips: (encode_pixels(px, srgb, srgb_in, mips), True)
+        textures,
+        "_encode",
+        lambda px, is_srgb, is_srgb_input, mip_count: (encode_pixels(px, is_srgb, is_srgb_input, mip_count), True),
     )
     return calls
 
@@ -325,111 +347,6 @@ PROPERTIES_XML = """<Properties>
 </Properties>
 """
 
-BAKERY_CFG = """<m_Config><m_Files><m_Config><m_FileName>data\\graphics\\props\\tree\\tree.cfg</m_FileName>
-<m_ConfigType>FILE</m_ConfigType>
-<m_Transformer><m_Config><m_Position.x>5.000000</m_Position.x>
-<m_Position.y>0.000000</m_Position.y>
-<m_Position.z>0.000000</m_Position.z>
-<m_Scale>0.700000</m_Scale>
-<m_ConfigType>ORIENTATION_TRANSFORM</m_ConfigType>
-</m_Config>
-</m_Transformer>
-</m_Config>
-</m_Files>
-<m_Models><m_Config><m_FileName>data\\graphics\\buildings\\bakery\\rdm\\bakery_lod0.rdm</m_FileName>
-<m_ConfigType>MODEL</m_ConfigType>
-<m_Animations><m_Config><m_FileName>data\\graphics\\buildings\\bakery\\anim\\bakery_work.rdm</m_FileName>
-<m_ConfigType>ANIMATION</m_ConfigType>
-</m_Config>
-</m_Animations>
-<m_Materials><m_Config><m_Name>xx</m_Name>
-<m_ShaderIndex>10</m_ShaderIndex>
-<m_DiffuseColor.r>1.000000</m_DiffuseColor.r>
-<m_DiffuseColor.g>0.500000</m_DiffuseColor.g>
-<m_DiffuseColor.b>0.250000</m_DiffuseColor.b>
-<m_DiffuseColor.a>1.000000</m_DiffuseColor.a>
-<m_DiffuseTexture>data\\graphics\\buildings\\bakery\\maps\\bakery_diff.png</m_DiffuseTexture>
-<m_NormalTexture>data\\graphics\\buildings\\bakery\\maps\\bakery_norm.png</m_NormalTexture>
-<m_EnvironmentTexture></m_EnvironmentTexture>
-<m_HeightTexture></m_HeightTexture>
-<m_MaskTexture>data\\graphics\\buildings\\bakery\\maps\\bakery_mask.png</m_MaskTexture>
-<m_RipplesTexture></m_RipplesTexture>
-<m_VertexFormat>P4h_N4b_G4b_B4b_T2h</m_VertexFormat>
-<m_DiffuseEnabled>1</m_DiffuseEnabled>
-<m_NormalEnabled>1</m_NormalEnabled>
-<m_EnvironmentEnabled>0</m_EnvironmentEnabled>
-<m_ParallaxEnabled>0</m_ParallaxEnabled>
-<m_RipplesEnabled>0</m_RipplesEnabled>
-<m_NumBonesPerVertex>0</m_NumBonesPerVertex>
-<m_ConfigType>MATERIAL</m_ConfigType>
-</m_Config>
-</m_Materials>
-<m_Transformer><m_Config><m_Position.x>1.000000</m_Position.x>
-<m_Position.y>2.000000</m_Position.y>
-<m_Position.z>3.000000</m_Position.z>
-<m_Rotation.x>0.000000</m_Rotation.x>
-<m_Rotation.y>0.000000</m_Rotation.y>
-<m_Rotation.z>0.000000</m_Rotation.z>
-<m_Rotation.w>1.000000</m_Rotation.w>
-<m_Scale>1.000000</m_Scale>
-<m_Conditions>0</m_Conditions>
-<m_ConfigType>ORIENTATION_TRANSFORM</m_ConfigType>
-</m_Config>
-</m_Transformer>
-</m_Config>
-</m_Models>
-<m_Effects><m_Config><m_FileName>data\\graphics\\effects\\particles\\fire_01.efc</m_FileName>
-<m_ConfigType>EFFECT</m_ConfigType>
-</m_Config>
-</m_Effects>
-<m_TerrainDecals><m_Config><m_Extend.x>2.000000</m_Extend.x>
-<m_Extend.y>1.500000</m_Extend.y>
-<m_TexCoords.x>0.000000</m_TexCoords.x>
-<m_TexCoords.y>0.250000</m_TexCoords.y>
-<m_TexCoords.z>1.000000</m_TexCoords.z>
-<m_TexCoords.w>1.000000</m_TexCoords.w>
-<m_ConfigType>TERRAINDECAL</m_ConfigType>
-<m_Materials><m_Config><m_Name></m_Name>
-<m_ShaderIndex>0</m_ShaderIndex>
-<m_DiffuseTexture>data\\graphics\\buildings\\bakery\\maps\\bakery_ground.png</m_DiffuseTexture>
-<m_ConfigType>MATERIAL</m_ConfigType>
-</m_Config>
-</m_Materials>
-</m_Config>
-</m_TerrainDecals>
-<m_Sequences><m_Config><m_SequenceID>5000</m_SequenceID>
-<m_ConfigType>SEQUENCE</m_ConfigType>
-</m_Config>
-</m_Sequences>
-<m_RenderPropertyFlags>131712</m_RenderPropertyFlags>
-<m_Center.x>0.000000</m_Center.x>
-<m_Center.y>3.355972</m_Center.y>
-<m_Center.z>-0.001022</m_Center.z>
-<m_Extent.x>2.000000</m_Extent.x>
-<m_Extent.y>3.384575</m_Extent.y>
-<m_Extent.z>1.572772</m_Extent.z>
-<m_Radius>4.234260</m_Radius>
-<m_ConfigType>ROOT</m_ConfigType>
-</m_Config>"""
-
-TREE_CFG = """<m_Config><m_Models><m_Config><m_FileName>data\\graphics\\props\\tree\\rdm\\tree.rdm</m_FileName>
-<m_ConfigType>MODEL</m_ConfigType>
-<m_Materials><m_Config><m_Name>leaves</m_Name>
-<m_ShaderIndex>4</m_ShaderIndex>
-<m_DiffuseTexture>tools\\bobnet\\data\\default_diff.png</m_DiffuseTexture>
-<m_VertexFormat>P4h_N4b_T2h</m_VertexFormat>
-<m_ConfigType>MATERIAL</m_ConfigType>
-</m_Config>
-</m_Materials>
-</m_Config>
-</m_Models>
-<m_Files><m_Config><m_FileName>data\\graphics\\buildings\\bakery\\bakery.cfg</m_FileName>
-<m_ConfigType>FILE</m_ConfigType>
-</m_Config>
-</m_Files>
-<m_ConfigType>ROOT</m_ConfigType>
-</m_Config>"""
-
 
 def _write(base: Path, rel: str, content: str | bytes) -> Path:
     p = base / rel
@@ -512,3 +429,99 @@ def pytest_runtest_makereport(item, call):
         report.outcome = "skipped"
         report.longrepr = (str(item.path), item.location[1] or 0, f"Skipped: needs {error.name} (an optional install)")
     return report
+
+
+@pytest.fixture(scope="module")
+def qt():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def fake_textures(monkeypatch):
+    def write(src, dst, is_srgb=False):
+        assert not is_srgb  # BC7_UNORM, as 117's own particle maps (tests/models/test_texture_formats.py)
+        dst.parent.mkdir(parents=True, exist_ok=True)  # a model map's folder is not made by its caller
+        dst.write_bytes(b"DDS ")
+
+    monkeypatch.setattr(textures, "convert_dds", write)
+
+
+@pytest.fixture
+def sound_window(monkeypatch):
+    """The Sound window offscreen with nothing open (a test sets its ``doc`` or opens a bank); deleted afterwards. The other
+    sound tests import it (with ``bank_window``): one setup for every test of the window."""
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.soundedit.soundwindow import CSoundWindow
+    from annotoolbox.suite.settings import CSettings
+
+    QApplication.instance() or QApplication([])
+    window = CSoundWindow(CSettings())
+    window.m_is_synchronous = True  # the reads on the test's thread; the off-thread test turns it off
+    yield window
+    window.deleteLater()
+
+
+@pytest.fixture
+def ui_tree(tmp_path: Path):
+    gen = tmp_path / "game" / GEN
+    gen.mkdir(parents=True)
+    (gen / WIDGET).write_bytes(widget_file())
+    (gen / IMAGE).write_bytes(image_file())
+    (gen / "testscene").write_bytes(scene_file())
+    texts = tmp_path / "game" / "data/base/config/gui/texts_english.xml"
+    texts.parent.mkdir(parents=True)
+    line = int("A010D06813984305", 16) - (1 << 64)
+    texts.write_text(
+        f"<TextExport><Texts><Text><LineId>{line}</LineId><Text>Tom &amp; Jerry</Text></Text></Texts></TextExport>"
+    )
+    pwl = tmp_path / "game" / "data/ui/pwl/components/pivot_c7b1e237.json"
+    pwl.parent.mkdir(parents=True)
+    pwl.write_text(json.dumps({"PhoenixAssetData": {"Object": {
+        "ObjectID": "C7B1E237-0000-0000-0000-000000000000", "Name": "ProportionalPivotPoint", "FolderPath": "Layouts",
+        "Description": "The pivot as a <Bold>fraction</Bold>.", "CustomProperties": [{"Object": {
+            "UniqueId": layout_uiedit.PPP_VALUE, "PropertyName": "ProportionalPivotPoint", "PropertyType": "CustomPropertyType_Vector3",
+            "Description": "x and y fractions"}}]}}}))  # fmt: skip
+    return gametree.loose_tree(tmp_path / "game")
+
+
+@pytest.fixture
+def composed(tmp_path):
+    gen = tmp_path / "game" / GEN
+    gen.mkdir(parents=True)
+    for key, data in ((INNER, inner_file()), (OUTER, outer_file()), (LIST, list_file()), (IMAGE, image_file()),
+                      ("composed", composed_scene_file())):  # fmt: skip
+        (gen / key).write_bytes(data)
+    return uifiles.CUiFiles(gametree.loose_tree(tmp_path / "game"))
+
+
+@pytest.fixture
+def scene_files(request):
+    """A scene composed of widget files (the fixture ``composed`` of ``test_uiedit_compose``)."""
+    return request.getfixturevalue("composed")
+
+
+@pytest.fixture
+def window(scene_files, tmp_path):
+    """The UI editor's window on the composed scene, its first layout done."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from annotoolbox.suite.settings import CSettings
+    from annotoolbox.uiedit.uiwindow import CUiWindow, _CGame
+
+    qt = QApplication.instance() or QApplication([])
+    w = CUiWindow(CSettings(workspace=str(tmp_path / "ws"), project=str(tmp_path / "proj")))
+    w._opened("anno117", "", _CGame("anno117", scene_files.m_tree, None))
+    w.qt = qt
+    yield w
+    settle_window(w)
+    for doc in w.m_docs.values():
+        doc.m_undo.mark_clean()  # closing asks about unsaved edits otherwise
+    w.close()
+    qt.processEvents()

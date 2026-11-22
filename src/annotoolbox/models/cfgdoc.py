@@ -1,8 +1,8 @@
 """A model config, info or feedback file of any game (``.cfg``, ``.mcf``, ``.ifo``, ``.fc``, ``.prp``) as an editable
 document that writes back byte for byte: its parts and fields, and the edits that change it, each one undoable.
 
-``Doc.read(data, path)`` is the entry; ``parts`` and ``fields`` are what an editor lists, ``set_value``, ``insert``,
-``remove``, ``move`` and ``duplicate`` return an ``Edit`` (``do`` / ``undo``). The tree is ``formats.isd2070``'s, which
+``SDoc.read(data, path)`` is the entry; ``parts`` and ``fields`` are what an editor lists, ``set_value``, ``insert``,
+``remove``, ``move`` and ``duplicate`` return an ``SEdit`` (``do`` / ``undo``). The tree is ``formats.isd2070``'s, which
 keeps the white space around every tag, so what was not touched keeps its bytes. docs/tool-suite.md section 23.
 """
 
@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..formats import isd2070
-from ..formats.isd2070 import Node
+from ..formats.isd2070 import SNode
 
 CONFIG_TAGS = ("Config", "m_Config")
 KIND_TAGS = ("ConfigType", "m_ConfigType")
@@ -22,7 +22,7 @@ VECTOR_PARTS = frozenset("x y z w xf yf zf wf r g b a Direction".split())  # a v
 
 
 @dataclass
-class Edit:
+class SEdit:
     """One change of a document: ``do`` makes it, ``undo`` takes it back (both may run again and again)."""
 
     label: str
@@ -31,18 +31,18 @@ class Edit:
 
 
 @dataclass
-class Part:
+class SPart:
     """A node with children as an editor lists it: its ``kind`` (a config's ``ConfigType``, else the node's name),
     the list it sits in and its place there, a ``path`` stable for the viewer (``Models/0/Materials/2``, the paths
     of ``models.configtree``), and its sub-parts."""
 
-    node: Node
-    parent: Node | None
+    node: SNode
+    parent: SNode | None
     kind: str
     section: str = ""
     index: int = 0
     path: str = ""
-    children: list[Part] = field(default_factory=list)
+    children: list[SPart] = field(default_factory=list)
     is_list: bool = False  # a list of configs (``Models``): its parts are its children
 
     @property
@@ -60,12 +60,12 @@ class Part:
 
 
 @dataclass(frozen=True)
-class Field:
+class SField:
     """A value of a part: its name as the editor shows it (a value block's ``Position.x``), the leaf node that holds
     it, the heading it stands under (117's materials), and whether it is binary (kept as bytes)."""
 
     name: str
-    node: Node
+    node: SNode
     group: str = ""
 
     @property
@@ -113,49 +113,49 @@ def is_config_tag(tag: str) -> bool:
     return tag in CONFIG_TAGS
 
 
-def is_config(node: Node) -> bool:
+def is_config(node: SNode) -> bool:
     return is_config_tag(node.name)
 
 
-def kind_of(node: Node) -> str:
+def kind_of(node: SNode) -> str:
     """A config's ``ConfigType`` (``MODEL``, ``MATERIAL`` ...), 1701's ``m_MCClassType``, else the node's name."""
     for child in node.children:
         if child.name in KIND_TAGS and child.text:
             return child.text.strip()
     if node.name == "m_MeshConfig" or node.name.startswith("m_Mesh"):
-        found = next((c.text for c in node.children if c.name == "m_MCClassType" and c.text), None)
+        found = next((member.text for member in node.children if member.name == "m_MCClassType" and member.text), None)
         if found is not None:
             return f"{strip(node.name)} {found.strip()}"
     return strip(node.name)
 
 
-def is_heading(node: Node) -> bool:
+def is_heading(node: SNode) -> bool:
     """A heading of 117's materials (``<Common [ModelCommon]>``): a field that only names the group after it."""
     return "[" in node.name and not node.children
 
 
-def is_vector(node: Node) -> bool:
+def is_vector(node: SNode) -> bool:
     """A small value block (a position, a colour, a rotation) shown as fields of its part, not as a part."""
-    return bool(node.children) and all(not c.children and c.name in VECTOR_PARTS for c in node.children)
+    return bool(node.children) and all(not child.children and child.name in VECTOR_PARTS for child in node.children)
 
 
-def is_part(node: Node) -> bool:
+def is_part(node: SNode) -> bool:
     return bool(node.children) and not is_vector(node)
 
 
 @dataclass
-class Doc:
+class SDoc:
     """One file as its tree. ``exact`` is False for a file that does not read back to its bytes (it is then shown,
     not saved); ``newline`` is the file's line end, for parts made new."""
 
     path: str
-    root: Node
+    root: SNode
     data: bytes
     exact: bool = True
     newline: bytes = b"\r\n"
 
     @classmethod
-    def read(cls, data: bytes, path: str = "") -> Doc:
+    def read(cls, data: bytes, path: str = "") -> SDoc:
         """A file's document; raises ``ValueError`` for bytes that are no tagged text."""
         try:
             root = isd2070.parse(data)
@@ -171,45 +171,47 @@ class Doc:
     def changed(self) -> bool:
         return self.to_bytes() != self.data
 
-    def parts(self) -> Part:
+    def parts(self) -> SPart:
         """The file as parts: its one top element (a config's ``Config``, an info file's ``Info``) with the path ""
         as ``models.configtree`` gives it, or the document when it has several (a feedback file); below, every node
         with children."""
-        tops = [c for c in self.root.children if is_part(c)]
+        tops = [child for child in self.root.children if is_part(child)]
         if len(tops) == 1:
-            return Part(tops[0], self.root, kind_of(tops[0]), children=_parts(tops[0], ""))
-        return Part(self.root, None, self.path.rsplit("/", 1)[-1] or "document", children=_parts(self.root, ""))
+            return SPart(tops[0], self.root, kind_of(tops[0]), children=_parts(tops[0], ""))
+        return SPart(self.root, None, self.path.rsplit("/", 1)[-1] or "document", children=_parts(self.root, ""))
 
-    def find(self, path: str) -> Part | None:
-        return next((p for p in self.parts().walk() if p.path == path), None)
+    def find(self, path: str) -> SPart | None:
+        return next((part for part in self.parts().walk() if part.path == path), None)
 
-    def parent_of(self, node: Node) -> Node | None:
-        return next((n for n in self.root.iter() if any(c is node for c in n.children)), None)
+    def parent_of(self, node: SNode) -> SNode | None:
+        return next(
+            (candidate for candidate in self.root.iter() if any(child is node for child in candidate.children)), None
+        )
 
 
-def _parts(node: Node, path: str) -> list[Part]:
+def _parts(node: SNode, path: str) -> list[SPart]:
     """The parts below a node: a list of configs (``Models``) gives each config the path ``Models/k`` as the viewer
     counts them; any other node with children is ``Name#k`` (k among the siblings of that name)."""
     out, seen = [], {}
     for child in node.children:
         if not is_part(child):
             continue
-        if all(is_config(c) for c in child.children):
+        if all(is_config(sub_child) for sub_child in child.children):
             section = strip(child.name)
-            folder = Part(child, node, section, section, 0, f"{path}/{section}".lstrip("/"), is_list=True)
+            folder = SPart(child, node, section, section, 0, f"{path}/{section}".lstrip("/"), is_list=True)
             for k, sub in enumerate(child.children):
                 sub_path = f"{folder.path}/{k}"
-                part = Part(sub, child, kind_of(sub), section, k, sub_path, _parts(sub, sub_path))
+                part = SPart(sub, child, kind_of(sub), section, k, sub_path, _parts(sub, sub_path))
                 folder.children.append(part)
             out.append(folder)
             continue
         k = seen[child.name] = seen.get(child.name, -1) + 1
         own = f"{path}/{strip(child.name)}#{k}".lstrip("/")
-        out.append(Part(child, node, kind_of(child), strip(node.name), k, own, _parts(child, own)))
+        out.append(SPart(child, node, kind_of(child), strip(node.name), k, own, _parts(child, own)))
     return out
 
 
-def fields(node: Node) -> list[Field]:
+def fields(node: SNode) -> list[SField]:
     """A part's values in file order: its leaves, and the leaves of its value blocks (``Position.x``); a field after
     one of 117's headings carries that heading as its group."""
     out, group = [], ""
@@ -218,16 +220,16 @@ def fields(node: Node) -> list[Field]:
             group = child.name.split(" [", 1)[0]
             continue
         if not child.children:
-            out.append(Field(child.name, child, group))
+            out.append(SField(child.name, child, group))
         elif is_vector(child):
-            out += [Field(f"{child.name}.{c.name}", c, group) for c in child.children]
+            out += [SField(f"{child.name}.{leaf.name}", leaf, group) for leaf in child.children]
     return out
 
 
 # Edits
 
 
-def set_value(leaf: Node, value: str, label: str = "") -> Edit:
+def set_value(leaf: SNode, value: str, label: str = "") -> SEdit:
     """A field set to ``value`` (as typed); a binary field takes hex digits."""
     if leaf.data is not None:
         new_data, old_data = bytes.fromhex(value), leaf.data
@@ -235,20 +237,20 @@ def set_value(leaf: Node, value: str, label: str = "") -> Edit:
         def put(data: bytes) -> Callable[[], None]:
             return lambda: setattr(leaf, "data", data)
 
-        return Edit(label or f"{leaf.name} = {len(new_data)} bytes", put(new_data), put(old_data))
+        return SEdit(label or f"{leaf.name} = {len(new_data)} bytes", put(new_data), put(old_data))
     old = (leaf.text, leaf.trail)
     text = stored(value) if value != "" else None
 
-    def put_text(t: str | None, trail: bytes) -> Callable[[], None]:
+    def put_text(new_text: str | None, trail: bytes) -> Callable[[], None]:
         def run() -> None:
-            leaf.text, leaf.trail = t, trail
+            leaf.text, leaf.trail = new_text, trail
 
         return run
 
-    return Edit(label or f"{leaf.name} = {value}", put_text(text, old[1] if text is not None else b""), put_text(*old))
+    return SEdit(label or f"{leaf.name} = {value}", put_text(text, old[1] if text is not None else b""), put_text(*old))
 
 
-def insert(parent: Node, index: int, nodes: list[Node], label: str = "") -> Edit:
+def insert(parent: SNode, index: int, nodes: list[SNode], label: str = "") -> SEdit:
     """``nodes`` put into ``parent``'s children at ``index`` (an empty list, ``<Files></Files>``, takes them too)."""
     nodes = list(nodes)
 
@@ -256,14 +258,14 @@ def insert(parent: Node, index: int, nodes: list[Node], label: str = "") -> Edit
         parent.children[index:index] = nodes
 
     def undo() -> None:
-        for n in nodes:
-            parent.children[:] = [c for c in parent.children if c is not n]
+        for node in nodes:
+            parent.children[:] = [child for child in parent.children if child is not node]
 
-    return Edit(label or f"add {', '.join(kind_of(n) for n in nodes)}", do, undo)
+    return SEdit(label or f"add {', '.join(kind_of(node) for node in nodes)}", do, undo)
 
 
-def remove(parent: Node, node: Node, label: str = "") -> Edit:
-    index = next(i for i, c in enumerate(parent.children) if c is node)
+def remove(parent: SNode, node: SNode, label: str = "") -> SEdit:
+    index = next(i for i, child in enumerate(parent.children) if child is node)
 
     def do() -> None:
         del parent.children[index]
@@ -271,37 +273,37 @@ def remove(parent: Node, node: Node, label: str = "") -> Edit:
     def undo() -> None:
         parent.children.insert(index, node)
 
-    return Edit(label or f"remove {kind_of(node)}", do, undo)
+    return SEdit(label or f"remove {kind_of(node)}", do, undo)
 
 
-def move(parent: Node, node: Node, step: int, label: str = "") -> Edit | None:
+def move(parent: SNode, node: SNode, step: int, label: str = "") -> SEdit | None:
     """The part moved ``step`` places among its siblings (None when it would leave the list)."""
-    old = next(i for i, c in enumerate(parent.children) if c is node)
+    old = next(i for i, child in enumerate(parent.children) if child is node)
     new = old + step
     if not 0 <= new < len(parent.children):
         return None
 
-    def place(at: int) -> Callable[[], None]:
+    def place(index: int) -> Callable[[], None]:
         def run() -> None:  # by identity: two parts may be equal field for field
-            parent.children[:] = [c for c in parent.children if c is not node]
-            parent.children.insert(at, node)
+            parent.children[:] = [child for child in parent.children if child is not node]
+            parent.children.insert(index, node)
 
         return run
 
-    return Edit(label or f"move {kind_of(node)}", place(new), place(old))
+    return SEdit(label or f"move {kind_of(node)}", place(new), place(old))
 
 
-def duplicate(parent: Node, node: Node, label: str = "") -> Edit:
+def duplicate(parent: SNode, node: SNode, label: str = "") -> SEdit:
     """A copy of the part right after it."""
-    index = next(i for i, c in enumerate(parent.children) if c is node)
+    index = next(i for i, child in enumerate(parent.children) if child is node)
     return insert(parent, index + 1, [copy.deepcopy(node)], label or f"duplicate {kind_of(node)}")
 
 
-def restyled(node: Node, newline: bytes) -> Node:
+def restyled(node: SNode, newline: bytes) -> SNode:
     """A copy of a part (from another file, a template) with its line ends made ``newline``."""
     out = copy.deepcopy(node)
-    for n in out.iter():
-        n.head, n.trail, n.tail = (_eol(b, newline) for b in (n.head, n.trail, n.tail))
+    for part in out.iter():
+        part.head, part.trail, part.tail = (_eol(piece, newline) for piece in (part.head, part.trail, part.tail))
     return out
 
 

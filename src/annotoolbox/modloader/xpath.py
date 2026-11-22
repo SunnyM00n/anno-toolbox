@@ -1,9 +1,9 @@
-"""XPath 1.0 evaluated over a ``patchdoc.PatchDoc``: node sets of elements, attributes and texts, numbers, strings
+"""XPath 1.0 evaluated over a ``patchdoc.CPatchDoc``: node sets of elements, attributes and texts, numbers, strings
 and booleans, the core functions. Stdlib only.
 
-``evaluate(doc, expr, node)`` is the entry (``select`` when a node set is wanted); the tree comes from
+``evaluate(document, expression, node)`` is the entry (``select`` when a node set is wanted); the tree comes from
 ``xpathparse.parse``. Two shortcuts keep a large asset file fast without changing a result: a key test such as
-``Text[LineId='5']`` is looked up in ``PatchDoc.keyed``, and ``//Values[Standard/GUID='5']`` reads only the lazy
+``Text[LineId='5']`` is looked up in ``CPatchDoc.keyed``, and ``//Values[Standard/GUID='5']`` reads only the lazy
 assets whose bytes hold the ``5`` (``docs/tool-suite.md`` section 17).
 """
 
@@ -15,8 +15,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .patchdoc import DOCUMENT, PatchDoc
-from .xpathparse import DESCEND, XPathError, parse
+from .patchdoc import DOCUMENT, CPatchDoc
+from .xpathparse import DESCEND, CXPathError, parse
 
 PLAIN = re.compile(r"[\w .:;,+\-]+")  # a literal whose bytes in the file are the literal itself
 ARITHMETIC = frozenset({"+", "-", "*", "div", "mod"})
@@ -25,28 +25,28 @@ NUMERIC = frozenset({"number", "sum", "count", "round", "floor", "ceiling", "str
 
 
 @dataclass(frozen=True)
-class Attr:
+class SAttr:
     owner: ET.Element
     name: str
     value: str
 
 
 @dataclass(frozen=True)
-class TextNode:
+class STextNode:
     owner: ET.Element
     value: str
 
 
-def evaluate(doc: PatchDoc, expr, node=None):
-    """The value of ``expr`` (text or a parsed tree) with ``node`` as the context (the document node when None)."""
-    tree = parse(expr) if isinstance(expr, str) else expr
-    return _Eval(doc).value(tree, doc.top if node is None else node, 1, 1)
+def evaluate(document: CPatchDoc, expression, node=None):
+    """The value of ``expression`` (text or a parsed tree) with ``node`` as the context (the document node when None)."""
+    tree = parse(expression) if isinstance(expression, str) else expression
+    return _CEval(document).value(tree, document.m_top if node is None else node, 1, 1)
 
 
-def select(doc: PatchDoc, expr, node=None) -> list:
-    found = evaluate(doc, expr, node)
+def select(document: CPatchDoc, expression, node=None) -> list:
+    found = evaluate(document, expression, node)
     if not isinstance(found, list):
-        raise XPathError(f"{expr!r} is not a path (it gives {format_value(found)!r})")
+        raise CXPathError(f"{expression!r} is not a path (it gives {format_value(found)!r})")
     return found
 
 
@@ -79,15 +79,15 @@ def format_number(x: float) -> str:
     return text
 
 
-def string_of(doc: PatchDoc, node) -> str:
-    if isinstance(node, (Attr, TextNode)):
+def string_of(document: CPatchDoc, node) -> str:
+    if isinstance(node, (SAttr, STextNode)):
         return node.value
-    return doc.string(node)
+    return document.string(node)
 
 
-def format_value(value, doc: PatchDoc | None = None) -> str:
+def format_value(value, document: CPatchDoc | None = None) -> str:
     if isinstance(value, list):
-        return string_of(doc, value[0]) if value and doc is not None else ""
+        return string_of(document, value[0]) if value and document is not None else ""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
@@ -109,7 +109,7 @@ def _needles(step) -> tuple[bytes, ...]:
 
 
 def _ends_at_guid(key: str) -> bool:
-    """Whether a key path ends with the elements ``Standard/GUID`` (what ``PatchDoc.guid_holders`` has indexed)."""
+    """Whether a key path ends with the elements ``Standard/GUID`` (what ``CPatchDoc.guid_holders`` has indexed)."""
     return key == "Standard/GUID" or key.endswith("/Standard/GUID")
 
 
@@ -148,51 +148,61 @@ def _uses_position(node) -> bool:
     if node[0] == "fn" and node[1] in ("position", "last"):
         return True
     parts = {"fn": lambda: node[2], "bin": lambda: node[2:], "neg": lambda: node[1:], "union": lambda: node[1:]}
-    return any(_uses_position(p) for p in parts.get(node[0], tuple)())  # a path's predicates are its own
+    return any(
+        _uses_position(predicate) for predicate in parts.get(node[0], tuple)()
+    )  # a path's predicates are its own
 
 
-class _Eval:
-    def __init__(self, doc: PatchDoc) -> None:
-        self.doc = doc
+class _CEval:
+    def __init__(self, document: CPatchDoc) -> None:
+        self.document = document
 
-    def value(self, t, node, pos: int, size: int):
-        kind = t[0]
+    def value(self, tree, node, position: int, context_size: int):
+        kind = tree[0]
         if kind == "lit":
-            return t[1]
+            return tree[1]
         if kind == "num":
-            return t[1]
+            return tree[1]
         if kind == "path":
-            start = [self.doc.top] if t[1] else [node]
-            return self.steps(start, t[2])
+            start = [self.document.m_top] if tree[1] else [node]
+            return self.steps(start, tree[2])
         if kind == "bin":
-            return self.binary(t, node, pos, size)
+            return self.binary(tree, node, position, context_size)
         if kind == "neg":
-            return -self.number(self.value(t[1], node, pos, size))
+            return -self.number(self.value(tree[1], node, position, context_size))
         if kind == "union":
-            a, b = self.value(t[1], node, pos, size), self.value(t[2], node, pos, size)
-            if not isinstance(a, list) or not isinstance(b, list):
-                raise XPathError("| joins node sets only")
-            return _unique(a + b)
+            left, right = (
+                self.value(tree[1], node, position, context_size),
+                self.value(tree[2], node, position, context_size),
+            )
+            if not isinstance(left, list) or not isinstance(right, list):
+                raise CXPathError("| joins node sets only")
+            return _unique(left + right)
         if kind == "filter":
-            found = self.value(t[1], node, pos, size)
+            found = self.value(tree[1], node, position, context_size)
             if not isinstance(found, list):
-                raise XPathError("a predicate or a path after a value that is not a node set")
-            return self.steps(self.predicates(found, t[2]), t[3])
+                raise CXPathError("a predicate or a path after a value that is not a node set")
+            return self.steps(self.predicates(found, tree[2]), tree[3])
         if kind == "fn":
-            return self.function(t[1], t[2], node, pos, size)
-        raise XPathError(f"unknown expression {kind}")
+            return self.function(tree[1], tree[2], node, position, context_size)
+        raise CXPathError(f"unknown expression {kind}")
 
     # paths
     def steps(self, nodes: list, steps: tuple) -> list:
         k = 0
         while k < len(steps):
             step = steps[k]
-            nxt = steps[k + 1] if k + 1 < len(steps) else None
-            if step == DESCEND and nxt and nxt[0] == "child" and not any(_positional(p) for p in nxt[2]):
-                nodes = self.descend(nodes, nxt)
+            next_step = steps[k + 1] if k + 1 < len(steps) else None
+            if (
+                step == DESCEND
+                and next_step
+                and next_step[0] == "child"
+                and not any(_positional(predicate) for predicate in next_step[2])
+            ):
+                nodes = self.descend(nodes, next_step)
                 k += 2
                 continue
-            nodes = _unique([m for n in nodes for m in self.step(n, step)])
+            nodes = _unique([match for node in nodes for match in self.step(node, step)])
             k += 1
         return nodes
 
@@ -204,21 +214,29 @@ class _Eval:
         by_guid = key and isinstance(key[1], str) and PLAIN.fullmatch(key[1]) and _ends_at_guid(key[0])
         hold = _needles(step)
         out = []
-        for n in nodes:
-            if not isinstance(n, ET.Element):
+        for node in nodes:
+            if not isinstance(node, ET.Element):
                 continue
             if by_guid:  # ``//Values[Standard/GUID='5']``: the GUID index instead of every element
-                found = [e for e in self.doc.guid_holders(key[1], (tag, *key[0].split("/"))) if self._under(e, n)]
+                found = [
+                    element
+                    for element in self.document.guid_holders(key[1], (tag, *key[0].split("/")))
+                    if self._under(element, node)
+                ]
                 out += self.predicates(found, step[2][1:])
                 continue
-            found = [e for e in self.doc.descendants(n, tag, hold) if self.matches(e, test, "child")]
+            found = [
+                element
+                for element in self.document.descendants(node, tag, hold)
+                if self.matches(element, test, "child")
+            ]
             out += self.predicates(found, step[2])
         return _unique(out)
 
-    def _under(self, el: ET.Element, ancestor: ET.Element) -> bool:
-        node = self.doc.parent(el)
+    def _under(self, element: ET.Element, ancestor: ET.Element) -> bool:
+        node = self.document.parent(element)
         while node is not None and node is not ancestor:
-            node = self.doc.parent(node)
+            node = self.document.parent(node)
         return node is ancestor
 
     def step(self, node, step) -> list:
@@ -226,7 +244,7 @@ class _Eval:
         if axis == "child" and preds and test[0] == "name" and test[1] != "*" and isinstance(node, ET.Element):
             key = _key_test(preds[0])
             if key and isinstance(key[1], str):
-                found = list(self.doc.keyed(node, test[1], key[0]).get(key[1], ()))
+                found = list(self.document.keyed(node, test[1], key[0]).get(key[1], ()))
                 return self.predicates(found, preds[1:])
         found = [n for n in self.axis(node, axis, test) if self.matches(n, test, axis)]
         return self.predicates(found, preds)
@@ -235,16 +253,16 @@ class _Eval:
         for pred in preds:
             if not nodes:
                 break
-            size = len(nodes)
+            context_size = len(nodes)
             key = _key_test(pred)
             if key is not None:
-                nodes = [n for n in nodes if self.key_holds(n, key)]
+                nodes = [node for node in nodes if self.key_holds(node, key)]
                 continue
             kept = []
-            for i, n in enumerate(nodes, 1):
-                v = self.value(pred, n, i, size)
-                if (v == i) if isinstance(v, float) else boolean(v):
-                    kept.append(n)
+            for i, node in enumerate(nodes, 1):
+                value = self.value(pred, node, i, context_size)
+                if (value == i) if isinstance(value, float) else boolean(value):
+                    kept.append(node)
             nodes = kept
         return nodes
 
@@ -252,158 +270,167 @@ class _Eval:
         """``a/b = 'x'`` on one node, read with the element tree's own path search (the same result, faster)."""
         if not isinstance(node, ET.Element):
             return False
-        found = self.doc.key_values(node, key[0])
+        found = self.document.key_values(node, key[0])
         if isinstance(key[1], str):
             return key[1] in found
-        return any(to_number(v) == key[1] for v in found)
+        return any(to_number(value) == key[1] for value in found)
 
     def matches(self, node, test, axis: str) -> bool:
         kind, name = test
         if kind == "type":
             if name == "node":
                 return True
-            return name == "text" and isinstance(node, TextNode)
+            return name == "text" and isinstance(node, STextNode)
         if axis == "attribute":
-            return isinstance(node, Attr) and (name == "*" or node.name == name)
+            return isinstance(node, SAttr) and (name == "*" or node.name == name)
         return isinstance(node, ET.Element) and node.tag != DOCUMENT and (name == "*" or node.tag == name)
 
     def axis(self, node, axis: str, test) -> list:
         """The nodes of an XPath axis from ``node``, in document order (reverse axes nearest first)."""
-        doc = self.doc
+        document = self.document
         if not isinstance(node, ET.Element):
             return [node.owner] if axis in ("parent", "ancestor") else [node] if axis.startswith("self") else []
         if axis == "child":
-            kids = doc.children(node)
+            kids = document.children(node)
             if test == ("type", "text"):
-                return [TextNode(node, t) for t in [node.text, *(c.tail for c in kids)] if t]
+                return [STextNode(node, tree) for tree in [node.text, *(child.tail for child in kids)] if tree]
             return kids
         if axis == "attribute":
-            if node in doc.lazy:
-                doc.materialize(node)
-            return [Attr(node, k, v) for k, v in node.attrib.items()]
+            if node in document.m_lazy:
+                document.materialize(node)
+            return [SAttr(node, k, value) for k, value in node.attrib.items()]
         if axis == "self":
             return [node]
         if axis in ("descendant", "descendant-or-self"):
             tag = test[1] if test[0] == "name" and test[1] != "*" else None
-            below = doc.descendants(node, tag)
+            below = document.descendants(node, tag)
             return [node, *below] if axis == "descendant-or-self" else below
         if axis in ("parent", "ancestor", "ancestor-or-self"):
             out = [node] if axis == "ancestor-or-self" else []
-            up = doc.parent(node)
-            while up is not None:
-                out.append(up)
+            parent = document.parent(node)
+            while parent is not None:
+                out.append(parent)
                 if axis == "parent":
                     break
-                up = doc.parent(up)
+                parent = document.parent(parent)
             return out
         if axis in ("following-sibling", "preceding-sibling"):
-            up = doc.parent(node)
-            if up is None:
+            parent = document.parent(node)
+            if parent is None:
                 return []
-            kids = list(up)
-            at = next(k for k, c in enumerate(kids) if c is node)
-            return kids[at + 1 :] if axis == "following-sibling" else kids[:at][::-1]
-        raise XPathError(f"the axis {axis} is not supported")
+            kids = list(parent)
+            index = next(k for k, child in enumerate(kids) if child is node)
+            return kids[index + 1 :] if axis == "following-sibling" else kids[:index][::-1]
+        raise CXPathError(f"the axis {axis} is not supported")
 
     # operators
-    def binary(self, t, node, pos: int, size: int):
-        op = t[1]
-        if op == "or":
-            return boolean(self.value(t[2], node, pos, size)) or boolean(self.value(t[3], node, pos, size))
-        if op == "and":
-            return boolean(self.value(t[2], node, pos, size)) and boolean(self.value(t[3], node, pos, size))
-        a, b = self.value(t[2], node, pos, size), self.value(t[3], node, pos, size)
-        if op in ("=", "!=", "<", "<=", ">", ">="):
-            return self.compare(op, a, b)
-        x, y = self.number(a), self.number(b)
-        if op == "+":
+    def binary(self, tree, node, position: int, context_size: int):
+        operator = tree[1]
+        if operator == "or":
+            return boolean(self.value(tree[2], node, position, context_size)) or boolean(
+                self.value(tree[3], node, position, context_size)
+            )
+        if operator == "and":
+            return boolean(self.value(tree[2], node, position, context_size)) and boolean(
+                self.value(tree[3], node, position, context_size)
+            )
+        left, right = (
+            self.value(tree[2], node, position, context_size),
+            self.value(tree[3], node, position, context_size),
+        )
+        if operator in ("=", "!=", "<", "<=", ">", ">="):
+            return self.compare(operator, left, right)
+        x, y = self.number(left), self.number(right)
+        if operator == "+":
             return x + y
-        if op == "-":
+        if operator == "-":
             return x - y
-        if op == "*":
+        if operator == "*":
             return x * y
-        if op == "div":
+        if operator == "div":
             if y:
                 return x / y
             return math.nan if x == 0 or math.isnan(x) else math.copysign(math.inf, x) * math.copysign(1, y)
-        if op == "mod":
+        if operator == "mod":
             return math.fmod(x, y) if y else math.nan
-        raise XPathError(f"unknown operator {op}")
+        raise CXPathError(f"unknown operator {operator}")
 
-    def compare(self, op: str, a, b) -> bool:
-        if isinstance(a, list) or isinstance(b, list):
-            if isinstance(a, list) and isinstance(b, list):
-                left = [string_of(self.doc, n) for n in a]
-                return any(_cmp(op, x, y) for x in left for y in (string_of(self.doc, n) for n in b))
-            nodes, other, flip = (a, b, False) if isinstance(a, list) else (b, a, True)
+    def compare(self, operator: str, left, right) -> bool:
+        if isinstance(left, list) or isinstance(right, list):
+            if isinstance(left, list) and isinstance(right, list):
+                left_texts = [string_of(self.document, node) for node in left]
+                return any(
+                    _cmp(operator, x, y) for x in left_texts for y in (string_of(self.document, node) for node in right)
+                )
+            nodes, other, flip = (left, right, False) if isinstance(left, list) else (right, left, True)
             if isinstance(other, bool):
-                return _cmp(op, boolean(nodes), other, flip)
-            for n in nodes:
-                s = string_of(self.doc, n)
-                if _cmp(op, to_number(s) if isinstance(other, float) else s, other, flip):
+                return _cmp(operator, boolean(nodes), other, flip)
+            for node in nodes:
+                text = string_of(self.document, node)
+                if _cmp(operator, to_number(text) if isinstance(other, float) else text, other, flip):
                     return True
             return False
-        if op in ("=", "!="):
-            if isinstance(a, bool) or isinstance(b, bool):
-                return _cmp(op, boolean(a), boolean(b))
-            if isinstance(a, float) or isinstance(b, float):
-                return _cmp(op, self.number(a), self.number(b))
-            return _cmp(op, a, b)
-        return _cmp(op, self.number(a), self.number(b))
+        if operator in ("=", "!="):
+            if isinstance(left, bool) or isinstance(right, bool):
+                return _cmp(operator, boolean(left), boolean(right))
+            if isinstance(left, float) or isinstance(right, float):
+                return _cmp(operator, self.number(left), self.number(right))
+            return _cmp(operator, left, right)
+        return _cmp(operator, self.number(left), self.number(right))
 
-    def number(self, v) -> float:
-        if isinstance(v, bool):
-            return 1.0 if v else 0.0
-        if isinstance(v, float):
-            return v
-        if isinstance(v, list):
-            return to_number(string_of(self.doc, v[0])) if v else math.nan
-        return to_number(v)
+    def number(self, value) -> float:
+        if isinstance(value, bool):
+            return 1.0 if value else 0.0
+        if isinstance(value, float):
+            return value
+        if isinstance(value, list):
+            return to_number(string_of(self.document, value[0])) if value else math.nan
+        return to_number(value)
 
-    def string(self, v) -> str:
-        return format_value(v, self.doc)
+    def string(self, value) -> str:
+        return format_value(value, self.document)
 
-    def function(self, name: str, args, node, pos: int, size: int):
+    def function(self, name: str, arguments, node, position: int, context_size: int):
         if name == "last":
-            return float(size)
+            return float(context_size)
         if name == "position":
-            return float(pos)
-        vals = [self.value(a, node, pos, size) for a in args]
+            return float(position)
+        vals = [self.value(left, node, position, context_size) for left in arguments]
         if name in NODE_SET_ARGUMENT and not (vals and isinstance(vals[0], list)):
-            raise XPathError(f"{name}() takes a node set")
+            raise CXPathError(f"{name}() takes a node set")
         try:
             return _call(self, name, vals, node)
         except IndexError as exc:  # an argument the function reads is not there
-            raise XPathError(f"{name}() is given {len(vals)} argument(s), too few") from exc
+            raise CXPathError(f"{name}() is given {len(vals)} argument(s), too few") from exc
 
 
-def _cmp(op: str, x, y, flip: bool = False) -> bool:
-    if flip:
+def _cmp(operator: str, x, y, is_flipped: bool = False) -> bool:
+    if is_flipped:
         x, y = y, x
-    if isinstance(x, str) and isinstance(y, str) and op in ("=", "!="):
-        return (x == y) == (op == "=")
+    if isinstance(x, str) and isinstance(y, str) and operator in ("=", "!="):
+        return (x == y) == (operator == "=")
     if isinstance(x, bool) or isinstance(y, bool):
         x, y = bool(x), bool(y)
-        return (x == y) == (op == "=") if op in ("=", "!=") else _cmp(op, float(x), float(y))
+        return (x == y) == (operator == "=") if operator in ("=", "!=") else _cmp(operator, float(x), float(y))
     if isinstance(x, str):
         x = to_number(x)
     if isinstance(y, str):
         y = to_number(y)
-    return {"=": x == y, "!=": x != y, "<": x < y, "<=": x <= y, ">": x > y, ">=": x >= y}[op]
+    return {"=": x == y, "!=": x != y, "<": x < y, "<=": x <= y, ">": x > y, ">=": x >= y}[operator]
 
 
 def _unique(nodes: list) -> list:
     seen, out = set(), []
-    for n in nodes:
-        key = id(n) if isinstance(n, ET.Element) else n
+    for node in nodes:
+        key = id(node) if isinstance(node, ET.Element) else node
         if key not in seen:
             seen.add(key)
-            out.append(n)
+            out.append(node)
     return out
 
 
-def _call(ev: _Eval, name: str, vals: list, node):
-    s = ev.string
+def _call(evaluator: _CEval, name: str, vals: list, node):
+    text = evaluator.string
     if name == "count":
         return float(len(vals[0]))
     if name == "not":
@@ -413,50 +440,57 @@ def _call(ev: _Eval, name: str, vals: list, node):
     if name == "boolean":
         return boolean(vals[0])
     if name == "number":
-        return ev.number(vals[0] if vals else [node])
+        return evaluator.number(vals[0] if vals else [node])
     if name == "string":
-        return s(vals[0] if vals else [node])
+        return text(vals[0] if vals else [node])
     if name == "concat":
-        return "".join(s(v) for v in vals)
+        return "".join(text(value) for value in vals)
     if name == "contains":
-        return s(vals[1]) in s(vals[0])
+        return text(vals[1]) in text(vals[0])
     if name == "starts-with":
-        return s(vals[0]).startswith(s(vals[1]))
+        return text(vals[0]).startswith(text(vals[1]))
     if name == "ends-with":
-        return s(vals[0]).endswith(s(vals[1]))
+        return text(vals[0]).endswith(text(vals[1]))
     if name == "string-length":
-        return float(len(s(vals[0] if vals else [node])))
+        return float(len(text(vals[0] if vals else [node])))
     if name == "normalize-space":
-        return " ".join(s(vals[0] if vals else [node]).split())
+        return " ".join(text(vals[0] if vals else [node]).split())
     if name == "substring-before":
-        a, b = s(vals[0]), s(vals[1])
-        return a.split(b, 1)[0] if b in a else ""
+        left, right = text(vals[0]), text(vals[1])
+        return left.split(right, 1)[0] if right in left else ""
     if name == "substring-after":
-        a, b = s(vals[0]), s(vals[1])
-        return a.split(b, 1)[1] if b in a else ""
+        left, right = text(vals[0]), text(vals[1])
+        return left.split(right, 1)[1] if right in left else ""
     if name == "substring":
-        return _substring(s(vals[0]), ev.number(vals[1]), ev.number(vals[2]) if len(vals) > 2 else math.inf)
+        return _substring(
+            text(vals[0]), evaluator.number(vals[1]), evaluator.number(vals[2]) if len(vals) > 2 else math.inf
+        )
     if name == "translate":
-        a, src, dst = s(vals[0]), s(vals[1]), s(vals[2])
-        table = {ord(c): (dst[k] if k < len(dst) else None) for k, c in reversed(list(enumerate(src)))}
-        return a.translate(table)
+        left, source_chars, target_chars = text(vals[0]), text(vals[1]), text(vals[2])
+        table = {
+            ord(child): (target_chars[k] if k < len(target_chars) else None)
+            for k, child in reversed(list(enumerate(source_chars)))
+        }
+        return left.translate(table)
     if name == "sum":
-        return float(sum(to_number(string_of(ev.doc, n)) for n in vals[0]))
+        return float(sum(to_number(string_of(evaluator.doc, n)) for n in vals[0]))
     if name in ("floor", "ceiling", "round"):
-        x = ev.number(vals[0])
+        x = evaluator.number(vals[0])
         if math.isnan(x) or math.isinf(x):
             return x
-        return float({"floor": math.floor, "ceiling": math.ceil, "round": lambda v: math.floor(v + 0.5)}[name](x))
+        return float(
+            {"floor": math.floor, "ceiling": math.ceil, "round": lambda value: math.floor(value + 0.5)}[name](x)
+        )
     if name in ("name", "local-name"):
         nodes = vals[0] if vals else [node]
         n = nodes[0] if nodes else None
-        return n.name if isinstance(n, Attr) else n.tag if isinstance(n, ET.Element) and n.tag != DOCUMENT else ""
-    raise XPathError(f"the function {name}() is not supported")
+        return n.name if isinstance(n, SAttr) else n.tag if isinstance(n, ET.Element) and n.tag != DOCUMENT else ""
+    raise CXPathError(f"the function {name}() is not supported")
 
 
-def _substring(text: str, start: float, length: float) -> str:
-    if math.isnan(start) or math.isnan(length):
+def _substring(text: str, start: float, char_count: float) -> str:
+    if math.isnan(start) or math.isnan(char_count):
         return ""
     first = math.floor(start + 0.5)
-    last = first + (math.floor(length + 0.5) if not math.isinf(length) else math.inf)
-    return "".join(c for k, c in enumerate(text, 1) if first <= k < last)
+    last = first + (math.floor(char_count + 0.5) if not math.isinf(char_count) else math.inf)
+    return "".join(char for k, char in enumerate(text, 1) if first <= k < last)

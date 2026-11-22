@@ -16,45 +16,45 @@ from ..mapedit import template
 
 
 @dataclass(frozen=True)
-class Place:
+class SPlace:
     """A fixed island of a map template: the template, the island file, its corner (tiles) and quarter turns."""
 
     template: str
     island: str
     x: int
     z: int
-    rotation90: int
+    Rotation90: int
 
 
 def templates(side) -> list[str]:
     """Every map template (``.a7tinfo``) of the game, sorted."""
-    listing = getattr(side.files, "list", None) or side.files.iter_paths
-    return sorted(p for p in listing("data/") if p.endswith(".a7tinfo"))
+    listing = getattr(side.m_files, "list", None) or side.m_files.iter_paths
+    return sorted(path for path in listing("data/") if path.endswith(".a7tinfo"))
 
 
-def _read(side, path: str) -> template.MapTemplate | None:
+def _read(side, path: str) -> template.SMapTemplate | None:
     try:
         return template.read(side.read(path))
     except (KeyError, OSError, ValueError):
         return None
 
 
-def fixed_islands(side) -> list[Place]:
+def fixed_islands(side) -> list[SPlace]:
     """Every fixed island of every map template of the game (island paths lower case, forward slashes)."""
     out = []
     for path in templates(side):
-        t = _read(side, path)
-        for e in t.elements if t is not None else []:
-            if e.kind == template.KIND_FIXED and e.map_file_path:
-                island = e.map_file_path.replace("\\", "/").lower()
-                out.append(Place(path, island, e.x, e.z, e.rotation90))
+        parsed = _read(side, path)
+        for element in parsed.elements if parsed is not None else []:
+            if element.kind == template.KIND_FIXED and element.MapFilePath:
+                island = element.MapFilePath.replace("\\", "/").lower()
+                out.append(SPlace(path, island, element.x, element.z, element.Rotation90))
     return out
 
 
-def placed_at(side, island: str) -> list[Place]:
+def placed_at(side, island: str) -> list[SPlace]:
     """The places of the island file ``island`` on the game's maps."""
     key = island.replace("\\", "/").lower()
-    return [p for p in fixed_islands(side) if p.island == key]
+    return [place for place in fixed_islands(side) if place.island == key]
 
 
 def story_map(path: str) -> bool:
@@ -70,22 +70,22 @@ def take_place(side, old: str, new: str, label: str) -> dict[str, bytes]:
     fertilities and the template's other islands."""
     key = old.replace("\\", "/").lower()
     out = {}
-    for path in sorted({p.template for p in placed_at(side, old) if not story_map(p.template)}):
-        t = _read(side, path)
+    for path in sorted({place.template for place in placed_at(side, old) if not story_map(place.template)}):
+        parsed = _read(side, path)
         changed = False
-        for e in t.elements if t is not None else []:
-            if e.kind == template.KIND_FIXED and e.map_file_path.replace("\\", "/").lower() == key:
-                e.map_file_path, e.island_label, e.mine_slot_activation = new, label, ()
+        for element in parsed.elements if parsed is not None else []:
+            if element.kind == template.KIND_FIXED and element.MapFilePath.replace("\\", "/").lower() == key:
+                element.MapFilePath, element.IslandLabel, element.MineSlotActivation = new, label, ()
                 changed = True
         if changed:
-            out[path] = t.render()
+            out[path] = parsed.render()
     return out
 
 
 def island_size(side, island: str) -> int | None:
     """The grid of an island file (its ``.a7minfo``'s ``MapSize``), None where it does not read."""
     try:
-        info = filedb.read(side.read(island[:-4] + ".a7minfo"))
-        return int.from_bytes(info.find("MapSize").data[:4], "little")
+        map_info = filedb.read(side.read(island[:-4] + ".a7minfo"))
+        return int.from_bytes(map_info.find("MapSize").data[:4], "little")
     except (KeyError, OSError, ValueError, AttributeError):
         return None

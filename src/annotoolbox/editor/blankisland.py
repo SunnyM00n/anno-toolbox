@@ -45,11 +45,11 @@ def coast_distance(grid: int, seed: int = 1) -> np.ndarray:
     """Per corner, the tiles inside a gently lobed coast (negative out at sea)."""
     rnd = random.Random(seed)
     lobes = [(k, rnd.uniform(0.04, 0.12) / k**0.5, rnd.uniform(0, 2 * math.pi)) for k in (2, 3, 5, 7)]
-    zz, xx = np.mgrid[0 : grid + 1, 0 : grid + 1].astype(np.float64)
-    c = grid / 2
-    angle = np.arctan2(zz - c, xx - c)
-    reach = REACH * grid * (1 + sum(a * np.cos(k * angle + p) for k, a, p in lobes))
-    return reach - np.hypot(xx - c, zz - c)
+    z_grid, x_grid = np.mgrid[0 : grid + 1, 0 : grid + 1].astype(np.float64)
+    centre = grid / 2
+    angle = np.arctan2(z_grid - centre, x_grid - centre)
+    reach = REACH * grid * (1 + sum(amplitude * np.cos(k * angle + phase) for k, amplitude, phase in lobes))
+    return reach - np.hypot(x_grid - centre, z_grid - centre)
 
 
 def land_level(corners: np.ndarray) -> float:
@@ -64,13 +64,15 @@ def land_level(corners: np.ndarray) -> float:
 def target_heights(corners: np.ndarray, seed: int = 1) -> np.ndarray:
     """The blank island's corner heights on the grid of ``corners`` (the vanilla island's, rows z)."""
     grid = corners.shape[0] - 1
-    d = coast_distance(grid, seed)
+    coast = coast_distance(grid, seed)
     land = land_level(corners)
     edge = corners[[0, -1], :].ravel().tolist() + corners[:, [0, -1]].ravel().tolist()
     bed = min(float(np.median(edge)), -1.0)
-    shaped = np.where(d >= BEACH, land, np.where(d >= 0, land * d / BEACH, bed * (1 - np.exp(d / SHELF))))
-    zz, xx = np.mgrid[0 : grid + 1, 0 : grid + 1]
-    to_edge = np.minimum(np.minimum(xx, grid - xx), np.minimum(zz, grid - zz))
+    shaped = np.where(
+        coast >= BEACH, land, np.where(coast >= 0, land * coast / BEACH, bed * (1 - np.exp(coast / SHELF)))
+    )
+    z_grid, x_grid = np.mgrid[0 : grid + 1, 0 : grid + 1]
+    to_edge = np.minimum(np.minimum(x_grid, grid - x_grid), np.minimum(z_grid, grid - z_grid))
     keep = np.clip(1 - to_edge / EDGE, 0, 1)  # 1 at the edge: the vanilla ground
     return (shaped * (1 - keep) + corners * keep).astype(np.float32)
 
@@ -101,12 +103,12 @@ def blank_edits(corners: np.ndarray, grid: int, forest=(), seed: int = 1, source
 PLAIN_RADIUS = 32.0  # tiles: the brush a plain ground is laid with; its dabs sit a quarter radius apart
 
 
-def plain_ground(size: int, material: int) -> list[dict]:
-    """The paint stroke that lays ``material`` over a whole grid of ``size`` tiles, so a blank island of an older game
+def plain_ground(size_tiles: int, material: int) -> list[dict]:
+    """The paint stroke that lays ``material`` over a whole grid of ``size_tiles`` tiles, so a blank island of an older game
     does not keep the donor island's ground: one serpentine line of dabs, covering every tile at least nine tenths
     (``islandground.stroke_cover``'s soft brush), the way an ordinary paint edit lays it."""
     step = PLAIN_RADIUS / 4
-    along = [min(float(size), k * step) for k in range(math.ceil(size / step) + 1)]
+    along = [min(float(size_tiles), k * step) for k in range(math.ceil(size_tiles / step) + 1)]
     points = [[x, z] for row, z in enumerate(along) for x in (along if row % 2 == 0 else along[::-1])]
     return [{"material": int(material), "radius": PLAIN_RADIUS, "strength": 1.0, "points": points}]
 

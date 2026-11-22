@@ -1,9 +1,9 @@
 """The sound editor: Wwise banks of Anno 117 (and 1800 and 2205 where the layouts allow) opened, their events, containers,
 sounds and music edited, the audio replaced, the bank written back into a project as mod files.
 
-Start at ``soundwindow.SoundWindow`` (the suite's Sound app). The parts, each one job:
+Start at ``soundwindow.CSoundWindow`` (the suite's Sound app). The parts, each one job:
 
-- ``bankdoc``: the open bank, its undo stack, ``to_bytes``; ``registry``: the edits by name and ``EditError``
+- ``bankdoc``: the open bank, its undo stack, ``to_bytes``; ``registry``: the edits by name and ``CEditError``
 - ``nodebase``: a Sound's or container's properties (volume, pitch ...); ``containers``: child lists, playlists, switch tables
 - ``edits``: the edits of objects; ``audioedits``: the edits of audio (a clip replaced, a sound added, a music track)
 - ``clipcodec``: a WAV or Ogg file read, encoded as PCM, Wwise ADPCM or Wwise Vorbis

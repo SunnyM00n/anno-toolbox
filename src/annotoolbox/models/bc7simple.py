@@ -29,11 +29,11 @@ def identity() -> str:
 
 def _blocks(rgba: np.ndarray) -> np.ndarray:
     """``(h, w, 4)`` as ``(n, 16, 4)`` float64 texels in block order; sides that are no multiple of 4 repeat the edge."""
-    h, w = rgba.shape[:2]
-    ph, pw = -(-h // 4) * 4, -(-w // 4) * 4
-    if (ph, pw) != (h, w):
-        rgba = np.pad(rgba, ((0, ph - h), (0, pw - w), (0, 0)), mode="edge")
-    tiled = rgba.reshape(ph // 4, 4, pw // 4, 4, 4).transpose(0, 2, 1, 3, 4)
+    height, width = rgba.shape[:2]
+    padded_height, padded_width = -(-height // 4) * 4, -(-width // 4) * 4
+    if (padded_height, padded_width) != (height, width):
+        rgba = np.pad(rgba, ((0, padded_height - height), (0, padded_width - width), (0, 0)), mode="edge")
+    tiled = rgba.reshape(padded_height // 4, 4, padded_width // 4, 4, 4).transpose(0, 2, 1, 3, 4)
     return tiled.reshape(-1, 16, 4).astype(np.float64)
 
 
@@ -52,90 +52,99 @@ def _quantise(target: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Endpoints ``(n, 4)`` in 0..255 as (7-bit values, p-bit, the 8-bit values the decoder reads): the p-bit that
     leaves the smaller weighted error, one for all four channels."""
     best_err = best_q = best_p = None
-    for p in (0, 1):
-        q = np.clip(np.rint((target - p) / 2), 0, 127)
-        err = (((q * 2 + p) - target) ** 2 * _CHANNEL_WEIGHT).sum(axis=1)
+    for pbit in (0, 1):
+        quantised = np.clip(np.rint((target - pbit) / 2), 0, 127)
+        err = (((quantised * 2 + pbit) - target) ** 2 * _CHANNEL_WEIGHT).sum(axis=1)
         if best_err is None:
-            best_err, best_q, best_p = err, q, np.zeros(len(target), np.int64)
+            best_err, best_q, best_p = err, quantised, np.zeros(len(target), np.int64)
         else:
             use = err < best_err
             best_err = np.where(use, err, best_err)
-            best_q = np.where(use[:, None], q, best_q)
-            best_p = np.where(use, p, best_p)
+            best_q = np.where(use[:, None], quantised, best_q)
+            best_p = np.where(use, pbit, best_p)
     return best_q.astype(np.int64), best_p, best_q * 2 + best_p[:, None]
 
 
-def _assign(texels: np.ndarray, e0: np.ndarray, e1: np.ndarray) -> np.ndarray:
+def _assign(texels: np.ndarray, first_endpoint: np.ndarray, second_endpoint: np.ndarray) -> np.ndarray:
     """The nearest of the sixteen levels for each texel, ``(n, 16)`` (the levels lie on one line: project, then pick)."""
-    span = e1 - e0
+    span = second_endpoint - first_endpoint
     length = (span * span).sum(axis=1)
-    t = np.einsum("nti,ni->nt", texels - e0[:, None, :], span) / np.maximum(length, 1e-9)[:, None]
-    return np.searchsorted(_MIDS, np.clip(t, 0.0, 1.0) * 64.0).astype(np.int64)
+    positions = np.einsum("nti,ni->nt", texels - first_endpoint[:, None, :], span) / np.maximum(length, 1e-9)[:, None]
+    return np.searchsorted(_MIDS, np.clip(positions, 0.0, 1.0) * 64.0).astype(np.int64)
 
 
-def _decoded(e0: np.ndarray, e1: np.ndarray, index: np.ndarray) -> np.ndarray:
-    w = WEIGHTS[index][:, :, None]
-    return np.floor(((64 - w) * e0[:, None, :] + w * e1[:, None, :] + 32) / 64)
+def _decoded(first_endpoint: np.ndarray, second_endpoint: np.ndarray, index: np.ndarray) -> np.ndarray:
+    weights = WEIGHTS[index][:, :, None]
+    return np.floor(((64 - weights) * first_endpoint[:, None, :] + weights * second_endpoint[:, None, :] + 32) / 64)
 
 
-def _refit(texels: np.ndarray, index: np.ndarray, e0: np.ndarray, e1: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _refit(
+    texels: np.ndarray, index: np.ndarray, first_endpoint: np.ndarray, second_endpoint: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Least-squares endpoints for the given levels (a block that uses one level keeps its endpoints)."""
-    w = WEIGHTS[index] / 64.0
-    a, b, c = ((1 - w) ** 2).sum(1), ((1 - w) * w).sum(1), (w * w).sum(1)
-    det = a * c - b * b
-    ok = det > 1e-6
-    safe = np.where(ok, det, 1.0)[:, None]
-    p0 = np.einsum("nt,nti->ni", 1 - w, texels)
-    p1 = np.einsum("nt,nti->ni", w, texels)
-    n0 = (c[:, None] * p0 - b[:, None] * p1) / safe
-    n1 = (a[:, None] * p1 - b[:, None] * p0) / safe
-    return np.where(ok[:, None], np.clip(n0, 0, 255), e0), np.where(ok[:, None], np.clip(n1, 0, 255), e1)
+    weights = WEIGHTS[index] / 64.0
+    sum_a, sum_b, sum_c = ((1 - weights) ** 2).sum(1), ((1 - weights) * weights).sum(1), (weights * weights).sum(1)
+    det = sum_a * sum_c - sum_b * sum_b
+    is_solvable = det > 1e-6
+    safe = np.where(is_solvable, det, 1.0)[:, None]
+    first_sums = np.einsum("nt,nti->ni", 1 - weights, texels)
+    second_sums = np.einsum("nt,nti->ni", weights, texels)
+    first_refit = (sum_c[:, None] * first_sums - sum_b[:, None] * second_sums) / safe
+    second_refit = (sum_a[:, None] * second_sums - sum_b[:, None] * first_sums) / safe
+    return np.where(is_solvable[:, None], np.clip(first_refit, 0, 255), first_endpoint), np.where(
+        is_solvable[:, None], np.clip(second_refit, 0, 255), second_endpoint
+    )
 
 
 def _fit(texels: np.ndarray) -> tuple[np.ndarray, ...]:
     """(q0, p0, q1, p1, index) of the best round for each block."""
     mean = texels.mean(axis=1, keepdims=True)
     axis = _axis(texels, mean)
-    t = np.einsum("nti,ni->nt", texels - mean, axis)
-    e0 = np.clip(mean[:, 0] + axis * t.min(axis=1)[:, None], 0, 255)
-    e1 = np.clip(mean[:, 0] + axis * t.max(axis=1)[:, None], 0, 255)
+    positions = np.einsum("nti,ni->nt", texels - mean, axis)
+    first_endpoint = np.clip(mean[:, 0] + axis * positions.min(axis=1)[:, None], 0, 255)
+    second_endpoint = np.clip(mean[:, 0] + axis * positions.max(axis=1)[:, None], 0, 255)
     best = None
     for _ in range(ROUNDS):
-        q0, p0, v0 = _quantise(e0)
-        q1, p1, v1 = _quantise(e1)
-        index = _assign(texels, v0.astype(np.float64), v1.astype(np.float64))
-        err = ((_decoded(v0, v1, index) - texels) ** 2 * _CHANNEL_WEIGHT).sum(axis=(1, 2))
+        first_quantised, first_pbit, first_values = _quantise(first_endpoint)
+        second_quantised, second_pbit, second_values = _quantise(second_endpoint)
+        index = _assign(texels, first_values.astype(np.float64), second_values.astype(np.float64))
+        err = ((_decoded(first_values, second_values, index) - texels) ** 2 * _CHANNEL_WEIGHT).sum(axis=(1, 2))
         if best is None:
-            best = [err, q0, p0, q1, p1, index]
+            best = [err, first_quantised, first_pbit, second_quantised, second_pbit, index]
         else:
             use = err < best[0]
             best = [
                 np.where(use, err, best[0]),
                 *(
                     np.where(use.reshape((-1,) + (1,) * (new.ndim - 1)), new, old)
-                    for new, old in zip((q0, p0, q1, p1, index), best[1:], strict=True)
+                    for new, old in zip(
+                        (first_quantised, first_pbit, second_quantised, second_pbit, index), best[1:], strict=True
+                    )
                 ),
             ]
-        e0, e1 = _refit(texels, index, e0, e1)
+        first_endpoint, second_endpoint = _refit(texels, index, first_endpoint, second_endpoint)
     return tuple(best[1:])
 
 
-def _pack(q0, p0, q1, p1, index) -> np.ndarray:
+def _pack(first_quantised, first_pbit, second_quantised, second_pbit, index) -> np.ndarray:
     """``(n, 16)`` bytes: mode 6, R0 R1 G0 G1 B0 B1 A0 A1 (7 bits), the two p-bits, a 3-bit anchor index, 15 x 4 bits."""
     flip = index[:, 0] >= 8  # the anchor texel's top index bit is implicit 0: swap the ends instead
-    q0, q1 = np.where(flip[:, None], q1, q0), np.where(flip[:, None], q0, q1)
-    p0, p1 = np.where(flip, p1, p0), np.where(flip, p0, p1)
+    first_quantised, second_quantised = (
+        np.where(flip[:, None], second_quantised, first_quantised),
+        np.where(flip[:, None], first_quantised, second_quantised),
+    )
+    first_pbit, second_pbit = np.where(flip, second_pbit, first_pbit), np.where(flip, first_pbit, second_pbit)
     index = np.where(flip[:, None], 15 - index, index)
-    lo = np.full(len(q0), 64, np.uint64)
-    for c in range(4):
-        lo |= q0[:, c].astype(np.uint64) << np.uint64(7 + 14 * c)
-        lo |= q1[:, c].astype(np.uint64) << np.uint64(14 + 14 * c)
-    lo |= p0.astype(np.uint64) << np.uint64(63)
-    hi = p1.astype(np.uint64) | (index[:, 0].astype(np.uint64) << np.uint64(1))
+    low_bits = np.full(len(first_quantised), 64, np.uint64)
+    for channel in range(4):
+        low_bits |= first_quantised[:, channel].astype(np.uint64) << np.uint64(7 + 14 * channel)
+        low_bits |= second_quantised[:, channel].astype(np.uint64) << np.uint64(14 + 14 * channel)
+    low_bits |= first_pbit.astype(np.uint64) << np.uint64(63)
+    high_bits = second_pbit.astype(np.uint64) | (index[:, 0].astype(np.uint64) << np.uint64(1))
     shifts = (np.uint64(4) + np.uint64(4) * np.arange(15, dtype=np.uint64))[None, :]
-    hi |= (index[:, 1:].astype(np.uint64) << shifts).sum(axis=1, dtype=np.uint64)
-    out = np.empty((len(lo), 2), "<u8")
-    out[:, 0], out[:, 1] = lo, hi
+    high_bits |= (index[:, 1:].astype(np.uint64) << shifts).sum(axis=1, dtype=np.uint64)
+    out = np.empty((len(low_bits), 2), "<u8")
+    out[:, 0], out[:, 1] = low_bits, high_bits
     return out.view(np.uint8).reshape(-1, 16)
 
 
@@ -145,7 +154,7 @@ def encode_level(rgba: np.ndarray) -> bytes:
     return b"".join(_pack(*_fit(texels[i : i + CHUNK])).tobytes() for i in range(0, len(texels), CHUNK))
 
 
-def encode_dds(levels: list[np.ndarray], srgb: bool) -> bytes:
+def encode_dds(levels: list[np.ndarray], is_srgb: bool) -> bytes:
     """A BC7 DDS of the mip levels (level 0 first), the header of ``bc7encode``."""
-    h, w = levels[0].shape[:2]
-    return dds_header(w, h, len(levels), srgb) + b"".join(encode_level(level) for level in levels)
+    height, width = levels[0].shape[:2]
+    return dds_header(width, height, len(levels), is_srgb) + b"".join(encode_level(level) for level in levels)

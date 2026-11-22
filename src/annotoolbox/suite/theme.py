@@ -80,7 +80,7 @@ CANVAS = {
 }
 SETTINGS = ("system", "light", "dark")
 
-_scheme = "dark"
+_g_scheme = "dark"
 
 STYLE = Template("""
 QMainWindow::separator { background: $edge; width: 3px; height: 3px; }
@@ -137,16 +137,16 @@ QStatusBar[mode] QLabel { color: $mode_text; }
 
 def scheme() -> str:
     """The scheme in use, ``dark`` or ``light``."""
-    return _scheme
+    return _g_scheme
 
 
 def colors() -> dict[str, str]:
-    return SCHEMES[_scheme]
+    return SCHEMES[_g_scheme]
 
 
 def canvas() -> dict[str, str]:
     """The road piece editor's canvas colours in the scheme in use."""
-    return CANVAS[_scheme]
+    return CANVAS[_g_scheme]
 
 
 def resolve(setting: str) -> str:
@@ -159,40 +159,42 @@ def resolve(setting: str) -> str:
 
 def stylesheet() -> str:
     """The style sheet, with a status bar rule per mode (``statusBar().setProperty("mode", ...)``)."""
-    modes = "".join(f'QStatusBar[mode="{k}"] {{ background: {v}; }}\n' for k, v in MODE_COLORS[_scheme].items())
-    return STYLE.substitute(SCHEMES[_scheme], mode_text=MODE_TEXT[_scheme]) + modes
+    modes = "".join(
+        f'QStatusBar[mode="{k}"] {{ background: {colour}; }}\n' for k, colour in MODE_COLORS[_g_scheme].items()
+    )
+    return STYLE.substitute(SCHEMES[_g_scheme], mode_text=MODE_TEXT[_g_scheme]) + modes
 
 
 def palette() -> QPalette:
     """The palette every widget takes its colours from; the style sheet only adds the accents."""
-    c = {k: QColor(v) for k, v in colors().items()}
-    p = QPalette()
+    colours = {k: QColor(hex_colour) for k, hex_colour in colors().items()}
+    qt_palette = QPalette()
     for role, colour in (
-        (QPalette.ColorRole.Window, c["bg"]),
-        (QPalette.ColorRole.WindowText, c["text"]),
-        (QPalette.ColorRole.Base, c["field"]),
-        (QPalette.ColorRole.AlternateBase, c["panel"]),
-        (QPalette.ColorRole.Text, c["text"]),
-        (QPalette.ColorRole.Button, c["raised"]),
-        (QPalette.ColorRole.ButtonText, c["text"]),
-        (QPalette.ColorRole.Highlight, c["accent_dim"]),
-        (QPalette.ColorRole.HighlightedText, c["text"]),
-        (QPalette.ColorRole.ToolTipBase, c["panel"]),
-        (QPalette.ColorRole.ToolTipText, c["text"]),
-        (QPalette.ColorRole.PlaceholderText, c["dim"]),
-        (QPalette.ColorRole.Link, c["accent"]),
+        (QPalette.ColorRole.Window, colours["bg"]),
+        (QPalette.ColorRole.WindowText, colours["text"]),
+        (QPalette.ColorRole.Base, colours["field"]),
+        (QPalette.ColorRole.AlternateBase, colours["panel"]),
+        (QPalette.ColorRole.Text, colours["text"]),
+        (QPalette.ColorRole.Button, colours["raised"]),
+        (QPalette.ColorRole.ButtonText, colours["text"]),
+        (QPalette.ColorRole.Highlight, colours["accent_dim"]),
+        (QPalette.ColorRole.HighlightedText, colours["text"]),
+        (QPalette.ColorRole.ToolTipBase, colours["panel"]),
+        (QPalette.ColorRole.ToolTipText, colours["text"]),
+        (QPalette.ColorRole.PlaceholderText, colours["dim"]),
+        (QPalette.ColorRole.Link, colours["accent"]),
     ):
-        p.setColor(role, colour)
+        qt_palette.setColor(role, colour)
     for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
-        p.setColor(QPalette.ColorGroup.Disabled, role, c["dim"])
-    return p
+        qt_palette.setColor(QPalette.ColorGroup.Disabled, role, colours["dim"])
+    return qt_palette
 
 
 def apply(widget, setting: str = "system") -> str:
     """Give a top-level window (and everything it parents) the theme the setting means; returns its scheme."""
-    global _scheme
-    _scheme = resolve(setting)
+    global _g_scheme
+    _g_scheme = resolve(setting)
     qtlang.install()  # Qt's own texts follow the interface language
     widget.setPalette(palette())
     widget.setStyleSheet(stylesheet())
-    return _scheme
+    return _g_scheme

@@ -20,7 +20,7 @@ def record(entry) -> dict:
         "source": entry.source,
         "kind": entry.kind,
         "archive": entry.archive,
-        "size": entry.size,
+        "size": entry.size_bytes,
         "files": list(entry.files),
         "status": entry.status,
         "notes": list(entry.notes),
@@ -29,29 +29,29 @@ def record(entry) -> dict:
 
 def index_name(entries) -> str:
     """``index``, or ``export-index`` when the export wrote a game file of that name at the output root."""
-    taken = {f.lower() for e in entries for f in e.files}
+    taken = {file_name.lower() for entry in entries for file_name in entry.files}
     return "export-index" if taken & {"index.json", "index.csv"} else "index"
 
 
 def write_index(out: Path, entries) -> None:
     """Write ``index.json`` and ``index.csv`` into ``out`` (UTF-8, LF)."""
-    rows = [record(e) for e in entries]
+    rows = [record(entry) for entry in entries]
     name = index_name(entries)
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{name}.json").write_text(json.dumps(rows, indent=1) + "\n", encoding="utf-8", newline="\n")
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(FIELDS)
-    for r in rows:
+    for row in rows:
         writer.writerow(
             [
-                r["source"],
-                r["kind"],
-                r["archive"],
-                r["size"],
-                "; ".join(r["files"]),
-                r["status"],
-                " | ".join(r["notes"]),
+                row["source"],
+                row["kind"],
+                row["archive"],
+                row["size"],
+                "; ".join(row["files"]),
+                row["status"],
+                " | ".join(row["notes"]),
             ]
         )
-    (out / f"{name}.csv").write_text(buf.getvalue(), encoding="utf-8", newline="\n")
+    (out / f"{name}.csv").write_text(buffer.getvalue(), encoding="utf-8", newline="\n")

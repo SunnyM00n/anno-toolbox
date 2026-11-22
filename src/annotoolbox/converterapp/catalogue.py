@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from ..infra.i18n import N_
 from ..suite import features
-from ..suite.extspecs import Conversion
+from ..suite.extspecs import SConversion
 
 CATEGORIES = {
     "models": N_("convert.cat.models"),
@@ -95,7 +95,7 @@ EXPORT_OPTIONS = frozenset({"rdm_target", "all_mips", "hdr_form", "kind"})  # wh
 
 def exported(
     key: str, category: str, kind: str, forms: tuple[str, ...], games=ALL_GAMES, keep=frozenset()
-) -> Conversion:
+) -> SConversion:
     """An entry of the ``export`` command for one kind of file (``exporting.kinds``) in one of ``forms``."""
     from ..exporting import kinds
 
@@ -103,13 +103,13 @@ def exported(
                  fixed=("--kind", kind), choices={"format": forms}, hidden=EXPORT_OPTIONS - keep)  # fmt: skip
 
 
-def _rdm_entry(key: str, word: str, suffixes: tuple[str, ...], games=RDM_GAMES, **more) -> Conversion:
+def _rdm_entry(key: str, word: str, suffixes: tuple[str, ...], games=RDM_GAMES, **more) -> SConversion:
     return entry(key, "models", ("rdm", word), _rdm, (word,), suffixes=suffixes, games=games, **more)
 
 
-def entry(key: str, category: str, command: tuple[str, ...], register, words: tuple[str, ...], **more) -> Conversion:
+def entry(key: str, category: str, command: tuple[str, ...], register, words: tuple[str, ...], **more) -> SConversion:
     """An entry with its title and summary from ``TEXTS``."""
-    return Conversion(key, category, *TEXTS[key], command, register, words, **more)
+    return SConversion(key, category, *TEXTS[key], command, register, words, **more)
 
 
 def _flash_movies(settings) -> list[tuple[str, str]]:
@@ -121,27 +121,27 @@ def _flash_movies(settings) -> list[tuple[str, str]]:
 
     if not settings.anno2205:
         return []
-    return [(p, p) for p in ui2205.UiFiles(GAMES["anno2205"].tree(Path(settings.anno2205))).movies()]
+    return [(movie, movie) for movie in ui2205.CUiFiles(GAMES["anno2205"].tree(Path(settings.anno2205))).movies()]
 
 
 def _region_ids() -> tuple[str, ...]:
     from ..islands import regions
 
-    return tuple(r.id for r in regions.REGIONS)
+    return tuple(region.id for region in regions.REGIONS)
 
 
 def port_values(settings, values: dict, game: str) -> dict:
     """The island port's game and installs from the settings: the source game's and the target region's."""
     from ..islands import regions
 
-    target = next((r for r in regions.REGIONS if r.id == values.get("to")), None)
+    target = next((region for region in regions.REGIONS if region.id == values.get("to")), None)
     out = {"game": game, "src": getattr(settings, game, "")}
     if target is not None and target.game != game:
         out["dst"] = getattr(settings, target.game, "")
     return out
 
 
-def baseline() -> list[Conversion]:
+def baseline() -> list[SConversion]:
     """This edition's entries, in the order the app lists them within their category."""
 
     def own(key, category, words, suffixes, **more):
@@ -221,14 +221,16 @@ def baseline() -> list[Conversion]:
     ]
 
 
-def entries() -> list[Conversion]:
+def entries() -> list[SConversion]:
     """This edition's entries, then what an extension registers (a registered key replaces this edition's)."""
-    added = {c.key: c for c in features.extensions(features.CONVERSIONS).values()}
-    return [added.pop(c.key, c) for c in baseline()] + list(added.values())
+    added = {conversion.key: conversion for conversion in features.extensions(features.CONVERSIONS).values()}
+    return [added.pop(conversion.key, conversion) for conversion in baseline()] + list(added.values())
 
 
-def by_category(found: list[Conversion]) -> list[tuple[str, list[Conversion]]]:
+def by_category(found: list[SConversion]) -> list[tuple[str, list[SConversion]]]:
     """``found`` grouped in the order of ``CATEGORIES`` (a category with nothing in it left out)."""
     return [
-        (cat, [c for c in found if c.category == cat]) for cat in CATEGORIES if any(c.category == cat for c in found)
+        (category, [conversion for conversion in found if conversion.category == category])
+        for category in CATEGORIES
+        if any(conversion.category == category for conversion in found)
     ]

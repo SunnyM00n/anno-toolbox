@@ -114,7 +114,7 @@ def delete_data(folder: Path, spawn: Callable[[Path], None] = _spawn_remove) -> 
 
 def before_uninstall(
     folder: Path | None = None,
-    where: shortcuts.Places | None = None,
+    where: shortcuts.SPlaces | None = None,
     root: Path | None = None,
     now: float | None = None,
     spawn: Callable[[Path], None] = _spawn_remove,

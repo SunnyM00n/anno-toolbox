@@ -1,7 +1,7 @@
 """The object tree: the config's lists and parts with the studio's titles, then the info file's boxes and areas and
 the feedback file's dummies; the lists a part may hold but has not yet are rows too, so a first part can be added.
 
-``ObjectTree.show_object(obj)`` fills it; ``picked`` gives the selected row as a ``Row``; ``select(role, path)``
+``CObjectTree.show_object(object_doc)`` fills it; ``picked`` gives the selected row as a ``SRow``; ``select(role, path)``
 makes a part current. docs/tool-suite.md section 23, "The window".
 """
 
@@ -14,8 +14,8 @@ from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
 
 from ..infra.i18n import N_, tr
 from ..models import cfgmcf, cfgparts
-from ..models.cfgdoc import Part, is_config
-from .objdoc import ObjectDoc
+from ..models.cfgdoc import SPart, is_config
+from .objdoc import CObjectDoc
 
 ROW = Qt.ItemDataRole.UserRole + 1
 ROLE_TITLES = {"cfg": N_("objects.config"), "ifo": N_("objects.info"), "fc": N_("objects.feedback")}
@@ -23,7 +23,7 @@ EXPAND = 12  # a list with more parts starts folded
 
 
 @dataclass(frozen=True)
-class Row:
+class SRow:
     """What a row stands for: a ``part`` (its path), a ``list`` (the list's path, ``section``) or an ``empty`` list
     the part at ``path`` may hold; ``role`` the file."""
 
@@ -33,69 +33,71 @@ class Row:
     section: str = ""
 
 
-def label(part: Part, mcf: bool = False) -> str:
-    """A part's row text; in a 1701 mesh config (``mcf``) by the node's class type (``models.cfgmcf``)."""
-    found = cfgmcf.label(part) if mcf else None
+def label(part: SPart, is_mcf: bool = False) -> str:
+    """A part's row text; in a 1701 mesh config (``is_mcf``) by the node's class type (``models.cfgmcf``)."""
+    found = cfgmcf.label(part) if is_mcf else None
     if found:
         return found
     name = part.name
     return f"{part.kind}  {name}".rstrip() if part.kind != name else part.kind
 
 
-class ObjectTree(QTreeWidget):
+class CObjectTree(QTreeWidget):
     picked = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
-        self.items: dict[tuple[str, str], QTreeWidgetItem] = {}
-        self.currentItemChanged.connect(lambda cur, _prev: self.picked.emit(cur.data(0, ROW) if cur else None))
+        self.m_items: dict[tuple[str, str], QTreeWidgetItem] = {}
+        self.currentItemChanged.connect(
+            lambda current, _previous: self.picked.emit(current.data(0, ROW) if current else None)
+        )
 
-    def show_object(self, obj: ObjectDoc) -> None:
+    def show_object(self, object_doc: CObjectDoc) -> None:
         """Fill the tree from the object, keeping the current row and the folded lists where they still exist."""
         current = self.current()
-        folded = {key for key, item in self.items.items() if not item.isExpanded()}
+        folded = {key for key, item in self.m_items.items() if not item.isExpanded()}
         self.blockSignals(True)
         self.clear()
-        self.items = {}
-        for role, opened in obj.opened.items():
+        self.m_items = {}
+        for role, opened in object_doc.m_opened.items():
             top = QTreeWidgetItem(
                 [f"{tr(ROLE_TITLES[role]) if role in ROLE_TITLES else role}  {opened.read.rsplit('/', 1)[-1]}"]
             )
-            top.setToolTip(0, opened.read + ("" if opened.doc.exact else tr("objects.not_read_back_exactly_only")))
+            top.setToolTip(0, opened.read + ("" if opened.document.exact else tr("objects.not_read_back_exactly_only")))
             self.addTopLevelItem(top)
-            root = opened.doc.parts()
-            top.setData(0, ROW, Row(role, "part", root.path))
-            self.items[(role, root.path)] = top
-            self._add(top, role, root, cfgparts.family(opened.doc) == "mcf")
+            root = opened.document.parts()
+            top.setData(0, ROW, SRow(role, "part", root.path))
+            self.m_items[(role, root.path)] = top
+            self._add(top, role, root, cfgparts.family(opened.document) == "mcf")
             top.setExpanded((role, root.path) not in folded)
         self.blockSignals(False)
         if current is not None:
             self.select(current.role, current.path, current.kind, current.section)
 
-    def _add(self, parent: QTreeWidgetItem, role: str, part: Part, mcf: bool = False) -> None:
+    def _add(self, parent: QTreeWidgetItem, role: str, part: SPart, is_mcf: bool = False) -> None:
         for child in part.children:
             if child.is_list:
                 text = tr("common.title_count", title=cfgparts.title(child.section), count=len(child.children))
-                row = Row(role, "list", child.path, child.section)
+                row = SRow(role, "list", child.path, child.section)
             else:
-                text, row = label(child, mcf), Row(role, "part", child.path)
+                text, row = label(child, is_mcf), SRow(role, "part", child.path)
             item = QTreeWidgetItem([text])
             item.setData(0, ROW, row)
             parent.addChild(item)
-            self.items[(role, row.path)] = item
-            self._add(item, role, child, mcf)
+            self.m_items[(role, row.path)] = item
+            self._add(item, role, child, is_mcf)
             item.setExpanded(len(child.children) <= EXPAND)
         if is_config(part.node):
-            have = {c.section for c in part.children if c.is_list}
+            have = {entry.section for entry in part.children if entry.is_list}
             for section in cfgparts.lists_of(part.node):
                 if section not in have and cfgparts.kinds_for(section):
                     item = QTreeWidgetItem([tr("objects.title_empty", title=cfgparts.title(section))])
                     item.setForeground(0, Qt.GlobalColor.gray)
-                    item.setData(0, ROW, Row(role, "empty", part.path, section))
+                    item.setData(0, ROW, SRow(role, "empty", part.path, section))
                     parent.addChild(item)
 
-    def current(self) -> Row | None:
+    def current(self) -> SRow | None:
         item = self.currentItem()
         return item.data(0, ROW) if item is not None else None
 
@@ -103,12 +105,12 @@ class ObjectTree(QTreeWidget):
         """Make the row of a part (or the nearest part above it that is listed) current."""
         if kind == "empty":
             for item in self._all():
-                if item.data(0, ROW) == Row(role, kind, path, section):
+                if item.data(0, ROW) == SRow(role, kind, path, section):
                     self.setCurrentItem(item)
                     return
         parts = path.split("/") if path else []
         for end in range(len(parts), -1, -1):
-            found = self.items.get((role, "/".join(parts[:end])))
+            found = self.m_items.get((role, "/".join(parts[:end])))
             if found is not None:
                 self.setCurrentItem(found)
                 self.scrollToItem(found)

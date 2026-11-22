@@ -11,7 +11,7 @@ MOVED, KEPT = "moved", "kept"
 
 
 @dataclass(frozen=True)
-class Reference:
+class SReference:
     file: str  # the file the reference is in (a game path, or "assets" / "lua")
     where: str  # its place inside the file
     status: str  # MOVED or KEPT
@@ -20,28 +20,35 @@ class Reference:
 
 
 @dataclass
-class Report:
-    grow: tuple[int, int, int, int]  # west, south, east, north (tiles)
-    size: tuple[int, int] = (0, 0)  # the map's new size
-    references: list[Reference] = field(default_factory=list)
+class CReport:
+    m_grow: tuple[int, int, int, int]  # west, south, east, north (tiles)
+    m_size: tuple[int, int] = (0, 0)  # the map's new size
+    m_references: list[SReference] = field(default_factory=list)
 
     def add(self, file: str, where: str, status: str, detail: str = "", count: int = 1) -> None:
-        self.references.append(Reference(file, where, status, detail, count))
+        self.m_references.append(SReference(file, where, status, detail, count))
 
-    def moved(self) -> list[Reference]:
-        return [r for r in self.references if r.status != KEPT]
+    def moved(self) -> list[SReference]:
+        return [reference for reference in self.m_references if reference.status != KEPT]
 
-    def kept(self) -> list[Reference]:
-        return [r for r in self.references if r.status == KEPT]
+    def kept(self) -> list[SReference]:
+        return [reference for reference in self.m_references if reference.status == KEPT]
 
     def lines(self) -> list[str]:
         """One line per reference, the kept ones last."""
         out = []
-        for r in [*self.moved(), *self.kept()]:
-            n = f" x{r.count}" if r.count != 1 else ""
-            out.append(f"{r.status}: {r.file} {r.where}{n}" + (f" ({r.detail})" if r.detail else ""))
+        for reference in [*self.moved(), *self.kept()]:
+            count_text = f" x{reference.count}" if reference.count != 1 else ""
+            out.append(
+                f"{reference.status}: {reference.file} {reference.where}{count_text}"
+                + (f" ({reference.detail})" if reference.detail else "")
+            )
         return out
 
     def to_json(self) -> str:
-        data = {"grow": list(self.grow), "size": list(self.size), "references": [asdict(r) for r in self.references]}
+        data = {
+            "grow": list(self.m_grow),
+            "size": list(self.m_size),
+            "references": [asdict(reference) for reference in self.m_references],
+        }
         return json.dumps(data, indent=1)

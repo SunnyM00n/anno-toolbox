@@ -2,7 +2,7 @@
 four bytes a cell: depth, coast waves, beach, foam). The sea shader draws coast waves where it is set; vanilla islands
 carry 255 nearly everywhere and lower values along some coasts (rendering/water.md "Physical waves and coast waves").
 
-``read`` gives the cells of an opened island (``IslandFile``), ``apply`` writes the edit file's ``surf`` into them
+``read`` gives the cells of an opened island (``CIslandFile``), ``apply`` writes the edit file's ``surf`` into them
 (``"cx,cz"`` -> 0..255, only the cells that differ from the island's own). Format: island-editor-tools "The edit file".
 """
 
@@ -10,35 +10,41 @@ from __future__ import annotations
 
 import numpy as np
 
+from .islandgrid import cell_key
+
 CHANNEL = 1  # the coast-wave byte of a cell
 
 
-def _cells(isl) -> tuple[np.ndarray, object] | None:
-    wi = isl.rd.path("WaterInfos")
-    if wi is None or wi.find("map") is None:
+def _cells(island) -> tuple[np.ndarray, object] | None:
+    water_infos = island.rd3d.path("WaterInfos")
+    if water_infos is None or water_infos.find("map") is None:
         return None
-    w = wi.find("width").u32()
-    return np.frombuffer(wi.find("map").data, np.uint8).reshape(w, w, -1).copy(), wi
+    width = water_infos.find("width").u32()
+    return np.frombuffer(water_infos.find("map").data, np.uint8).reshape(width, width, -1).copy(), water_infos
 
 
-def read(isl) -> np.ndarray | None:
+def read(island) -> np.ndarray | None:
     """The island's coast-wave byte per cell, rows z, as ``uint8``; None when it has no sea map."""
-    found = _cells(isl)
+    found = _cells(island)
     return None if found is None else found[0][..., CHANNEL].copy()
 
 
-def apply(isl, changes: dict | None) -> dict:
+def apply(island, changes: dict | None) -> dict:
     """Set the cells of ``changes`` (``"cx,cz"`` -> value) in the island's sea map; a cell off the map or a value off
     0..255 is left out. Returns the build report entry."""
-    found = _cells(isl) if changes else None
+    found = _cells(island) if changes else None
     if found is None:
         return {}
-    info, wi = found
-    n, done = info.shape[0], 0
+    cells, water_infos = found
+    size, done = cells.shape[0], 0
     for key, value in changes.items():
-        cx, cz = map(int, key.split(","))
-        if 0 <= cx < n and 0 <= cz < n and 0 <= int(value) <= 255:
-            info[cz, cx, CHANNEL] = int(value)
+        cell = cell_key(key, size)
+        try:
+            byte = int(value)
+        except (TypeError, ValueError):
+            continue
+        if cell is not None and 0 <= byte <= 255:
+            cells[cell[1], cell[0], CHANNEL] = byte
             done += 1
-    wi.find("map").data = info.tobytes()
+    water_infos.find("map").data = cells.tobytes()
     return {"surf cells": done} if done else {}

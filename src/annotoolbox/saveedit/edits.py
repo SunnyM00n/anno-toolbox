@@ -1,7 +1,7 @@
 """The values a save may be edited in, and the write of a new save next to the original (``docs/save-editor.md``,
 "What can be written, and how"). ``fields(save)`` lists what the form shows, ``write_beside(save, changes)`` writes;
 the format modules do the byte work (``formats.savegame117``, ``formats.savegame2070``). The emperor's values are in
-``emperoredit``; an edition may add more at the extension point ``features.SAVE_EDITS`` (``extspecs.SaveEdit``).
+``emperoredit``; an edition may add more at the extension point ``features.SAVE_EDITS`` (``extspecs.SSaveEdit``).
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ..infra import i18n
 from ..infra.i18n import N_, tr
 from ..suite import features
 from . import summary117
-from .container import TAIL, SaveFile
+from .container import TAIL, SSaveFile
 
 TEXT, GUID, NUMBER = "text", "guid", "number"
 EDITABLE = ("anno117", "anno2070")
@@ -27,7 +27,7 @@ GROUPED_DE = re.compile(r"[+-]?\d{1,3}(\.\d{3})+")  # German: points group the t
 
 
 @dataclass(frozen=True)
-class Field:
+class SField:
     key: str  # "save_name", "name", ..., "money:<participant>"
     label: str  # marked for translation; ``{who}`` is the participant
     kind: str
@@ -37,11 +37,11 @@ class Field:
     named: tuple[int, ...] = ()
 
 
-def who_text(field: Field, name: Callable[[int], str] | None) -> str:
+def who_text(field: SField, name: Callable[[int], str] | None) -> str:
     """The field's ``who`` with each GUID of ``named`` as ``name(guid)`` gives it (its number when that is "")."""
     if not field.named:
         return field.who
-    return field.who.format(*(guid_label(g, name) for g in field.named))
+    return field.who.format(*(guid_label(guid, name) for guid in field.named))
 
 
 def guid_label(guid: int, name: Callable[[int], str] | None) -> str:
@@ -50,47 +50,51 @@ def guid_label(guid: int, name: Callable[[int], str] | None) -> str:
     return f"{found} ({guid})" if found else str(guid)
 
 
-class EditError(ValueError):
+class CEditError(ValueError):
     pass
 
 
-def _player_fields(save: savegame117.Save) -> list[Field]:
-    head = savegame117.read_player(save)["header.a7s"]
+def _participant_fields(save: savegame117.SSave) -> list[SField]:
+    head = savegame117.read_participant(save)["header.a7s"]
     return [
-        Field("save_name", N_("saves.save_name"), TEXT, savegame117.save_name(save)),
-        Field("name", N_("saves.company_name"), TEXT, head.name),
-        Field("profile_name", N_("saves.profile_name"), TEXT, head.profile_name or ""),
-        Field("color", N_("saves.colour_participantcolor_guid"), GUID, head.color),
-        Field("logo", N_("saves.logo_playerlogo_guid"), GUID, head.logo),
-        Field("portrait", N_("saves.portrait_guid"), GUID, head.portrait),
+        SField("save_name", N_("saves.save_name"), TEXT, savegame117.save_name(save)),
+        SField("name", N_("saves.company_name"), TEXT, head.name),
+        SField("profile_name", N_("saves.profile_name"), TEXT, head.profile_name or ""),
+        SField("color", N_("saves.colour_participantcolor_guid"), GUID, head.color),
+        SField("logo", N_("saves.logo_playerlogo_guid"), GUID, head.logo),
+        SField("portrait", N_("saves.portrait_guid"), GUID, head.portrait),
     ]
 
 
-def save117(save: SaveFile) -> savegame117.Save:
+def save117(save: SSaveFile) -> savegame117.SSave:
     """The opened parts as ``savegame117`` holds them (no second inflate); every part must have the game's tail."""
-    parts = {n: save.part(n) for n in savegame117.PARTS}
-    missing = [n for n, p in parts.items() if p is None or p.packing != TAIL]
+    parts = {part_name: save.part(part_name) for part_name in savegame117.PARTS}
+    missing = [part_name for part_name, part in parts.items() if part is None or part.m_packing != TAIL]
     if missing:
-        raise EditError(f"{save.path.name}: {', '.join(missing)} missing or without the game's tail")
-    return savegame117.Save({n: p.doc for n, p in parts.items()}, {n: p.raw for n, p in parts.items()}, save.data)
+        raise CEditError(f"{save.path.name}: {', '.join(missing)} missing or without the game's tail")
+    return savegame117.SSave(
+        {part_name: part.m_doc for part_name, part in parts.items()},
+        {part_name: part.m_raw for part_name, part in parts.items()},
+        save.data,
+    )
 
 
-def _fields117(save: SaveFile) -> list[Field]:
-    out = _player_fields(save117(save))
+def _fields117(save: SSaveFile) -> list[SField]:
+    out = _participant_fields(save117(save))
     money = summary117.money_by_participant(save.part("data.a7s").tree())
-    for guid in sorted(money, key=lambda g: (g != savegame117.HUMAN_PARTICIPANT, g)):
+    for guid in sorted(money, key=lambda participant: (participant != savegame117.HUMAN_PARTICIPANT, participant)):
         label = N_("saves.money_player_who") if guid == savegame117.HUMAN_PARTICIPANT else N_("saves.money_of_who")
-        out.append(Field(f"money:{guid}", label, NUMBER, money[guid], str(guid)))
+        out.append(SField(f"money:{guid}", label, NUMBER, money[guid], str(guid)))
     return out
 
 
-def _fields2070(save: SaveFile) -> list[Field]:
+def _fields2070(save: SSaveFile) -> list[SField]:
     parsed = savegame2070.read_bytes(save.data, save.path.name)
-    who = str(savegame2070.human_id(parsed))
-    return [Field("money", N_("saves.money_player_who"), NUMBER, savegame2070.read_money(parsed), who)]
+    who = str(savegame2070.human_participant(parsed))
+    return [SField("money", N_("saves.money_player_who"), NUMBER, savegame2070.read_money(parsed), who)]
 
 
-def _own_fields(save: SaveFile) -> list[Field]:
+def _own_fields(save: SSaveFile) -> list[SField]:
     if save.game == "anno117":
         return _fields117(save)
     if save.game == "anno2070" and save.part("save.sww") is not None:
@@ -98,36 +102,38 @@ def _own_fields(save: SaveFile) -> list[Field]:
     return []
 
 
-def _extra_fields(save: SaveFile) -> list[tuple[object, list[Field]]]:
-    """Per ``SaveEdit`` of the save's game (the emperor's, then those registered), the rows it offers."""
+def _extra_fields(save: SSaveFile) -> list[tuple[object, list[SField]]]:
+    """Per ``SSaveEdit`` of the save's game (the emperor's, then those registered), the rows it offers."""
     from . import emperoredit
 
     specs = [emperoredit.EDIT, *features.extensions(features.SAVE_EDITS).values()]
     return [(spec, spec.fields(save)) for spec in specs if save.game in spec.games]
 
 
-def fields(save: SaveFile) -> list[Field]:
+def fields(save: SSaveFile) -> list[SField]:
     """The editable values with what the save holds now; none for a game whose layout no sample pinned."""
     own = _own_fields(save)
-    return own + [f for _spec, rows in _extra_fields(save) for f in rows] if own else []
+    return own + [field for _spec, rows in _extra_fields(save) for field in rows] if own else []
 
 
-def _apply117(save: SaveFile, changes: dict[str, str | int]) -> savegame117.Save:
+def _apply117(save: SSaveFile, changes: dict[str, str | int]) -> savegame117.SSave:
     parsed = save117(save)
     if "save_name" in changes:
         parsed = savegame117.set_save_name(parsed, str(changes["save_name"]))
-    player = {k: changes[k] for k in ("name", "profile_name", "color", "logo", "portrait") if k in changes}
-    if "name" in player and "profile_name" not in player:  # the profile keeps its folder's name
-        player["profile_name"] = savegame117.read_player(parsed)["header.a7s"].profile_name
-    if player:
-        parsed = savegame117.set_player(parsed, **player)
+    participant_changes = {k: changes[k] for k in ("name", "profile_name", "color", "logo", "portrait") if k in changes}
+    if (
+        "name" in participant_changes and "profile_name" not in participant_changes
+    ):  # the profile keeps its folder's name
+        participant_changes["profile_name"] = savegame117.read_participant(parsed)["header.a7s"].profile_name
+    if participant_changes:
+        parsed = savegame117.set_participant(parsed, **participant_changes)
     for key, value in changes.items():
         if key.startswith("money:"):
             parsed = savegame117.set_money(parsed, int(value), int(key.split(":", 1)[1]))
     return parsed
 
 
-def parse_value(field: Field, text: str, language: str | None = None) -> str | int:
+def parse_value(field: SField, text: str, language: str | None = None) -> str | int:
     """A form's text as ``write_beside`` takes it: a name as typed, a GUID in decimal or ``0x`` hex, money in
     decimal (leading zeros and thousands separators allowed); ``ValueError`` for anything else. The separators
     are read by ``language`` (the interface's when None): English groups with ``,``; German groups with ``.``,
@@ -146,14 +152,14 @@ def parse_value(field: Field, text: str, language: str | None = None) -> str | i
     return int(text.replace(",", "").replace("_", ""), 10)
 
 
-def changed_values(fields: list[Field], typed: dict[str, str]) -> dict[str, str | int]:
+def changed_values(fields: list[SField], typed: dict[str, str]) -> dict[str, str | int]:
     """The typed values (by field key) that differ from the save's, parsed."""
     out: dict[str, str | int] = {}
-    for f in fields:
-        text = typed.get(f.key)
-        if text is None or (text if f.kind == TEXT else text.strip()) == str(f.value):
+    for field in fields:
+        text = typed.get(field.key)
+        if text is None or (text if field.kind == TEXT else text.strip()) == str(field.value):
             continue
-        out[f.key] = parse_value(f, text)
+        out[field.key] = parse_value(field, text)
     return out
 
 
@@ -162,13 +168,13 @@ def target(original: Path) -> Path:
     edited file counts on from its own number instead of nesting the suffix."""
     original = Path(original)
     stem = EDITED.sub("", original.stem)
-    n = 1
+    part_name = 1
     while True:
-        tag = SUFFIX if n == 1 else f" (edited {n})"
+        tag = SUFFIX if part_name == 1 else f" (edited {part_name})"
         path = original.with_name(f"{stem}{tag}{original.suffix}")
         if not path.exists():
             return path
-        n += 1
+        part_name += 1
 
 
 def _reserve(original: Path) -> Path:
@@ -182,17 +188,17 @@ def _reserve(original: Path) -> Path:
         return path
 
 
-def write_beside(save: SaveFile, changes: dict[str, str | int], settings: object = None) -> Path:
+def write_beside(save: SSaveFile, changes: dict[str, str | int], settings: object = None) -> Path:
     """Write the save with ``changes`` (keys of ``fields``) as a new file next to the original; returns its path.
     ``settings`` (the suite's) go to the values an extension adds, which may check them against the installed game."""
     if save.game not in EDITABLE:
-        raise EditError(f"{save.game}: saves of this game are read only")
-    own_keys = {f.key for f in _own_fields(save)}
-    extra = [(spec, {f.key for f in rows}) for spec, rows in _extra_fields(save)]
+        raise CEditError(f"{save.game}: saves of this game are read only")
+    own_keys = {field.key for field in _own_fields(save)}
+    extra = [(spec, {field.key for field in rows}) for spec, rows in _extra_fields(save)]
     unknown = sorted(set(changes) - own_keys - {k for _spec, keys in extra for k in keys})
     if unknown:
-        raise EditError(f"{save.path.name}: no such value to change: {', '.join(unknown)}")
-    own = {k: v for k, v in changes.items() if k in own_keys}
+        raise CEditError(f"{save.path.name}: no such value to change: {', '.join(unknown)}")
+    own = {k: value for k, value in changes.items() if k in own_keys}
     dest = _reserve(save.path)
     try:
         if save.game == "anno117":
@@ -202,7 +208,7 @@ def write_beside(save: SaveFile, changes: dict[str, str | int], settings: object
             if "money" in own:
                 parsed = savegame2070.set_money(parsed, int(own["money"]))
         for spec, keys in extra:
-            mine = {k: v for k, v in changes.items() if k in keys}
+            mine = {k: value for k, value in changes.items() if k in keys}
             if mine:
                 parsed = spec.apply(save, parsed, mine, settings)
         (savegame117 if save.game == "anno117" else savegame2070).write(parsed, dest)

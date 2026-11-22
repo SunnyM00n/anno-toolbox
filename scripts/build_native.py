@@ -37,24 +37,24 @@ def deps() -> dict:
 
 def fetch(name: str, spec: dict, into: Path) -> Path:
     """A source at its pinned commit (a shallow fetch of that commit only); kept for later builds."""
-    dst = into / f"{name}-{spec['commit'][:12]}"
-    if (dst / ".fetched").is_file():
-        return dst
-    if dst.exists():
-        shutil.rmtree(dst)
-    dst.mkdir(parents=True)
-    git = ["git", "-C", str(dst)]
-    for cmd in (
+    target_dir = into / f"{name}-{spec['commit'][:12]}"
+    if (target_dir / ".fetched").is_file():
+        return target_dir
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True)
+    git = ["git", "-C", str(target_dir)]
+    for command in (
         ["init", "-q"],
         ["fetch", "-q", "--depth", "1", spec["url"], spec["commit"]],
         ["checkout", "-q", "FETCH_HEAD"],
     ):
-        subprocess.run(git + cmd, check=True)
+        subprocess.run(git + command, check=True)
     got = subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     if got != spec["commit"]:
         raise SystemExit(f"{name}: fetched {got}, pinned {spec['commit']}")
-    (dst / ".fetched").write_text(spec["commit"] + "\n", encoding="utf-8", newline="\n")
-    return dst
+    (target_dir / ".fetched").write_text(spec["commit"] + "\n", encoding="utf-8", newline="\n")
+    return target_dir
 
 
 def msvc_env() -> dict[str, str]:
@@ -72,21 +72,22 @@ def msvc_env() -> dict[str, str]:
     out = subprocess.run(f'cmd /s /c ""{vcvars}" >nul && set"', check=True, capture_output=True, text=True, shell=True)
     env = {}
     for line in out.stdout.splitlines():
-        key, eq, value = line.partition("=")
-        if eq:
+        key, equals_sign, value = line.partition("=")
+        if equals_sign:
             env[key] = value
     return env
 
 
 def package_render() -> Path:
     """The package's render folder (``src/<package>/render``): the full source's or the public edition's."""
-    found = sorted(p.parent for p in (ROOT / "src").glob("*/render/nativegpu.py"))
+    found = sorted(path.parent for path in (ROOT / "src").glob("*/render/nativegpu.py"))
     if not found:
         raise SystemExit("no src/<package>/render/nativegpu.py: is this the repository's root?")
     return found[0]
 
 
-def build(test: bool = False, fresh: bool = False, dest: Path | None = None) -> Path:
+def build(is_test: bool = False, is_fresh: bool = False, destination: Path | None = None) -> Path:
+    """Fetch the sources, configure and compile the native module, and put it at ``destination`` (its path is returned)."""
     if sys.platform != "win32":
         raise SystemExit("the module is Windows only (Direct3D 12)")
     spec = deps()
@@ -94,7 +95,7 @@ def build(test: bool = False, fresh: bool = False, dest: Path | None = None) -> 
     nvrhi = fetch("nvrhi", spec["sources"]["nvrhi"], sources)
     headers = fetch("directx-headers", spec["sources"]["directx-headers"], sources)
     out = BUILD / f"cp{sys.version_info.major}{sys.version_info.minor}"
-    if fresh and out.exists():
+    if is_fresh and out.exists():
         shutil.rmtree(out)
     env = msvc_env()
     configure = ["cmake", "-S", str(NATIVE), "-B", str(out), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
@@ -102,24 +103,24 @@ def build(test: bool = False, fresh: bool = False, dest: Path | None = None) -> 
                  f"-DPython_EXECUTABLE={Path(sys.executable).as_posix()}", f"-DMODULE_VERSION={spec['version']}",
                  f"-DNVRHI_REVISION={spec['sources']['nvrhi']['commit']}"]  # fmt: skip
     subprocess.run(configure, check=True, env=env)
-    targets = [MODULE] + (["nativegpu_test"] if test else [])
+    targets = [MODULE] + (["nativegpu_test"] if is_test else [])
     subprocess.run(["cmake", "--build", str(out), "--target", *targets], check=True, env=env)
-    if test:
+    if is_test:
         subprocess.run([str(out / "nativegpu_test.exe")], check=True)
     built = next(out.glob(f"{MODULE}*.pyd"))
-    target = (dest or package_render()) / f"{MODULE}.pyd"
+    target = (destination or package_render()) / f"{MODULE}.pyd"
     shutil.copy2(built, target)
     print(f"{target} ({target.stat().st_size // 1024} KB)")
     return target
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog=EPILOG,
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog=EPILOG,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)  # fmt: skip
-    ap.add_argument("--test", action="store_true", help="also build and run the layer's test program")
-    ap.add_argument("--fresh", action="store_true", help="configure from scratch")
-    ap.add_argument("--dest", type=Path, help="where the module goes (default: the package's render folder)")
-    args = ap.parse_args(argv)
+    parser.add_argument("--test", action="store_true", help="also build and run the layer's test program")
+    parser.add_argument("--fresh", action="store_true", help="configure from scratch")
+    parser.add_argument("--dest", type=Path, help="where the module goes (default: the package's render folder)")
+    args = parser.parse_args(argv)
     build(args.test, args.fresh, args.dest)
     return 0
 

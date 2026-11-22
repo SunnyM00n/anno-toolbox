@@ -40,20 +40,20 @@ EDITOR_FLAGS = re.compile(r"<(OnlyVisibleInEditor|PlacableInEditor|AddToEditorOb
 def catalogue(assets_text: str, templates_text: str) -> list[dict]:
     """Every editor-only asset of a point kind: ``{"guid", "name", "template"}``."""
     editor_templates = {
-        m.group(1)
-        for m in re.finditer(r"<Name>([^<]+)</Name>(?:(?!<Name>).)*?<OnlyVisibleInEditor>1<", templates_text, re.S)
+        match.group(1)
+        for match in re.finditer(r"<Name>([^<]+)</Name>(?:(?!<Name>).)*?<OnlyVisibleInEditor>1<", templates_text, re.S)
     }
     out = []
     for found in ASSET_BLOCK.finditer(assets_text):
         block = found.group(1)
-        g = re.search(r"<GUID>(\d+)</GUID>", block)
-        t = re.search(r"<Template>([^<]*)</Template>", block)
-        if not g or not t or t.group(1) not in POINT_TEMPLATES:
+        guid = re.search(r"<GUID>(\d+)</GUID>", block)
+        template = re.search(r"<Template>([^<]*)</Template>", block)
+        if not guid or not template or template.group(1) not in POINT_TEMPLATES:
             continue
-        if t.group(1) in editor_templates or EDITOR_FLAGS.search(block):
-            name = (re.search(r"<Name>([^<]*)</Name>", block) or [None, g.group(1)])[1]
-            out.append({"guid": int(g.group(1)), "name": name, "template": t.group(1)})
-    return sorted(out, key=lambda e: (e["template"], e["name"].lower()))
+        if template.group(1) in editor_templates or EDITOR_FLAGS.search(block):
+            name = (re.search(r"<Name>([^<]*)</Name>", block) or [None, guid.group(1)])[1]
+            out.append({"guid": int(guid.group(1)), "name": name, "template": template.group(1)})
+    return sorted(out, key=lambda entry: (entry["template"], entry["name"].lower()))
 
 
 def load(files) -> tuple[list[dict], dict[int, str]]:
@@ -68,25 +68,25 @@ def load(files) -> tuple[list[dict], dict[int, str]]:
 def _objects_of(gamedata: bytes):
     """(group, object) for every object with a guid in an island's areas."""
     session = filedb.read(gamedata).path("GameSessionManager")
-    for group, o in a7mread.object_tags(session, GROUPS) if session is not None else ():
-        if o.find("guid") is not None and o.find("Position") is not None:
-            yield group, o
+    for group, object_tag in a7mread.object_tags(session, GROUPS) if session is not None else ():
+        if object_tag.find("guid") is not None and object_tag.find("Position") is not None:
+            yield group, object_tag
 
 
-def samples(files, template_of: dict[int, str]) -> dict[str, tuple[str, filedb.Tag]]:
+def samples(files, template_of: dict[int, str]) -> dict[str, tuple[str, filedb.STag]]:
     """One vanilla instance per point kind: template -> (object group, object). ``files`` reads the
     game (``iter_paths``/``read``); ``template_of``: asset GUID -> template."""
-    found: dict[str, tuple[str, filedb.Tag]] = {}
-    for path in sorted(p for p in files.iter_paths("data/") if p.endswith(".a7m")):
+    found: dict[str, tuple[str, filedb.STag]] = {}
+    for path in sorted(candidate for candidate in files.iter_paths("data/") if candidate.endswith(".a7m")):
         data = files.read(path)
         try:
             (gamedata,) = a7mread.members(data, "gamedata.data")
         except Exception:
             continue
-        for group, o in _objects_of(gamedata):
-            t = template_of.get(struct.unpack_from("<I", o.find("guid").data)[0])
-            if t in POINT_TEMPLATES and t not in found:
-                found[t] = (group, o)
+        for group, object_tag in _objects_of(gamedata):
+            template = template_of.get(struct.unpack_from("<I", object_tag.find("guid").data)[0])
+            if template in POINT_TEMPLATES and template not in found:
+                found[template] = (group, object_tag)
         if len(found) == len(POINT_TEMPLATES):
             break
     return found
@@ -97,37 +97,39 @@ def template_map(assets_text: str) -> dict[int, str]:
     out = {}
     for found in ASSET_BLOCK.finditer(assets_text):
         block = found.group(1)
-        g = re.search(r"<GUID>(\d+)</GUID>", block)
-        t = re.search(r"<Template>([^<]*)</Template>", block)
-        if g and t:
-            out.setdefault(int(g.group(1)), t.group(1))
+        guid = re.search(r"<GUID>(\d+)</GUID>", block)
+        template = re.search(r"<Template>([^<]*)</Template>", block)
+        if guid and template:
+            out.setdefault(int(guid.group(1)), template.group(1))
     return out
 
 
-def clone(sample: filedb.Tag, guid: int, serial: int, position, rotation) -> filedb.Tag:
+def clone(sample: filedb.STag, guid: int, serial: int, position, rotation) -> filedb.STag:
     """A copy of a vanilla instance as asset ``guid`` at ``position`` (Anno's coordinates), turned
     by ``rotation`` (x, y, z, w). Quest links and the source island's folder are dropped."""
-    o = copy.deepcopy(sample)
-    o.children = [c for c in o.children if c.name not in ("QuestObject", "ObjectFolderID")]
-    o.find("guid").data = struct.pack("<I", guid)
-    o.find("ID").data = struct.pack("<I", serial) + o.find("ID").data[4:]
-    o.find("Position").data = struct.pack("<3f", *map(float, position))
-    orient = o.path("Mesh/Orientation")
+    object_tag = copy.deepcopy(sample)
+    object_tag.children = [
+        child for child in object_tag.children if child.name not in ("QuestObject", "ObjectFolderID")
+    ]
+    object_tag.find("guid").data = struct.pack("<I", guid)
+    object_tag.find("ID").data = struct.pack("<I", serial) + object_tag.find("ID").data[4:]
+    object_tag.find("Position").data = struct.pack("<3f", *map(float, position))
+    orient = object_tag.path("Mesh/Orientation")
     if orient is not None:
         orient.data = struct.pack("<4f", *map(float, rotation))
     # vanilla point objects carry the orientation's yaw as Direction (0..2pi, right after Position;
     # absent when unturned), so the sample's own must not survive the turn
     yaw = islandedits._yaw(rotation) % (2 * math.pi)
-    direction = o.find("Direction")
+    direction = object_tag.find("Direction")
     if direction is not None:
         direction.data = struct.pack("<f", yaw)
     elif yaw > 1e-6 and 2 * math.pi - yaw > 1e-6:
-        at = [c.name for c in o.children].index("Position") + 1
-        o.children.insert(at, filedb.Attrib("Direction", struct.pack("<f", yaw)))
-    return o
+        position_index = [child.name for child in object_tag.children].index("Position") + 1
+        object_tag.children.insert(position_index, filedb.SAttrib("Direction", struct.pack("<f", yaw)))
+    return object_tag
 
 
-def place(builder, found: dict[str, tuple[str, filedb.Tag]], entry: dict) -> bool:
+def place(builder, found: dict[str, tuple[str, filedb.STag]], entry: dict) -> bool:
     """Add an editor-only asset (an ``added_objects`` entry with ``guid`` and ``template``) to the
     builder's main area. False when no vanilla instance of its kind was found or the area lacks the group."""
     if entry.get("template") not in found:

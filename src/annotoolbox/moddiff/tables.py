@@ -1,4 +1,4 @@
-"""The Conflicts tab's table, and the Dropped tab's list. ``ConflictTable.set_conflicts`` fills the table (a model that
+"""The Conflicts tab's table, and the Dropped tab's list. ``CConflictTable.set_conflicts`` fills the table (a model that
 reads a row's text only when the view shows it, so no conflict is left out), a double click on a row says which target it
 is about (``opened``). ``docs/mod-diff.md`` "The views".
 """
@@ -27,7 +27,7 @@ from .model import (
     SET_VALUE,
     VALUE,
     VALUES,
-    Conflict,
+    SConflict,
 )
 
 KINDS = {
@@ -68,38 +68,38 @@ def shown_value(kind: str, value: str | None) -> str:
     return tr(NOTE_COUNTS[unit], n=count) if unit in NOTE_COUNTS and count.isdigit() else value
 
 
-def values_text(conflict: Conflict) -> str:
+def values_text(conflict: SConflict) -> str:
     """Each mod's value in load order: ``mod: value`` joined by a semicolon (removed: ``-``)."""
-    shown = (shown_value(conflict.kind, v) for v in conflict.values)
-    return "; ".join(f"{m}: {v}" for m, v in zip(conflict.mods, shown, strict=True))
+    shown = (shown_value(conflict.kind, value) for value in conflict.values)
+    return "; ".join(f"{mod}: {value}" for mod, value in zip(conflict.mods, shown, strict=True))
 
 
-def cells(c: Conflict) -> list[str]:
+def cells(conflict: SConflict) -> list[str]:
     """The seven columns of one conflict."""
-    target = c.file if not c.key else f"{c.key} {c.name}".strip()
+    target = conflict.file if not conflict.key else f"{conflict.key} {conflict.name}".strip()
     return [
-        tr(LEVELS.get(c.level, c.level)),
-        tr(KINDS[c.kind]),
+        tr(LEVELS.get(conflict.level, conflict.level)),
+        tr(KINDS[conflict.kind]),
         target,
-        c.path,
-        values_text(c),
-        c.winner,
-        tr(DECIDED[c.decided]) if c.decided in DECIDED else c.decided,
+        conflict.path,
+        values_text(conflict),
+        conflict.winner,
+        tr(DECIDED[conflict.decided]) if conflict.decided in DECIDED else conflict.decided,
     ]
 
 
-class ConflictModel(QAbstractTableModel):
+class CConflictModel(QAbstractTableModel):
     def __init__(self) -> None:
         super().__init__()
-        self.found: list[Conflict] = []
+        self.m_found: list[SConflict] = []
 
-    def set_conflicts(self, conflicts: list[Conflict]) -> None:
+    def set_conflicts(self, conflicts: list[SConflict]) -> None:
         self.beginResetModel()
-        self.found = conflicts
+        self.m_found = conflicts
         self.endResetModel()
 
     def rowCount(self, parent=NO_PARENT) -> int:
-        return 0 if parent.isValid() else len(self.found)
+        return 0 if parent.isValid() else len(self.m_found)
 
     def columnCount(self, parent=NO_PARENT) -> int:
         return 0 if parent.isValid() else len(HEADERS)
@@ -112,16 +112,16 @@ class ConflictModel(QAbstractTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             return None
-        return cells(self.found[index.row()])[index.column()]
+        return cells(self.m_found[index.row()])[index.column()]
 
 
-class ConflictTable(QTableView):
+class CConflictTable(QTableView):
     opened = Signal(str, str)  # the file and the key of the row's target
 
     def __init__(self) -> None:
         super().__init__()
-        self.model_ = ConflictModel()
-        self.setModel(self.model_)
+        self.m_model = CConflictModel()
+        self.setModel(self.m_model)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.horizontalHeader().setStretchLastSection(True)
@@ -132,18 +132,18 @@ class ConflictTable(QTableView):
         self.doubleClicked.connect(self._open)
 
     @property
-    def found(self) -> list[Conflict]:
-        return self.model_.found
+    def found(self) -> list[SConflict]:
+        return self.m_model.m_found
 
-    def set_conflicts(self, conflicts: list[Conflict]) -> None:
-        self.model_.set_conflicts(conflicts)
+    def set_conflicts(self, conflicts: list[SConflict]) -> None:
+        self.m_model.set_conflicts(conflicts)
 
     def _open(self, index: QModelIndex) -> None:
         if 0 <= index.row() < len(self.found):
             self.opened.emit(self.found[index.row()].file, self.found[index.row()].key)
 
 
-class DroppedList(QPlainTextEdit):
+class CDroppedList(QPlainTextEdit):
     """What the loader would log or skip, one line each."""
 
     def __init__(self) -> None:

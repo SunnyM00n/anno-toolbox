@@ -1,6 +1,6 @@
 """The UI editor window's frame: ``build`` lays out its widgets and docks, ``wire`` connects their signals to the
 window's slots, ``menus`` fills the menu bar, ``fill_files`` the list of the game's UI files. Split off ``uiwindow`` so
-the window class holds what it does, not how it is put together; the first three take the ``UiWindow`` and set the
+the window class holds what it does, not how it is put together; the first three take the ``CUiWindow`` and set the
 widgets they name on it.
 """
 
@@ -20,27 +20,28 @@ from PySide6.QtWidgets import (
 )
 
 from ..infra.i18n import N_, tr
-from ..suite import features, widgets
+from ..sources import gametree
+from ..suite import centralmenu, features, widgets
 from . import gamedataview, livevalues, playmode, previewpanel, tweens, uifiles
-from .graphview import BindingGraph
-from .panels import PalettePanel, PropertyPanel, SamplePanel, StatesPanel, ViewModelPanel
-from .preview import Preview
-from .timeline import SequenceEditor
+from .graphview import CBindingGraph
+from .panels import CPalettePanel, CPropertyPanel, CSamplePanel, CStatesPanel, CViewModelPanel
+from .preview import CPreview
+from .timeline import CSequenceEditor
 
 APP = "ui"  # the key of its remembered state in the settings
-GAMES = {"anno117": "Anno 117", "anno1800": "Anno 1800", "anno1404": "Anno 1404", "anno1701": "Anno 1701"}
+GAMES = {key: gametree.GAMES[key] for key in ("anno117", "anno1800", "anno1404", "anno1701")}
 ROLE = Qt.ItemDataRole.UserRole
 
 
-def fill_files(file_list: QTreeWidget, files: uifiles.UiFiles, text: str, saved: set[str]) -> None:
+def fill_files(file_list: QTreeWidget, files: uifiles.CUiFiles, text: str, saved: set[str]) -> None:
     """The (cleared) file list filled: scenes, widget files and - only when ``text`` filters - the other files, each
     group with its count; a file the project holds a copy of (``saved``, by path) is marked."""
     words = text.lower().split()
     groups = {"SC": QTreeWidgetItem(file_list, [tr("ui.scenes"), ""]), "WI": QTreeWidgetItem(file_list, [tr("ui.widget_files"), ""]),
               "": QTreeWidgetItem(file_list, [tr("ui.other_files_properties_only"), ""])}  # fmt: skip
-    for entry in sorted(files.entries.values(), key=lambda e: (files.title(e.key).lower(), e.key)):
+    for entry in sorted(files.m_entries.values(), key=lambda e: (files.title(e.key).lower(), e.key)):
         title = files.title(entry.key)
-        if words and not all(w in f"{title} {entry.key}".lower() for w in words):
+        if words and not all(word in f"{title} {entry.key}".lower() for word in words):
             continue
         group = groups.get(entry.kind, groups[""])
         if group is groups[""] and not words:
@@ -50,14 +51,14 @@ def fill_files(file_list: QTreeWidget, files: uifiles.UiFiles, text: str, saved:
         it = QTreeWidgetItem(group, [title + mark, tr(kind) if kind else entry.kind])
         it.setToolTip(0, entry.path)
         it.setData(0, ROLE, entry.key)
-    for g in groups.values():
-        g.setText(0, f"{g.text(0)} ({g.childCount()})")
+    for title_group in groups.values():
+        title_group.setText(0, f"{title_group.text(0)} ({title_group.childCount()})")
     groups["SC"].setExpanded(True)
 
 
 def build(window) -> None:
     """The window's widgets: the preview in the centre, the panels as docks around it; then ``wire``."""
-    window.preview = Preview()
+    window.preview = CPreview()
     window.centre = QStackedWidget()  # the preview, or (a game's old interface) its page
     window.centre.addWidget(window.preview)
     window.setCentralWidget(window.centre)
@@ -72,15 +73,15 @@ def build(window) -> None:
     lay.addWidget(window.file_list)
     window.element_tree = QTreeWidget()
     window.element_tree.setHeaderLabels([tr("ui.element"), tr("ui.kind")])
-    window.props, window.palette_panel = PropertyPanel(), PalettePanel()
-    window.vm, window.sample_panel, window.states = ViewModelPanel(), SamplePanel(), StatesPanel()
-    window.graph = BindingGraph()
+    window.props, window.palette_panel = CPropertyPanel(), CPalettePanel()
+    window.vm, window.sample_panel, window.states = CViewModelPanel(), CSamplePanel(), CStatesPanel()
+    window.graph = CBindingGraph()
     window.checks = QListWidget()
     window.compare = features.extension(features.UI_COMPARE, "game")  # None in an edition without it
     window.compare_panel = window.compare.make_panel() if window.compare else None
-    window.sequence = SequenceEditor()
+    window.sequence = CSequenceEditor()
     previewpanel.install(window)  # what the preview assumes of the player's game
-    window.tween_list: list[tweens.Tween] = []
+    window.m_tween_list: list[tweens.STween] = []
     window.docks: dict[str, QDockWidget] = {}
     left, right, bottom = (Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea,
                            Qt.DockWidgetArea.BottomDockWidgetArea)  # fmt: skip
@@ -129,14 +130,20 @@ def wire(window) -> None:
     window.preview.selected.connect(window._picked_in_preview)
     window.preview.moved.connect(window._moved)
     window.preview.sized.connect(window._sized)
-    window.props.edit_field.connect(lambda node, f, v: window._edit(lambda d: d.set_field(node, f, v)))
-    window.props.edit_color.connect(lambda node, f, rgb: window._edit(lambda d: d.set_color(node, f, rgb)))
-    window.props.edit_value.connect(lambda node, p, c, v: window._edit(lambda d: d.set_property_value(node, p, c, v)))
-    window.props.remove_object.connect(lambda node, f, o: window._edit(lambda d: d.remove_object(node, f, o)))
+    window.props.edit_field.connect(lambda node, f, v: window._edit(lambda document: document.set_field(node, f, v)))
+    window.props.edit_color.connect(
+        lambda node, f, rgb: window._edit(lambda document: document.set_color(node, f, rgb))
+    )
+    window.props.edit_value.connect(
+        lambda node, p, c, v: window._edit(lambda document: document.set_property_value(node, p, c, v))
+    )
+    window.props.remove_object.connect(
+        lambda node, f, o: window._edit(lambda document: document.remove_object(node, f, o))
+    )
     window.palette_panel.add.connect(window._add_from_palette)
     window.graph.picked.connect(window._binding_picked)
-    window.graph.change.connect(lambda b, op: window._edit(lambda d: d.set_operator(b, op)))
-    window.graph.remove.connect(lambda b: window._edit(lambda d: d.remove_binding(b)))
+    window.graph.change.connect(lambda b, op: window._edit(lambda document: document.set_operator(b, op)))
+    window.graph.remove.connect(lambda b: window._edit(lambda document: document.remove_binding(b)))
     window.vm.name_id.connect(window._name_id)
     window.vm.bind.connect(window._bind_read)
     window.vm.add_readout.connect(window._add_readout)
@@ -147,18 +154,20 @@ def wire(window) -> None:
     if window.compare_panel is not None:
         window.compare_panel.changed.connect(window._redraw)  # its texts and rectangles
         window.compare_panel.cleared.connect(
-            lambda: (setattr(window.preview, "overlay", []), window.preview.update(), window._redraw())
+            lambda: (setattr(window.preview, "m_overlay", []), window.preview.update(), window._redraw())
         )
         window.compare_panel.picked.connect(window._picked_in_preview)
     window.preview.dropped.connect(lambda what, which, x, y: window._add_from_palette(what, which, (x, y)))
     window.states.animation.connect(window._animation)
-    window.states.stage = window.preview
+    window.states.m_stage = window.preview
     window.states.design.connect(window._design)
-    window.sequence.add_key.connect(lambda trk, t, v: window._edit(lambda d: d.add_key(trk, t, v)))
-    window.sequence.set_key.connect(lambda trk, k, t, v, i: window._edit(lambda d: d.set_key(trk, k, t, v, i)))
-    window.sequence.remove_key.connect(lambda trk, k: window._edit(lambda d: d.remove_key(trk, k)))
+    window.sequence.add_key.connect(lambda trk, t, v: window._edit(lambda document: document.add_key(trk, t, v)))
+    window.sequence.set_key.connect(
+        lambda trk, k, t, v, i: window._edit(lambda document: document.set_key(trk, k, t, v, i))
+    )
+    window.sequence.remove_key.connect(lambda trk, k: window._edit(lambda document: document.remove_key(trk, k)))
     window.sequence.edit_tween.connect(
-        lambda node, p, c, v: window._edit(lambda d: d.set_property_value(node, p, c, v))
+        lambda node, p, c, v: window._edit(lambda document: document.set_property_value(node, p, c, v))
     )
 
 
@@ -171,13 +180,15 @@ def _open_mirror(window) -> None:
 def menus(window) -> None:
     """The menu bar (File, Edit, View, Window), each entry a method of the window."""
     file = window.menuBar().addMenu(tr("common.menu.file"))
-    games = file.addMenu(tr("common.menu.open_game"))
+    games = centralmenu.mark(file.addMenu(tr("common.menu.open_game")), centralmenu.GAME)
     for key, name in GAMES.items():
         games.addAction(name, lambda k=key: window.open_game(k))
     file.addAction(tr("common.open_folder_loose_files"), window._open_folder)
     file.addAction(tr("ui.new_widget_file"), window.new_widget_file, QKeySequence("Ctrl+N"))
     file.addSeparator()
-    file.addAction(tr("ui.save_project"), window.save, QKeySequence.StandardKey.Save)
+    centralmenu.mark(
+        file.addAction(tr("ui.save_project"), window.save, QKeySequence.StandardKey.Save), centralmenu.SAVE
+    )
     file.addAction(tr("ui.revert_file_games"), window.revert)
     file.addAction(tr("ui.check_projects_references"), window.check_references)
     file.addAction(tr("ui.save_preview_picture"), window._save_picture, QKeySequence("Ctrl+Shift+S"))
@@ -194,7 +205,7 @@ def menus(window) -> None:
     view = window.menuBar().addMenu(tr("common.menu.view"))
     view.addAction(
         tr("ui.fit_preview"),
-        lambda: (setattr(window.preview, "fit", True), window.preview.fit_view()),
+        lambda: (setattr(window.preview, "m_fit", True), window.preview.fit_view()),
         QKeySequence("F"),
     )
     window.all_bindings = view.addAction(tr("ui.show_all_bindings_not_only"), window._show_graph)
@@ -223,9 +234,11 @@ def menus(window) -> None:
     window.play_action = widgets.kept_switch(window, view, play, window._play_toggled, (APP, "play_effects"))
     window.preview.set_play_effects(window.play_action.isChecked())
     view.addSeparator()
-    world = window.world_menu
+    world = window.m_world_menu
     behind = tr("ui.show_3d_scene_behind_ui")
-    window.world_action = widgets.kept_switch(window, view, behind, world.toggled, (APP, "world_scene"), on=False)
+    window.world_action = widgets.kept_switch(
+        window, view, behind, world.toggled, (APP, "world_scene"), checked_by_default=False
+    )
     view.addAction(tr("ui.pick_picture_scene_behind_ui"), world.pick)
     view.addAction(tr("ui.draw_scene_behind_ui_model"), world.pick_model)
     view.addAction(tr("ui.draw_scene_behind_ui_island"), world.pick_island)

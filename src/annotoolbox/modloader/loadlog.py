@@ -1,7 +1,7 @@
 """``mods/mod-loader.log`` of the last start, read per mod: which mods were enabled and loaded, what each one took to
 patch, and every line that is a problem (a level above information, a file position, or one of the loss messages).
 
-``read_log(mods_dir)`` returns a ``LoadLog`` or None without a log. The loader writes ``Load`` before it patches a
+``read_log(mods_dir)`` returns a ``SLoadLog`` or None without a log. The loader writes ``Load`` before it patches a
 mod, so the time between two ``Load`` lines is the first mod's patch time and the lines between them are its own
 (``docs/engine-modloader.md`` "Everything that fails without a word"). Stdlib only.
 """
@@ -31,7 +31,7 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 
 
 @dataclass
-class ModRun:
+class SModRun:
     """What the log says about one mod."""
 
     mod_id: str
@@ -45,10 +45,10 @@ class ModRun:
 
 
 @dataclass
-class LoadLog:
+class SLoadLog:
     path: Path
     modified: float
-    mods: dict[str, ModRun] = field(default_factory=dict)
+    mods: dict[str, SModRun] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)  # the mods in the order they were loaded
     problems: list[str] = field(default_factory=list)  # the problem lines no mod claims
     searched: list[str] = field(default_factory=list)
@@ -57,20 +57,20 @@ class LoadLog:
     seconds: float | None = None  # ``Patching completed in``
     lines: list[str] = field(default_factory=list)
 
-    def run_of(self, mod_id: str) -> ModRun | None:
+    def run_of(self, mod_id: str) -> SModRun | None:
         return self.mods.get(mod_id)
 
     @property
     def problem_count(self) -> int:
-        return len(self.problems) + sum(len(m.problems) for m in self.mods.values())
+        return len(self.problems) + sum(len(mod.problems) for mod in self.mods.values())
 
 
 def is_problem(line: str) -> bool:
     """A line that is not a plain information line: another level, a file position or a loss message."""
-    m = LINE.match(line)
-    if not m:
+    match = LINE.match(line)
+    if not match:
         return bool(line.strip())
-    return m["level"].strip().lower() != "info" or bool(POSITION.search(line) or SUSPECT.search(m["text"]))
+    return match["level"].strip().lower() != "info" or bool(POSITION.search(line) or SUSPECT.search(match["text"]))
 
 
 def _time(stamp: str) -> datetime | None:
@@ -80,20 +80,20 @@ def _time(stamp: str) -> datetime | None:
         return None
 
 
-def parse_log(lines: list[str], path: Path = Path(LOG_FILE), modified: float = 0.0) -> LoadLog:
-    log = LoadLog(path, modified, lines=list(lines))
-    current: ModRun | None = None
+def parse_log(lines: list[str], path: Path = Path(LOG_FILE), modified: float = 0.0) -> SLoadLog:
+    log = SLoadLog(path, modified, lines=list(lines))
+    current: SModRun | None = None
     started: dict[str, datetime] = {}
-    last_load: ModRun | None = None
+    last_load: SModRun | None = None
     for line in lines:
-        m = LINE.match(line)
-        text = m["text"] if m else line
-        when = _time(m["time"]) if m else None
+        match = LINE.match(line)
+        text = match["text"] if match else line
+        when = _time(match["time"]) if match else None
         if (found := ENABLED.match(text)) is not None:
-            run = log.mods.setdefault(found["id"], ModRun(found["id"]))
+            run = log.mods.setdefault(found["id"], SModRun(found["id"]))
             run.enabled, run.version, run.folder = True, found["version"], found["path"]
         elif (found := LOADED.match(text)) is not None:
-            run = log.mods.setdefault(found["id"], ModRun(found["id"]))
+            run = log.mods.setdefault(found["id"], SModRun(found["id"]))
             run.loaded, run.version, run.name, run.folder = True, found["version"], found["name"], found["path"]
             _close(last_load, started, when)
             if when is not None:
@@ -113,21 +113,22 @@ def parse_log(lines: list[str], path: Path = Path(LOG_FILE), modified: float = 0
     return log
 
 
-def _close(run: ModRun | None, started: dict[str, datetime], when: datetime | None) -> None:
+def _close(run: SModRun | None, started: dict[str, datetime], when: datetime | None) -> None:
     if run is not None and when is not None and run.mod_id in started:
         run.seconds = (when - started[run.mod_id]).total_seconds()
 
 
-def _file(log: LoadLog, text: str, line: str, current: ModRun | None) -> None:
+def _file(log: SLoadLog, text: str, line: str, current: SModRun | None) -> None:
     """Put a problem line with the mod it names, else with the mod being patched, else with the log."""
     named = next(
-        (r for r in log.mods.values() if r.mod_id and re.search(rf"(?<![\w-]){re.escape(r.mod_id)}\s*:", text)), None
+        (mod for mod in log.mods.values() if mod.mod_id and re.search(rf"(?<![\w-]){re.escape(mod.mod_id)}\s*:", text)),
+        None,
     )
     owner = named or current
     (owner.problems if owner is not None else log.problems).append(line)
 
 
-def read_log(mods_dir: Path) -> LoadLog | None:
+def read_log(mods_dir: Path) -> SLoadLog | None:
     """The log in a mods folder; None when there is none."""
     path = Path(mods_dir) / LOG_FILE
     try:

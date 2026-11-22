@@ -3,7 +3,7 @@
 This page is hand-written. It was read from the shipped files of an installed Anno 2205 (all patches): the 89
 movies of `data/ui/`, their pictures, atlases, fonts and tables. Every movie and every table named here is read and
 written back byte for byte by the readers in `src/annotoolbox/formats/` (`feuread.py`, `feuwrite.py`,
-`feuedit.py`, `feushape.py`, `feuabc.py`, `feuassets.py`). The test `tests/test_feu.py` runs over the install when
+`feuedit.py`, `feushape.py`, `feuabc.py`, `feuassets.py`). The test `tests/formats/test_feu.py` runs over the install when
 `ANNO2205_DIR` names it. **Nothing here was seen in the game yet**: a passing round trip proves the file format, not
 that the game loads a changed file. The guide to the editor built on it is
 [`../ui/2205/flash-ui-editor.md`](../ui/2205/flash-ui-editor.md).

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..formats import csl2070 as csl
-from .overlay import SourceTree
+from .overlay import CSourceTree
 
 API = "data/ai/cslapi.xml"
 FISHERY = "data/ai/feedback/fishery.csl"
@@ -21,7 +21,7 @@ TREEFARMER = "data/ai/economy/treefarmer.csl"
 
 
 @dataclass(frozen=True)
-class FisheryScript:
+class SFisheryScript:
     berth_dummy: str  # where the boat is created ("ship", the building's dummy of that name; index -1)
     pier_dummy: str  # the pier it sails to first ("harbour_0", index 0)
     water_radius: float | None  # _getWaterPos search radius; a plain number in the script (no _REALINT_ONE), so tiles
@@ -32,8 +32,8 @@ class FisheryScript:
 
 
 @dataclass(frozen=True)
-class MineScript:
-    drone_guid: int | None  # _feedback_transportation_droneGUID
+class SMineScript:
+    drone_unit: int | None  # _feedback_transportation_droneGUID
     dummy: str  # "drone": the dummy of the mine and of its station the drone flies between
     hover_ms: int | None  # the sleep after the flight to the mine
     landed_ms: int | None  # the sleep after the flight back, before it fades
@@ -42,7 +42,7 @@ class MineScript:
 
 
 @dataclass(frozen=True)
-class FellScript:
+class SFellScript:
     stand_off: float | None  # tiles in front of the tree (the script adds 2048 of 4096 towards the building)
     fall_ms: int | None  # treeFallingTime
     cuts: tuple[tuple[int, int], ...]  # (work sequence, first-hit time ms): the chopping variants, in script order
@@ -54,92 +54,101 @@ class FellScript:
 
 
 @dataclass(frozen=True)
-class PlantScript:
+class SPlantScript:
     stand_off: float | None
     no_position_ms: int | None
     sequences: tuple[int, ...]  # the sequences whose full length it sleeps, in order
 
 
 @dataclass
-class WorkScripts:
-    fishery: FisheryScript | None = None
-    mine: MineScript | None = None
-    fell: FellScript | None = None
-    plant: PlantScript | None = None
+class SWorkScripts:
+    fishery: SFisheryScript | None = None
+    mine: SMineScript | None = None
+    fell: SFellScript | None = None
+    plant: SPlantScript | None = None
     warnings: list[str] = field(default_factory=list)
 
 
-def _load(tree: SourceTree, path: str, api: csl.Api, warnings: list[str]) -> csl.Script | None:
+def _load(tree: CSourceTree, path: str, api: csl.SApi, warnings: list[str]) -> csl.CScript | None:
     if not tree.exists(path):
         warnings.append(f"work scripts: {path} is not in 2070's data")
         return None
     try:
         return csl.load(tree.read_text(path, "latin-1"), api)
-    except csl.CslError as err:
-        warnings.append(f"work scripts: {path}: {err}")
+    except csl.CCslError as error:
+        warnings.append(f"work scripts: {path}: {error}")
         return None
 
 
-def _known_sleeps(script: csl.Script, function: str) -> list[int]:
-    return [ms for _, ms in script.sleeps(function) if ms is not None]
+def _known_sleeps(script: csl.CScript, function: str) -> list[int]:
+    return [sleep_ms for _, sleep_ms in script.sleeps(function) if sleep_ms is not None]
 
 
-def _sequence_sleep(script: csl.Script, function: str) -> tuple[int | None, int | None]:
+def _sequence_sleep(script: csl.CScript, function: str) -> tuple[int | None, int | None]:
     """``_sleep(_getSequenceDuration(SEQ) * n)``: the sequence and n (1 when there is no factor)."""
     for event, _ in script.sleeps(function):
         arg = event.call.args[0]
         factor = 1
-        if isinstance(arg, csl.Binary) and arg.op == "*":
+        if isinstance(arg, csl.SBinary) and arg.operator == "*":
             arg, factor = arg.left, script.fold(arg.right) or 1
-        if isinstance(arg, csl.Call) and arg.name == "_getSequenceDuration":
+        if isinstance(arg, csl.SCall) and arg.name == "_getSequenceDuration":
             return script.fold(arg.args[0]), factor
     return None, None
 
 
-def _dummy_names(script: csl.Script) -> list[str]:
-    return [a.text for e in script.calls("_getDummyPosition") for a in e.call.args if isinstance(a, csl.Str)]
+def _dummy_names(script: csl.CScript) -> list[str]:
+    return [
+        argument.text
+        for event in script.calls("_getDummyPosition")
+        for argument in event.call.args
+        if isinstance(argument, csl.SStr)
+    ]
 
 
-def _stand_off(script: csl.Script) -> float | None:
+def _stand_off(script: csl.CScript) -> float | None:
     """The distance the worker stops short of the tree: ``targetPos.x += (...) * 2048 / dist`` in fixed point."""
     for _fn, stmts in _bodies(script):
         for stmt in stmts:
-            if isinstance(stmt, csl.Assign) and stmt.op == "+=" and isinstance(stmt.target, csl.Member):
-                nums = _numbers(stmt.value)
-                if nums:
-                    return nums[0] / csl.REALINT_ONE
+            if isinstance(stmt, csl.SAssign) and stmt.operator == "+=" and isinstance(stmt.target, csl.SMember):
+                numbers = _numbers(stmt.value)
+                if numbers:
+                    return numbers[0] / csl.REALINT_ONE
     return None
 
 
-def _bodies(script: csl.Script):
-    for fn in script.module.functions.values():
-        yield fn.name, _flat(fn.body)
+def _bodies(script: csl.CScript):
+    for function in script.m_module.functions.values():
+        yield function.name, _flat(function.body)
 
 
 def _flat(stmts):
-    for s in stmts:
-        yield s
-        for part in (getattr(s, "then", []), getattr(s, "other", []), getattr(s, "body", [])):
+    for statement in stmts:
+        yield statement
+        for part in (getattr(statement, "then", []), getattr(statement, "other", []), getattr(statement, "body", [])):
             yield from _flat(part)
 
 
 def _numbers(node) -> list[int]:
-    if isinstance(node, csl.Num):
+    if isinstance(node, csl.SNum):
         return [node.value]
-    if isinstance(node, csl.Binary):
+    if isinstance(node, csl.SBinary):
         return _numbers(node.left) + _numbers(node.right)
     return []
 
 
-def _fishery(script: csl.Script) -> FisheryScript | None:
+def _fishery(script: csl.CScript) -> SFisheryScript | None:
     names = _dummy_names(script)
-    radius = [script.fold(e.call.args[-1]) for e in script.calls("_getWaterPos")]
+    radius = [script.fold(event.call.args[-1]) for event in script.calls("_getWaterPos")]
     if len(names) < 2 or not radius:
         return None
     sequence, repeats = _sequence_sleep(script, "goFishing")
     main = _known_sleeps(script, "main")
-    idle = [ms for e, ms in script.sleeps("goFishing") if ms is not None and any(w.startswith("not ") for w in e.when)]
-    return FisheryScript(
+    idle = [
+        sleep_ms
+        for event, sleep_ms in script.sleeps("goFishing")
+        if sleep_ms is not None and any(word.startswith("not ") for word in event.when)
+    ]
+    return SFisheryScript(
         names[0],
         names[1],
         radius[0],
@@ -150,7 +159,7 @@ def _fishery(script: csl.Script) -> FisheryScript | None:
     )
 
 
-def _mine(script: csl.Script) -> MineScript | None:
+def _mine(script: csl.CScript) -> SMineScript | None:
     names = _dummy_names(script)
     spawn = script.calls("_createObjectAtPos3D")
     if not names or not spawn:
@@ -158,11 +167,11 @@ def _mine(script: csl.Script) -> MineScript | None:
     fly = _known_sleeps(script, "fly")
     main = _known_sleeps(script, "main")
     sequences = tuple(
-        v
-        for e in script.events("fly")
-        if e.name == "_setWalkSequence" and (v := script.fold(e.call.args[0])) is not None
+        value
+        for event in script.events("fly")
+        if event.name == "_setWalkSequence" and (value := script.fold(event.call.args[0])) is not None
     )
-    return MineScript(
+    return SMineScript(
         script.fold(spawn[0].call.args[0]),
         names[0],
         fly[0] if len(fly) > 0 else None,
@@ -172,49 +181,59 @@ def _mine(script: csl.Script) -> MineScript | None:
     )
 
 
-def _fell(script: csl.Script) -> FellScript | None:
-    if "lumber" not in script.module.functions:
+def _fell(script: csl.CScript) -> SFellScript | None:
+    if "lumber" not in script.m_module.functions:
         return None
     falling = script.values("treeFallingTime") or [None]
     seqs = script.assignments("workSequence", "lumber")
     times = script.assignments("cutTime", "lumber")
-    cuts = tuple((s, t) for s, t in zip(seqs, times, strict=False) if s is not None and t is not None)
-    shake = [script.folded(e)[2:] for e in script.calls("_shakeTree")]
-    sleeps = [ms for _, ms in script.sleeps("lumber")]
-    dying = [script.folded(e)[-1] for e in script.calls("_startTreeDying")]
-    sinks = [ms for ms in sleeps if ms is not None and falling[0] is not None and ms == falling[0] + 3000]
-    return FellScript(
+    cuts = tuple(
+        (sequence, time)
+        for sequence, time in zip(seqs, times, strict=False)
+        if sequence is not None and time is not None
+    )
+    shake = [script.folded(event)[2:] for event in script.calls("_shakeTree")]
+    sleeps = [sleep_ms for _, sleep_ms in script.sleeps("lumber")]
+    dying = [script.folded(event)[-1] for event in script.calls("_startTreeDying")]
+    sinks = [
+        sleep_ms
+        for sleep_ms in sleeps
+        if sleep_ms is not None and falling[0] is not None and sleep_ms == falling[0] + 3000
+    ]
+    return SFellScript(
         _stand_off(script),
         falling[0],
         cuts,
         tuple(shake[0]) if shake else (),
-        next((ms for ms in sleeps if ms == 30000), None),
+        next((sleep_ms for sleep_ms in sleeps if sleep_ms == 30000), None),
         sinks[0] if sinks else None,
         dying[0] if dying and dying[0] is not None and dying[0] != 0 else None,
-        next((ms for ms in sleeps if ms in (2000,)), None),
+        next((sleep_ms for sleep_ms in sleeps if sleep_ms in (2000,)), None),
     )
 
 
-def _plant(script: csl.Script) -> PlantScript | None:
-    if "plant" not in script.module.functions:
+def _plant(script: csl.CScript) -> SPlantScript | None:
+    if "plant" not in script.m_module.functions:
         return None
     sequences = tuple(
-        v
-        for e in script.events("plant")
-        if e.name == "_getSequenceDuration" and (v := script.fold(e.call.args[0])) is not None
+        value
+        for event in script.events("plant")
+        if event.name == "_getSequenceDuration" and (value := script.fold(event.call.args[0])) is not None
     )
-    no_pos = [ms for e, ms in script.sleeps("plant") if ms is not None and e.when]
-    return PlantScript(_stand_off(script), no_pos[0] if no_pos else None, sequences)
+    conditional_sleeps_ms = [
+        sleep_ms for event, sleep_ms in script.sleeps("plant") if sleep_ms is not None and event.when
+    ]
+    return SPlantScript(_stand_off(script), conditional_sleeps_ms[0] if conditional_sleeps_ms else None, sequences)
 
 
-def read(tree: SourceTree) -> WorkScripts:
+def read(tree: CSourceTree) -> SWorkScripts:
     """The four scripts' numbers; a missing or unreadable script leaves its part ``None`` and a warning."""
-    out = WorkScripts()
+    out = SWorkScripts()
     if not tree.exists(API):
         out.warnings.append(f"work scripts: {API} is not in 2070's data")
         return out
     api = csl.read_api(tree.read_text(API, "latin-1"))
-    for path, attr, reader in (
+    for path, attribute, reader in (
         (FISHERY, "fishery", _fishery),
         (MINE, "mine", _mine),
         (LUMBERJACK, "fell", _fell),
@@ -224,5 +243,5 @@ def read(tree: SourceTree) -> WorkScripts:
         value = reader(script) if script is not None else None
         if script is not None and value is None:
             out.warnings.append(f"work scripts: {path} has another shape than the reader expects")
-        setattr(out, attr, value)
+        setattr(out, attribute, value)
     return out

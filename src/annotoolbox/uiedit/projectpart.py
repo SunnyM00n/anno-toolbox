@@ -1,4 +1,4 @@
-"""The UI editor's share of a project's mod (``suite.project.Part``): the changed and new UI files of the project's
+"""The UI editor's share of a project's mod (``suite.project.SPart``): the changed and new UI files of the project's
 game, kept whole under ``ui-edits/<game>/<game path>``, and the check that every file they name exists.
 
 ``UI_PART`` is what ``suite.apps.parts`` lists (``PART`` and the Flash editor's ``flashui.projectpart``);
@@ -14,19 +14,19 @@ from pathlib import Path
 from ..formats import phoenix
 from ..infra.i18n import N_
 from ..mod import phxrefs
-from ..suite.project import UI_EDITS, EditsFolder, Part, Project
+from ..suite.project import UI_EDITS, CProject, SEditsFolder, SPart
 
-EDITS = EditsFolder(UI_EDITS, ("anno117", "anno1800", "anno1404", "anno1701"))
+EDITS = SEditsFolder(UI_EDITS, ("anno117", "anno1800", "anno1404", "anno1701"))
 PART = EDITS.part("ui", N_("common.ui"), "UI")
 
 
-def _has_work(project: Project) -> bool:
+def _has_work(project: CProject) -> bool:
     from ..flashui import projectpart as flash
 
     return PART.has_work(project) or flash.PART.has_work(project)
 
 
-def _render(project: Project, settings, log: Callable[[str], None]) -> dict[str, bytes]:
+def _render(project: CProject, settings, log: Callable[[str], None]) -> dict[str, bytes]:
     from ..flashui import projectpart as flash
 
     files: dict[str, bytes] = {}
@@ -36,22 +36,22 @@ def _render(project: Project, settings, log: Callable[[str], None]) -> dict[str,
     return files
 
 
-UI_PART = Part(
+UI_PART = SPart(
     "ui", N_("common.ui"), _has_work, _render
 )  # the UI app's: the Phoenix files and the Flash movies' (``flashui``)
 
 
-def sidecar(project: Project, game: str, name: str) -> Path:
+def sidecar(project: CProject, game: str, name: str) -> Path:
     """A file of the editor's own beside the UI files (``names``, ``samples``)."""
     return project.folder / UI_EDITS / f"{game}-{name}.json"
 
 
-def save_file(project: Project, game: str, path: str, data: bytes) -> Path:
+def save_file(project: CProject, game: str, path: str, data: bytes) -> Path:
     """Keep a changed or new UI file in the project (whole or not at all)."""
     return EDITS.save_files(project, game, {path: data})[0]
 
 
-def check(project: Project, game: str, has_base: Callable[[str], bool], schema: dict | None = None) -> list[str]:
+def check(project: CProject, game: str, has_base: Callable[[str], bool], schema: dict | None = None) -> list[str]:
     """Every reference of the project's UI files that neither the project nor the game has (as the loader lint's
     U01 says it after a build)."""
     root = EDITS.folder(project, game)

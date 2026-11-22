@@ -59,8 +59,8 @@ def _leaf_paths(node: ET.Element, prefix: str = ""):
     kids = list(node)
     if not kids:
         yield prefix
-    for c in kids:
-        yield from _leaf_paths(c, f"{prefix}/{c.tag}" if prefix else c.tag)
+    for child in kids:
+        yield from _leaf_paths(child, f"{prefix}/{child.tag}" if prefix else child.tag)
 
 
 def donor_profile(assets_xml: str, template: str) -> tuple[int, dict[str, int]]:
@@ -70,9 +70,9 @@ def donor_profile(assets_xml: str, template: str) -> tuple[int, dict[str, int]]:
     counts: dict[str, int] = {}
     for block in blocks:
         values = ET.fromstring(block).find("Values")
-        seen = {p.split("/Item")[0] for p in _leaf_paths(values)} if values is not None else set()
-        for p in seen:
-            counts[p] = counts.get(p, 0) + 1
+        seen = {path.split("/Item")[0] for path in _leaf_paths(values)} if values is not None else set()
+        for path in seen:
+            counts[path] = counts.get(path, 0) + 1
     return len(blocks), counts
 
 
@@ -81,14 +81,14 @@ IDENTITY = ("Standard", "Text/OasisId")  # what makes an asset itself, never sha
 
 def _fields(node: ET.Element, prefix: str = ""):
     """(path, value) per field: a leaf's text, or a whole list (an element holding ``Item``s)."""
-    for c in node:
-        path = f"{prefix}/{c.tag}" if prefix else c.tag
-        if len(c) and all(k.tag == "Item" for k in c):
-            yield path, c
-        elif len(c):
-            yield from _fields(c, path)
+    for child in node:
+        path = f"{prefix}/{child.tag}" if prefix else child.tag
+        if len(child) and all(k.tag == "Item" for k in child):
+            yield path, child
+        elif len(child):
+            yield from _fields(child, path)
         else:
-            yield path, c.text or ""
+            yield path, child.text or ""
 
 
 def consensus(assets_xml: str, template: str, names: str = "") -> dict[str, Value]:
@@ -103,11 +103,19 @@ def consensus(assets_xml: str, template: str, names: str = "") -> dict[str, Valu
         if names and not re.search(names, values.findtext("Standard/Name") or ""):
             continue
         mine = {}
-        for path, v in _fields(values):
+        for path, value in _fields(values):
             if not path.startswith(IDENTITY):
-                mine[path] = (ET.tostring(v, encoding="unicode") if isinstance(v, ET.Element) else v, v)
-        shared = mine if shared is None else {p: sv for p, sv in shared.items() if p in mine and mine[p][0] == sv[0]}
-    return {p: v for p, (_, v) in (shared or {}).items()}
+                mine[path] = (ET.tostring(value, encoding="unicode") if isinstance(value, ET.Element) else value, value)
+        shared = (
+            mine
+            if shared is None
+            else {
+                field_path: shared_value
+                for field_path, shared_value in shared.items()
+                if field_path in mine and mine[field_path][0] == shared_value[0]
+            }
+        )
+    return {field_path: value for field_path, (_, value) in (shared or {}).items()}
 
 
 def compose(base: dict[str, Value], ours: dict[str, Value]) -> dict[str, Value]:
@@ -115,11 +123,15 @@ def compose(base: dict[str, Value], ours: dict[str, Value]) -> dict[str, Value]:
     above it), and ``None`` removes path and all below, so a whole component can be switched off."""
     out = dict(base)
     for path, value in ours.items():
-        for p in list(out):
-            under = p == path or p.startswith(path + "/")
+        for existing_path in list(out):
+            under = existing_path == path or existing_path.startswith(path + "/")
             # a list above a value we set would hold it twice; an empty component above is its parent
-            if under or (value is not None and path.startswith(p + "/") and isinstance(out[p], ET.Element)):
-                del out[p]
+            if under or (
+                value is not None
+                and path.startswith(existing_path + "/")
+                and isinstance(out[existing_path], ET.Element)
+            ):
+                del out[existing_path]
         if value is not None:
             out[path] = value
     return out
@@ -127,11 +139,11 @@ def compose(base: dict[str, Value], ours: dict[str, Value]) -> dict[str, Value]:
 
 def template_paths(templates_xml: str, template: str) -> set[str]:
     """The fields ``template``'s own defaults set in ``templates.xml`` (lists down to their ``Item``s)."""
-    m = re.search(rf"<Name>{re.escape(template)}</Name>\s*<Properties>.*?</Properties>", templates_xml, re.S)
-    if not m:
+    match = re.search(rf"<Name>{re.escape(template)}</Name>\s*<Properties>.*?</Properties>", templates_xml, re.S)
+    if not match:
         return set()
-    props = ET.fromstring(m.group(0)[m.group(0).index("<Properties>") :])
-    return {p.split("/Item")[0] for p in _leaf_paths(props)}
+    props = ET.fromstring(match.group(0)[match.group(0).index("<Properties>") :])
+    return {path.split("/Item")[0] for path in _leaf_paths(props)}
 
 
 def gaps(
@@ -144,12 +156,19 @@ def gaps(
     ``defaults`` (:func:`template_paths`) give: a field counts as covered when something sits at it,
     above it, or below it."""
     total, counts = profile
-    given = [p for p, v in values.items() if v is not None] + list(defaults)
+    given = [value_path for value_path, value in values.items() if value is not None] + list(defaults)
 
     def covered(path: str) -> bool:
-        return any(g == path or path.startswith(g + "/") or g.startswith(path + "/") for g in given)
+        return any(
+            given_path == path or path.startswith(given_path + "/") or given_path.startswith(path + "/")
+            for given_path in given
+        )
 
-    return sorted(p for p, n in counts.items() if total and n / total >= share and not covered(p))
+    return sorted(
+        value_path
+        for value_path, count in counts.items()
+        if total and count / total >= share and not covered(value_path)
+    )
 
 
 CULTURE = "2070"  # stands where 117 names its culture: "Production Food Roman Porridge"
@@ -160,7 +179,7 @@ def words(identifier: str) -> str:
     """A 2070 identifier as 117 writes a name: ``food_supply_factory`` -> ``Food Supply Factory``,
     ``TVDinner`` -> ``TV Dinner``. Lower case and underscores give the identifier back."""
     spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", identifier.replace("_", " "))
-    return " ".join(w[:1].upper() + w[1:] for w in spaced.split())
+    return " ".join(word[:1].upper() + word[1:] for word in spaced.split())
 
 
 def culture(faction: str | None = None) -> str:
@@ -171,7 +190,7 @@ def culture(faction: str | None = None) -> str:
 def name(kind: str, faction: str | None = None, *subject: str) -> str:
     """An asset name in 117's order, kind first: ``name("Production", "Tycoons", "Food Supply Factory")``
     -> ``Production 2070 Tycoons Food Supply Factory`` (docs/systems.md, "Naming")."""
-    return " ".join(p for p in (kind, culture(faction), *subject) if p)
+    return " ".join(part for part in (kind, culture(faction), *subject) if part)
 
 
 # What 117's own buildings carry and 2070's never had: water, Romanization, the Roman population
@@ -195,7 +214,7 @@ def _consensus(source, template: str, names: str) -> dict[str, Value]:
     the asset list per kind, not one per asset written."""
     cache = source.__dict__.setdefault("_consensus", {})
     if (template, names) not in cache:
-        cache[template, names] = consensus(source.text, template, names)
+        cache[template, names] = consensus(source.m_text, template, names)
     return cache[template, names]
 
 
@@ -207,8 +226,14 @@ def ground_up(source, template: str, names: str, *layers: dict, donor: str | Non
     values = compose(_consensus(source, donor or template, names), dict.fromkeys(NOT_2070))
     for layer in layers:
         values = compose(values, layer)
-    first = [p for p in values if p.startswith(IDENTITY)]
-    return build(template, {p: values[p] for p in first + [p for p in values if p not in first]})
+    first = [value_path for value_path in values if value_path.startswith(IDENTITY)]
+    return build(
+        template,
+        {
+            value_path: values[value_path]
+            for value_path in first + [value_path for value_path in values if value_path not in first]
+        },
+    )
 
 
 def identity(guid: int, name: str, icon: str | None = None) -> dict[str, Value]:

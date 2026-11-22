@@ -17,17 +17,17 @@ from pathlib import Path
 from ..infra.i18n import N_, tr
 from ..mod.modlint import lint_mod, lint_modinfo
 from ..mod.modlintdeps import resolution_findings
-from ..modloader.engine import WARNING, Session
-from ..modloader.mods import Mod, Variables, read_options
-from ..modloader.profilefile import ProfileText
-from ..modloader.resolve import Resolution, resolve_profile
-from .catalog import NEW, Catalog, state_of
+from ..modloader.engine import WARNING, CSession
+from ..modloader.mods import CMod, CVariables, read_options
+from ..modloader.profilefile import CProfileText
+from ..modloader.resolve import SResolution, resolve_profile
+from .catalog import NEW, SCatalog, state_of
 
 PROBLEM, NOTE = "problem", "note"
 
 
 @dataclass(frozen=True)
-class Issue:
+class SIssue:
     """One thing a person should know before starting: ``level`` is ``PROBLEM`` (the loader logs it or does something
     the mod's author did not mean) or ``NOTE``; ``mod`` the ModID it is about ("" for the profile as a whole)."""
 
@@ -41,62 +41,65 @@ class Issue:
 
 
 @dataclass
-class OrderRow:
+class SOrderRow:
     position: int
-    mod: Mod
+    mod: CMod
     why: str  # how it came in and what places it
 
 
 @dataclass
-class Plan:
+class SPlan:
     profile: str
-    resolution: Resolution
-    rows: list[OrderRow] = field(default_factory=list)
-    issues: list[Issue] = field(default_factory=list)
+    resolution: SResolution
+    rows: list[SOrderRow] = field(default_factory=list)
+    issues: list[SIssue] = field(default_factory=list)
 
     @property
-    def order(self) -> list[Mod]:
+    def order(self) -> list[CMod]:
         return self.resolution.order
 
-    def issues_of(self, mod_id: str) -> list[Issue]:
+    def issues_of(self, mod_id: str) -> list[SIssue]:
         return [i for i in self.issues if i.mod == mod_id]
 
     @property
-    def problems(self) -> list[Issue]:
+    def problems(self) -> list[SIssue]:
         return [i for i in self.issues if i.level == PROBLEM]
 
 
-def _why(mod: Mod, on_ids: set[str], how: dict[str, str]) -> str:
+def _why(mod: CMod, on_ids: set[str], how: dict[str, str]) -> str:
     bits = []
-    if mod.parent is not None:
-        bits.append(tr("mods.nested_in_id", id=mod.top.mod_id))
+    if mod.m_parent is not None:
+        bits.append(tr("mods.nested_in_id", id=mod.top.m_mod_id))
     else:
-        bits.append(tr(how.get(mod.mod_id, N_("mods.listed"))))
+        bits.append(tr(how.get(mod.m_mod_id, N_("mods.listed"))))
     if mod.late:
         bits.append(tr("mods.late_phase"))
-    after = [d for d in mod.load_after if d in on_ids and d != "*"]
+    after = [other_id for other_id in mod.m_load_after if other_id in on_ids and other_id != "*"]
     if after:
         bits.append(tr("mods.after_mods", mods=", ".join(after)))
     return "; ".join(bits)
 
 
 def plan_profile(
-    catalog: Catalog, text: ProfileText | None, name: str = "", provided: frozenset[str] = frozenset()
-) -> Plan:
+    catalog: SCatalog, text: CProfileText | None, name: str = "", provided: frozenset[str] = frozenset()
+) -> SPlan:
     """The load order of ``text`` over ``catalog`` and its dependency problems. ``text`` None: no profile, nothing on.
     ``provided``: ids a ``Require`` may name that are no mod (a game's DLCs)."""
-    new_roots = tuple(r.path for r in catalog.roots if r.new_mods)
-    profile = (ProfileText("") if text is None else text).to_profile(name)
-    res = resolve_profile(catalog.mods, profile, new_roots, provided)
+    new_roots = tuple(root.path for root in catalog.roots if root.new_mods)
+    profile = (CProfileText("") if text is None else text).to_profile(name)
+    resolution = resolve_profile(catalog.mods, profile, new_roots, provided)
     how: dict[str, str] = {}
     for card in catalog.cards:
         if card.usable:
             _, why = state_of(card, text)
             how[card.mod_id] = N_("mods.enablenewmods") if why == NEW else N_("mods.listed")
-    on_ids = {m.mod_id for m in res.order}
-    plan = Plan(name, res)
-    plan.rows = [OrderRow(n, m, _why(m, on_ids, how)) for n, m in enumerate(res.order, 1)]
-    plan.issues = _resolution_issues(res) + _catalog_issues(catalog, text) + _info_issues(res.order)
+    on_ids = {ordered_mod.m_mod_id for ordered_mod in resolution.order}
+    plan = SPlan(name, resolution)
+    plan.rows = [
+        SOrderRow(position, ordered_mod, _why(ordered_mod, on_ids, how))
+        for position, ordered_mod in enumerate(resolution.order, 1)
+    ]
+    plan.issues = _resolution_issues(resolution) + _catalog_issues(catalog, text) + _info_issues(resolution.order)
     return plan
 
 
@@ -105,25 +108,28 @@ def _level(finding) -> str:
     return NOTE if finding.level == "info" else PROBLEM
 
 
-def _lint_issue(finding, mod_id: str) -> Issue:
+def _lint_issue(finding, mod_id: str) -> SIssue:
     """A finding of the mod lint about a file of the mod ``mod_id``."""
-    return Issue(_level(finding), mod_id, finding.code, f"{finding.where}: {finding.message}")
+    return SIssue(_level(finding), mod_id, finding.code, f"{finding.where}: {finding.message}")
 
 
-def _resolution_issues(res: Resolution) -> list[Issue]:
+def _resolution_issues(resolution: SResolution) -> list[SIssue]:
     """The resolution's M01-M09 as issues: a problem for the ones the loader logs or gets wrong, else a note."""
-    return [Issue(_level(f), f.where, f.code, f.message) for f in resolution_findings(res, notes=True)]
+    return [
+        SIssue(_level(finding), finding.where, finding.code, finding.message)
+        for finding in resolution_findings(resolution, notes=True)
+    ]
 
 
-def _catalog_issues(catalog: Catalog, text: ProfileText | None) -> list[Issue]:
+def _catalog_issues(catalog: SCatalog, text: CProfileText | None) -> list[SIssue]:
     """What the folders say: one the loader drops, a second copy of a ModID, a listed mod that is not installed."""
-    out: list[Issue] = []
+    out: list[SIssue] = []
     for card in catalog.cards:
         if card.problem and not card.parked:
-            out.append(Issue(PROBLEM, "", "C01", f"{card.folder.name}: {card.problem}"))
+            out.append(SIssue(PROBLEM, "", "C01", f"{card.folder.name}: {card.problem}"))
         elif card.duplicate_of:
             out.append(
-                Issue(
+                SIssue(
                     NOTE,
                     card.mod_id,
                     "C02",
@@ -137,51 +143,56 @@ def _catalog_issues(catalog: Catalog, text: ProfileText | None) -> list[Issue]:
     if text is not None:
         have = catalog.installed_ids()
         out += [
-            Issue(NOTE, i, "C03", tr("mods.profile_lists_no_installed_mod")) for i in text.ids(True) if i not in have
+            SIssue(NOTE, i, "C03", tr("mods.profile_lists_no_installed_mod")) for i in text.ids(True) if i not in have
         ]
     return out
 
 
-def _info_issues(order: list[Mod]) -> list[Issue]:
+def _info_issues(order: list[CMod]) -> list[SIssue]:
     """The ``modinfo`` findings of every mod that is on (117's rules: ``Anno`` 8, ``Difficulty``)."""
-    return [_lint_issue(f, mod.mod_id) for mod in order if mod.anno is not None for f in lint_modinfo(mod.folder)]
+    return [
+        _lint_issue(finding, mod.m_mod_id)
+        for mod in order
+        if mod.m_anno is not None
+        for finding in lint_modinfo(mod.m_folder)
+    ]
 
 
 def deep_check(
-    plan: Plan,
+    plan: SPlan,
     mods_dir: Path,
     read_base: Callable[[str], bytes | None] | None = None,
     has_base: Callable[[str], bool] | None = None,
     progress: Callable[[str], None] | None = None,
     lint: bool = True,
-) -> list[Issue]:
+) -> list[SIssue]:
     """The slow checks of the mods ``plan`` has on. ``lint``: ``mod.modlint`` over each mod's files (``has_base``
     tells whether the game has a file: patches of a game file that does not exist). ``read_base``: the game's files;
     with it every operation is applied in the loader's order and each one that matches nothing, or that the loader
     drops, is an issue."""
     say = progress or (lambda _t: None)
-    out: list[Issue] = []
-    tops = [m for m in plan.order if m.parent is None]
+    out: list[SIssue] = []
+    tops = [top for top in plan.order if top.m_parent is None]
     if lint:
         for mod in tops:
-            if mod.anno is None:
+            if mod.m_anno is None:
                 continue
-            say(tr("mods.lint_mod", mod=mod.mod_id))
-            result = lint_mod(mod.folder, has_base=has_base)
+            say(tr("mods.lint_mod", mod=mod.m_mod_id))
+            result = lint_mod(mod.m_folder, has_base=has_base)
             out += [
-                _lint_issue(f, mod.mod_id)
-                for f in result.findings
-                if not f.code.startswith(("M", "I0"))  # the plan has these already
+                _lint_issue(finding, mod.m_mod_id)
+                for finding in result.findings
+                if not finding.code.startswith(("M", "I0"))  # the plan has these already
             ]
     if read_base is not None:
-        session = Session(read_base)
-        variables = Variables(plan.order, read_options(mods_dir))
+        session = CSession(read_base)
+        variables = CVariables(plan.order, read_options(mods_dir))
         for mod in plan.order:
-            say(tr("common.applying_mod", mod=mod.mod_id))
+            say(tr("common.applying_mod", mod=mod.m_mod_id))
             session.apply_mod(mod, variables)
         out += [
-            Issue(PROBLEM, e.mod, f"op:{e.code}", f"{e.file}: {e.message}")
-            for e in session.events
-            if e.level == WARNING
+            SIssue(PROBLEM, event.mod, f"op:{event.code}", f"{event.file}: {event.message}")
+            for event in session.m_events
+            if event.level == WARNING
         ]
     return out

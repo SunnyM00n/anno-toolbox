@@ -1,7 +1,7 @@
 """What the Project window needs to hand an imported mod's carried files to an app (docs/mod-import.md, "Phase 2 as
-built"): a ``Handover`` record an app's ``Part`` carries, so the window never imports the app. Stdlib only.
+built"): a ``SHandover`` record an app's ``Part`` carries, so the window never imports the app. Stdlib only.
 
-``Handover`` holds the two button labels, whether each is offered for a project, and the two actions (the window's own
+``SHandover`` holds the two button labels, whether each is offered for a project, and the two actions (the window's own
 functions of the app: the first asks and reports, the second undoes). ``suite.apps.parts`` puts the app's record on its
 part.
 """
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class Handover:
+class SHandover:
     """``take_label`` / ``undo_label``: string ids (``N_``) of the buttons. ``can_take(project)`` / ``can_undo(project)``
     say whether the button is offered. ``start_take(parent, project, settings, background, say, done, wait, confirm)``
     reads, reports and (on a yes) hands over, then calls ``done``; ``undo(parent, project, say, confirm)`` returns
@@ -26,4 +26,4 @@ class Handover:
     can_undo: Callable[[object], bool]
     start_take: Callable[..., None]
     undo: Callable[..., bool]
-    more: tuple[Handover, ...] = ()
+    more: tuple[SHandover, ...] = ()

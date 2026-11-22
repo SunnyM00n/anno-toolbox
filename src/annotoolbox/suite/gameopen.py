@@ -12,22 +12,22 @@ from PySide6.QtWidgets import QMessageBox
 
 from ..infra.i18n import tr
 from ..sources import gametree
-from .background import Background
+from .background import CBackground
 
 
 def open_installed(
     window,
     settings,
     key: str,
-    background: Background,
+    background: CBackground,
     *,
     then: Callable[[object], None],
     prepare: Callable[[object], object] = lambda tree: tree,
-    wait: bool = False,
+    is_waiting: bool = False,
 ) -> bool:
     """Open game ``key`` from ``settings``. ``prepare(tree)`` runs on the background thread (lay the project over
     the tree, read the app's own indexes); ``then(result)`` runs on the window's thread with what it returned, or
-    with the exception when opening failed. ``wait``: do it all here (tests). False when no folder is set (the
+    with the exception when opening failed. ``is_waiting``: do it all here (tests). False when no folder is set (the
     window has said so)."""
     folder = getattr(settings, key, "")
     title = gametree.GAMES.get(key, key)
@@ -40,5 +40,5 @@ def open_installed(
         return False
     window.statusBar().showMessage(tr("common.opening_archives_indexed_once", title=title))
     index = settings.index_dir(key)
-    background.run(lambda: prepare(gametree.open_game(key, Path(folder), index)), then, wait=wait)
+    background.run(lambda: prepare(gametree.open_game(key, Path(folder), index)), then, is_waiting=is_waiting)
     return True

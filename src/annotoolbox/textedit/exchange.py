@@ -1,8 +1,8 @@
 """A translation as a file for outside tools and back: CSV, XLIFF 1.2 and PO (docs/text-editor.md, "Import and export").
 
-``rows_of(doc, ids)`` makes the rows of the open pair of languages; ``write(fmt, rows, ...)`` and ``read(fmt, data)``
+``rows_of(doc, ids)`` makes the rows of the open pair of languages; ``write(format_name, rows, ...)`` and ``read(format_name, data)``
 are the formats; ``apply(doc, rows, add_new)`` puts the rows into the project as one undo step and returns an
-``Applied`` that says what became of them.
+``SApplied`` that says what became of them.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from ..infra.i18n import tr
 from . import checks
-from .textdoc import OUTDATED, REVIEW, TRANSLATED, TextDoc
+from .textdoc import OUTDATED, REVIEW, TRANSLATED, CTextDoc
 
 FORMATS = ("csv", "xliff", "po")
 SUFFIXES = {"csv": ".csv", "xliff": ".xlf", "po": ".po"}
@@ -30,7 +30,7 @@ CODES = {
 
 
 @dataclass(frozen=True)
-class Row:
+class SRow:
     id: str
     source: str
     target: str
@@ -40,7 +40,7 @@ class Row:
 
 
 @dataclass
-class Applied:
+class SApplied:
     applied: int = 0
     unchanged: int = 0
     empty: int = 0
@@ -56,11 +56,11 @@ class Applied:
         )  # fmt: skip
 
 
-def rows_of(doc: TextDoc, ids: list[str]) -> list[Row]:
+def rows_of(doc: CTextDoc, ids: list[str]) -> list[SRow]:
     out = []
     for key in ids:
         entry = doc.entry(key)
-        out.append(Row(key, doc.source_text(key), doc.target_text(key), entry.file if entry else "",
+        out.append(SRow(key, doc.source_text(key), doc.target_text(key), entry.file if entry else "",
                        entry.group if entry else "", doc.status(key)))  # fmt: skip
     return out
 
@@ -69,24 +69,24 @@ def code_of(language: str) -> str:
     return CODES.get(language, language)
 
 
-def write(fmt: str, rows: list[Row], game: str, source: str, target: str) -> bytes:
-    if fmt == "csv":
+def write(format_name: str, rows: list[SRow], game: str, source: str, target: str) -> bytes:
+    if format_name == "csv":
         return write_csv(rows)
-    if fmt == "xliff":
+    if format_name == "xliff":
         return write_xliff(rows, game, source, target)
-    if fmt == "po":
+    if format_name == "po":
         return write_po(rows, game, source, target)
-    raise ValueError(tr("texts.unknown_format_fmt", fmt=fmt))
+    raise ValueError(tr("texts.unknown_format_fmt", fmt=format_name))
 
 
-def read(fmt: str, data: bytes) -> list[Row]:
+def read(format_name: str, data: bytes) -> list[SRow]:
     readers = {"csv": read_csv, "xliff": read_xliff, "po": read_po}
-    if fmt not in readers:
-        raise ValueError(tr("texts.unknown_format_fmt", fmt=fmt))
+    if format_name not in readers:
+        raise ValueError(tr("texts.unknown_format_fmt", fmt=format_name))
     try:
-        return readers[fmt](data)
+        return readers[format_name](data)
     except (ET.ParseError, csv.Error, UnicodeError) as exc:
-        raise ValueError(tr("texts.not_readable_file", fmt=fmt, error=exc)) from exc
+        raise ValueError(tr("texts.not_readable_file", fmt=format_name, error=exc)) from exc
 
 
 def format_of(path: str) -> str:
@@ -99,15 +99,15 @@ def format_of(path: str) -> str:
 
 
 # CSV
-def write_csv(rows: list[Row]) -> bytes:
+def write_csv(rows: list[SRow]) -> bytes:
     out = io.StringIO(newline="")
     writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow(COLUMNS)
-    writer.writerows([r.id, r.file, r.group, r.source, r.target, r.status] for r in rows)
+    writer.writerows([row.id, row.file, row.group, row.source, row.target, row.status] for row in rows)
     return b"\xef\xbb\xbf" + out.getvalue().encode("utf-8")
 
 
-def read_csv(data: bytes) -> list[Row]:
+def read_csv(data: bytes) -> list[SRow]:
     """A CSV as a spreadsheet saves it: UTF-8 or UTF-16 (Excel's "Unicode text"), the separator the person's region
     uses (a comma, a semicolon or a tab: the one the header line holds most of)."""
     text = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8-sig")
@@ -117,15 +117,15 @@ def read_csv(data: bytes) -> list[Row]:
     if "id" not in reader.fieldnames or "target" not in reader.fieldnames:
         raise ValueError(tr("texts.csv_needs_columns_id_target"))
     return [
-        Row((r.get("id") or "").strip(), r.get("source") or "", r.get("target") or "", r.get("file") or "",
-            r.get("group") or "")  # the status column is for the reader: a translator who edited a row made it current
-        for r in reader
-        if (r.get("id") or "").strip()
+        SRow((record.get("id") or "").strip(), record.get("source") or "", record.get("target") or "", record.get("file") or "",
+            record.get("group") or "")  # the status column is for the reader: a translator who edited a row made it current
+        for record in reader
+        if (record.get("id") or "").strip()
     ]  # fmt: skip
 
 
 # XLIFF 1.2
-def write_xliff(rows: list[Row], game: str, source: str, target: str) -> bytes:
+def write_xliff(rows: list[SRow], game: str, source: str, target: str) -> bytes:
     ET.register_namespace("", XLIFF_NS)
     root = ET.Element(f"{{{XLIFF_NS}}}xliff", {"version": "1.2"})
     attrs = {
@@ -153,7 +153,7 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def read_xliff(data: bytes) -> list[Row]:
+def read_xliff(data: bytes) -> list[SRow]:
     """XLIFF 1.2 (``trans-unit``) and 2.x (``unit`` with ``segment``s); a state that asks for a review marks the row."""
     rows = []
     for unit in ET.fromstring(data).iter():
@@ -166,9 +166,9 @@ def read_xliff(data: bytes) -> list[Row]:
                 parts[name] = "".join(node.itertext())
             if name in ("target", "segment") and node.get("state"):
                 states.append(node.get("state", ""))
-        review = any(s.startswith(("needs-review", "needs-adaptation", "needs-l10n")) for s in states)
+        review = any(state.startswith(("needs-review", "needs-adaptation", "needs-l10n")) for state in states)
         rows.append(
-            Row(
+            SRow(
                 unit.get("id", "").strip(),
                 parts.get("source", ""),
                 parts.get("target", ""),
@@ -186,14 +186,14 @@ _UNESCAPES = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "\\": "\\"}
 
 
 def _quote(text: str) -> str:
-    return '"' + "".join(_ESCAPES.get(c, c) for c in text) + '"'
+    return '"' + "".join(_ESCAPES.get(character, character) for character in text) + '"'
 
 
 def _unquote(text: str) -> str:
-    return re.sub(r"\\(.)", lambda m: _UNESCAPES.get(m.group(1), m.group(1)), text[1:-1])
+    return re.sub(r"\\(.)", lambda match: _UNESCAPES.get(match.group(1), match.group(1)), text[1:-1])
 
 
-def write_po(rows: list[Row], game: str, source: str, target: str) -> bytes:
+def write_po(rows: list[SRow], game: str, source: str, target: str) -> bytes:
     head = f"Project-Id-Version: {game}\\nLanguage: {code_of(target)}\\nX-Source-Language: {code_of(source)}\\nContent-Type: text/plain; charset=UTF-8\\n"
     blocks = [f'msgid ""\nmsgstr ""\n"{head}"\n']
     for row in rows:
@@ -203,20 +203,20 @@ def write_po(rows: list[Row], game: str, source: str, target: str) -> bytes:
     return "\n".join(blocks).encode("utf-8")
 
 
-def _po_entry(fields: dict[str, str], comments: list[str]) -> Row | None:
+def _po_entry(fields: dict[str, str], comments: list[str]) -> SRow | None:
     if not fields.get("msgctxt"):
         return None  # the header, or an entry without an id
-    where = next((c[3:].strip() for c in comments if c.startswith("#:")), "")
-    fuzzy = any(c.startswith("#,") and "fuzzy" in c for c in comments)
-    return Row(
+    where = next((comment[3:].strip() for comment in comments if comment.startswith("#:")), "")
+    fuzzy = any(comment.startswith("#,") and "fuzzy" in comment for comment in comments)
+    return SRow(
         fields["msgctxt"], fields.get("msgid", ""), fields.get("msgstr", ""), where, "", OUTDATED if fuzzy else ""
     )
 
 
-def read_po(data: bytes) -> list[Row]:
+def read_po(data: bytes) -> list[SRow]:
     """The entries of a PO file that carry a ``msgctxt`` (the id). Lines end at a line feed only: a text may hold other
     characters Python takes for line ends (U+2028, U+0085). An entry also ends where the next begins, blank line or not."""
-    rows: list[Row] = []
+    rows: list[SRow] = []
     fields: dict[str, str] = {}
     last, comments = "", []
     text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
@@ -243,20 +243,20 @@ def read_po(data: bytes) -> list[Row]:
 
 
 # into the project
-def apply(doc: TextDoc, rows: list[Row], add_new: bool = False) -> Applied:
+def apply(doc: CTextDoc, rows: list[SRow], add_new: bool = False) -> SApplied:
     """The rows' targets as the project's edits, one undo step. A row that carries a source different from the one now is
     taken as written against that source (the row becomes outdated); an unknown id is skipped, or added as a new text."""
-    result, items = Applied(), []
+    result, items = SApplied(), []
     known = set(doc.ids())
-    for row in {r.id: r for r in rows}.values():  # an id twice in a file: the last one counts
+    for row in {entry.id: entry for entry in rows}.values():  # an id twice in a file: the last one counts
         target = row.target.replace("\r\n", "\n").replace("\r", "\n")
         if row.id not in known and not add_new:
             result.unknown.append(row.id)
         elif not target.strip():
             result.empty += 1
         elif row.id not in known:
-            items += [(doc.source, row.id, row.source, None)] if row.source.strip() else []
-            items.append((doc.target, row.id, target, None))
+            items += [(doc.m_source, row.id, row.source, None)] if row.source.strip() else []
+            items.append((doc.m_target, row.id, target, None))
             result.added += 1
         elif target == doc.target_text(row.id):
             result.unchanged += 1
@@ -265,10 +265,12 @@ def apply(doc: TextDoc, rows: list[Row], add_new: bool = False) -> Applied:
             written_against = (
                 row.source if row.source and row.source != now else (REVIEW if row.status == OUTDATED else None)
             )
-            items.append((doc.target, row.id, target, written_against))
+            items.append((doc.m_target, row.id, target, written_against))
             result.applied += 1
     doc.edit_many(items, tr("texts.import_count_texts", count=len(items)))
     result.problems = sum(
-        1 for lang, key, *_ in items if lang == doc.target and any(p.severity != checks.HINT for p in doc.problems(key))
+        1
+        for lang, key, *_ in items
+        if lang == doc.m_target and any(problem.severity != checks.HINT for problem in doc.problems(key))
     )
     return result

@@ -1,7 +1,7 @@
 """Anno 117's eye adaptation by the game's own compute shaders (``eye_adaptation.fx``): a histogram of the view's HDR
 colour per 32 x 32 tile, the tiles merged, the exposure worked out and eased into the buffer the tone map reads.
 
-``EyeAdaptation(rhi, stages)`` is the entry (the compiled shaders by pass, ``STAGES``); ``run(ctx, image, size,
+``CEyeAdaptation(rhi, stages)`` is the entry (the compiled shaders by pass, ``STAGES``); ``run(ctx, image, size_px,
 seconds)`` records the three passes and leaves the exposure in ``exposure`` (``cExposureBuffer``). The engine's values
 and the viewer's stand-ins: docs/rendering/frame-117-viewer.md section 6.
 """
@@ -13,7 +13,7 @@ import struct
 from PySide6.QtGui import QRhiReadbackResult
 
 from . import gameshader as gs
-from .gamecompute import ComputeChain, ComputeStage, groups, record, storage_buffer
+from .gamecompute import CComputeChain, CComputeStage, groups, record, storage_buffer
 
 EFFECT = "data/shaders/fx/eye_adaptation.fx"
 # pass -> (effect, technique, function): what ``ShaderSource.stage_set`` compiles
@@ -31,80 +31,80 @@ CONSTANTS = {"cHistogramMin": -12.0, "cHistogramRange": 16.0, "cHistogramFilterM
 SETTLE = 1.0  # seconds: a frame later than this after the last one starts at the target (no easing)
 
 
-def fill(c: gs.Constants, size: tuple[int, int], seconds: float | None) -> None:
-    """``cbHistogram`` for an image of ``size`` and the frame's time (``seconds`` since the last frame; None: no
+def fill(constants: gs.CConstants, size_px: tuple[int, int], seconds: float | None) -> None:
+    """``cbHistogram`` for an image of ``size_px`` and the frame's time (``seconds`` since the last frame; None: no
     easing, the exposure jumps to its target)."""
     for key, value in CONSTANTS.items():
-        c.set(key, value)
+        constants.set(key, value)
     eased = seconds is not None and 0.0 < seconds <= SETTLE
-    for key, value in (("cImageOffset", [0, 0]), ("cImageSize", list(size)),
-                       ("cNumTiles", [groups(size[0], TILE), groups(size[1], TILE)]),
+    for key, value in (("cImageOffset", [0, 0]), ("cImageSize", list(size_px)),
+                       ("cNumTiles", [groups(size_px[0], TILE), groups(size_px[1], TILE)]),
                        ("cProgressive", int(eased)), ("cRealTimer", [0.0, seconds if eased else 0.0, 0.0, 0.0])):  # fmt: skip
-        c.set(key, value)
+        constants.set(key, value)
 
 
-class EyeAdaptation(ComputeChain):
+class CEyeAdaptation(CComputeChain):
     """The three passes and their buffers (module docstring); ``read_back`` asks for the exposure once (the tests)."""
 
     def __init__(self, rhi, stages: dict) -> None:
-        self.rhi = rhi
-        self.stages = {key: ComputeStage(rhi, stages[key]) for key in STAGES}
-        self.exposure = storage_buffer(rhi, EXPOSURE_FLOATS * 4)
-        self.merged = storage_buffer(rhi, BINS * 4)
-        self.tiles = None
-        self.tile_count = 0
-        self._started = False
-        self.read_back = False
-        self.readback: QRhiReadbackResult | None = None
+        self.m_rhi = rhi
+        self.m_stages = {key: CComputeStage(rhi, stages[key]) for key in STAGES}
+        self.m_exposure = storage_buffer(rhi, EXPOSURE_FLOATS * 4)
+        self.m_merged = storage_buffer(rhi, BINS * 4)
+        self.m_tiles = None
+        self.m_tile_count = 0
+        self._m_started = False
+        self.m_read_back = False
+        self.m_readback: QRhiReadbackResult | None = None
 
     def _tile_buffer(self, count: int):
-        if self.tiles is None or count > self.tile_count:
-            if self.tiles is not None:
-                self.tiles.destroy()
-            self.tiles, self.tile_count = storage_buffer(self.rhi, count * BINS * 4), count
-            for stage in self.stages.values():
-                stage.res.invalidate()
-        return self.tiles
+        if self.m_tiles is None or count > self.m_tile_count:
+            if self.m_tiles is not None:
+                self.m_tiles.destroy()
+            self.m_tiles, self.m_tile_count = storage_buffer(self.m_rhi, count * BINS * 4), count
+            for stage in self.m_stages.values():
+                stage.m_res.invalidate()
+        return self.m_tiles
 
-    def run(self, ctx, image, size: tuple[int, int], seconds: float | None) -> None:
-        """The histograms of ``image`` (a device texture of ``size``), their merge and the exposure, each a compute
+    def run(self, ctx, image, size_px: tuple[int, int], seconds: float | None) -> None:
+        """The histograms of ``image`` (a device texture of ``size_px``), their merge and the exposure, each a compute
         pass of its own; ``seconds`` as ``fill`` takes it."""
-        grid = (groups(size[0], TILE), groups(size[1], TILE))
+        grid = (groups(size_px[0], TILE), groups(size_px[1], TILE))
         tiles = self._tile_buffer(grid[0] * grid[1])
         inputs = {"cImageTex": image.native, "cPerTileHistogramsOut": tiles, "cPerTileHistogramsIn": tiles,
-                  "cMergedHistogramOut": self.merged, "cMergedHistogramIn": self.merged, "cExposureOut": self.exposure}  # fmt: skip
+                  "cMergedHistogramOut": self.m_merged, "cMergedHistogramIn": self.m_merged, "cExposureOut": self.m_exposure}  # fmt: skip
 
-        first = not self._started  # the passes run when the frame is recorded: decide now
+        first = not self._m_started  # the passes run when the frame is recorded: decide now
         frame_seconds = None if first else seconds
 
-        def setup(c: gs.Constants) -> None:
-            fill(c, size, frame_seconds)
+        def setup(constants: gs.CConstants) -> None:
+            fill(constants, size_px, frame_seconds)
 
         def start(batch) -> None:  # the engine's first exposure: 1, then zeros
             if first:
-                batch.uploadStaticBuffer(self.exposure, struct.pack("<f", 1.0) + bytes(4 * (EXPOSURE_FLOATS - 1)))
+                batch.uploadStaticBuffer(self.m_exposure, struct.pack("<f", 1.0) + bytes(4 * (EXPOSURE_FLOATS - 1)))
 
-        record(ctx, self.stages["tiles"], inputs, setup, (*grid, 1), before=start)
-        record(ctx, self.stages["merge"], inputs, setup, (groups(grid[0] * grid[1], MERGE_GROUP), 1, 1),
-               before=lambda batch: batch.uploadStaticBuffer(self.merged, bytes(BINS * 4)))  # fmt: skip
-        after = self._readback if self.read_back else None
-        record(ctx, self.stages["exposure"], inputs, setup, (1, 1, 1), after)
-        self._started = True
+        record(ctx, self.m_stages["tiles"], inputs, setup, (*grid, 1), before=start)
+        record(ctx, self.m_stages["merge"], inputs, setup, (groups(grid[0] * grid[1], MERGE_GROUP), 1, 1),
+               before=lambda batch: batch.uploadStaticBuffer(self.m_merged, bytes(BINS * 4)))  # fmt: skip
+        after = self._readback if self.m_read_back else None
+        record(ctx, self.m_stages["exposure"], inputs, setup, (1, 1, 1), after)
+        self._m_started = True
 
     def restart(self) -> None:
         """The next run starts at the target at once (a new model, a view drawn after a pause)."""
-        self._started = False
+        self._m_started = False
 
     def _readback(self):
-        self.read_back = False
-        batch = self.rhi.nextResourceUpdateBatch()
-        self.readback = QRhiReadbackResult()
-        batch.readBackBuffer(self.exposure, 0, 8 * 4, self.readback)
+        self.m_read_back = False
+        batch = self.m_rhi.nextResourceUpdateBatch()
+        self.m_readback = QRhiReadbackResult()
+        batch.readBackBuffer(self.m_exposure, 0, 8 * 4, self.m_readback)
         return batch
 
     def release(self) -> None:
         super().release()
-        for b in (self.exposure, self.merged, self.tiles):
-            if b is not None:
-                b.destroy()
-        self.tiles = None
+        for buffer in (self.m_exposure, self.m_merged, self.m_tiles):
+            if buffer is not None:
+                buffer.destroy()
+        self.m_tiles = None

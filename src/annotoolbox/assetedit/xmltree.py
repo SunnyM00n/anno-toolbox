@@ -25,21 +25,21 @@ def parse(data: bytes | str) -> ET.Element:
         return ET.fromstring(close_tags(text))
 
 
-def text(el: ET.Element | None, child: str, default: str = "") -> str:
+def text(element: ET.Element | None, child: str, default: str = "") -> str:
     """The stripped text of ``child`` of ``el`` (a path is allowed), ``default`` when absent or empty."""
-    if el is None:
+    if element is None:
         return default
-    found = el.findtext(child)
+    found = element.findtext(child)
     return found.strip() if found and found.strip() else default
 
 
-def flag(el: ET.Element | None, child: str) -> bool:
-    return text(el, child) in TRUE
+def flag(element: ET.Element | None, child: str) -> bool:
+    return text(element, child) in TRUE
 
 
-def number(el: ET.Element | None, child: str) -> float | None:
+def number(element: ET.Element | None, child: str) -> float | None:
     """The number in ``child``, None when absent or no number."""
-    raw = text(el, child)
+    raw = text(element, child)
     try:
         return float(raw) if raw else None
     except ValueError:
@@ -56,9 +56,9 @@ def walk_groups(root: ET.Element, path: tuple[str, ...] = ()) -> Iterator[tuple[
         yield from walk_groups(sub, path)
 
 
-def leaves(el: ET.Element, prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
+def leaves(element: ET.Element, prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], str]]:
     """(path, text) of every leaf below ``el``, in document order (the k-th repeated name is a separate path)."""
-    for child in el:
+    for child in element:
         here = prefix + (child.tag,)
         if len(child):
             yield from leaves(child, here)
@@ -66,10 +66,10 @@ def leaves(el: ET.Element, prefix: tuple[str, ...] = ()) -> Iterator[tuple[tuple
             yield here, (child.text or "").strip()
 
 
-def find_path(el: ET.Element | None, path: tuple[str, ...] | str) -> ET.Element | None:
+def find_path(element: ET.Element | None, path: tuple[str, ...] | str) -> ET.Element | None:
     """The first element at ``path`` (names, or a "/" string) below ``el``; None when a step is missing."""
     parts = path.split("/") if isinstance(path, str) else path
-    node = el
+    node = element
     for name in parts:
         if node is None:
             return None
@@ -77,6 +77,6 @@ def find_path(el: ET.Element | None, path: tuple[str, ...] | str) -> ET.Element 
     return node
 
 
-def to_text(el: ET.Element) -> str:
+def to_text(element: ET.Element) -> str:
     """An element as compact text, the way the writers put it into a file."""
-    return ET.tostring(el, encoding="unicode", short_empty_elements=True)
+    return ET.tostring(element, encoding="unicode", short_empty_elements=True)

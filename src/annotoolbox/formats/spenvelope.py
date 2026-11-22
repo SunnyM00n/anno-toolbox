@@ -3,7 +3,7 @@ reads to move a speaker's mouth.
 
 Layout (read from every ``.sp`` of the three installs): ``u32 count``, ``count`` loudness bytes (0 silent, 255
 loudest), ``u32 interval`` (ms between two bytes, 50 in all files) and a ``u32`` that is 0. ``read(data)`` gives an
-``Envelope``, ``Envelope.to_bytes()`` the file again; ``Envelope.from_samples`` makes one for a replaced clip.
+``SEnvelope``, ``SEnvelope.to_bytes()`` the file again; ``SEnvelope.from_samples`` makes one for a replaced clip.
 A line of ``n`` bytes is about ``n * interval`` milliseconds long (``docs/sounds.md``, "What 2070 has").
 """
 
@@ -16,7 +16,7 @@ INTERVAL_MS = 50  # the shipped files' step
 
 
 @dataclass
-class Envelope:
+class SEnvelope:
     levels: bytes
     interval_ms: int = INTERVAL_MS
     spare: int = 0  # the last u32 (0 in every shipped file)
@@ -29,21 +29,23 @@ class Envelope:
         return struct.pack("<I", len(self.levels)) + self.levels + struct.pack("<II", self.interval_ms, self.spare)
 
     @classmethod
-    def from_samples(cls, samples, rate: int, interval_ms: int = INTERVAL_MS) -> Envelope:
-        """An envelope from mono PCM ``samples`` (signed 16 bit values) at ``rate`` Hz: per step the loudest sample
+    def from_samples(cls, samples, rate_hz: int, interval_ms: int = INTERVAL_MS) -> SEnvelope:
+        """An envelope from mono PCM ``samples`` (signed 16 bit values) at ``rate_hz`` Hz: per step the loudest sample
         scaled to 0..255 against the clip's own peak, so a quiet clip still moves the mouth."""
-        step = max(1, rate * interval_ms // 1000)
-        peaks = [max((abs(s) for s in samples[i : i + step]), default=0) for i in range(0, len(samples), step)]
+        step = max(1, rate_hz * interval_ms // 1000)
+        peaks = [
+            max((abs(sample) for sample in samples[i : i + step]), default=0) for i in range(0, len(samples), step)
+        ]
         top = max(peaks, default=0) or 1
-        return cls(bytes(min(255, p * 255 // top) for p in peaks), interval_ms)
+        return cls(bytes(min(255, peak * 255 // top) for peak in peaks), interval_ms)
 
 
-def read(data: bytes) -> Envelope:
+def read(data: bytes) -> SEnvelope:
     """The envelope of a ``.sp`` file; ValueError when the size does not fit its count."""
     if len(data) < 12:
         raise ValueError("not a speech envelope: shorter than its 12 byte frame")
     (count,) = struct.unpack_from("<I", data)
     if len(data) != count + 12:
         raise ValueError(f"not a speech envelope: {count} levels need {count + 12} bytes, the file has {len(data)}")
-    interval, spare = struct.unpack_from("<II", data, 4 + count)
-    return Envelope(data[4 : 4 + count], interval, spare)
+    interval_ms, spare = struct.unpack_from("<II", data, 4 + count)
+    return SEnvelope(data[4 : 4 + count], interval_ms, spare)

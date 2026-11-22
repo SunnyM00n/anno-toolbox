@@ -1,7 +1,7 @@
 """The profiles of one mods folder: ``mods/profiles/<name>.txt`` and the ``mods/profile.txt`` that names the active one.
 
-``ProfileStore(mods_dir)`` lists, reads, saves, creates, copies, renames and deletes profiles and switches the active
-one; a failure is a ``ProfileError`` with a sentence for the person. Files are written whole beside the old one and
+``CProfileStore(mods_dir)`` lists, reads, saves, creates, copies, renames and deletes profiles and switches the active
+one; a failure is a ``CProfileError`` with a sentence for the person. Files are written whole beside the old one and
 moved over it, so a game that reads the folder never sees half a file. ``docs/mod-manager.md`` "Profiles".
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 from ..infra.buildcache import write_atomic
 from ..infra.i18n import tr
 from ..modloader.mods import PROFILE_FILE
-from ..modloader.profilefile import DEFAULT, ActiveFile, ProfileText, new_active, new_profile
+from ..modloader.profilefile import DEFAULT, CActiveFile, CProfileText, new_active, new_profile
 
 FOLDER = "profiles"
 NAME_FORBIDDEN = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -24,7 +24,7 @@ RESERVED = frozenset(
 MAX_NAME = 64
 
 
-class ProfileError(ValueError):
+class CProfileError(ValueError):
     """A profile operation that cannot be done; the message says why."""
 
 
@@ -41,13 +41,13 @@ def name_problem(name: str) -> str:
     return ""
 
 
-class ProfileStore:
+class CProfileStore:
     def __init__(self, mods_dir: Path) -> None:
-        self.mods_dir = Path(mods_dir)
+        self.m_mods_dir = Path(mods_dir)
 
     @property
     def folder(self) -> Path:
-        return self.mods_dir / FOLDER
+        return self.m_mods_dir / FOLDER
 
     def path(self, name: str) -> Path:
         return self.folder / f"{name}.txt"
@@ -56,29 +56,31 @@ class ProfileStore:
         """The profiles, by name without case."""
         if not self.folder.is_dir():
             return []
-        return sorted((p.stem for p in self.folder.glob("*.txt") if p.is_file()), key=str.lower)
+        return sorted((path.stem for path in self.folder.glob("*.txt") if path.is_file()), key=str.lower)
 
     def exists(self, name: str) -> bool:
         return self.path(name).is_file()
 
     def _find(self, name: str) -> str | None:
-        return next((n for n in self.names() if n.lower() == name.lower()), None)
+        return next((known_name for known_name in self.names() if known_name.lower() == name.lower()), None)
 
     # the profile files
 
-    def read(self, name: str) -> ProfileText:
+    def read(self, name: str) -> CProfileText:
         try:
-            return ProfileText.from_bytes(self.path(name).read_bytes())
-        except OSError as exc:
-            raise ProfileError(tr("mods.profile_cannot_read", name=name, reason=exc.strerror or exc)) from exc
+            return CProfileText.from_bytes(self.path(name).read_bytes())
+        except OSError as error:
+            raise CProfileError(tr("mods.profile_cannot_read", name=name, reason=error.strerror or error)) from error
 
-    def save(self, name: str, text: ProfileText) -> None:
+    def save(self, name: str, text: CProfileText) -> None:
         _write(self.path(name), text.to_bytes())
 
-    def create(self, name: str, on: list[str] = (), off: list[str] = (), enable_new: bool = False) -> Path:
-        """A new profile in the game's layout, ``on`` and ``off`` as its mod lines."""
+    def create(
+        self, name: str, enabled_ids: list[str] = (), disabled_ids: list[str] = (), enable_new: bool = False
+    ) -> Path:
+        """A new profile in the game's layout, ``enabled_ids`` and ``disabled_ids`` as its mod lines."""
         self._free(name)
-        self.save(name, new_profile(name, list(on), list(off), enable_new))
+        self.save(name, new_profile(name, list(enabled_ids), list(disabled_ids), enable_new))
         return self.path(name)
 
     def copy(self, source: str, name: str) -> Path:
@@ -96,7 +98,7 @@ class ProfileStore:
             return self.path(old)
         if old.lower() == name.lower():  # only the case changes
             if name_problem(name):
-                raise ProfileError(name_problem(name))
+                raise CProfileError(name_problem(name))
         else:
             self._free(name)
         text = self.read(old)
@@ -106,8 +108,8 @@ class ProfileStore:
         self.save(old, text)
         try:
             os.replace(self.path(old), self.path(name))
-        except OSError as exc:
-            raise ProfileError(tr("mods.profile_cannot_renamed", name=old, reason=exc.strerror or exc)) from exc
+        except OSError as error:
+            raise CProfileError(tr("mods.profile_cannot_renamed", name=old, reason=error.strerror or error)) from error
         if was_active:
             self.set_active(name)
         return self.path(name)
@@ -115,26 +117,26 @@ class ProfileStore:
     def delete(self, name: str) -> None:
         """Delete a profile; the active one is not deleted (the game would find none)."""
         if self.active().lower() == name.lower():
-            raise ProfileError(tr("mods.active_profile_make_another_one", name=name))
+            raise CProfileError(tr("mods.active_profile_make_another_one", name=name))
         try:
             self.path(name).unlink()
-        except OSError as exc:
-            raise ProfileError(tr("mods.profile_cannot_deleted", name=name, reason=exc.strerror or exc)) from exc
+        except OSError as error:
+            raise CProfileError(tr("mods.profile_cannot_deleted", name=name, reason=error.strerror or error)) from error
 
     def _free(self, name: str) -> None:
         why = name_problem(name)
         if why:
-            raise ProfileError(why)
+            raise CProfileError(why)
         if self._find(name) is not None:
-            raise ProfileError(tr("mods.profile_named_exists_already", name=self._find(name)))
+            raise CProfileError(tr("mods.profile_named_exists_already", name=self._find(name)))
 
     # the active profile
 
-    def active_file(self) -> ActiveFile | None:
-        path = self.mods_dir / PROFILE_FILE
+    def active_file(self) -> CActiveFile | None:
+        path = self.m_mods_dir / PROFILE_FILE
         if not path.is_file():
             return None
-        return ActiveFile.from_bytes(path.read_bytes())
+        return CActiveFile.from_bytes(path.read_bytes())
 
     def active(self) -> str:
         """The profile the game starts with: ``default`` without a ``profile.txt``; "" when it names none (no mods)."""
@@ -144,15 +146,17 @@ class ProfileStore:
     def set_active(self, name: str) -> None:
         """Make ``name`` the active profile ("" for none: the game starts without mods)."""
         if name and not self.exists(name):
-            raise ProfileError(tr("mods.no_profile_named", name=name))
+            raise CProfileError(tr("mods.no_profile_named", name=name))
         found = self.active_file() or new_active(name)
         found.set_name(name)
-        _write(self.mods_dir / PROFILE_FILE, found.to_bytes())
+        _write(self.m_mods_dir / PROFILE_FILE, found.to_bytes())
 
 
 def _write(path: Path, data: bytes) -> None:
     """The file's bytes written beside it and moved over it."""
     try:
         write_atomic(path, data)
-    except OSError as exc:
-        raise ProfileError(tr("mods.name_cannot_written_reason", name=path.name, reason=exc.strerror or exc)) from exc
+    except OSError as error:
+        raise CProfileError(
+            tr("mods.name_cannot_written_reason", name=path.name, reason=error.strerror or error)
+        ) from error

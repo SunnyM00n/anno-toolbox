@@ -11,7 +11,7 @@ from ..paths import documents_dir
 
 
 @dataclass(frozen=True)
-class Location:
+class SLocation:
     folders: tuple[str, ...]  # candidates under Documents, the first that exists wins
     patterns: tuple[str, ...]  # globs below it
     skip: tuple[str, ...] = ()  # file names that are no save
@@ -19,22 +19,22 @@ class Location:
 
 
 LOCATIONS = {
-    "anno117": Location(("Anno 117 - Pax Romana",), ("accounts/*/*/*.a8s",), ("accountdata.a8s",), seen=True),
-    "anno1800": Location(("Anno 1800",), ("accounts/*/*/*.a7s",), ("accountdata.a7s",)),
-    "anno2205": Location(("Anno 2205",), ("accounts/**/*.a6s",)),
-    "anno2070": Location(("ANNO 2070",), ("Accounts/*/Savegames/*.sww",), seen=True),
-    "anno1404": Location(("Anno 1404 History Edition", "Anno 1404 HE", "Anno 1404"), ("**/Savegames*/*.sww",)),
-    "anno1701": Location(("Anno 1701 History Edition", "Anno 1701 HE", "Anno 1701"), ("**/Savegames*/*.sww",)),
+    "anno117": SLocation(("Anno 117 - Pax Romana",), ("accounts/*/*/*.a8s",), ("accountdata.a8s",), seen=True),
+    "anno1800": SLocation(("Anno 1800",), ("accounts/*/*/*.a7s",), ("accountdata.a7s",)),
+    "anno2205": SLocation(("Anno 2205",), ("accounts/**/*.a6s",)),
+    "anno2070": SLocation(("ANNO 2070",), ("Accounts/*/Savegames/*.sww",), seen=True),
+    "anno1404": SLocation(("Anno 1404 History Edition", "Anno 1404 HE", "Anno 1404"), ("**/Savegames*/*.sww",)),
+    "anno1701": SLocation(("Anno 1701 History Edition", "Anno 1701 HE", "Anno 1701"), ("**/Savegames*/*.sww",)),
 }
 EXTENSIONS = {".a8s": "anno117", ".a7s": "anno1800", ".a6s": "anno2205", ".sww": "anno2070"}
 
 
 @dataclass(frozen=True)
-class SaveRef:
+class SSaveRef:
     game: str
     path: Path
     group: str  # the profile (117, 1800) or the account folder
-    size: int
+    size_bytes: int
     mtime: float
 
     @property
@@ -60,7 +60,7 @@ def _group(game: str, root: Path, path: Path) -> str:
     return "/".join(rel[:-1])
 
 
-def find(game: str, documents: Path | None = None) -> list[SaveRef]:
+def find(game: str, documents: Path | None = None) -> list[SSaveRef]:
     """The game's saves in its folder, newest first (an unreadable file is left out)."""
     root = folder(game, documents)
     if root is None:
@@ -74,14 +74,14 @@ def find(game: str, documents: Path | None = None) -> list[SaveRef]:
                 stat = path.stat()
             except OSError:
                 continue
-            found[path] = SaveRef(game, path, _group(game, root, path), stat.st_size, stat.st_mtime)
-    return sorted(found.values(), key=lambda r: (-r.mtime, str(r.path)))
+            found[path] = SSaveRef(game, path, _group(game, root, path), stat.st_size, stat.st_mtime)
+    return sorted(found.values(), key=lambda found_file: (-found_file.mtime, str(found_file.path)))
 
 
 def game_of(path: Path, shown: str = "") -> str:
     """The game a save file is of, by its extension; ``shown`` (the game the caller has open) wins where it writes
     that extension too (1404 and 1701 also write ``.sww``) and for an extension no game is known by."""
     suffix = Path(path).suffix.lower()
-    if shown in LOCATIONS and any(p.lower().endswith(suffix) for p in LOCATIONS[shown].patterns):
+    if shown in LOCATIONS and any(pattern.lower().endswith(suffix) for pattern in LOCATIONS[shown].patterns):
         return shown
     return EXTENSIONS.get(suffix, shown)

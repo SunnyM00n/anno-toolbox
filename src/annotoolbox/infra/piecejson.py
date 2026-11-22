@@ -21,7 +21,7 @@ _SPACE = re.compile(r"[ \t\n\r]*")
 def dumps(doc, depth: int = 0) -> str:
     """``json.dumps(doc)``, the same text, made in pieces: the outer objects walked, long lists ``ITEMS`` at a call."""
     if isinstance(doc, dict) and depth < OBJECT_DEPTH:
-        return "{" + ", ".join(f"{json.dumps(str(k))}: {dumps(v, depth + 1)}" for k, v in doc.items()) + "}"
+        return "{" + ", ".join(f"{json.dumps(str(k))}: {dumps(value, depth + 1)}" for k, value in doc.items()) + "}"
     if isinstance(doc, list) and depth < LIST_DEPTH and len(doc) > ITEMS:
         runs = (json.dumps(doc[k : k + ITEMS])[1:-1] for k in range(0, len(doc), ITEMS))
         return "[" + ", ".join(runs) + "]"

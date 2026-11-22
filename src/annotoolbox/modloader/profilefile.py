@@ -1,7 +1,7 @@
 """A profile file read and written without losing a line: comments, blank lines, order, each line's own end, the byte
 order mark and the encoding stay as they were; only the line of the mod that changed is touched. Stdlib only.
 
-``ProfileText`` is a profile, ``ActiveFile`` the ``profile.txt``; ``mods.read_profile`` / ``mods.active_profile`` read
+``CProfileText`` is a profile, ``CActiveFile`` the ``profile.txt``; ``mods.read_profile`` / ``mods.active_profile`` read
 through them. The format and the "last line counts" rule for a mod or ``ActiveProfile`` named twice (inferred): see
 ``docs/engine-modloader.md`` "Where mods live and which ones run".
 """
@@ -38,7 +38,7 @@ ACTIVE_HEADER = (
 
 
 @dataclass
-class Profile:
+class SProfile:
     """What a profile switches: the ids listed on and off, and ``EnableNewMods`` (``resolve_profile`` takes it)."""
 
     name: str
@@ -48,20 +48,20 @@ class Profile:
 
 
 @dataclass
-class Entry:
+class SEntry:
     """One mod line of a profile."""
 
     mod_id: str
-    on: bool
+    is_on: bool
     note: str  # what follows the id after a ``#`` (``not installed``), "" when nothing
     index: int  # the line
 
 
-class _Text:
+class _CText:
     """The lines of a text file, each with the line end it had, and the byte order mark and encoding of the file."""
 
-    def __init__(self, text: str, *, bom: bool = False, encoding: str = "utf-8") -> None:
-        self.bom = bom or text.startswith("﻿")
+    def __init__(self, text: str, *, has_bom: bool = False, encoding: str = "utf-8") -> None:
+        self.bom = has_bom or text.startswith("﻿")
         self.encoding = encoding
         text = text.lstrip("﻿")
         self.eol = "\r\n" if "\r\n" in text else "\n"  # the end of a line added later
@@ -78,9 +78,9 @@ class _Text:
         bom = data.startswith(codecs.BOM_UTF8)
         body = data[len(codecs.BOM_UTF8) :] if bom else data
         try:
-            return cls(body.decode("utf-8"), bom=bom)
+            return cls(body.decode("utf-8"), has_bom=bom)
         except UnicodeDecodeError:
-            return cls(body.decode("cp1252", errors="replace"), bom=bom, encoding="cp1252")
+            return cls(body.decode("cp1252", errors="replace"), has_bom=bom, encoding="cp1252")
 
     def to_text(self) -> str:
         return "".join(line + end for line, end in zip(self.lines, self.ends, strict=True))
@@ -92,66 +92,69 @@ class _Text:
             data, self.encoding = self.to_text().encode("utf-8"), "utf-8"
         return codecs.BOM_UTF8 + data if self.bom else data
 
-    def append(self, line: str, *, final: bool = True) -> None:
-        """A line at the end (with a line end of its own only when ``final``)."""
+    def append(self, line: str, *, has_final_newline: bool = True) -> None:
+        """A line at the end (with a line end of its own only when ``has_final_newline``)."""
         if self.ends and not self.ends[-1]:
             self.ends[-1] = self.eol
         self.lines.append(line)
-        self.ends.append(self.eol if final else "")
+        self.ends.append(self.eol if has_final_newline else "")
 
-    def insert(self, at: int, line: str) -> None:
-        if at >= len(self.lines):
+    def insert(self, index: int, line: str) -> None:
+        if index >= len(self.lines):
             self.append(line)
             return
-        self.lines.insert(at, line)
-        self.ends.insert(at, self.eol)
+        self.lines.insert(index, line)
+        self.ends.insert(index, self.eol)
 
     def drop(self, indexes: set[int]) -> None:
-        keep = [n for n in range(len(self.lines)) if n not in indexes]
-        self.lines, self.ends = [self.lines[n] for n in keep], [self.ends[n] for n in keep]
+        keep = [line_index for line_index in range(len(self.lines)) if line_index not in indexes]
+        self.lines, self.ends = (
+            [self.lines[line_index] for line_index in keep],
+            [self.ends[line_index] for line_index in keep],
+        )
 
 
-class ProfileText(_Text):
+class CProfileText(_CText):
     """A profile file. ``entries()`` lists its mods, ``set_state`` switches one (adding its line when it has none),
     ``to_text()`` gives the file back: unchanged lines byte for byte."""
 
-    def entries(self) -> list[Entry]:
+    def entries(self) -> list[SEntry]:
         out = []
-        for n, line in enumerate(self.lines):
-            m = None if line.lstrip().startswith("##") or NEW_MODS.match(line) else MOD_LINE.match(line)
-            if m and not NAME_LINE.match(line):
-                tail = m["tail"].strip().lstrip("#").strip()
-                out.append(Entry(m["id"], not m["hash"], tail, n))
+        for line_index, line in enumerate(self.lines):
+            match = None if line.lstrip().startswith("##") or NEW_MODS.match(line) else MOD_LINE.match(line)
+            if match and not NAME_LINE.match(line):
+                tail = match["tail"].strip().lstrip("#").strip()
+                out.append(SEntry(match["id"], not match["hash"], tail, line_index))
         return out
 
     def state(self, mod_id: str) -> bool | None:
         """True when the profile lists the mod switched on, False switched off, None when it does not list it. Listed
         twice: the last line counts."""
-        found = [e.on for e in self.entries() if e.mod_id == mod_id]
+        found = [entry.is_on for entry in self.entries() if entry.mod_id == mod_id]
         return found[-1] if found else None
 
-    def ids(self, on: bool | None = None) -> list[str]:
+    def ids(self, is_on: bool | None = None) -> list[str]:
         """The listed ids (those on, those off, or all)."""
-        return [e.mod_id for e in self.entries() if on is None or e.on == on]
+        return [entry.mod_id for entry in self.entries() if is_on is None or entry.is_on == is_on]
 
-    def set_state(self, mod_id: str, on: bool, note: str = "") -> bool:
+    def set_state(self, mod_id: str, is_on: bool, note: str = "") -> bool:
         """Switch ``mod_id`` on or off in every line that names it, a new line after the last mod line when none does
         (``note`` after it). True when the file changed."""
-        hits = [e for e in self.entries() if e.mod_id == mod_id]
+        hits = [entry for entry in self.entries() if entry.mod_id == mod_id]
         if not hits:
-            self._append(f"{'' if on else '# '}{mod_id}" + (f" # {note}" if note else ""))
+            self._append(f"{'' if is_on else '# '}{mod_id}" + (f" # {note}" if note else ""))
             return True
         changed = False
-        for e in hits:
-            if e.on != on:
-                m = MOD_LINE.match(self.lines[e.index])
-                assert m is not None
-                self.lines[e.index] = f"{m['indent']}{'' if on else '# '}{m['id']}{m['tail']}"
+        for entry in hits:
+            if entry.is_on != is_on:
+                match = MOD_LINE.match(self.lines[entry.index])
+                assert match is not None
+                self.lines[entry.index] = f"{match['indent']}{'' if is_on else '# '}{match['id']}{match['tail']}"
                 changed = True
         return changed
 
     def remove(self, mod_id: str) -> bool:
-        gone = {e.index for e in self.entries() if e.mod_id == mod_id}
+        gone = {entry.index for entry in self.entries() if entry.mod_id == mod_id}
         self.drop(gone)
         return bool(gone)
 
@@ -159,50 +162,50 @@ class ProfileText(_Text):
     def enable_new(self) -> bool | None:
         """``EnableNewMods`` on (True), switched off by a ``#`` (False), None when the file has no such line."""
         for line in self.lines:
-            m = NEW_MODS.match(line)
-            if m:
-                return "#" not in m["hash"]
+            match = NEW_MODS.match(line)
+            if match:
+                return "#" not in match["hash"]
         return None
 
-    def set_enable_new(self, on: bool) -> bool:
-        for n, line in enumerate(self.lines):
-            m = NEW_MODS.match(line)
-            if m:
-                if ("#" not in m["hash"]) == on:
+    def set_enable_new(self, is_on: bool) -> bool:
+        for line_index, line in enumerate(self.lines):
+            match = NEW_MODS.match(line)
+            if match:
+                if ("#" not in match["hash"]) == is_on:
                     return False
-                self.lines[n] = f"{'' if on else '# '}EnableNewMods{m['tail']}"
+                self.lines[line_index] = f"{'' if is_on else '# '}EnableNewMods{match['tail']}"
                 return True
-        at = next((n for n, line in enumerate(self.lines) if NAME_LINE.match(line)), None)
-        self.insert(len(self.lines) if at is None else at, "EnableNewMods" if on else "# EnableNewMods")
+        index = next((line_index for line_index, line in enumerate(self.lines) if NAME_LINE.match(line)), None)
+        self.insert(len(self.lines) if index is None else index, "EnableNewMods" if is_on else "# EnableNewMods")
         return True
 
     @property
     def display_name(self) -> str:
         for line in self.lines:
-            m = NAME_LINE.match(line)
-            if m:
-                return m["name"]
+            match = NAME_LINE.match(line)
+            if match:
+                return match["name"]
         return ""
 
     def set_display_name(self, name: str) -> None:
-        for n, line in enumerate(self.lines):
+        for line_index, line in enumerate(self.lines):
             if NAME_LINE.match(line):
-                self.lines[n] = f"DisplayName {name}"
+                self.lines[line_index] = f"DisplayName {name}"
                 return
-        self._append(f"DisplayName {name}", after_entries=False)
+        self._append(f"DisplayName {name}", is_after_entries=False)
 
-    def to_profile(self, name: str = "") -> Profile:
-        """The ``Profile`` of this file (what ``resolve_profile`` takes); a mod listed twice counts by its last line."""
-        state = {e.mod_id: e.on for e in self.entries()}
-        return Profile(
+    def to_profile(self, name: str = "") -> SProfile:
+        """The ``SProfile`` of this file (what ``resolve_profile`` takes); a mod listed twice counts by its last line."""
+        state = {entry.mod_id: entry.is_on for entry in self.entries()}
+        return SProfile(
             name,
-            [i for i, on in state.items() if on],
-            [i for i, on in state.items() if not on],
+            [i for i, is_on in state.items() if is_on],
+            [i for i, is_on in state.items() if not is_on],
             bool(self.enable_new),
         )
 
-    def _append(self, line: str, after_entries: bool = True) -> None:
-        last = max((e.index for e in self.entries()), default=None) if after_entries else None
+    def _append(self, line: str, is_after_entries: bool = True) -> None:
+        last = max((entry.index for entry in self.entries()), default=None) if is_after_entries else None
         if last is None:
             while self.lines and not self.lines[-1].strip():
                 self.drop({len(self.lines) - 1})
@@ -211,7 +214,7 @@ class ProfileText(_Text):
             self.insert(last + 1, line)
 
 
-class ActiveFile(_Text):
+class CActiveFile(_CText):
     """``profile.txt``: the line ``ActiveProfile <name>`` with the game's comments above it. With two such lines the
     last one counts (inferred), and ``set_name`` rewrites every one of them, so the change holds whichever is read."""
 
@@ -220,9 +223,9 @@ class ActiveFile(_Text):
         """The profile named; "" when the value is empty (no mods at all); None without the line."""
         found = None
         for line in self.lines:
-            m = ACTIVE_LINE.match(line)
-            if m:
-                found = m["name"]
+            match = ACTIVE_LINE.match(line)
+            if match:
+                found = match["name"]
         return found
 
     @property
@@ -230,34 +233,34 @@ class ActiveFile(_Text):
         """The profile the game starts with: ``default`` without the line, "" for none (no mods)."""
         return DEFAULT if self.name is None else self.name.removesuffix(".txt")
 
-    def set_name(self, name: str, *, last: bool = False, final: bool = True) -> None:
-        """Every ``ActiveProfile`` line says ``name``; a file with none gets one. ``last``: the one line goes to the
-        end of the file (``final``: with a line end of its own)."""
+    def set_name(self, name: str, *, is_last: bool = False, has_final_newline: bool = True) -> None:
+        """Every ``ActiveProfile`` line says ``name``; a file with none gets one. ``is_last``: the one line goes to the
+        end of the file (``has_final_newline``: with a line end of its own)."""
         text = f"ActiveProfile {name}"
-        hits = {n for n, line in enumerate(self.lines) if ACTIVE_LINE.match(line)}
-        if last or not hits:
+        hits = {line_index for line_index, line in enumerate(self.lines) if ACTIVE_LINE.match(line)}
+        if is_last or not hits:
             self.drop(hits)
-            self.append(text, final=final)
+            self.append(text, has_final_newline=has_final_newline)
             return
-        for n in hits:
-            self.lines[n] = text
+        for line_index in hits:
+            self.lines[line_index] = text
 
 
 def new_profile(
-    name: str, on: list[str] = (), off: list[str] = (), enable_new: bool = False, eol: str = "\n"
-) -> ProfileText:
+    name: str, on_ids: list[str] = (), off_ids: list[str] = (), enable_new: bool = False, eol: str = "\n"
+) -> CProfileText:
     """A new profile in the game's own layout: its comments, ``EnableNewMods``, ``DisplayName``, then a line a mod
-    (``on`` first, then ``off``)."""
+    (``on_ids`` first, then ``off_ids``)."""
     lines = [
         *HEADER,
         "EnableNewMods" if enable_new else "# EnableNewMods",
         f"DisplayName {name}",
         "",
-        *on,
-        *(f"# {i}" for i in off),
+        *on_ids,
+        *(f"# {i}" for i in off_ids),
     ]
-    return ProfileText(eol.join(lines) + eol)
+    return CProfileText(eol.join(lines) + eol)
 
 
-def new_active(name: str, eol: str = "\n", final: bool = True) -> ActiveFile:
-    return ActiveFile(eol.join([*ACTIVE_HEADER, f"ActiveProfile {name}"]) + (eol if final else ""))
+def new_active(name: str, eol: str = "\n", has_final_newline: bool = True) -> CActiveFile:
+    return CActiveFile(eol.join([*ACTIVE_HEADER, f"ActiveProfile {name}"]) + (eol if has_final_newline else ""))

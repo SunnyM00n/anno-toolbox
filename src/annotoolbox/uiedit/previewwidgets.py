@@ -1,6 +1,6 @@
-"""The parts the preview settings panel (``previewpanel``) is built from: ``Icons`` (the game's pictures decoded off the
-window's thread), ``IconGrid`` and ``IconCombo`` (a choice shown with its picture, like the game's profile
-customization), ``Section`` (a tab's base: the store, the catalogue and a row with its reset button).
+"""The parts the preview settings panel (``previewpanel``) is built from: ``CIcons`` (the game's pictures decoded off the
+window's thread), ``CIconGrid`` and ``CIconCombo`` (a choice shown with its picture, like the game's profile
+customization), ``CSection`` (a tab's base: the store, the catalogue and a row with its reset button).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from . import previewdefaults
-from .previewcatalogue import Catalogue, Option
+from .previewcatalogue import SCatalogue, SOption
 
 CELL = 56  # a picture's side in the grids
 PICTURE = 64  # the side the pictures are decoded at
@@ -45,7 +45,7 @@ def humanise(name: str) -> str:
     return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text).strip()
 
 
-class Icons(QObject):
+class CIcons(QObject):
     """The game's pictures by path as icons. ``request`` decodes the ones not held off the window's thread (``load``
     gives a ``QImage`` or None) and tells ``ready``; ``get`` is what is held (None: not yet, or no picture)."""
 
@@ -53,36 +53,36 @@ class Icons(QObject):
 
     def __init__(self, background, load: Callable[[str], QImage | None] | None = None) -> None:
         super().__init__()
-        self.background, self.load = background, load
-        self.held: dict[str, QIcon | None] = {}
-        self._asked: set[str] = set()
+        self.m_background, self.m_load = background, load
+        self.m_held: dict[str, QIcon | None] = {}
+        self._m_asked: set[str] = set()
 
     def reset(self, load) -> None:
         """Another game: forget the pictures held and read them with ``load``."""
-        self.held.clear()
-        self._asked.clear()
-        self.load = load
+        self.m_held.clear()
+        self._m_asked.clear()
+        self.m_load = load
 
     def get(self, path: str) -> QIcon | None:
-        return self.held.get(path) if path else None
+        return self.m_held.get(path) if path else None
 
-    def request(self, paths, wait: bool = False) -> None:
-        new = sorted({p for p in paths if p and p not in self._asked})
-        if not new or self.load is None:
+    def request(self, paths, is_waiting: bool = False) -> None:
+        new = sorted({path for path in paths if path and path not in self._m_asked})
+        if not new or self.m_load is None:
             return
-        self._asked.update(new)
-        load = self.load
+        self._m_asked.update(new)
+        load = self.m_load
 
         def work() -> dict[str, QImage | None]:
-            return {p: load(p) for p in new}
+            return {path: load(path) for path in new}
 
-        self.background.run(work, self._taken, wait)
+        self.m_background.run(work, self._taken, is_waiting)
 
     def _taken(self, found) -> None:
         if isinstance(found, Exception):
             return
         for path, image in found.items():
-            self.held[path] = QIcon(QPixmap.fromImage(image)) if image is not None and not image.isNull() else None
+            self.m_held[path] = QIcon(QPixmap.fromImage(image)) if image is not None and not image.isNull() else None
         self.ready.emit()
 
 
@@ -109,11 +109,11 @@ def on_tile(image: QImage) -> QImage:
 
 
 def image_loader(pictures) -> Callable[[str], QImage | None]:
-    """A loader of ``Icons`` over a ``pictures.Pictures``: the game's picture at the grid's size, a white one on a
+    """A loader of ``CIcons`` over a ``pictures.CPictures``: the game's picture at the grid's size, a white one on a
     dark tile."""
 
     def load(path: str) -> QImage | None:
-        found = pictures.get(image_id=path, size=(PICTURE, PICTURE))
+        found = pictures.get(image_id=path, size_px=(PICTURE, PICTURE))
         if found is None:
             return None
         rgba = found.rgba
@@ -126,16 +126,16 @@ def image_loader(pictures) -> Callable[[str], QImage | None]:
     return load
 
 
-def icon_at(icons: Icons | None, path: str) -> QIcon:
+def icon_at(icons: CIcons | None, path: str) -> QIcon:
     """The game's picture at ``path`` as held by ``icons``; an empty icon while it is not (or there is none)."""
     return (icons.get(path) if icons is not None else None) or QIcon()
 
 
-def icon_of(option: Option, icons: Icons | None) -> QIcon:
+def icon_of(option: SOption, icons: CIcons | None) -> QIcon:
     return swatch(option.rgb) if option.rgb is not None else icon_at(icons, option.icon)
 
 
-class IconGrid(QListWidget):
+class CIconGrid(QListWidget):
     """One choice out of ``options`` shown as pictures (a name as the tool tip); ``picked(guid)`` when the person
     chooses, not when ``select`` sets it."""
 
@@ -143,8 +143,8 @@ class IconGrid(QListWidget):
 
     def __init__(self, rows: int = 2, backdrop: str = "") -> None:
         super().__init__()
-        self.options: list[Option] = []
-        self.icons: Icons | None = None
+        self.m_options: list[SOption] = []
+        self.m_icons: CIcons | None = None
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setResizeMode(QListView.ResizeMode.Adjust)
         self.setMovement(QListView.Movement.Static)
@@ -156,91 +156,91 @@ class IconGrid(QListWidget):
         back = f"QListWidget {{ background: {backdrop}; }}" if backdrop else ""  # white emblems need a dark one
         self.setStyleSheet(back + "QListWidget::item:selected { background: palette(highlight); }")
         self.currentItemChanged.connect(self._changed)
-        self._quiet = False
+        self._m_quiet = False
 
-    def fill(self, options: list[Option], icons: Icons | None) -> None:
-        self.options, self.icons = list(options), icons
-        self._quiet = True
+    def fill(self, options: list[SOption], icons: CIcons | None) -> None:
+        self.m_options, self.m_icons = list(options), icons
+        self._m_quiet = True
         self.clear()
-        for option in self.options:
+        for option in self.m_options:
             item = QListWidgetItem(icon_of(option, icons), "")
             item.setToolTip(option.name)
             item.setData(Qt.ItemDataRole.UserRole, option.guid)
             self.addItem(item)
-        self._quiet = False
+        self._m_quiet = False
 
     def update_icons(self) -> None:
-        for row, option in enumerate(self.options):
-            self.item(row).setIcon(icon_of(option, self.icons))
+        for row, option in enumerate(self.m_options):
+            self.item(row).setIcon(icon_of(option, self.m_icons))
 
     def select(self, guid) -> None:
-        self._quiet = True
-        self.setCurrentRow(next((i for i, o in enumerate(self.options) if o.guid == guid), -1))
-        self._quiet = False
+        self._m_quiet = True
+        self.setCurrentRow(next((i for i, option in enumerate(self.m_options) if option.guid == guid), -1))
+        self._m_quiet = False
 
     def current_guid(self):
         item = self.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
 
     def _changed(self, item, _old) -> None:
-        if item is not None and not self._quiet:
+        if item is not None and not self._m_quiet:
             self.picked.emit(item.data(Qt.ItemDataRole.UserRole))
 
 
-class IconCombo(QComboBox):
+class CIconCombo(QComboBox):
     """The same as a drop-down: ``options`` with their pictures, ``picked(guid)`` on the person's choice."""
 
     picked = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
-        self.options: list[Option] = []
-        self.icons: Icons | None = None
-        self._quiet = False
+        self.m_options: list[SOption] = []
+        self.m_icons: CIcons | None = None
+        self._m_quiet = False
         self.activated.connect(lambda i: self.picked.emit(self.itemData(i)))
 
-    def fill(self, options: list[Option], icons: Icons | None = None) -> None:
-        self.options, self.icons = list(options), icons
-        self._quiet = True
+    def fill(self, options: list[SOption], icons: CIcons | None = None) -> None:
+        self.m_options, self.m_icons = list(options), icons
+        self._m_quiet = True
         self.clear()
-        for option in self.options:
+        for option in self.m_options:
             self.addItem(icon_of(option, icons), option.name, option.guid)
-        self._quiet = False
+        self._m_quiet = False
 
     def update_icons(self) -> None:
-        for row, option in enumerate(self.options):
-            self.setItemIcon(row, icon_of(option, self.icons))
+        for row, option in enumerate(self.m_options):
+            self.setItemIcon(row, icon_of(option, self.m_icons))
 
     def select(self, guid) -> None:
         index = self.findData(guid)
-        self._quiet = True
+        self._m_quiet = True
         self.setCurrentIndex(index)
-        self._quiet = False
+        self._m_quiet = False
 
     def current_guid(self):
         return self.currentData()
 
 
-class Section(QWidget):
+class CSection(QWidget):
     """A tab of the panel: it builds its controls once (``build``), reads the store into them (``refresh``) and writes
     a change through ``put``. A row of a form carries a small reset button that puts its values back."""
 
     def __init__(self, panel) -> None:
         super().__init__()
-        self.panel = panel
-        self.keyed: list = []  # the labels and buttons that get an access key
+        self.m_panel = panel
+        self.m_keyed: list = []  # the labels and buttons that get an access key
 
     @property
     def store(self):
-        return self.panel.store
+        return self.m_panel.m_store
 
     @property
-    def cat(self) -> Catalogue:
-        return self.panel.catalogue
+    def cat(self) -> SCatalogue:
+        return self.m_panel.catalogue
 
     @property
-    def d(self) -> previewdefaults.Defaults:
-        return self.panel.store.defaults
+    def d(self) -> previewdefaults.SDefaults:
+        return self.m_panel.m_store.m_defaults
 
     def build(self) -> None:
         raise NotImplementedError
@@ -253,8 +253,8 @@ class Section(QWidget):
 
     def put(self, name: str, value) -> None:
         """A value the person chose (``Store.set``); not while the controls are being filled from the store."""
-        if not self.panel.busy:
-            self.panel.store.set(name, value)
+        if not self.m_panel.m_busy:
+            self.m_panel.m_store.set(name, value)
 
     def put_option(self, name: str, value) -> None:
         """An option: the campaign's own value is no change."""
@@ -271,23 +271,23 @@ class Section(QWidget):
         lay = QHBoxLayout(box)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(control, 1)
-        lay.addWidget(self.panel.reset_button(names))
+        lay.addWidget(self.m_panel.reset_button(names))
         form.addRow(label, box)
-        self.keyed.append(label)
+        self.m_keyed.append(label)
 
 
 def reset_icon(widget: QWidget) -> QIcon:
     return widget.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
 
 
-class ResetButton(QToolButton):
+class CResetButton(QToolButton):
     """A small button that puts the values ``names`` back to the campaign's; it is off while they are not changed."""
 
     def __init__(self, panel, names: tuple[str, ...]) -> None:
         super().__init__()
-        self.names = names
+        self.m_names = names
         self.setIcon(reset_icon(self))
         self.setAutoRaise(True)
         self.setToolTip(tr("ui.preview_reset_one_tip"))
         self.setAccessibleName(tr("ui.preview_reset_one"))
-        self.clicked.connect(lambda _c=False: panel.reset_names(self.names))
+        self.clicked.connect(lambda _c=False: panel.reset_names(self.m_names))

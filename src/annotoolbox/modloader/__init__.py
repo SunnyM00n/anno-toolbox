@@ -2,7 +2,7 @@
 applied to the game's files, with every operation the loader would drop reported. Stdlib only. The rules are
 ``docs/engine-modloader.md``; what is reproduced and what is not, ``docs/tool-suite.md`` section 17.
 
-``engine.Session`` is the entry: ``apply_mod`` runs one mod's patch files on the documents it holds, ``events`` says
+``engine.CSession`` is the entry: ``apply_mod`` runs one mod's patch files on the documents it holds, ``events`` says
 what the loader would log or skip. ``mods`` finds the mods, reads ``modinfo.json``, the profile and the options, and
 orders them, nested mods included; ``resolve`` turns a set of mods into the loader's run with dependencies checked;
 ``patchdoc`` is a patched file (assets kept as bytes until an operation reads them); ``content`` merges,

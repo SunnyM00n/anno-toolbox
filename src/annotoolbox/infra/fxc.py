@@ -2,10 +2,10 @@
 to DXBC for shader models 4 and 5, preprocess, disassemble, and read a compiled shader's bindings and signatures - the
 compiler of the games that draw on Direct3D 10 and 11 (docs/rendering/shader-compile.md section 9).
 
-``Fxc.find(game_folder)`` is the entry: ``ANNO_FXC_DIR`` (folders or files), else the compiler a game ships in its
-``Bin/Win64`` folder (never copied, never shipped), else Windows' own ``System32`` copy. ``Fxc.compile`` returns a ``dxc.Compiled``,
-``Fxc.reflect`` a ``dxc.Reflection`` (the same records as the DXC loader's). Includes are read through a callback
-(``include``: name -> text or None). Windows only; elsewhere ``find`` raises ``FxcMissing``.
+``CFxc.find(game_folder)`` is the entry: ``ANNO_FXC_DIR`` (folders or files), else the compiler a game ships in its
+``Bin/Win64`` folder (never copied, never shipped), else Windows' own ``System32`` copy. ``CFxc.compile`` returns a ``dxc.SCompiled``,
+``CFxc.reflect`` a ``dxc.SReflection`` (the same records as the DXC loader's). Includes are read through a callback
+(``include``: name -> text or None). Windows only; elsewhere ``find`` raises ``CFxcMissing``.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-from .com import POINTER, Guid, blob_bytes, c_void_p, file_version, release
-from .dxc import Compiled, CompilerMissing, Reflection, read_reflection
+from .com import POINTER, SGuid, blob_bytes, c_void_p, file_version, release
+from .dxc import CCompilerMissing, SCompiled, SReflection, read_reflection
 from .i18n import N_
 from .tools import candidates
 
@@ -36,11 +36,11 @@ IID_REFLECTION11 = "8d536ca1-0cca-4956-a837-786963755584"  # ID3D11ShaderReflect
 IID_REFLECTION11_LEGACY = "0a233719-3960-4578-9d7c-203b8b1d9cc1"  # the same interface in d3dcompiler_43
 
 
-class FxcMissing(CompilerMissing):
+class CFxcMissing(CCompilerMissing):
     pass
 
 
-class _Macro(ctypes.Structure):
+class _SMacro(ctypes.Structure):
     _fields_ = [("name", ctypes.c_char_p), ("definition", ctypes.c_char_p)]
 
 
@@ -52,7 +52,7 @@ def _callback_types() -> tuple[type, type]:
     return opened, ctypes.WINFUNCTYPE(ctypes.c_long, c_void_p, c_void_p)
 
 
-class _Include:
+class _CInclude:
     """An ``ID3DInclude`` (a C++ interface without ``IUnknown``) that asks ``read`` for each included file."""
 
     def __init__(self, read: Callable[[str, str], bytes | None]) -> None:
@@ -65,18 +65,18 @@ class _Include:
         self._object = (c_void_p * 1)(ctypes.addressof(self._table))
         self.pointer = ctypes.addressof(self._object)
 
-    def _on_open(self, _this, _kind, name, parent, data, size) -> int:
+    def _on_open(self, _this, _kind, name, parent, data, size_bytes) -> int:
         try:
             text = self.read(name.decode("utf-8", "replace"), self.parents.get(parent or 0, ""))
-        except Exception as exc:  # an exception must not cross into the compiler, which would read garbage
+        except Exception as error:  # an exception must not cross into the compiler, which would read garbage
             text = None
-            self.errors.append(f"include {name.decode('utf-8', 'replace')}: {type(exc).__name__}: {exc}")
+            self.errors.append(f"include {name.decode('utf-8', 'replace')}: {type(error).__name__}: {error}")
         if text is None:
             return 0x80004005  # E_FAIL: the compiler reports the missing file
-        buf = ctypes.create_string_buffer(text, len(text))
-        self.held[ctypes.addressof(buf)] = buf
-        self.parents[ctypes.addressof(buf)] = name.decode("utf-8", "replace")
-        data[0], size[0] = ctypes.addressof(buf), len(text)
+        buffer = ctypes.create_string_buffer(text, len(text))
+        self.held[ctypes.addressof(buffer)] = buffer
+        self.parents[ctypes.addressof(buffer)] = name.decode("utf-8", "replace")
+        data[0], size_bytes[0] = ctypes.addressof(buffer), len(text)
         return 0
 
     def _on_close(self, _this, data) -> int:
@@ -91,108 +91,118 @@ class _Include:
 def _macros(defines) -> ctypes.Array | None:
     if not defines:
         return None
-    items = [(str(n).encode(), str(v).encode()) for n, v in defines] + [(None, None)]
-    return (_Macro * len(items))(*[_Macro(n, v) for n, v in items])
+    items = [(str(name).encode(), str(value).encode()) for name, value in defines] + [(None, None)]
+    return (_SMacro * len(items))(*[_SMacro(name, value) for name, value in items])
 
 
-class Fxc:
+def _system32() -> Path:
+    return Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+
+
+def _messages(errors: c_void_p, handler: _CInclude | None) -> str:
+    """The compiler's error blob as text, with the include reads that raised."""
+    messages = blob_bytes(errors.value).decode("utf-8", "replace").rstrip("\0")
+    return handler.report(messages) if handler else messages
+
+
+class CFxc:
     """A loaded ``d3dcompiler_47``: ``compile``, ``preprocess``, ``disassemble`` and ``reflect``."""
 
     def __init__(self, path: Path) -> None:
         if os.name != "nt":
-            raise FxcMissing.of(N_("common.fxc_windows_dll"), WHERE_TO_GET)
-        self.path = Path(path)
+            raise CFxcMissing.of(N_("common.fxc_windows_dll"), WHERE_TO_GET)
+        self._m_version: str | None = None
+        self.m_path = Path(path)
         try:
-            self._dll = ctypes.WinDLL(str(self.path))
-        except OSError as e:
-            raise FxcMissing(f"{path}: {e}") from e
-        d = self._dll
-        d.D3DCompile.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_char_p, c_void_p, c_void_p, ctypes.c_char_p,
+            self._m_dll = ctypes.WinDLL(str(self.m_path))
+        except OSError as error:
+            raise CFxcMissing(f"{path}: {error}") from error
+        dll = self._m_dll
+        dll.D3DCompile.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_char_p, c_void_p, c_void_p, ctypes.c_char_p,
                                  ctypes.c_char_p, ctypes.c_uint, ctypes.c_uint, POINTER(c_void_p), POINTER(c_void_p)]  # fmt: skip
-        d.D3DPreprocess.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_char_p, c_void_p, c_void_p, POINTER(c_void_p),
+        dll.D3DPreprocess.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_char_p, c_void_p, c_void_p, POINTER(c_void_p),
                                     POINTER(c_void_p)]  # fmt: skip
-        d.D3DReflect.argtypes = [c_void_p, ctypes.c_size_t, c_void_p, POINTER(c_void_p)]
-        d.D3DDisassemble.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_uint, ctypes.c_char_p, POINTER(c_void_p)]
-        for f in (d.D3DCompile, d.D3DPreprocess, d.D3DReflect, d.D3DDisassemble):
-            f.restype = ctypes.c_long
+        dll.D3DReflect.argtypes = [c_void_p, ctypes.c_size_t, c_void_p, POINTER(c_void_p)]
+        dll.D3DDisassemble.argtypes = [c_void_p, ctypes.c_size_t, ctypes.c_uint, ctypes.c_char_p, POINTER(c_void_p)]
+        for function in (dll.D3DCompile, dll.D3DPreprocess, dll.D3DReflect, dll.D3DDisassemble):
+            function.restype = ctypes.c_long
 
     @classmethod
-    def find(cls, game_folder: str | Path | None = None, library: str = "") -> Fxc:
+    def find(cls, game_folder: str | Path | None = None, library: str = "") -> CFxc:
         """The compiler from ``ANNO_FXC_DIR``, else the game's own when ``game_folder`` ships one, else Windows'
         copy; ``library`` names an older build (2070's ``d3dcompiler_43`` is part of the DirectX runtime in
         ``System32``). A copy that does not load (another architecture, a blocked file) leaves the next one to try."""
         dll = f"{library}.dll" if library else DLL
-        system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
         places = candidates(
-            [dll], env=FXC_ENV, roots=[game_folder] if game_folder else [], subdirs=GAME_DIRS, extra=[system]
+            [dll], env=FXC_ENV, roots=[game_folder] if game_folder else [], subdirs=GAME_DIRS, extra=[_system32()]
         )
         failed = []
         for path in places:
             try:
                 return cls(path)
-            except FxcMissing as e:
-                failed.append(e)
-        raise FxcMissing.of(N_("common.no_dll_found"), WHERE_TO_GET, failed, dll=dll)
+            except CFxcMissing as error:
+                failed.append(error)
+        raise CFxcMissing.of(N_("common.no_dll_found"), WHERE_TO_GET, failed, dll=dll)
 
     @classmethod
-    def windows(cls) -> Fxc:
+    def windows(cls) -> CFxc:
         """Windows' own copy in ``System32``: the one Qt's Direct3D backends load to compile HLSL."""
-        return cls(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / DLL)
+        return cls(_system32() / DLL)
 
     @property
     def parallel(self) -> bool:
         """Whether this build compiles on several threads at once (47 does; an older one, 2070's 43, is kept to one
         compile at a time)."""
-        return self.path.name.lower() == DLL
+        return self.m_path.name.lower() == DLL
 
     def version(self) -> str:
-        if getattr(self, "_version", None) is None:  # read once: asked for every shader's cache key
-            self._version = file_version(self.path)
-        return self._version
+        """The library's file version, as Windows reports it."""
+        if self._m_version is None:  # read once: asked for every shader's cache key
+            self._m_version = file_version(self.m_path)
+        return self._m_version
 
     def is_games(self) -> bool:
         """Whether this is a game's own copy (not Windows' or a folder named by the user)."""
-        return "system32" not in str(self.path).lower() and not os.environ.get(FXC_ENV)
+        return "system32" not in str(self.m_path).lower() and not os.environ.get(FXC_ENV)
 
     def compile(self, source: str, entry: str, profile: str, defines=(), flags: int = GAME_FLAGS,
-                include: Callable[[str, str], bytes | None] | None = None, name: str = "shader.hlsl") -> Compiled:  # fmt: skip
+                include: Callable[[str, str], bytes | None] | None = None, name: str = "shader.hlsl") -> SCompiled:  # fmt: skip
         """``source`` compiled for ``entry`` with ``profile`` (``vs_5_0``, ``ps_4_0``, ...), ``defines`` as (name,
         value) pairs, ``flags`` the ``D3DCOMPILE_*`` bits; ``include(name, parent)`` gives an included file's text."""
         data = source.encode("utf-8")
         code, errors = c_void_p(), c_void_p()
-        handler = _Include(include) if include else None
-        hr = self._dll.D3DCompile(data, len(data), name.encode(), ctypes.cast(_macros(defines), c_void_p),
+        handler = _CInclude(include) if include else None
+        hr = self._m_dll.D3DCompile(data, len(data), name.encode(), ctypes.cast(_macros(defines), c_void_p),
                                   handler.pointer if handler else None, entry.encode(), profile.encode(), flags, 0,
                                   ctypes.byref(code), ctypes.byref(errors))  # fmt: skip
-        messages = blob_bytes(errors.value).decode("utf-8", "replace").rstrip("\0")
-        messages = handler.report(messages) if handler else messages
-        obj = blob_bytes(code.value)
-        return Compiled(hr == 0 and bool(obj), obj if hr == 0 else b"", messages)
+        messages = _messages(errors, handler)
+        object_code = blob_bytes(code.value)
+        return SCompiled(hr == 0 and bool(object_code), object_code if hr == 0 else b"", messages)
 
     def preprocess(self, source: str, defines=(), include=None, name: str = "shader.hlsl") -> tuple[str, str]:
         """``source`` through FXC's preprocessor: the text and the messages (empty text on an error)."""
         data = source.encode("utf-8")
         code, errors = c_void_p(), c_void_p()
-        handler = _Include(include) if include else None
-        hr = self._dll.D3DPreprocess(data, len(data), name.encode(), ctypes.cast(_macros(defines), c_void_p),
+        handler = _CInclude(include) if include else None
+        hr = self._m_dll.D3DPreprocess(data, len(data), name.encode(), ctypes.cast(_macros(defines), c_void_p),
                                      handler.pointer if handler else None, ctypes.byref(code), ctypes.byref(errors))  # fmt: skip
-        messages = blob_bytes(errors.value).decode("utf-8", "replace").rstrip("\0")
-        messages = handler.report(messages) if handler else messages
+        messages = _messages(errors, handler)
         text = blob_bytes(code.value).decode("utf-8", "replace").rstrip("\0")
         return (text if hr == 0 else ""), messages
 
     def disassemble(self, dxbc: bytes) -> str:
+        """The shader's assembly text ("" when the compiler refuses it)."""
         out = c_void_p()
-        if self._dll.D3DDisassemble(dxbc, len(dxbc), 0, None, ctypes.byref(out)):
+        if self._m_dll.D3DDisassemble(dxbc, len(dxbc), 0, None, ctypes.byref(out)):
             return ""
         return blob_bytes(out.value).decode("utf-8", "replace").rstrip("\0")
 
-    def reflect(self, dxbc: bytes) -> Reflection:
+    def reflect(self, dxbc: bytes) -> SReflection:
         """The bindings, constant buffers and signatures of a DXBC shader (shader model 4 or 5)."""
         refl = c_void_p()
         for guid in (IID_REFLECTION11, IID_REFLECTION11_LEGACY):  # the older builds know the interface by its first id
-            iid = Guid.of(guid)
-            hr = self._dll.D3DReflect(dxbc, len(dxbc), ctypes.byref(iid), ctypes.byref(refl))
+            iid = SGuid.of(guid)
+            hr = self._m_dll.D3DReflect(dxbc, len(dxbc), ctypes.byref(iid), ctypes.byref(refl))
             if not hr and refl:
                 break
         if hr or not refl:

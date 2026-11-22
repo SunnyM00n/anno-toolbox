@@ -53,10 +53,10 @@ def missing_texture(ctx, kept: dict):
     """The magenta and black checker a view draws where a colour map is missing (``fileresolve.MISSING_RGBA``),
     made once on ``ctx`` and kept in ``kept`` (the view's textures) under ``"missing"``."""
     if "missing" not in kept:
-        from ..models.fileresolve import MISSING_RGBA
+        from ..models.fileresolve import MISSING_RGBA  # numpy is an optional extra: the palettes load without it
 
-        tex = ctx.texture((MISSING_RGBA.shape[1], MISSING_RGBA.shape[0]), 4, MISSING_RGBA.tobytes())
-        tex.filter = (ctx.NEAREST, ctx.NEAREST)
-        tex.repeat_x = tex.repeat_y = True
-        kept["missing"] = tex
+        texture = ctx.texture((MISSING_RGBA.shape[1], MISSING_RGBA.shape[0]), 4, MISSING_RGBA.tobytes())
+        texture.filter = (ctx.NEAREST, ctx.NEAREST)
+        texture.repeat_x = texture.repeat_y = True
+        kept["missing"] = texture
     return kept["missing"]

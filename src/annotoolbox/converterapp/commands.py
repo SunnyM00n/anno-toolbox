@@ -18,8 +18,8 @@ NEWEST_BANK = 172  # the newest bank layout family (formats/bnkgraph): the versi
 
 def register(sub: argparse._SubParsersAction) -> None:
     texture = sub.add_parser("texture", help="textures into the games' formats: a picture or DDS as BC7 with mips")
-    tsub = texture.add_subparsers(dest="texture_command", required=True)
-    bc7 = tsub.add_parser("bc7", help="pictures or DDS files as BC7 DDS files with their full mip chain")
+    texture_commands = texture.add_subparsers(dest="texture_command", required=True)
+    bc7 = texture_commands.add_parser("bc7", help="pictures or DDS files as BC7 DDS files with their full mip chain")
     bc7.add_argument("inputs", nargs="+", type=Path, help="picture or .dds files, or folders searched recursively")
     bc7.add_argument("-o", "--out", type=Path, required=True, help="the output folder")
     bc7.add_argument(
@@ -28,8 +28,8 @@ def register(sub: argparse._SubParsersAction) -> None:
     bc7.add_argument("--force", action="store_true", help="overwrite files that exist")
     bc7.set_defaults(func=cmd_bc7)
     sound = sub.add_parser("sound", help="sounds into the games' formats: audio files as Wwise .wem files")
-    ssub = sound.add_subparsers(dest="sound_command", required=True)
-    wem = ssub.add_parser("wem", help="WAV, Ogg, MP3 or FLAC files as Wwise .wem files")
+    sound_commands = sound.add_subparsers(dest="sound_command", required=True)
+    wem = sound_commands.add_parser("wem", help="WAV, Ogg, MP3 or FLAC files as Wwise .wem files")
     wem.add_argument("inputs", nargs="+", type=Path, help="audio files, or folders searched recursively")
     wem.add_argument("-o", "--out", type=Path, required=True, help="the output folder")
     wem.add_argument("--codec", choices=("pcm", "adpcm", "vorbis"), default="pcm", help="the codec (vorbis: ffmpeg)")
@@ -44,7 +44,9 @@ def files_of(inputs: list[Path], suffixes: tuple[str, ...]) -> list[tuple[Path, 
     out = []
     for given in inputs:
         if given.is_dir():
-            out += [(p, p.relative_to(given)) for p in sorted(given.rglob("*")) if p.suffix.lower() in suffixes]
+            out += [
+                (path, path.relative_to(given)) for path in sorted(given.rglob("*")) if path.suffix.lower() in suffixes
+            ]
         elif given.is_file():
             out.append((given, Path(given.name)))
         else:
@@ -57,17 +59,17 @@ def files_of(inputs: list[Path], suffixes: tuple[str, ...]) -> list[tuple[Path, 
 def _each(args: argparse.Namespace, suffixes: tuple[str, ...], suffix: str, make) -> int:
     """``make(source, target)`` for every input whose target is free (or ``--force``); one line per file."""
     failed = 0
-    for source, rel in files_of(args.inputs, suffixes):
-        target = args.out / rel.with_suffix(suffix)
+    for source, relative_path in files_of(args.inputs, suffixes):
+        target = args.out / relative_path.with_suffix(suffix)
         if target.exists() and not args.force:
             print(f"skipped {source} (exists: {target})")
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             make(source, target)
-        except (OSError, ValueError, RuntimeError) as exc:
+        except (OSError, ValueError, RuntimeError) as error:
             failed += 1
-            print(f"FAILED {source}: {str(exc).splitlines()[0] if str(exc) else type(exc).__name__}")
+            print(f"FAILED {source}: {str(error).splitlines()[0] if str(error) else type(error).__name__}")
             continue
         print(f"wrote {target}")
     return 1 if failed else 0
@@ -78,9 +80,11 @@ def cmd_bc7(args: argparse.Namespace) -> int:
 
     def make(source: Path, target: Path) -> None:
         if source.suffix.lower() == ".dds":
-            textures.convert_dds(source, target, srgb=args.srgb)
+            textures.convert_dds(source, target, is_srgb=args.srgb)
         else:
-            textures.png_to_bc7(source, target, srgb=args.srgb, srgb_in=args.srgb)  # the picture's values are sRGB
+            textures.png_to_bc7(
+                source, target, is_srgb=args.srgb, is_srgb_input=args.srgb
+            )  # the picture's values are sRGB
 
     return _each(args, (*PICTURES, ".dds"), ".dds", make)
 
@@ -91,8 +95,8 @@ def cmd_wem(args: argparse.Namespace) -> int:
     def make(source: Path, target: Path) -> None:
         clip = clipcodec.read_clip(source.read_bytes(), source.name)
         data = clipcodec.encode(clip, args.codec, args.version)
-        tmp = target.with_name(target.name + ".part")
-        tmp.write_bytes(data)
-        tmp.replace(target)  # whole or not at all
+        part_path = target.with_name(target.name + ".part")
+        part_path.write_bytes(data)
+        part_path.replace(target)  # whole or not at all
 
     return _each(args, AUDIO, ".wem", make)

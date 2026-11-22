@@ -1,8 +1,8 @@
 """An asset's values in layers, as ToolOne shows them: its own, then its base asset's (``BaseAssetGUID``, up the
 chain), then its template's defaults, then the property group's defaults; and a change applied to an asset.
 
-``Layers`` answers "what is the value at this path, and where does it come from" (``lookup``); ``apply_change``
-writes a change (``changeset.AssetChange``) into a copy of an ``<Asset>``. An empty leaf means "nothing set here"
+``CLayers`` answers "what is the value at this path, and where does it come from" (``lookup``); ``apply_change``
+writes a change (``changeset.SAssetChange``) into a copy of an ``<Asset>``. An empty leaf means "nothing set here"
 (ToolOne writes ``<Mesh />`` for a component that only keeps its defaults), so the next layer's value shows.
 """
 
@@ -19,14 +19,14 @@ OWN, BASE, TEMPLATE, DEFAULT, NONE = "own", "base", "template", "default", "none
 
 
 @dataclass
-class Layer:
+class SLayer:
     origin: str  # OWN, BASE, TEMPLATE, DEFAULT
     values: ET.Element  # ``Values``-shaped: one child per property
     source: int | None = None  # the base asset's GUID
 
 
 @dataclass
-class Found:
+class SFound:
     element: ET.Element | None
     origin: str
     source: int | None = None
@@ -36,34 +36,34 @@ class Found:
         return (self.element.text or "").strip() if self.element is not None else ""
 
 
-class Layers:
+class CLayers:
     """The value layers of one asset, its own first."""
 
-    def __init__(self, layers: list[Layer]) -> None:
-        self.layers = layers
+    def __init__(self, layers: list[SLayer]) -> None:
+        self.m_layers = layers
 
     @property
     def own(self) -> ET.Element:
-        return self.layers[0].values
+        return self.m_layers[0].values
 
-    def lookup(self, path: tuple[str, ...]) -> Found:
+    def lookup(self, path: tuple[str, ...]) -> SFound:
         """The element at ``path`` from the first layer that sets it: a leaf with text, or a block with children;
         an element that is only present (empty) counts when no later layer has more."""
-        first: Found | None = None
-        for layer in self.layers:
-            el = find_path(layer.values, path)
-            if el is None:
+        first: SFound | None = None
+        for layer in self.m_layers:
+            element = find_path(layer.values, path)
+            if element is None:
                 continue
-            if len(el) or (el.text or "").strip():
-                return Found(el, layer.origin, layer.source)
-            first = first or Found(el, layer.origin, layer.source)
-        return first or Found(None, NONE)
+            if len(element) or (element.text or "").strip():
+                return SFound(element, layer.origin, layer.source)
+            first = first or SFound(element, layer.origin, layer.source)
+        return first or SFound(None, NONE)
 
     def property_names(self) -> list[str]:
         """The asset's properties: its template's in their order, then any other a layer has."""
         names: list[str] = []
-        for layer in sorted(self.layers, key=lambda la: la.origin != TEMPLATE):
-            names += [c.tag for c in layer.values if c.tag not in names]
+        for layer in sorted(self.m_layers, key=lambda layer: layer.origin != TEMPLATE):
+            names += [child.tag for child in layer.values if child.tag not in names]
         return names
 
 
@@ -81,7 +81,7 @@ def template_values(template_props: ET.Element | None) -> ET.Element:
 
 def defaults_layer(defaults: dict[str, ET.Element], names: list[str]) -> ET.Element:
     out = ET.Element("Values")
-    out.extend(copy.deepcopy(defaults[n]) for n in names if n in defaults)
+    out.extend(copy.deepcopy(defaults[name]) for name in names if name in defaults)
     return out
 
 
@@ -96,9 +96,9 @@ def apply_change(asset: ET.Element, change) -> ET.Element:
         old = find_path(values, path)
         holder = find_path(values, path.rsplit("/", 1)[0]) if "/" in path else values
         if old is not None and holder is not None:
-            at = list(holder).index(old)
+            position = list(holder).index(old)
             holder.remove(old)
-            holder.insert(at, parse(xml))
+            holder.insert(position, parse(xml))
         else:
             set_value(values, path, parse(xml))
     for path, text in change.set.items():

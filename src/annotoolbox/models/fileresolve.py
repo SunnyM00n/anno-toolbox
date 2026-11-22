@@ -1,8 +1,8 @@
 """Which file a game loads for a name a model config writes: the one set of rules the viewer, the island editor and
 the files check (``viewer.filecheck``) find meshes, textures, nested configs and effects by, and why a name finds none.
 
-``Resolver(files, game)`` is the entry: ``texture``, ``mesh``, ``config``, ``effect`` turn a name into the game path
-it loads ("" for none) and keep every lookup as a ``Ref`` (``refs``, ``missing``); ``texture_file`` and friends are
+``CResolver(files, game)`` is the entry: ``texture``, ``mesh``, ``config``, ``effect`` turn a name into the game path
+it loads ("" for none) and keep every lookup as a ``SRef`` (``refs``, ``missing``); ``texture_file`` and friends are
 the same rules over a bare ``exists`` (``loaded_file``: texture or mesh). ``decode`` reads a texture to RGBA or says why it cannot, ``MISSING_RGBA`` is
 the checker a view draws for a file that is not there. The rules and their sources: docs/viewer.md "How files are
 found".
@@ -78,7 +78,7 @@ def texture_candidates(name: str, game: str) -> list[tuple[str, str]]:
     if game not in NEW_ENGINE or path.endswith(".dds"):  # a .dds is loaded as it is named (formats/rdp117)
         first.reverse()
     rest = [(stem + ".dds", ".dds"), (stem + ".tga", ".tga")]
-    rest += [(f"{stem}_{n}.dds", f"quality level _{n}") for n in QUALITY_LEVELS]
+    rest += [(f"{stem}_{level}.dds", f"quality level _{level}") for level in QUALITY_LEVELS]
     seen, out = set(), []
     for candidate, rule in first + rest:
         if candidate not in seen:
@@ -99,14 +99,16 @@ def mesh_candidates(name: str) -> list[tuple[str, str]]:
     if rdm.endswith(".rdm") and not rdm.endswith("_lod0.rdm"):
         out.append((rdm[: -len(".rdm")] + "_lod0.rdm", "level _lod0"))
     out += [
-        (configtree.shared_config(p), f"{rule}, the shared/ copy") for p, rule in out if configtree.shared_config(p)
+        (configtree.shared_config(candidate_path), f"{rule}, the shared/ copy")
+        for candidate_path, rule in out
+        if configtree.shared_config(candidate_path)
     ]
     return out
 
 
 def first_existing(candidates: Iterable[tuple[str, str]], exists: Callable[[str], bool]) -> tuple[str, str]:
     """(path, rule) of the first candidate the game has, ("", "") for none."""
-    return next(((p, rule) for p, rule in candidates if exists(p)), ("", ""))
+    return next(((path, rule) for path, rule in candidates if exists(path)), ("", ""))
 
 
 def texture_file(name: str, exists: Callable[[str], bool], game: str = "anno117") -> str:
@@ -134,10 +136,10 @@ def loaded_file(name: str, exists: Callable[[str], bool], game: str) -> str:
 
 
 @dataclass(frozen=True)
-class Ref:
+class SRef:
     """One name a config writes and what it loads: ``kind`` (texture, mesh, config, effect, animation), the field
     or slot it sits in, the config and node that name it, the path found ("" for none), the rule that found it
-    and, when none, the ``reason``; ``off``: a texture slot the material switches off (the game loads nothing)."""
+    and, when none, the ``reason``; ``is_off``: a texture slot the material switches off (the game loads nothing)."""
 
     kind: str
     name: str
@@ -147,92 +149,94 @@ class Ref:
     slot: str = ""
     owner: str = ""
     node: str = ""
-    off: bool = False
+    is_off: bool = False
 
     @property
     def failed(self) -> bool:
-        return not self.path and not self.off and self.reason not in EMPTY_REASONS
+        return not self.path and not self.is_off and self.reason not in EMPTY_REASONS
 
 
-class Index:
+class CIndex:
     """A game's folders and file names, read once from its paths (``of`` keeps one per tree): what tells a folder
     the game does not ship and a file that ships under another folder."""
 
-    _kept: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+    _m_kept: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
     def __init__(self, paths: Iterable[str]) -> None:
-        self.folders: set[str] = set()
-        self.names: dict[str, str] = {}
-        for p in paths:
-            self.folders.add(posixpath.dirname(p))
-            self.names.setdefault(posixpath.basename(p), p)
+        self.m_folders: set[str] = set()
+        self.m_names: dict[str, str] = {}
+        for path in paths:
+            self.m_folders.add(posixpath.dirname(path))
+            self.m_names.setdefault(posixpath.basename(path), path)
 
     @classmethod
-    def of(cls, files) -> Index | None:
+    def of(cls, files) -> CIndex | None:
         """The index of a tree that lists its ``paths`` (None for one that does not)."""
-        listed = getattr(files, "paths", None)
+        listed = getattr(files, "m_paths", None) or getattr(files, "paths", None)  # CGameTree; the editors' files
         if not listed:
             return None
         try:
-            found = cls._kept.get(files)
+            found = cls._m_kept.get(files)
             if found is None:
-                found = cls._kept[files] = cls(listed)
+                found = cls._m_kept[files] = cls(listed)
             return found
         except TypeError:  # a tree that cannot be weakly referenced: indexed for this resolver alone
             return cls(listed)
 
 
 def _deleted(files) -> set[str]:
-    found = getattr(files, "deleted", ()) or ()
+    found = (
+        getattr(files, "m_deleted", None) or getattr(files, "deleted", ()) or ()
+    )  # CGameTree: list; CAnno117Files: method
     return set(found() if callable(found) else found)
 
 
 @dataclass
-class Resolver:
-    """Names resolved against one game's ``files`` (anything with ``exists``; a ``GameTree`` also gives its paths,
+class CResolver:
+    """Names resolved against one game's ``files`` (anything with ``exists``; a ``CGameTree`` also gives its paths,
     so a miss can say whether the folder ships at all or the name lies elsewhere, and its ``deleted``)."""
 
-    files: object
-    game: str = "anno117"
-    refs: list[Ref] = field(default_factory=list)
-    keep: bool = True  # keep every lookup in ``refs`` (the files check, the Checks panels)
+    m_files: object
+    m_game: str = "anno117"
+    m_refs: list[SRef] = field(default_factory=list)
+    m_keep: bool = True  # keep every lookup in ``refs`` (the files check, the Checks panels)
 
     def __post_init__(self) -> None:
-        self._index: Index | None | bool = False  # False: not read yet
-        self._deleted = _deleted(self.files)
-        found = getattr(self.files, "exists", None)  # files that only say where a file is (``where``) do as well
-        self._exists = found or (lambda path: self.files.where(path) is not None)
+        self._m_index: CIndex | None | bool = False  # False: not read yet
+        self._m_deleted = _deleted(self.m_files)
+        found = getattr(self.m_files, "exists", None)  # files that only say where a file is (``where``) do as well
+        self._m_exists = found or (lambda path: self.m_files.where(path) is not None)
 
     def exists(self, path: str) -> bool:
-        return bool(path) and self._exists(path)
+        return bool(path) and self._m_exists(path)
 
-    def texture(self, name: str, slot: str = "", owner: str = "", node: str = "", off: bool = False) -> str:
+    def texture(self, name: str, slot: str = "", owner: str = "", node: str = "", is_off: bool = False) -> str:
         """The file a texture name loads ("" for none: a placeholder, a switched-off slot or a missing file)."""
-        return self.texture_ref(name, slot, owner, node, off).path
+        return self.texture_reference(name, slot, owner, node, is_off).path
 
     def shown(self, name: str, slot: str = "", owner: str = "", node: str = "") -> str:
         """What a view loads for a texture name: the file found; the name itself when none is (the load fails and
         the view draws its missing-file checker); "" for no name or a placeholder."""
-        return drawn(self.texture_ref(name, slot, owner, node))
+        return drawn(self.texture_reference(name, slot, owner, node))
 
-    def texture_ref(
-        self, name: str, slot: str = "", owner: str = "", node: str = "", off: bool = False, kind: str = "texture"
-    ) -> Ref:
-        """The lookup of a texture name as a ``Ref`` (kept in ``refs``); ``kind``: an effect's texture is counted
+    def texture_reference(
+        self, name: str, slot: str = "", owner: str = "", node: str = "", is_off: bool = False, kind: str = "texture"
+    ) -> SRef:
+        """The lookup of a texture name as a ``SRef`` (kept in ``refs``); ``kind``: an effect's texture is counted
         apart from a model's."""
         if not normalize(name, studio=True):
-            return Ref(kind, name, slot=slot, owner=owner, node=node, off=off)
-        if off:
-            return self._keep(Ref(kind, name, slot=slot, owner=owner, node=node, off=True))
-        found, rule = first_existing(texture_candidates(name, self.game), self.exists)
+            return SRef(kind, name, slot=slot, owner=owner, node=node, is_off=is_off)
+        if is_off:
+            return self._keep(SRef(kind, name, slot=slot, owner=owner, node=node, is_off=True))
+        found, rule = first_existing(texture_candidates(name, self.m_game), self.exists)
         if found and PLACEHOLDERS.search(normalize(name, studio=True)):
             rule = f"{rule} (a placeholder the game ships)"
         reason = (
             ""
             if found
-            else self.why(texture_candidates(name, self.game), PLACEHOLDERS.search(normalize(name, studio=True)))
+            else self.why(texture_candidates(name, self.m_game), PLACEHOLDERS.search(normalize(name, studio=True)))
         )
-        return self._keep(Ref(kind, name, found, rule, reason, slot, owner, node))
+        return self._keep(SRef(kind, name, found, rule, reason, slot, owner, node))
 
     def mesh(self, name: str, owner: str = "", node: str = "", kind: str = "mesh") -> str:
         """The mesh (or animation) file a name loads, "" for none."""
@@ -240,10 +244,10 @@ class Resolver:
             return ""
         found, rule = first_existing(mesh_candidates(name), self.exists)
         reason = "" if found else self.why(mesh_candidates(name))
-        return self._keep(Ref(kind, name, found, rule, reason, "FileName", owner, node)).path
+        return self._keep(SRef(kind, name, found, rule, reason, "FileName", owner, node)).path
 
-    def config(self, name: str, owner: str = "", node: str = "", shared: bool = False) -> str:
-        """The config a nested FILE names: with ``shared``, its baked ``shared/`` copy when the game has one (without,
+    def config(self, name: str, owner: str = "", node: str = "", prefers_shared: bool = False) -> str:
+        """The config a nested FILE names: with ``prefers_shared``, its baked ``shared/`` copy when the game has one (without,
         the copy only when there is no ``data/`` file)."""
         path = normalize(name, studio=True)
         if not path:
@@ -251,10 +255,10 @@ class Resolver:
         copy = configtree.shared_config(path)
         candidates = [(path, "as written")]
         if copy:  # the game reads the baked copy first; the view without it still draws a config only baked
-            candidates.insert(0 if shared else 1, (copy, "the shared/ copy"))
+            candidates.insert(0 if prefers_shared else 1, (copy, "the shared/ copy"))
         found, rule = first_existing(candidates, self.exists)
         reason = "" if found else self.why([(path, "")])
-        return self._keep(Ref("config", name, found, rule, reason, "FileName", owner, node)).path
+        return self._keep(SRef("config", name, found, rule, reason, "FileName", owner, node)).path
 
     def effect(self, name: str, owner: str = "", node: str = "") -> str:
         """A particle effect file (117's ``.rdp``, 2070's ``.efc``), as written."""
@@ -263,79 +267,86 @@ class Resolver:
             return ""
         found = path if self.exists(path) else ""
         reason = "" if found else self.why([(path, "")])
-        ref = Ref("effect", name, found, "as written" if found else "", reason, "FileName", owner, node)
-        return self._keep(ref).path
+        reference = SRef("effect", name, found, "as written" if found else "", reason, "FileName", owner, node)
+        return self._keep(reference).path
 
-    def _keep(self, ref: Ref) -> Ref:
-        if self.keep:
-            self.refs.append(ref)
-        return ref
+    def _keep(self, reference: SRef) -> SRef:
+        if self.m_keep:
+            self.m_refs.append(reference)
+        return reference
 
-    def missing(self) -> list[Ref]:
+    def missing(self) -> list[SRef]:
         """The lookups that found nothing (placeholders and switched-off slots aside), each once."""
         seen, out = set(), []
-        for r in self.refs:
-            if r.failed and (r.kind, r.name, r.owner) not in seen:
-                seen.add((r.kind, r.name, r.owner))
-                out.append(r)
+        for reference in self.m_refs:
+            if reference.failed and (reference.kind, reference.name, reference.owner) not in seen:
+                seen.add((reference.kind, reference.name, reference.owner))
+                out.append(reference)
         return out
 
-    def index(self) -> Index | None:
-        if self._index is False:
-            self._index = Index.of(self.files)
-        return self._index
+    def index(self) -> CIndex | None:
+        if self._m_index is False:
+            self._m_index = CIndex.of(self.m_files)
+        return self._m_index
 
     def why(self, candidates: list[tuple[str, str]], placeholder: object = None) -> str:
         """Why none of ``candidates`` is there, by the game's own index: a placeholder name, deleted, a name that
         ships in another folder, a folder the game does not ship at all, or plainly absent."""
-        paths = [p for p, _rule in candidates]
+        paths = [path for path, _rule in candidates]
         if placeholder:
             return PLACEHOLDER
-        if any(p in self._deleted for p in paths):
+        if any(path in self._m_deleted for path in paths):
             return DELETED
         index = self.index()
         if index is None:
             return ABSENT
-        if any(posixpath.basename(p) in index.names for p in paths):
+        if any(posixpath.basename(path) in index.m_names for path in paths):
             return ELSEWHERE
-        if not any(posixpath.dirname(p) in index.folders for p in paths):
+        if not any(posixpath.dirname(path) in index.m_folders for path in paths):
             return NOT_SHIPPED
         return ABSENT
 
-    def elsewhere(self, ref: Ref) -> str:
+    def elsewhere(self, reference: SRef) -> str:
         """For a stale path: the file of the same name the game ships in another folder ("" for none)."""
         index = self.index()
         if index is None:
             return ""
-        texture = ref.kind in ("texture", "effect texture")
-        candidates = texture_candidates(ref.name, self.game) if texture else mesh_candidates(ref.name)
-        return next((f for c, _r in candidates if (f := index.names.get(posixpath.basename(c)))), "")
+        texture = reference.kind in ("texture", "effect texture")
+        candidates = texture_candidates(reference.name, self.m_game) if texture else mesh_candidates(reference.name)
+        return next(
+            (
+                found
+                for candidate_path, _r in candidates
+                if (found := index.m_names.get(posixpath.basename(candidate_path)))
+            ),
+            "",
+        )
 
 
-def drawn(ref: Ref) -> str:
+def drawn(reference: SRef) -> str:
     """What a view loads for a lookup: the file found, the name when it failed (to draw it as missing), else ""."""
-    return ref.path or (normalize(ref.name, studio=True) if ref.failed else "")
+    return reference.path or (normalize(reference.name, studio=True) if reference.failed else "")
 
 
-def material_textures(node, resolve: Resolver, owner: str = "", path: str = "") -> dict[str, Ref]:
-    """Every texture slot a newer game's MATERIAL node (``configtree.Node``) writes, looked up: slot -> its ``Ref``;
+def material_textures(node, resolve: CResolver, owner: str = "", path: str = "") -> dict[str, SRef]:
+    """Every texture slot a newer game's MATERIAL node (``configtree.SNode``) writes, looked up: slot -> its ``SRef``;
     a slot its switch turns off is kept as off, not looked up."""
     out = {}
     for slot, value in node.fields:
         if not value or not SOURCE_TEXTURE.search(value.strip().lower()):
             continue
         switch = SLOT_SWITCHES.get(slot, "")
-        off = bool(switch) and node.get(switch, "1" if switch in ON_UNLESS_OFF else "0") == "0"
-        out[slot] = resolve.texture_ref(value, slot, owner, path, off=off)
+        is_off = bool(switch) and node.get(switch, "1" if switch in ON_UNLESS_OFF else "0") == "0"
+        out[slot] = resolve.texture_reference(value, slot, owner, path, is_off=is_off)
     return out
 
 
-def view_textures(found: dict[str, Ref]) -> Callable[[str], str]:
+def view_textures(found: dict[str, SRef]) -> Callable[[str], str]:
     """A name -> what a view loads for it, over a material's looked-up slots (``material_textures``)."""
     by_name: dict[str, str] = {}
-    for ref in found.values():  # two slots may name one file: a slot that is on wins over one that is off
-        name = normalize(ref.name, studio=True)
-        by_name[name] = by_name.get(name) or drawn(ref)
+    for reference in found.values():  # two slots may name one file: a slot that is on wins over one that is off
+        name = normalize(reference.name, studio=True)
+        by_name[name] = by_name.get(name) or drawn(reference)
     return lambda name: by_name.get(normalize(name, studio=True), "")
 
 
@@ -344,63 +355,64 @@ def view_textures(found: dict[str, Ref]) -> Callable[[str], str]:
 TEXTURE_MAX = 1024  # texels across: the first mip at or below it is drawn (a view needs no more)
 
 
-class DecodeError(ValueError):
+class CDecodeError(ValueError):
     """A texture file the in-process decoders do not read, with the reason (its format)."""
 
 
 def decode(data: bytes, limit: int = TEXTURE_MAX) -> np.ndarray:
     """A texture file (DDS of any format ``ddsdecode`` reads, PNG, TGA, JPEG) as ``(h, w, 4)`` uint8 RGBA, the
-    first DDS mip at or below ``limit`` texels (a cube's first face). Raises ``DecodeError`` saying why not."""
-    from .ddsdecode import DdsFile, UnsupportedDds
+    first DDS mip at or below ``limit`` texels (a cube's first face). Raises ``CDecodeError`` saying why not."""
+    from .ddsdecode import CDdsFile, CUnsupportedDds
 
     if not data:
-        raise DecodeError("an empty file (0 bytes): the game ships it so")
+        raise CDecodeError("an empty file (0 bytes): the game ships it so")
     if data[:4] == b"DDS ":
         try:
-            dds = DdsFile(data)
-            mip = next((k for k in range(dds.info.mips) if max(dds.size_of(k)) <= limit), dds.info.mips - 1)
+            dds = CDdsFile(data)
+            mip = next((k for k in range(dds.m_info.mips) if max(dds.size_of(k)) <= limit), dds.m_info.mips - 1)
             return dds.level(mip)
-        except (UnsupportedDds, IndexError, ValueError) as exc:
-            raise DecodeError(f"DDS: {exc}") from exc
+        except (CUnsupportedDds, IndexError, ValueError) as exc:
+            raise CDecodeError(f"DDS: {exc}") from exc
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
     try:
-        import io
-
-        from PIL import Image, UnidentifiedImageError
-
-        return np.asarray(Image.open(io.BytesIO(data)).convert("RGBA"))
-    except (OSError, ValueError, UnidentifiedImageError) as exc:
-        raise DecodeError(f"not a picture the decoders read ({data[:4]!r}): {exc}") from exc
+        with Image.open(io.BytesIO(data)) as picture:
+            return np.asarray(picture.convert("RGBA"))
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise CDecodeError(f"not a picture the decoders read ({data[:4]!r}): {exc}") from exc
 
 
 def check_decode(data: bytes) -> str:
     """Why a texture would not draw ("" when it decodes): every level and face fits the file, and the smallest
     level decodes. A full decode is the view's job; this proves the format and the layout, fast."""
-    from .ddsdecode import DdsFile, UnsupportedDds
+    from .ddsdecode import CDdsFile, CUnsupportedDds
 
     if data[:4] != b"DDS ":
         try:
             decode(data[:], 1)
-        except DecodeError as exc:
+        except CDecodeError as exc:
             return str(exc)
         return ""
     try:
-        dds = DdsFile(data)
+        dds = CDdsFile(data)
         short = dds.cut_short()
         if short:
-            return f"DDS: {dds.info.format}: {short}"
-        dds.level(dds.info.mips - 1)
-    except (UnsupportedDds, IndexError, ValueError) as exc:
+            return f"DDS: {dds.m_info.format}: {short}"
+        dds.level(dds.m_info.mips - 1)
+    except (CUnsupportedDds, IndexError, ValueError) as exc:
         return f"DDS: {exc}"
     return ""
 
 
-def _checker(size: int = 64, cell: int = 8) -> np.ndarray:
+def _checker(size_px: int = 64, cell_px: int = 8) -> np.ndarray:
     """Magenta and black squares: what a view draws where a file the model names is not there."""
-    y, x = np.mgrid[0:size, 0:size]
-    on = ((x // cell) + (y // cell)) % 2 == 0
-    out = np.zeros((size, size, 4), np.uint8)
-    out[on] = (255, 0, 255, 255)
-    out[~on] = (24, 24, 24, 255)
+    y, x = np.mgrid[0:size_px, 0:size_px]
+    is_on = ((x // cell_px) + (y // cell_px)) % 2 == 0
+    out = np.zeros((size_px, size_px, 4), np.uint8)
+    out[is_on] = (255, 0, 255, 255)
+    out[~is_on] = (24, 24, 24, 255)
     return out
 
 

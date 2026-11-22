@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from html import escape
 
 from ..infra.i18n import tr
-from .assetdoc import AssetDocument
-from .balancing import Cell
-from .values import Layers
+from .assetdoc import CAssetDocument
+from .balancing import SCell
+from .values import CLayers
 from .xmltree import leaves
 
 
 @dataclass(frozen=True)
-class Row:
+class SRow:
     path: str
     value: str
     origin: str
@@ -39,7 +39,7 @@ def _overlay(into: ET.Element, source: ET.Element) -> None:
                 if mine is not None:
                     into.remove(mine)
                 into.append(copy.deepcopy(child))
-        elif mine is None or any(c.tag == "Item" for c in child) or not len(mine):
+        elif mine is None or any(grandchild.tag == "Item" for grandchild in child) or not len(mine):
             if mine is not None:
                 into.remove(mine)
             into.append(copy.deepcopy(child))
@@ -47,20 +47,20 @@ def _overlay(into: ET.Element, source: ET.Element) -> None:
             _overlay(mine, child)
 
 
-def _effective(layers: Layers, prop: str) -> ET.Element:
+def _effective(layers: CLayers, property_name: str) -> ET.Element:
     """The merged block of one property over all the layers (the lowest first, the asset's own last)."""
-    merged = ET.Element(prop)
-    for layer in reversed(layers.layers):
-        block = layer.values.find(prop)
+    merged = ET.Element(property_name)
+    for layer in reversed(layers.m_layers):
+        block = layer.values.find(property_name)
         if block is not None:
             _overlay(merged, block)
     return merged
 
 
-def _indexed(el: ET.Element, prefix: tuple[str, ...]):
+def _indexed(element: ET.Element, prefix: tuple[str, ...]):
     """(path, leaf text) below ``el``; the k-th ``Item`` of a list is ``Item[k]``."""
     seen: dict[str, int] = {}
-    for child in el:
+    for child in element:
         k = seen[child.tag] = seen.get(child.tag, 0) + 1
         name = f"{child.tag}[{k}]" if child.tag == "Item" else child.tag
         here = (*prefix, name)
@@ -70,42 +70,46 @@ def _indexed(el: ET.Element, prefix: tuple[str, ...]):
             yield here, (child.text or "").strip()
 
 
-def effective_rows(doc: AssetDocument, guid: int, original: bool = False) -> list[Row]:
+def effective_rows(doc: CAssetDocument, guid: int, original: bool = False) -> list[SRow]:
     """Every value the asset has, in its template's property order, with its origin; ``original``: the game's own
     value too, where this change set changed it."""
     layers = doc.layers(guid)
     before = doc.layers(guid, original=True) if original else None
     rows = []
-    for prop in layers.property_names():
-        for path, value in _indexed(_effective(layers, prop), (prop,)):
-            plain = tuple(p.split("[")[0] for p in path)
+    for property_name in layers.property_names():
+        for path, value in _indexed(_effective(layers, property_name), (property_name,)):
+            plain = tuple(part.split("[")[0] for part in path)
             in_list = "Item" in plain
-            at = plain[: plain.index("Item")] if in_list else plain
-            origin = layers.lookup(at).origin
+            parent_path = plain[: plain.index("Item")] if in_list else plain
+            origin = layers.lookup(parent_path).origin
             was = None
             if before is not None:
                 old = _leaf(before, plain, in_list, path)
                 was = old if old != value else None
-            rows.append(Row("/".join(path), value, origin, was))
+            rows.append(SRow("/".join(path), value, origin, was))
     return rows
 
 
-def _leaf(layers: Layers, plain: tuple[str, ...], in_list: bool, path: tuple[str, ...]) -> str:
+def _leaf(layers: CLayers, plain: tuple[str, ...], in_list: bool, path: tuple[str, ...]) -> str:
     """The value at ``path`` in ``layers``: a plain lookup, or the same ``Item[k]`` of the list it is in."""
     if not in_list:
         return layers.lookup(plain).text
     head = plain[: plain.index("Item")]
     found = layers.lookup(head)
-    items = {"/".join(p): v for p, v in _indexed(found.element, head)} if found.element is not None else {}
+    items = (
+        {"/".join(item_path): value for item_path, value in _indexed(found.element, head)}
+        if found.element is not None
+        else {}
+    )
     return items.get("/".join(path), "")
 
 
-def asset_texts(doc: AssetDocument, guid: int, game: dict[str, str], edited: dict[str, str] | None = None):
+def asset_texts(doc: CAssetDocument, guid: int, game: dict[str, str], edited: dict[str, str] | None = None):
     """(value path, text id, text) for each text value of the asset: the edited text over the game's."""
     values = doc.asset(guid).find("Values")
     out = []
     for path, ident in leaves(values) if values is not None else ():
-        spec = doc.schema.spec_at(path)
+        spec = doc.m_schema.spec_at(path)
         if ident and spec is not None and spec.type == "Text":
             out.append(("/".join(path), ident, (edited or {}).get(ident, game.get(ident, ""))))
     return out
@@ -117,10 +121,10 @@ def words_of(texts) -> int:
 
 
 def group_words(
-    doc: AssetDocument, guids: list[int], game: dict[str, str], edited: dict[str, str] | None = None
+    doc: CAssetDocument, guids: list[int], game: dict[str, str], edited: dict[str, str] | None = None
 ) -> int:
     """The words in the texts of all these assets."""
-    return sum(words_of(asset_texts(doc, g, game, edited)) for g in guids if doc.exists(g))
+    return sum(words_of(asset_texts(doc, guid, game, edited)) for guid in guids if doc.exists(guid))
 
 
 STYLE = (
@@ -131,16 +135,16 @@ STYLE = (
 
 
 def _table(headers: list[str], rows: list[list[str]], classes: list[str] | None = None) -> str:
-    head = "".join(f"<th>{escape(h)}</th>" for h in headers)
+    head = "".join(f"<th>{escape(header)}</th>" for header in headers)
     body = "".join(
-        f'<tr class="{classes[k] if classes else ""}">' + "".join(f"<td>{escape(c)}</td>" for c in row) + "</tr>"
+        f'<tr class="{classes[k] if classes else ""}">' + "".join(f"<td>{escape(cell)}</td>" for cell in row) + "</tr>"
         for k, row in enumerate(rows)
     )
     return f"<table><tr>{head}</tr>{body}</table>"
 
 
 def asset_html(
-    doc: AssetDocument, guid: int, game_texts: dict[str, str] | None = None, language: str = "english",
+    doc: CAssetDocument, guid: int, game_texts: dict[str, str] | None = None, language: str = "english",
     original: bool = True,
 ) -> str:  # fmt: skip
     """The asset as a page: its name and ids, every value with its origin (and the game's value where changed), and
@@ -153,20 +157,24 @@ def asset_html(
         "<p>"
         + tr("assets.guid_template", guid=guid, template=escape(doc.template(guid)))
         + (" · " + tr("assets.base_asset_guid", guid=base) if base else "")
-        + f" · {doc.changes.game}</p>",
+        + f" · {doc.m_changes.m_game}</p>",
     ]
-    wide = any(r.was is not None for r in rows)
+    wide = any(row.was is not None for row in rows)
     headers = [tr("common.value"), tr("assets.now"), tr("assets.from")] + ([tr("assets.games")] if wide else [])
-    cells = [[r.path, r.value, r.origin] + ([r.was if r.was is not None else ""] if wide else []) for r in rows]
+    cells = [
+        [row.path, row.value, row.origin] + ([row.was if row.was is not None else ""] if wide else []) for row in rows
+    ]
     parts.append("<h2>" + tr("assets.values_n", n=len(rows)) + "</h2>")
-    parts.append(_table(headers, cells, ["own" if r.origin == "own" else "" for r in rows]))
+    parts.append(_table(headers, cells, ["own" if row.origin == "own" else "" for row in rows]))
     if game_texts is not None:
-        texts = asset_texts(doc, guid, game_texts, doc.changes.texts.get(language))
+        texts = asset_texts(doc, guid, game_texts, doc.m_changes.m_texts.get(language))
         parts.append(
             "<h2>" + tr("assets.texts_language_n_words", language=escape(language), n=words_of(texts)) + "</h2>"
         )
         parts.append(
-            _table([tr("common.value"), tr("assets.text_id"), tr("assets.text")], [list(t) for t in texts])
+            _table(
+                [tr("common.value"), tr("assets.text_id"), tr("assets.text")], [list(text_row) for text_row in texts]
+            )
             if texts
             else "<p>" + tr("common.none") + "</p>"
         )
@@ -174,11 +182,14 @@ def asset_html(
     return "".join(parts)
 
 
-def table_html(title: str, columns: list[str], rows: list[tuple[int, str, list[Cell]]]) -> str:
+def table_html(title: str, columns: list[str], rows: list[tuple[int, str, list[SCell]]]) -> str:
     """A balancing table (``balancing.grid``) as a page; a changed cell shows the game's value in brackets."""
     cells = [
         [f"{name} ({guid})"]
-        + [c.text + (" " + tr("assets.game_value_bracketed", value=c.was) if c.was is not None else "") for c in row]
+        + [
+            cell.text + (" " + tr("assets.game_value_bracketed", value=cell.was) if cell.was is not None else "")
+            for cell in row
+        ]
         for guid, name, row in rows
     ]
     return (

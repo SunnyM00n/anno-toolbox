@@ -24,7 +24,7 @@ _FIELD = r"<{0}>([^<]*)</{0}>"
 
 
 @dataclass(frozen=True)
-class Logo:
+class SLogo:
     """A ``PlayerLogo`` asset: its GUID, name and the picture file its ``DefaultLogo`` names (as written)."""
 
     guid: int
@@ -32,13 +32,15 @@ class Logo:
     path: str
 
 
-def logos(text: str) -> list[Logo]:
+def logos(text: str) -> list[SLogo]:
     """The ``PlayerLogo`` assets of the asset file's text that name a ``DefaultLogo``, in file order."""
     out = []
     for block in _BLOCK.findall(text):
-        guid, name, path = (re.search(_FIELD.format(t), block) for t in ("GUID", "Name", "DefaultLogo"))
+        guid, name, path = (
+            re.search(_FIELD.format(field_name), block) for field_name in ("GUID", "Name", "DefaultLogo")
+        )
         if guid and path and path.group(1):
-            out.append(Logo(int(guid.group(1)), name.group(1) if name else "", path.group(1)))
+            out.append(SLogo(int(guid.group(1)), name.group(1) if name else "", path.group(1)))
     return out
 
 
@@ -53,7 +55,7 @@ def has_logos(files) -> bool:
     return bool(files.exists(ASSETS))
 
 
-def default_logo(files, guid: int | None = None) -> ddsdecode.DdsFile | None:
+def default_logo(files, guid: int | None = None) -> ddsdecode.CDdsFile | None:
     """The texture of the logo ``guid`` (the first one whose file is there when None), None without one."""
     data = files.read(ASSETS) if has_logos(files) else None
     if not data:
@@ -64,12 +66,12 @@ def default_logo(files, guid: int | None = None) -> ddsdecode.DdsFile | None:
         for candidate in texture_candidates(logo.path):
             if files.exists(candidate):
                 try:
-                    return ddsdecode.DdsFile(files.read(candidate))
-                except ddsdecode.UnsupportedDds:
+                    return ddsdecode.CDdsFile(files.read(candidate))
+                except ddsdecode.CUnsupportedDds:
                     break
     return None
 
 
 def atlas_word(slot: int, dds) -> int:
     """The atlas entry of a texture at bindless index ``slot``: the index, with bit 31 set for an sRGB format."""
-    return (slot & 0x7FFFFFFF) | (SRGB_BIT if dds.info.srgb else 0)
+    return (slot & 0x7FFFFFFF) | (SRGB_BIT if dds.m_info.srgb else 0)

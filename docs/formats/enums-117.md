@@ -12608,7 +12608,7 @@ Group Religion, dataset id 2524.
 | `Active` | 0x5055A6EC |
 | `Paused` | 0x555AD1ED |
 | `WaterMissing` | 0x55627120 |
-| `NotConnected` | 0x58D5CB4B |
+| `CNotConnected` | 0x58D5CB4B |
 
 ### halo.WaterConsumptionType
 

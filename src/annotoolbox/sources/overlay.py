@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..formats.rda import RdaArchive
+from ..formats.rda import CRdaArchive
 from ..paths import cache_dir
 
 _ARCHIVE_RE = re.compile(
@@ -41,14 +41,14 @@ STUDIO_PATH = re.compile(
 
 
 @dataclass(frozen=True)
-class Archive:
+class SArchive:
     """One archive (extracted folder or ``.rda`` file) and its place in the override order."""
 
     name: str
     path: Path
     rank: int
     language: str | None = None
-    rda: RdaArchive | None = None
+    rda: CRdaArchive | None = None
     unique_id: str = ""  # names the archive's cache files; ``name`` repeats in 1404 (data0 in maindata and addon)
 
     @property
@@ -62,29 +62,29 @@ class Archive:
 
 def classify_archive(name: str) -> tuple[int, str | None] | None:
     """Return (rank, language) for an archive name, or None if unknown."""
-    m = _ARCHIVE_RE.match(name)
-    if not m:
+    match = _ARCHIVE_RE.match(name)
+    if not match:
         return None
-    if m.group("data"):
-        return 100 + int(m.group("data_n")), None
-    if m.group("lang"):
-        return 200 + int(m.group("lang_n")), m.group("lang").lower()
-    if m.group("patch"):
-        n = int(m.group("patch_n"))
-        return (300 if n < 9 else 700) + n, None  # patch9 is mounted after the add-on
-    if m.group("exedata"):
+    if match.group("data"):
+        return 100 + int(match.group("data_n")), None
+    if match.group("lang"):
+        return 200 + int(match.group("lang_n")), match.group("lang").lower()
+    if match.group("patch"):
+        patch_number = int(match.group("patch_n"))
+        return (300 if patch_number < 9 else 700) + patch_number, None  # patch9 is mounted after the add-on
+    if match.group("exedata"):
         return 400, None
-    if m.group("addon"):
-        return 500 + int(m.group("addon_n")), None
-    if m.group("alang"):
-        return 600 + int(m.group("alang_n")), m.group("alang").lower()
+    if match.group("addon"):
+        return 500 + int(match.group("addon_n")), None
+    if match.group("alang"):
+        return 600 + int(match.group("alang_n")), match.group("alang").lower()
     return None
 
 
 def archive_root(root: str | Path) -> Path:
     """The folder holding the archives: ``root`` itself, or its ``maindata`` folder."""
     root = Path(root)
-    if not SourceTree._has_archives(root) and SourceTree._has_archives(root / "maindata"):
+    if not CSourceTree._has_archives(root) and CSourceTree._has_archives(root / "maindata"):
         return root / "maindata"
     return root
 
@@ -104,16 +104,52 @@ def normalize(rel: str | Path, *, lower: bool = True, studio: bool = False) -> s
     """A game path as a key: forward slashes, no ``./``, leading or doubled slash (1800 writes ``maps//x.psd``),
     lower case unless ``lower`` is False; ``studio`` cuts a path on the studio's machine (``d:/projects/anno8/game/
     data/x``, 117) back to its ``data/`` or ``shared/`` folder."""
-    s = str(rel)
-    if not studio and "\\" not in s and "//" not in s and not s.startswith(("/", "./")) and s == s.strip():
-        return s.lower() if lower else s  # the usual key, already clean: the half-million of an install's list
-    s = re.sub(r"/{2,}", "/", s.replace("\\", "/").strip())
-    if studio and (rooted := STUDIO_PATH.match(s)):
-        s = s[rooted.end() :]
-    while s.startswith("./"):
-        s = s[2:]
-    s = s.lstrip("/")
-    return s.lower() if lower else s
+    text = str(rel)
+    if (
+        not studio
+        and "\\" not in text
+        and "//" not in text
+        and not text.startswith(("/", "./"))
+        and text == text.strip()
+    ):
+        return text.lower() if lower else text  # the usual key, already clean: the half-million of an install's list
+    text = re.sub(r"/{2,}", "/", text.replace("\\", "/").strip())
+    if studio and (rooted := STUDIO_PATH.match(text)):
+        text = text[rooted.end() :]
+    while text.startswith("./"):
+        text = text[2:]
+    text = text.lstrip("/")
+    return text.lower() if lower else text
+
+
+def _find_nocase(base: Path, key: str) -> Path | None:
+    """The file ``key`` (a lower-case game path) names below ``base``, whatever case its folders and file are
+    written in on disk (the index keys are lower case; a case-sensitive file system needs the real spelling)."""
+    here = base
+    for part in key.split("/"):
+        if not part:
+            continue
+        next_path = here / part
+        if not next_path.exists():
+            try:
+                next_path = next((child for child in here.iterdir() if child.name.lower() == part), None)
+            except OSError:
+                return None
+            if next_path is None:
+                return None
+        here = next_path
+    return here if here.is_file() else None
+
+
+def files_directly_in(tree, folder: str, suffix: str) -> dict[str, str]:
+    """name (the file name without ``suffix``) -> game path of the files of ``tree`` directly in ``folder``, not in
+    its subfolders, sorted by name. ``tree`` is anything with ``iter_paths(prefix, suffix=)``."""
+    out = {}
+    for path in tree.iter_paths(folder, suffix=suffix):
+        rel = path[len(folder) :]
+        if "/" not in rel:
+            out[rel[: -len(suffix)]] = path
+    return dict(sorted(out.items()))
 
 
 def cache_base() -> Path:
@@ -129,7 +165,7 @@ def default_cache_dir(root: Path) -> Path:
     return base / f"{root.name}-{digest}"
 
 
-class SourceTree:
+class CSourceTree:
     """Index of a 2070 installation honouring the archive order."""
 
     def __init__(
@@ -138,43 +174,44 @@ class SourceTree:
         language: str = "eng",
         cache_dir: str | Path | None = None,
         *,
-        archives: list[Archive] | None = None,
+        archives: list[SArchive] | None = None,
         skip: tuple[str, ...] = (),
     ) -> None:
         """Index the 2070 install at ``root``; with ``archives`` given, index just those (``from_archives``);
         ``skip``: archive names (``patch9``) to leave out, such as the one the island editor wrote."""
-        self.root = Path(root)
-        self.language = language.lower()
-        self.skip = {name.lower() for name in skip}
-        self.ignored_folders: list[str] = []
+        self.m_root = Path(root)
+        self.m_language = language.lower()
+        self.m_skip = {name.lower() for name in skip}
+        self.m_ignored_folders: list[str] = []
         if archives is None:
-            if not self.root.is_dir():
-                raise FileNotFoundError(f"source root is not a directory: {self.root}")
-            self.root = archive_root(self.root)
-        self.cache_dir = Path(cache_dir) if cache_dir else default_cache_dir(self.root)
-        self.archives = archives if archives is not None else self._discover()
+            if not self.m_root.is_dir():
+                raise FileNotFoundError(f"source root is not a directory: {self.m_root}")
+            self.m_root = archive_root(self.m_root)
+        self.m_cache_dir = Path(cache_dir) if cache_dir else default_cache_dir(self.m_root)
+        self.m_archives = archives if archives is not None else self._discover()
         # key -> (rank, archive index, stored path inside the archive / physical path)
-        self._index: dict[str, tuple[int, int, str]] = {}
+        self._m_index: dict[str, tuple[int, int, str]] = {}
+        self._m_rda_key_tables: dict[str, dict[str, str]] = {}
         self._build_index()
 
     @classmethod
-    def from_archives(cls, files, cache_dir: str | Path | None = None) -> SourceTree:
+    def from_archives(cls, files, cache_dir: str | Path | None = None) -> CSourceTree:
         """The same lookups over archives given in their override order (later wins): the other games'
         installs (``othergames.installs``), whose archive names and order 2070's rules do not know."""
-        files = [Path(f) for f in files if Path(f).is_file()]
+        files = [Path(file) for file in files if Path(file).is_file()]
         if not files:
             raise FileNotFoundError("no archives to read")
         root = files[0].parent
         cache = Path(cache_dir) if cache_dir else default_cache_dir(root)
-        archives: list[Archive] = []
+        archives: list[SArchive] = []
         seen: set[str] = set()
-        for rank, f in enumerate(files):
-            uid = f"{f.parent.name}-{f.stem}"
+        for rank, file in enumerate(files):
+            uid = f"{file.parent.name}-{file.stem}"
             if uid in seen:  # the same folder and name under two roots
                 uid = f"{uid}-{rank}"
             seen.add(uid)
-            rda = RdaArchive(f, cache_dir=cache / "index" / uid)
-            archives.append(Archive(f.stem, f, rank, None, rda, uid))
+            rda = CRdaArchive(file, cache_dir=cache / "index" / uid)
+            archives.append(SArchive(file.stem, file, rank, None, rda, uid))
         return cls(root, "", cache, archives=archives)
 
     # Construction
@@ -189,82 +226,86 @@ class SourceTree:
                     return True
         return False
 
-    def _discover(self) -> list[Archive]:
+    def _discover(self) -> list[SArchive]:
         """The archives of ``root`` in rank order; a name that is no archive goes to ``ignored_folders``."""
-        archives: list[Archive] = []
-        for child in sorted(self.root.iterdir()):
+        archives: list[SArchive] = []
+        for child in sorted(self.m_root.iterdir()):
             if child.is_dir():
                 name = child.name
             elif child.suffix.lower() == ".rda":
                 name = child.stem
             else:
                 continue
-            if name.lower() in self.skip:
+            if name.lower() in self.m_skip:
                 continue
-            info = classify_archive(name)
-            if info is None:
-                self.ignored_folders.append(child.name)
+            archive_info = classify_archive(name)
+            if archive_info is None:
+                self.m_ignored_folders.append(child.name)
                 continue
-            rank, lang = info
-            if lang is not None and lang != self.language:
+            rank, language = archive_info
+            if language is not None and language != self.m_language:
                 continue
-            rda = RdaArchive(child, cache_dir=self.cache_dir / "index") if child.is_file() else None
-            archives.append(Archive(name, child, rank, lang, rda))
-        return sorted(archives, key=lambda a: a.rank)
+            rda = CRdaArchive(child, cache_dir=self.m_cache_dir / "index") if child.is_file() else None
+            archives.append(SArchive(name, child, rank, language, rda))
+        return sorted(archives, key=lambda archive: archive.rank)
 
     LIST_NAME = "overlay-index"
 
     def _build_index(self) -> None:
         from ..infra import buildcache, listcache  # not at the top: the cache modules import this one
 
-        folders = [a.path for a in self.archives if a.rda is None]
-        files = [a.path for a in self.archives if a.rda is not None]
-        self._signature = buildcache.digest(
+        folders = [member.path for member in self.m_archives if member.rda is None]
+        files = [member.path for member in self.m_archives if member.rda is not None]
+        self._m_signature = buildcache.digest(
             listcache.files_signature(files, buildcache.code_version("sources.overlay")),
-            *(listcache.folder_signature(f) for f in folders),
-            *(f"{a.name}:{a.rank}:{a.path}" for a in self.archives),
+            *(listcache.folder_signature(folder) for folder in folders),
+            *(f"{member.name}:{member.rank}:{member.path}" for member in self.m_archives),
         )
-        self._scope = "|".join(
-            [str(self.root), self.language, *sorted(self.skip), *(str(a.path) for a in self.archives)]
+        self._m_scope = "|".join(
+            [str(self.m_root), self.m_language, *sorted(self.m_skip), *(str(member.path) for member in self.m_archives)]
         )
-        if self._load_list(listcache.load(self.LIST_NAME, self._scope, self._signature)):
+        if self._load_list(listcache.load(self.LIST_NAME, self._m_scope, self._m_signature)):
             return
-        for i, archive in enumerate(self.archives):  # ascending rank: later writes win
+        for i, archive in enumerate(self.m_archives):  # ascending rank: later writes win
             if archive.rda is not None:
                 for entry in archive.rda:
-                    self._index[normalize(entry.path)] = (archive.rank, i, entry.path)
+                    self._m_index[normalize(entry.path)] = (archive.rank, i, entry.path)
             else:
                 base = archive.path
-                for p in base.rglob("*"):
-                    if p.is_file():
-                        key = normalize(p.relative_to(base).as_posix())
-                        self._index[key] = (archive.rank, i, str(p))
-        listcache.store(self.LIST_NAME, self._scope, self._signature, self._list())
+                for path in base.rglob("*"):
+                    if path.is_file():
+                        key = normalize(path.relative_to(base).as_posix())
+                        self._m_index[key] = (archive.rank, i, str(path))
+        listcache.store(self.LIST_NAME, self._m_scope, self._m_signature, self._list())
 
     def _list(self) -> dict[str, tuple[int, str | int]]:
         """The index as plain data for ``listcache``: the archive's place, and the stored path (0: the key itself)."""
-        return {key: (at, 0 if stored == key else stored) for key, (_rank, at, stored) in self._index.items()}
+        return {
+            key: (archive_index, 0 if stored == key else stored)
+            for key, (_rank, archive_index, stored) in self._m_index.items()
+        }
 
     def _load_list(self, kept) -> bool:
         try:
             index = {
-                key: (self.archives[at].rank, at, key if stored == 0 else stored) for key, (at, stored) in kept.items()
+                key: (self.m_archives[archive_index].rank, archive_index, key if stored == 0 else stored)
+                for key, (archive_index, stored) in kept.items()
             }
         except (AttributeError, TypeError, ValueError, IndexError):  # none kept, or not what ``_list`` writes
             return False
-        self._index = index
+        self._m_index = index
         return True
 
     # Lookups
 
     def __len__(self) -> int:
-        return len(self._index)
+        return len(self._m_index)
 
-    def _hit(self, rel: str | Path) -> tuple[Archive, str] | None:
-        hit = self._index.get(normalize(rel))
+    def _hit(self, rel: str | Path) -> tuple[SArchive, str] | None:
+        hit = self._m_index.get(normalize(rel))
         if hit is None:
             return None
-        return self.archives[hit[1]], hit[2]
+        return self.m_archives[hit[1]], hit[2]
 
     def resolve(self, rel: str | Path) -> Path | None:
         """Return a real file for the path, extracting from an archive if needed."""
@@ -276,10 +317,13 @@ class SourceTree:
             return Path(stored)
         return self._materialize(archive, stored)
 
-    def _materialize(self, archive: Archive, stored: str) -> Path:
+    def _materialize(self, archive: SArchive, stored: str) -> Path:
         assert archive.rda is not None
         entry = archive.rda.entries[stored]
-        dest = self.cache_dir / "files" / archive.cache_id / normalize(stored)
+        relative = normalize(stored)
+        if ".." in relative.split("/") or re.match(r"[a-z]:|/", relative):  # a hostile archive's path leaving the cache
+            raise ValueError(f"{archive.name}: the path {stored!r} leaves the cache folder")
+        dest = self.m_cache_dir / "files" / archive.cache_id / relative
         try:
             # an archive replaced after the extraction (a game update) leaves a stale file of the same size
             if (
@@ -301,7 +345,7 @@ class SourceTree:
         return stored if archive.rda is None else f"{archive.path.name}!{stored}"
 
     def exists(self, rel: str | Path) -> bool:
-        return normalize(rel) in self._index
+        return normalize(rel) in self._m_index
 
     def archive_of(self, rel: str | Path) -> str | None:
         hit = self._hit(rel)
@@ -313,7 +357,7 @@ class SourceTree:
         return hit[0].path if hit else None
 
     def entry_of(self, rel: str | Path):
-        """The ``RdaEntry`` the path is read from (its timestamp, size), or None for a folder or a missing path."""
+        """The ``SRdaEntry`` the path is read from (its timestamp, size), or None for a folder or a missing path."""
         hit = self._hit(rel)
         return hit[0].rda.entries.get(hit[1]) if hit and hit[0].rda is not None else None
 
@@ -321,17 +365,23 @@ class SourceTree:
         """Every archive that carries this path, lowest priority first."""
         key = normalize(rel)
         out = []
-        for a in self.archives:
-            if a.rda is not None:
-                for entry in a.rda:
-                    if normalize(entry.path) == key:
-                        out.append((a.name, f"{a.path.name}!{entry.path}"))
-                        break
-            else:
-                p = a.path / key
-                if p.is_file():
-                    out.append((a.name, str(p)))
+        for archive in self.m_archives:
+            if archive.rda is not None:
+                if (stored := self._rda_keys(archive).get(key)) is not None:
+                    out.append((archive.name, f"{archive.path.name}!{stored}"))
+            elif (candidate := _find_nocase(archive.path, key)) is not None:
+                out.append((archive.name, str(candidate)))
         return out
+
+    def _rda_keys(self, archive: SArchive) -> dict[str, str]:
+        """An archive's normalised path -> stored path, made on the first ask (``candidates`` is a diagnostic)."""
+        table = self._m_rda_key_tables.get(archive.cache_id)
+        if table is None:
+            table = {}
+            for entry in archive.rda:
+                table.setdefault(normalize(entry.path), entry.path)
+            self._m_rda_key_tables[archive.cache_id] = table
+        return table
 
     def read_bytes(self, rel: str | Path) -> bytes:
         hit = self._hit(rel)
@@ -348,7 +398,7 @@ class SourceTree:
     def iter_paths(self, prefix: str = "", suffix: str | None = None) -> Iterator[str]:
         prefix = normalize(prefix)
         suffix = suffix.lower() if suffix else None
-        for key in sorted(self._index):
+        for key in sorted(self._m_index):
             if prefix and not key.startswith(prefix):
                 continue
             if suffix and not key.endswith(suffix):
@@ -357,7 +407,7 @@ class SourceTree:
 
     def glob(self, pattern: str) -> list[str]:
         pattern = normalize(pattern)
-        return sorted(k for k in self._index if fnmatch.fnmatchcase(k, pattern))
+        return sorted(k for k in self._m_index if fnmatch.fnmatchcase(k, pattern))
 
     def resolve_texture(self, rel: str | Path) -> Path | None:
         """Resolve a texture reference to a real file (see :meth:`texture_key`)."""
@@ -372,13 +422,13 @@ class SourceTree:
         levels. Try the literal path first, then the shipped variants.
         """
         key = normalize(rel)
-        if key in self._index:
+        if key in self._m_index:
             return key
         stem, _dot, _ext = key.rpartition(".")
         if not stem:
             return None
-        for ext in TEXTURE_EXTENSIONS:
-            for variant in (f"{stem}_0{ext}", f"{stem}{ext}"):
-                if variant in self._index:
+        for extension in TEXTURE_EXTENSIONS:
+            for variant in (f"{stem}_0{extension}", f"{stem}{extension}"):
+                if variant in self._m_index:
                     return variant
         return None

@@ -18,15 +18,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ....formats import filedb
-from ....formats.rda import RdaArchive, write_v22
+from ....formats.rda import CRdaArchive, write_v22
 from ....infra.i18n import tr
 from ....islands import islandedits, objectedits
 from ....othergames import delivery2205
-from ....othergames.index2205 import FILE_DB, ArchiveIndex
+from ....othergames.index2205 import FILE_DB, CArchiveIndex
 from ... import groundedit, objectclones
 from . import session as a7m_session
 from . import sessionground as a7m_sessionground
-from .session import Session2205, unique_key
+from .session import CSession2205, unique_key
 from .sessionground import set_axes
 
 EDIT_PREFIX = "2205_"  # edit files of 2205 sessions: island-edits/2205_<session>.json
@@ -42,85 +42,96 @@ def edit_name(source: str) -> str:
 # Objects
 
 
-def _set_free_orientation(o: filedb.Tag, rotation: list[float], scale: float) -> None:
-    free = o.find("FreeOrientation")
+def _set_free_orientation(game_object: filedb.STag, rotation: list[float], scale: float) -> None:
+    free = game_object.find("FreeOrientation")
     if free is None:
-        free = filedb.Tag("FreeOrientation", [])
-        o.children.append(free)
+        free = filedb.STag("FreeOrientation", [])
+        game_object.children.append(free)
     for name, data in (("Orientation", struct.pack("<4f", *rotation)), ("Scale", struct.pack("<f", scale))):
-        attr = free.find(name)
-        if attr is not None:
-            attr.data = data
+        attribute = free.find(name)
+        if attribute is not None:
+            attribute.data = data
         else:
-            free.children.append(filedb.Attrib(name, data))
+            free.children.append(filedb.SAttrib(name, data))
 
 
-def set_object(o: filedb.Tag, change: dict) -> None:
+def set_object(game_object: filedb.STag, change: dict) -> None:
     """Apply an object edit (``position`` / ``rotation`` / ``scale``) to a 2205 object. A turn about the vertical
     axis alone is ``Direction``; a tilt or a scale needs ``FreeOrientation``, which then holds the whole rotation."""
     if "position" in change:
-        pos = o.find("Position")
-        if pos is None:
-            pos = filedb.Tag("Position", [])
-            o.children.append(pos)
-        set_axes(pos, dict(zip("xyz", map(float, change["position"]), strict=True)))
+        position_tag = game_object.find("Position")
+        if position_tag is None:
+            position_tag = filedb.STag("Position", [])
+            game_object.children.append(position_tag)
+        set_axes(position_tag, dict(zip("xyz", map(float, change["position"]), strict=True)))
     if "rotation" not in change and "scale" not in change:
         return
-    rotation = [float(v) for v in change.get("rotation", a7m_session.object_rotation(o))]
-    scale = float(change.get("scale", a7m_session.object_scale(o)))
+    rotation = [float(value) for value in change.get("rotation", a7m_session.object_rotation(game_object))]
+    scale = float(change.get("scale", a7m_session.object_scale(game_object)))
     upright = abs(rotation[0]) < 1e-4 and abs(rotation[2]) < 1e-4
     if upright:
         degrees = math.degrees(-2.0 * math.atan2(rotation[1], rotation[3])) % 360
-        set_axes(o, {"Direction": degrees})
-    if o.find("FreeOrientation") is not None or not upright or abs(scale - 1.0) > 1e-6:
-        _set_free_orientation(o, rotation, scale)
+        set_axes(game_object, {"Direction": degrees})
+    if game_object.find("FreeOrientation") is not None or not upright or abs(scale - 1.0) > 1e-6:
+        _set_free_orientation(game_object, rotation, scale)
 
 
-def _tags(isl: Session2205) -> dict[str, filedb.Tag]:
+def _tags(session: CSession2205) -> dict[str, filedb.STag]:
     """The object lists of the session by group (none in a scene without objects)."""
-    gom = isl.gm.find("GameObjectManager")
-    lists = {g: gom.path(f"{g}/objects") if gom is not None else None for g in a7m_session.OBJECT_GROUPS}
-    return {g: objs for g, objs in lists.items() if objs is not None}
+    game_object_manager = session.game_session_manager.find("GameObjectManager")
+    lists = {
+        group: game_object_manager.path(f"{group}/objects") if game_object_manager is not None else None
+        for group in a7m_session.OBJECT_GROUPS
+    }
+    return {group: objs for group, objs in lists.items() if objs is not None}
 
 
-def _referenced(isl: Session2205) -> set[bytes]:
+def _referenced(session: CSession2205) -> set[bytes]:
     """The object IDs that labels, object groups and snap pairs name: deleting such an object leaves them dangling."""
     out: set[bytes] = set()
     for path in ("GameObjectManager/GameObjectLabelMap", "GameObjectManager/ObjectGroupCollection", "CSlotManager"):
-        node = isl.gm.path(path)
+        node = session.game_session_manager.path(path)
         if node is not None:
-            out |= {a.data for a in node.iter() if isinstance(a, filedb.Attrib) and len(a.data) == 8}
+            out |= {
+                attribute.data
+                for attribute in node.iter()
+                if isinstance(attribute, filedb.SAttrib) and len(attribute.data) == 8
+            }
     return out
 
 
-def _next_serial(lists: dict[str, filedb.Tag], high: bytes) -> int:
+def _next_serial(lists: dict[str, filedb.STag], high: bytes) -> int:
     """One past the highest serial among the objects whose ID carries this high word (the asset's kind)."""
     serials = [
-        struct.unpack("<I", o.find("ID").data[:4])[0]
+        struct.unpack("<I", game_object.find("ID").data[:4])[0]
         for objs in lists.values()
-        for o in objs.children
-        if isinstance(o, filedb.Tag) and o.find("ID") is not None and o.find("ID").data[4:] == high
+        for game_object in objs.children
+        if isinstance(game_object, filedb.STag)
+        and game_object.find("ID") is not None
+        and game_object.find("ID").data[4:] == high
     ]
     return max(serials, default=0) + 1
 
 
-def _sample(lists: dict[str, filedb.Tag], guid: int, plain: bool) -> tuple[filedb.Tag, int, filedb.Tag] | None:
+def _sample(lists: dict[str, filedb.STag], guid: int, plain: bool) -> tuple[filedb.STag, int, filedb.STag] | None:
     """(objects list, index, object) of the first object of this asset; with ``plain`` (an entry placed from the asset
     list), of the first game object when the session holds none of it."""
     found = [
-        (objs, k, o)
+        (objs, k, game_object)
         for objs in lists.values()
-        for k, o in enumerate(objs.children)
-        if isinstance(o, filedb.Tag) and o.find("guid") is not None and o.find("ID") is not None
+        for k, game_object in enumerate(objs.children)
+        if isinstance(game_object, filedb.STag)
+        and game_object.find("guid") is not None
+        and game_object.find("ID") is not None
     ]
-    same = next((f for f in found if f[2].find("guid").u32() == guid), None)
+    same = next((candidate for candidate in found if candidate[2].find("guid").u32() == guid), None)
     if same is None and plain:
         game = lists.get("GameObject")
-        same = next((f for f in found if f[0] is game), None)
+        same = next((candidate for candidate in found if candidate[0] is game), None)
     return same
 
 
-def _clone(lists: dict[str, filedb.Tag], guid: int, entry: dict, report: dict) -> bool:
+def _clone(lists: dict[str, filedb.STag], guid: int, entry: dict, report: dict) -> bool:
     """Place a copy of the first object of this asset (``_sample``) where the entry says, next to the original, with an
     ID of its own and the entry's asset. False when the session holds nothing to copy. A copy of another asset's
     object keeps that object's kind (the ID's high word): the report lists it (an unverified guess, see
@@ -128,11 +139,11 @@ def _clone(lists: dict[str, filedb.Tag], guid: int, entry: dict, report: dict) -
     found = _sample(lists, guid, bool(entry.get("plain")))
     if found is None:
         return False
-    objs, k, o = found
-    if o.find("guid").u32() != guid:
+    objs, k, game_object = found
+    if game_object.find("guid").u32() != guid:
         report.setdefault("placed with another asset's kind", []).append(f"guid:{guid}")
-    new = copy.deepcopy(o)
-    high = o.find("ID").data[4:]
+    new = copy.deepcopy(game_object)
+    high = game_object.find("ID").data[4:]
     new.find("ID").data = struct.pack("<I", _next_serial(lists, high)) + high
     new.find("guid").data = struct.pack("<I", guid)
     if "variation" in entry:
@@ -146,25 +157,32 @@ def _scale(entry: dict) -> dict:
     return {"scale": entry["scale"]} if "scale" in entry else {}
 
 
-def apply_objects(isl: Session2205, edits: dict, report: dict) -> None:
-    lists, seen, refs = _tags(isl), {}, _referenced(isl)
+def apply_objects(session: CSession2205, edits: dict, report: dict) -> None:
+    lists, seen, refs = _tags(session), {}, _referenced(session)
 
     def keyed():
         for objs in lists.values():
-            for o in list(objs.children):
-                name = islandedits.object_name(o) if isinstance(o, filedb.Tag) and o.find("guid") is not None else None
+            for game_object in list(objs.children):
+                name = (
+                    islandedits.object_name(game_object)
+                    if isinstance(game_object, filedb.STag) and game_object.find("guid") is not None
+                    else None
+                )
                 if name:
-                    yield unique_key(islandedits.key(name, a7m_session.object_position(o)), seen), (objs, o)
+                    yield (
+                        unique_key(islandedits.key(name, a7m_session.object_position(game_object)), seen),
+                        (objs, game_object),
+                    )
 
-    def remove(dead: list[tuple[filedb.Tag, filedb.Tag]]) -> None:
-        for objs, o in dead:
-            objs.children.remove(o)
+    def remove(dead: list[tuple[filedb.STag, filedb.STag]]) -> None:
+        for objs, game_object in dead:
+            objs.children.remove(game_object)
 
-    def referenced(handle: tuple[filedb.Tag, filedb.Tag]) -> bool:
+    def referenced(handle: tuple[filedb.STag, filedb.STag]) -> bool:
         ident = handle[1].find("ID")
         return ident is not None and ident.data in refs
 
-    ops = objectedits.ObjectOps(lambda handle, change: set_object(handle[1], change), remove, referenced)
+    ops = objectedits.SObjectOps(lambda handle, change: set_object(handle[1], change), remove, referenced)
     objectedits.apply_changes(keyed(), edits.get("objects", {}), ops, report)
     objectedits.add_each(
         edits.get("added_objects", []),
@@ -177,54 +195,56 @@ def apply_objects(isl: Session2205, edits: dict, report: dict) -> None:
 # Props
 
 
-def _new_prop(entry: dict) -> filedb.Tag:
+def _new_prop(entry: dict) -> filedb.STag:
     scale = entry.get("scale", 1.0)
     scale = scale if isinstance(scale, list) else [scale] * 3
-    return filedb.Tag(
+    return filedb.STag(
         "#1",
         [
-            filedb.Attrib("FileName", entry["cfg"].encode("utf-16-le")),
-            filedb.Attrib("Position", struct.pack("<3f", *map(float, entry["position"]))),
-            filedb.Attrib("Rotation", struct.pack("<4f", *map(float, entry.get("rotation", (0, 0, 0, 1))))),
-            filedb.Attrib("Scale", struct.pack("<3f", *map(float, scale))),
-            filedb.Attrib("Color", struct.pack("<4f", 1.0, 1.0, 1.0, 0.0)),
+            filedb.SAttrib("FileName", entry["cfg"].encode("utf-16-le")),
+            filedb.SAttrib("Position", struct.pack("<3f", *map(float, entry["position"]))),
+            filedb.SAttrib("Rotation", struct.pack("<4f", *map(float, entry.get("rotation", (0, 0, 0, 1))))),
+            filedb.SAttrib("Scale", struct.pack("<3f", *map(float, scale))),
+            filedb.SAttrib("Color", struct.pack("<4f", 1.0, 1.0, 1.0, 0.0)),
         ],
     )
 
 
-def _set_prop(p: filedb.Tag, change: dict) -> None:
+def _set_prop(prop: filedb.STag, change: dict) -> None:
     """A prop edit on its item; a ``Rotation`` or ``Scale`` the item does not store (the game's default) is added."""
     packed = {
-        name.capitalize(): struct.pack(fmt, *map(float, change[name]))
-        for name, fmt in (("position", "<3f"), ("rotation", "<4f"))
+        name.capitalize(): struct.pack(struct_format, *map(float, change[name]))
+        for name, struct_format in (("position", "<3f"), ("rotation", "<4f"))
         if name in change
     }
     if "scale" in change:
-        s = change["scale"]
-        packed["Scale"] = struct.pack("<3f", *(map(float, s) if isinstance(s, list) else (float(s),) * 3))
+        scale_value = change["scale"]
+        packed["Scale"] = struct.pack(
+            "<3f", *(map(float, scale_value) if isinstance(scale_value, list) else (float(scale_value),) * 3)
+        )
     for name, data in packed.items():
-        attr = p.find(name)
-        if attr is not None:
-            attr.data = data
+        attribute = prop.find(name)
+        if attribute is not None:
+            attribute.data = data
         else:
-            p.children.append(filedb.Attrib(name, data))
+            prop.children.append(filedb.SAttrib(name, data))
 
 
-def apply_props(isl: Session2205, edits: dict, report: dict) -> None:
-    props = isl.rd.path("PropGrid/Props")
+def apply_props(session: CSession2205, edits: dict, report: dict) -> None:
+    props = session.rd3d.path("PropGrid/Props")
     wanted, seen, dead = dict(edits.get("props", {})), {}, set()
-    for p in isl.prop_tags():
-        key = unique_key(islandedits.key(*_cfg_position(p)), seen)
+    for prop in session.prop_tags():
+        key = unique_key(islandedits.key(*_cfg_position(prop)), seen)
         change = wanted.pop(key, None)
         if change is None:
             continue
         if change.get("deleted"):
-            dead.add(id(p))
+            dead.add(id(prop))
         else:
-            _set_prop(p, change)
+            _set_prop(prop, change)
             report["props changed"] += 1
     if props is not None:
-        props.children = [p for p in props.children if id(p) not in dead]
+        props.children = [prop for prop in props.children if id(prop) not in dead]
         for entry in edits.get("added_props", []):
             props.children.append(_new_prop(entry))
             report["props added"] += 1
@@ -232,40 +252,40 @@ def apply_props(isl: Session2205, edits: dict, report: dict) -> None:
     report["unmatched"] += sorted(wanted)
 
 
-def _cfg_position(p: filedb.Tag) -> tuple[str, list[float]]:
-    return p.find("FileName").data.decode("utf-16-le").replace("\\", "/"), list(
-        struct.unpack("<3f", p.find("Position").data)
+def _cfg_position(prop: filedb.STag) -> tuple[str, list[float]]:
+    return prop.find("FileName").data.decode("utf-16-le").replace("\\", "/"), list(
+        struct.unpack("<3f", prop.find("Position").data)
     )
 
 
 # Apply and write
 
 
-def apply(isl: Session2205, edits: dict) -> dict:
+def apply(session: CSession2205, edits: dict) -> dict:
     """Put ``edits`` on an opened session and say what matched; ``members`` names the files that changed."""
     report = {"objects changed": 0, "objects deleted": 0, "objects added": 0, "props changed": 0}
     report |= {"props deleted": 0, "props added": 0, "unmatched": [], "still referenced": []}
-    ground = a7m_sessionground.apply(isl, edits)
-    apply_objects(isl, edits, report)
+    ground = a7m_sessionground.apply(session, edits)
+    apply_objects(session, edits, report)
     if edits.get("props") or edits.get("added_props"):
-        apply_props(isl, edits, report)
+        apply_props(session, edits, report)
     report["members"] = [
-        n
-        for n, hit in (
+        member_name
+        for member_name, changed_count in (
             ("gamedata.data", report["objects changed"] + report["objects deleted"] + report["objects added"]),
             ("rd3d.data", report["props changed"] + report["props deleted"] + report["props added"]),
         )
-        if hit or n in ground["members"]
+        if changed_count or member_name in ground["members"]
     ]
-    report |= {k: v for k, v in ground.items() if k != "members"}
+    report |= {k: value for k, value in ground.items() if k != "members"}
     report["unmatched"] += groundedit.unmatched(ground)
     return report
 
 
-def member_bytes(isl: Session2205, name: str) -> bytes:
+def member_bytes(session: CSession2205, name: str) -> bytes:
     """A member as the engine reads it, in the layout it was read in (an unedited one is the original, byte for byte)."""
-    tree = isl.gd if name == "gamedata.data" else isl.rd
-    return filedb.write(tree, *isl.ids[name], version=isl.versions[name])
+    tree = session.gamedata if name == "gamedata.data" else session.rd3d
+    return filedb.write(tree, *session.file_name_ids[name], version=session.file_versions[name])
 
 
 def edited_members(files, edits_dir: Path, log: Callable[[str], None] = print) -> tuple[dict[str, bytes], list[str]]:
@@ -278,12 +298,12 @@ def edited_members(files, edits_dir: Path, log: Callable[[str], None] = print) -
         if not source:
             log(tr("islands.no_source_session_skipped", name=path.name))
             continue
-        isl = Session2205(files, source)
-        report = apply(isl, edits)
-        log(tr("islands.source_report", source=source, report={k: v for k, v in report.items() if v}))
+        session = CSession2205(files, source)
+        report = apply(session, edits)
+        log(tr("islands.source_report", source=source, report={k: value for k, value in report.items() if value}))
         for name in report["members"]:
-            members[isl.member_paths[name]] = member_bytes(isl, name)
-        members.update(isl.new_files)
+            members[session.member_paths[name]] = member_bytes(session, name)
+        members.update(session.new_files)
         written.append(source)
     return members, written
 
@@ -291,9 +311,9 @@ def edited_members(files, edits_dir: Path, log: Callable[[str], None] = print) -
 def pack(members: dict[str, bytes], index_raw: bytes) -> dict[str, bytes]:
     """Our archive holding ``members`` and the game's archive index (``index_raw``) pointing at them, by their path
     in the install (``ARCHIVE``, ``FILE_DB``). A path the index lacks is not a file of this install."""
-    index = ArchiveIndex(index_raw)
+    index = CArchiveIndex(index_raw)
     archive = write_v22(members)
-    entries = RdaArchive.from_bytes(archive).entries
+    entries = CRdaArchive.from_bytes(archive).entries
     for path in members:
         if index.entry(path) is None:
             raise ValueError(tr("islands.games_archive_index_no_entry", path=path))
@@ -313,8 +333,8 @@ def build(files, index_raw: bytes, edits_dir: Path, out: Path, log: Callable[[st
     if not members:
         log(tr("islands.no_edit_changes_session_nothing"))
         return []
-    for rel, data in pack(members, index_raw).items():
-        (out / rel).write_bytes(data)
+    for relative_path, data in pack(members, index_raw).items():
+        (out / relative_path).write_bytes(data)
     return written
 
 
@@ -323,7 +343,7 @@ def build(files, index_raw: bytes, edits_dir: Path, out: Path, log: Callable[[st
 
 def is_ours(index_raw: bytes) -> bool:
     """Whether an archive index lists our archive: the one ``install`` wrote."""
-    return ARCHIVE in ArchiveIndex(index_raw).archive_names()
+    return ARCHIVE in CArchiveIndex(index_raw).archive_names()
 
 
 def original_index(game: Path, old_backup: Path | None = None) -> bytes:

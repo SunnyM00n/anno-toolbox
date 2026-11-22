@@ -83,7 +83,7 @@ EDITIONS = {
 def edition_of(tree: Path, wanted: str | None = None) -> Edition:
     """The edition a source tree is: its one package under ``src/`` says it (``annotoolbox`` is the public one);
     ``wanted`` must agree when given. The result carries the package's name."""
-    found = sorted(d.name for d in (tree / "src").glob("*") if (d / "__init__.py").is_file())
+    found = sorted(directory.name for directory in (tree / "src").glob("*") if (directory / "__init__.py").is_file())
     if len(found) != 1:
         raise SystemExit(f"{tree}: expected exactly one package under src/, found {found}")
     edition = EDITIONS["public" if found[0] == EDITIONS["public"].package else "full"]
@@ -114,7 +114,7 @@ def msi_version(version: str) -> str:
     numbers = re.match(r"\d+(?:\.\d+){0,2}", version)
     if not numbers:
         raise SystemExit(f"cannot make an installer version of {version!r}")
-    parts = [int(p) for p in numbers.group(0).split(".")]
+    parts = [int(part) for part in numbers.group(0).split(".")]
     parts += [0] * (3 - len(parts))
     if parts[0] > 255 or parts[1] > 255 or parts[2] > 65535:
         raise SystemExit(f"{version}: too large for an installer version (255.255.65535)")
@@ -147,7 +147,7 @@ def find_texconv(tree: Path, environ: dict[str, str]) -> Path | None:
     options += [tree / "tools" / "texconv.exe", ROOT / "tools" / "texconv.exe"]
     if on_path := shutil.which("texconv"):
         options.append(Path(on_path))
-    return next((p for p in options if p.is_file()), None)
+    return next((option for option in options if option.is_file()), None)
 
 
 def third_party(names=THIRD_PARTY) -> list[tuple[str, str, str]]:
@@ -155,11 +155,15 @@ def third_party(names=THIRD_PARTY) -> list[tuple[str, str, str]]:
     out = []
     for name in names:
         try:
-            meta = importlib.metadata.metadata(name)
+            metadata = importlib.metadata.metadata(name)
         except importlib.metadata.PackageNotFoundError:
             continue
-        licence = meta.get("License-Expression") or (meta.get("License") or "").splitlines()[:1] or ["see its package"]
-        out.append((name, meta["Version"], licence if isinstance(licence, str) else licence[0]))
+        licence = (
+            metadata.get("License-Expression")
+            or (metadata.get("License") or "").splitlines()[:1]
+            or ["see its package"]
+        )
+        out.append((name, metadata["Version"], licence if isinstance(licence, str) else licence[0]))
     return out
 
 
@@ -168,14 +172,18 @@ def third_party_text(found: list[tuple[str, str, str]], windows: bool = True) ->
     and no Direct3D 12 module)."""
     lines = ["Third-party software in this folder", ""]
     lines += [f"{name} {version} - {licence}" for name, version, licence in found]
-    lines += [f"{n} - {lic} ({note})" for n, lic, note in THIRD_PARTY_FIXED if windows or n not in WINDOWS_ONLY]
+    lines += [
+        f"{fixed_name} - {fixed_licence} ({note})"
+        for fixed_name, fixed_licence, note in THIRD_PARTY_FIXED
+        if windows or fixed_name not in WINDOWS_ONLY
+    ]
     lines += ["", "Each project's licence text is in its folder under _internal/ where it ships one."]
     return "\n".join(lines) + "\n"
 
 
 def folder_files(folder: Path) -> list[str]:
     """Every file of the program folder, relative with "/", sorted (the installer's file list)."""
-    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
+    return sorted(path.relative_to(folder).as_posix() for path in folder.rglob("*") if path.is_file())
 
 
 # Release verification

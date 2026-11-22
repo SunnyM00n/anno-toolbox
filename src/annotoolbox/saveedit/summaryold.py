@@ -6,8 +6,8 @@ save of either game was available, so what a real save adds (the players' econom
 from __future__ import annotations
 
 from ..infra.i18n import N_
-from .container import SaveFile
-from .records import Section, Summary, Table
+from .container import SSaveFile
+from .records import CSummary, SSection, STable
 
 WORLD = "WorldConfig"
 SIZE = (("Width", "Height"), ("m_Width", "m_Height"))  # 1404's names, 1701's
@@ -34,10 +34,12 @@ def _world(root):
     return root.find(WORLD) if root is not None else None
 
 
-def _islands(world) -> Table:
-    table = Table([N_("islands.island"), N_("common.name"), N_("common.file"), N_("saves.position"), N_("saves.size")])
+def _islands(world) -> STable:
+    table = STable([N_("islands.island"), N_("common.name"), N_("common.file"), N_("saves.position"), N_("saves.size")])
     islands = world.find("Islands") if world is not None else None
-    for number, value in enumerate((c for c in islands.children if c.name == "v") if islands is not None else [], 1):
+    for number, value in enumerate(
+        (child for child in islands.children if child.name == "v") if islands is not None else [], 1
+    ):
         config = value.find("IslandConfig") or value
         got = {key: _first(config, *names) for key, names in ISLAND_FIELDS.items()}
         table.rows.append([
@@ -46,36 +48,36 @@ def _islands(world) -> Table:
     return table
 
 
-def _players(world) -> Table | None:
+def _participants(world) -> STable | None:
     infos = world.path("GameData/PlayerInfos") if world is not None else None
     if infos is None:
         return None
-    table = Table([N_("saves.player"), N_("ui.type"), N_("mods.profile"), N_("common.colour")])
-    for number, value in enumerate(c for c in infos.children if c.name == "v"):
+    table = STable([N_("saves.player"), N_("ui.type"), N_("mods.profile"), N_("common.colour")])
+    for number, value in enumerate(child for child in infos.children if child.name == "v"):
         table.rows.append([str(number), _first(value, "m_Type"), _first(value, "m_Profile"), _first(value, "m_Color")])
     return table
 
 
-def summarize(save: SaveFile) -> Summary:
-    s = Summary(save.game)
+def summarize(save: SSaveFile) -> CSummary:
+    summary = CSummary(save.game)
     part = save.parts[0] if save.parts else None
     world = _world(part.tree()) if part is not None and part.tree() is not None else None
     if world is None:
-        s.note(N_("saves.no_world_found_save_shown"))
-        return s
-    sec = s.section(N_("common.save"))
-    sec.rows += [
+        summary.note(N_("saves.no_world_found_save_shown"))
+        return summary
+    section_node = summary.section(N_("common.save"))
+    section_node.rows += [
         (N_("common.game"), "Anno 1404" if save.game == "anno1404" else "Anno 1701"),
         (N_("saves.saved_game"), _first(world, "m_IsSaveGame")),
         (N_("saves.world_name"), _first(world, "m_Name")),
         (N_("saves.world_size"), _size(world)),
     ]
-    s.sections.append(Section(N_("common.islands"), table=_islands(world)))
-    players = _players(world)
-    if players is not None:
-        s.sections.append(Section(N_("saves.players"), table=players))
-    s.note(N_("saves.only_world_read_no_save"))
-    return s
+    summary.m_sections.append(SSection(N_("common.islands"), table=_islands(world)))
+    participants = _participants(world)
+    if participants is not None:
+        summary.m_sections.append(SSection(N_("saves.players"), table=participants))
+    summary.note(N_("saves.only_world_read_no_save"))
+    return summary
 
 
 def _size(world) -> str:

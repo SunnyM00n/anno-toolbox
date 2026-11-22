@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QLabel, QMessageBox
 
 from .. import __version__
 from ..infra.i18n import tr
-from . import updates
+from . import centralmenu, updates
 
 
 def applies() -> bool:
@@ -51,8 +51,7 @@ def about(window) -> None:
 
 def attach(window) -> QAction:
     """``Help > About...`` of a suite window (the menu is the update checker's or the setup's, else made here)."""
-    menu = next((a.menu() for a in window.menuBar().actions() if a.text() == tr("islands.help")), None)
-    menu = menu or window.menuBar().addMenu(tr("islands.help"))
+    menu = centralmenu.menu_of(window, centralmenu.HELP)
     action = QAction(tr("common.about_toolbox_dots"), window)
     action.triggered.connect(lambda _c=False: about(window))
     menu.addAction(action)

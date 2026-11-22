@@ -17,7 +17,7 @@ from ..sources import gametree
 FOLDER = "converter"  # the app's folder in the workspace and in a project
 
 
-def open_tree(settings, game: str) -> gametree.GameTree:
+def open_tree(settings, game: str) -> gametree.CGameTree:
     """The installed game ``game`` of the settings, with the suite's index of its archives."""
     folder = getattr(settings, game, "")
     if not folder or not Path(folder).is_dir():
@@ -29,11 +29,11 @@ def paths(tree, suffixes: tuple[str, ...], query: str = "", limit: int = 400) ->
     """The game's paths with one of ``suffixes`` (any when empty) that contain every word of ``query``."""
     words = query.lower().split()
     found = []
-    for p in tree.paths:
-        if suffixes and not p.endswith(suffixes):
+    for path in tree.m_paths:
+        if suffixes and not path.endswith(suffixes):
             continue
-        if all(w in p for w in words):
-            found.append(p)
+        if all(word in path for word in words):
+            found.append(path)
             if len(found) >= limit:
                 break
     return found
@@ -43,8 +43,8 @@ def fresh_folder(settings, game: str) -> Path:
     """A new folder below the workspace for one pick of a game's files."""
     root = Path(settings.workspace) / FOLDER / "game-files" / game
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    for n in range(1, 1000):
-        folder = root / (stamp if n == 1 else f"{stamp}-{n}")
+    for attempt in range(1, 1000):
+        folder = root / (stamp if attempt == 1 else f"{stamp}-{attempt}")
         if not folder.exists():
             return folder
     raise FileExistsError(root)
@@ -54,10 +54,10 @@ def extract(tree, chosen: list[str], folder: Path) -> list[Path]:
     """Write each of ``chosen`` below ``folder`` at its game path, as stored; a path that would leave it is refused."""
     written = []
     for path in chosen:
-        rel = PurePosixPath(path)
-        if rel.is_absolute() or ".." in rel.parts or ":" in path:
+        relative_path = PurePosixPath(path)
+        if relative_path.is_absolute() or ".." in relative_path.parts or ":" in path:
             raise ValueError(f"{path}: not a path inside the game")
-        target = folder.joinpath(*rel.parts)
+        target = folder.joinpath(*relative_path.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(tree.read(path))
         written.append(target)

@@ -111,15 +111,18 @@ def light_uniforms(lights, places, color_of, middle) -> tuple[int, bytes, bytes,
     """(count, positions, colours, (reach, falloff)) of the lights nearest ``middle`` (view space), packed as the
     shader's arrays; ``places`` their matrices in view space, ``color_of(light)`` its colour this frame."""
     found = sorted(
-        ((float(np.linalg.norm(m[:3, 3] - middle)), light, m) for light, m in zip(lights, places, strict=True)),
+        (
+            (float(np.linalg.norm(matrix[:3, 3] - middle)), light, matrix)
+            for light, matrix in zip(lights, places, strict=True)
+        ),
         key=lambda row: row[0],
     )[:MAX_LIGHTS]
-    pos = np.zeros((MAX_LIGHTS, 3), "f4")
+    positions = np.zeros((MAX_LIGHTS, 3), "f4")
     col = np.zeros((MAX_LIGHTS, 3), "f4")
     reach = np.zeros((MAX_LIGHTS, 2), "f4")
-    for k, (_d, light, m) in enumerate(found):
-        pos[k], col[k], reach[k] = m[:3, 3], color_of(light), (light.range, light.falloff)
-    return len(found), pos.tobytes(), col.tobytes(), reach.tobytes()
+    for k, (_d, light, matrix) in enumerate(found):
+        positions[k], col[k], reach[k] = matrix[:3, 3], color_of(light), (light.range, light.falloff)
+    return len(found), positions.tobytes(), col.tobytes(), reach.tobytes()
 
 
 def decal_quad(extents: tuple[float, float]) -> tuple[np.ndarray, np.ndarray]:

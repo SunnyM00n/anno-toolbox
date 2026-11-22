@@ -1,6 +1,6 @@
 """The binary tag tree (``BIN ``) of Anno 2070's savegames: read and written back byte for byte.
 
-``read`` gives a ``Tree`` (the nodes as ``isd2070.Node``: ``text`` for a text value, ``data`` for bytes) and the tag
+``read`` gives a ``STree`` (the nodes as ``isd2070.SNode``: ``text`` for a text value, ``data`` for bytes) and the tag
 table in file order; ``write`` is its inverse. The layout is ``docs/save-editor.md``, "Anno 2070 in detail".
 """
 
@@ -9,27 +9,27 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from .isd2070 import Node
+from .isd2070 import SNode
 
 MAGIC, MAP, END = b"BIN ", b"MAP ", b"END "
 TEXT, CLOSE = -1, -1  # a length of -1: a NUL-terminated text follows; a tag number of -1 closes a node
 
 
-class BinTreeError(ValueError):
+class CBinTreeError(ValueError):
     pass
 
 
 @dataclass
-class Tree:
+class STree:
     """The top-level nodes and the tag table (name -> number, in the order the file lists them)."""
 
-    nodes: list[Node] = field(default_factory=list)
+    nodes: list[SNode] = field(default_factory=list)
     tags: dict[str, int] = field(default_factory=dict)
 
-    def find(self, name: str) -> Node | None:
-        return next((n for n in self.nodes if n.name == name), None)
+    def find(self, name: str) -> SNode | None:
+        return next((name_length for name_length in self.nodes if name_length.name == name), None)
 
-    def path(self, path: str) -> Node | None:
+    def path(self, path: str) -> SNode | None:
         first, _, rest = path.partition("/")
         node = self.find(first)
         return node.path(rest) if node is not None and rest else node
@@ -40,66 +40,73 @@ def _unnamed(name: str) -> bool:
     return name.startswith("#") and name[1:].isdigit()
 
 
-def is_bintree(b: bytes) -> bool:
-    return b[:4] == MAGIC and len(b) >= 16 and b[-8:-4] == END
+def is_bintree(data: bytes) -> bool:
+    return data[:4] == MAGIC and len(data) >= 16 and data[-8:-4] == END
 
 
-def _table(b: bytes) -> tuple[int, dict[int, str], dict[str, int]]:
-    (map_at,) = struct.unpack_from("<I", b, len(b) - 4)
-    if b[map_at : map_at + 4] != MAP:
-        raise BinTreeError("no MAP table where the end says")
-    (count,) = struct.unpack_from("<I", b, map_at + 4)
+def _table(data: bytes) -> tuple[int, dict[int, str], dict[str, int]]:
+    (map_at,) = struct.unpack_from("<I", data, len(data) - 4)
+    if data[map_at : map_at + 4] != MAP:
+        raise CBinTreeError("no MAP table where the end says")
+    (count,) = struct.unpack_from("<I", data, map_at + 4)
     names, order, i = {}, {}, map_at + 8
     for _ in range(count):
-        n = b[i]
-        name = b[i + 1 : i + n].decode("latin-1")
-        (number,) = struct.unpack_from("<i", b, i + 1 + n)
+        name_length = data[i]
+        name = data[i + 1 : i + name_length].decode("latin-1")
+        (number,) = struct.unpack_from("<i", data, i + 1 + name_length)
         names[number] = name
         order[name] = number
-        i += 1 + n + 4
-    if b[i : i + 4] != END or i + 8 != len(b):
-        raise BinTreeError("the MAP table does not end at END")
+        i += 1 + name_length + 4
+    if data[i : i + 4] != END or i + 8 != len(data):
+        raise CBinTreeError("the MAP table does not end at END")
     return map_at, names, order
 
 
-def read(b: bytes) -> Tree:
-    if not is_bintree(b):
-        raise BinTreeError("not a binary tag tree")
-    end, names, order = _table(b)
-    tree = Tree(tags=order)
-    stack: list[Node] = []
+def read(data: bytes) -> STree:
+    if not is_bintree(data):
+        raise CBinTreeError("not a binary tag tree")
+    try:
+        return _read(data)
+    except (struct.error, IndexError) as exc:
+        raise CBinTreeError(f"truncated binary tag tree: {exc}") from None
+
+
+def _read(data: bytes) -> STree:
+    end, names, order = _table(data)
+    tree = STree(tags=order)
+    stack: list[SNode] = []
     i = 4
     while i < end:
-        (number,) = struct.unpack_from("<i", b, i)
+        (number,) = struct.unpack_from("<i", data, i)
         i += 4
         if number == CLOSE:
             if not stack:
-                raise BinTreeError(f"a close without a node at {i - 4}")
+                raise CBinTreeError(f"a close without a node at {i - 4}")
             stack.pop()
             continue
-        (size,) = struct.unpack_from("<i", b, i)
+        (size,) = struct.unpack_from("<i", data, i)
         i += 4
-        node = Node(names.get(number, f"#{number}"))
+        node = SNode(names.get(number, f"#{number}"))
         if size == TEXT:
-            stop = b.index(b"\0", i)
-            node.text = b[i:stop].decode("latin-1")
+            stop = data.index(b"\0", i)
+            node.text = data[i:stop].decode("latin-1")
             i = stop + 1
         elif size > 0:
-            node.data = b[i : i + size]
+            node.data = data[i : i + size]
             i += size
         (stack[-1].children if stack else tree.nodes).append(node)
         stack.append(node)
     if stack:
-        raise BinTreeError(f"{len(stack)} node(s) not closed")
+        raise CBinTreeError(f"{len(stack)} node(s) not closed")
     return tree
 
 
-def write(tree: Tree) -> bytes:
+def write(tree: STree) -> bytes:
     """The bytes of ``tree``; a tag the table lacks gets the next number."""
     tags = dict(tree.tags)
     out = bytearray(MAGIC)
 
-    def emit(node: Node) -> None:
+    def emit(node: SNode) -> None:
         if node.name not in tags and not _unnamed(node.name):
             tags[node.name] = max(tags.values(), default=0) + 1
         out.extend(struct.pack("<i", int(node.name[1:]) if _unnamed(node.name) else tags[node.name]))

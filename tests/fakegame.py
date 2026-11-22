@@ -1,11 +1,5 @@
-"""A stand-in for the game's side of the live link: the same protocol (``suite/linkprotocol``) served from Python.
-
-``FakeGame`` answers over any ``Channel``: ``pair()`` gives a client channel joined to one by a socket (every platform),
-``pipe_server()`` serves a real named pipe (Windows). It checks the handshake with the token, applies the closed message
-set, keeps every request in ``requests``, lets a test choose the answer per request (``answers``), delay it (``delay``),
-push events and cut the connection; a ``responder`` answers the requests an extension adds. What the real game side
-does with a request is the helper library's; this proves the client against the protocol.
-"""
+"""A stand-in for the running game the live link talks to: the socket and pipe ends, the protocol answers and the link
+client's own stand-in."""
 
 from __future__ import annotations
 
@@ -17,35 +11,37 @@ from pathlib import Path
 
 from annotoolbox.suite import linkprotocol as proto
 from annotoolbox.suite import livelink
-from annotoolbox.suite.linkclient import ChannelClosed, PipeChannel, PipeLink
+from annotoolbox.suite.linkclient import CChannelClosed, CPipeChannel, CPipeLink
 
 TOKEN = "0123456789abcdef0123456789abcdef"
+
+
 PIPE = r"\\.\pipe\anno117-live-link-1"  # a name the session file's rule takes (a socket pair needs none)
 
 
-class SocketChannel:
+class FakeSocketChannel:
     """A ``Channel`` over a socket (the portable double of the pipe)."""
 
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
 
-    def read(self, timeout: float) -> bytes:
-        self._sock.settimeout(max(timeout, 0.001))
+    def read(self, timeout_s: float) -> bytes:
+        self._sock.settimeout(max(timeout_s, 0.001))
         try:
             data = self._sock.recv(65536)
         except TimeoutError:
             return b""
         except OSError as error:
-            raise ChannelClosed(str(error)) from error
+            raise CChannelClosed(str(error)) from error
         if not data:
-            raise ChannelClosed("end of stream")
+            raise CChannelClosed("end of stream")
         return data
 
     def write(self, data: bytes) -> None:
         try:
             self._sock.sendall(data)
         except OSError as error:
-            raise ChannelClosed(str(error)) from error
+            raise CChannelClosed(str(error)) from error
 
     def close(self) -> None:
         try:
@@ -98,7 +94,7 @@ class FakeGame:
         return [name for name, _ in self.requests]
 
     def _serve(self) -> None:
-        reader = proto.FrameReader()
+        reader = proto.CFrameReader()
         challenge = proto.new_secret()
         try:
             self.channel.write(proto.encode_frame({"challenge": challenge, "protocol": proto.PROTOCOL}))
@@ -107,7 +103,7 @@ class FakeGame:
                     if not self._handle(frame, challenge):
                         self.channel.close()
                         return
-        except (OSError, proto.FrameError):
+        except (OSError, proto.CFrameError):
             return
 
     def _handle(self, frame: dict, challenge: str) -> bool:
@@ -182,11 +178,11 @@ class FakeGame:
         self.channel.write(proto.encode_frame(proto.answer_frame(request_id, status, message, data)))
 
 
-def pair(game: FakeGame | None = None) -> tuple[SocketChannel, FakeGame]:
+def pair(game: FakeGame | None = None) -> tuple[FakeSocketChannel, FakeGame]:
     """A client channel and the game serving its other end."""
     near, far = socket.socketpair()
-    game = (game or FakeGame()).attach(SocketChannel(far))
-    return SocketChannel(near), game
+    game = (game or FakeGame()).attach(FakeSocketChannel(far))
+    return FakeSocketChannel(near), game
 
 
 def pipe_name(game: str, pid: int = 1) -> str:
@@ -194,23 +190,23 @@ def pipe_name(game: str, pid: int = 1) -> str:
     return "\\\\.\\pipe\\" + f"{game}-live-link-{pid}"
 
 
-def session_for(game: FakeGame, pipe: str = "") -> proto.SessionInfo:
-    return proto.SessionInfo(
+def session_for(game: FakeGame, pipe: str = "") -> proto.SSessionInfo:
+    return proto.SSessionInfo(
         pipe or pipe_name(game.game), game.token, proto.PROTOCOL, game.game, game.build, "fake 1", 1
     )
 
 
-def connect(game: FakeGame | None = None) -> PipeLink:
+def connect(game: FakeGame | None = None) -> CPipeLink:
     """A client link with its handshake done, to ``game`` (a plain one by default) over a socket pair. The game is on
     ``link.game``; ``disconnect(link)`` ends both."""
     channel, game = pair(game)
-    link = PipeLink(channel)
+    link = CPipeLink(channel)
     assert link.open(session_for(game))
     link.game = game
     return link
 
 
-def disconnect(link: PipeLink) -> None:
+def disconnect(link: CPipeLink) -> None:
     link.close()
     link.game.drop()
 
@@ -225,7 +221,7 @@ def wait_for(condition, seconds: float = 3.0) -> bool:
     return bool(condition())
 
 
-def write_session(user_dir: Path, info: proto.SessionInfo) -> Path:
+def write_session(user_dir: Path, info: proto.SSessionInfo) -> Path:
     folder = proto.session_folder(user_dir)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / proto.SESSION_FILE
@@ -253,8 +249,27 @@ def pipe_server(game: FakeGame, name: str) -> threading.Thread:
 
     def accept() -> None:
         kernel.ConnectNamedPipe(handle, None)
-        game.attach(PipeChannel(handle))
+        game.attach(CPipeChannel(handle))
 
     thread = threading.Thread(target=accept, daemon=True)
     thread.start()
     return thread
+
+
+class FakeLink(livelink.CLiveLink):
+    """A connected live link with no transport: it answers ``DONE`` to what ``kinds`` covers and keeps every request
+    in ``sent`` (``(name, args)``); ``player(event, payload)`` plays an event of the game."""
+
+    def __init__(self, kinds=livelink.KINDS, game: str = "anno117", build: str = "3.0") -> None:
+        super().__init__()
+        self.set_status(livelink.SLinkStatus(True, game, build, frozenset(kinds)))
+
+    def _transmit(self, request):
+        return livelink.SReply(livelink.DONE, data={"name": request.name})
+
+    def player(self, event: str, payload: dict) -> None:
+        self.emit(event, payload)
+
+    @property
+    def names(self) -> list[str]:
+        return [s.name for s in self.m_sent]

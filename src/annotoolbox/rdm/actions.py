@@ -16,13 +16,13 @@ from ..formats.gltf import read_gltf
 from ..formats.rdmread import read_rdm
 from ..formats.rdmwrite import write_file
 from . import gltfrdm, listing
-from .gltfdoc import Options
+from .gltfdoc import SOptions
 
 GLTF_SUFFIXES = (".glb", ".gltf")
 
 
 @dataclass
-class ImportReport:
+class SImportReport:
     """The files an import makes (name -> bytes, the mesh files first) and what it says about them."""
 
     files: dict[str, bytes] = field(default_factory=dict)
@@ -30,12 +30,12 @@ class ImportReport:
     meshes: list[str] = field(default_factory=list)  # the names of the files that hold meshes
 
 
-def read_model(path: Path, name: str | None = None, options: Options | None = None) -> gltfrdm.Imported:
+def read_model(path: Path, name: str | None = None, options: SOptions | None = None) -> gltfrdm.SImported:
     """The import of a glTF file: its RDM files in memory, nothing written."""
     return gltfrdm.import_gltf(read_gltf(path), name or path.with_suffix(".rdm").name, options)
 
 
-def import_model(path: Path, target_name: str | None = None, options: Options | None = None) -> ImportReport:
+def import_model(path: Path, target_name: str | None = None, options: SOptions | None = None) -> SImportReport:
     """Import a ``.glb`` or ``.gltf``: ``target_name`` is the file name of the mesh file when the document holds one
     (default: the document's name with ``.rdm``); animation files and further meshes keep their own names."""
     target = target_name or path.with_suffix(".rdm").name
@@ -44,10 +44,10 @@ def import_model(path: Path, target_name: str | None = None, options: Options | 
     files = {}
     for name, rdm in got.files:
         files[target if len(meshes) == 1 and name == meshes[0] else name] = write_file(rdm)
-    return ImportReport(files, list(got.notes), [target if len(meshes) == 1 else m for m in meshes])
+    return SImportReport(files, list(got.notes), [target if len(meshes) == 1 else mesh for mesh in meshes])
 
 
-def write_files(report: ImportReport, folder: Path, force: bool = False) -> tuple[list[Path], list[str]]:
+def write_files(report: SImportReport, folder: Path, force: bool = False) -> tuple[list[Path], list[str]]:
     """Write the report's files into ``folder``; the paths written and the names left alone (they exist, no ``force``)."""
     folder.mkdir(parents=True, exist_ok=True)
     written, skipped = [], []
@@ -82,7 +82,11 @@ def describe_as_rdm(path: Path, values: bool = False, like_name: str = "") -> li
     if path.suffix.lower() not in GLTF_SUFFIXES:
         return listing.describe(read_rdm(path.read_bytes()), values)
     files = read_model(path).files
-    chosen = [f for f in files if f[0] == like_name] or [f for f in files if f[1].meshes][:1] or files[:1]
+    chosen = (
+        [entry for entry in files if entry[0] == like_name]
+        or [entry for entry in files if entry[1].meshes][:1]
+        or files[:1]
+    )
     if not chosen:
         raise ValueError(f"{path.name}: the import writes no file")
     return listing.describe(chosen[0][1], values)

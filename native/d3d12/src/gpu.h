@@ -67,6 +67,7 @@ struct Buffer : Held {
     nvrhi::BufferHandle get() const { return static_cast<nvrhi::IBuffer*>(handle.Get()); }
     uint64_t size = 0;
     uint64_t gpu_address() const;
+    uintptr_t native() const;  // its ID3D12Resource*
 };
 
 struct Texture : Held {
@@ -166,6 +167,7 @@ struct Device {
     void release_late(nvrhi::IResource* handle);
     std::vector<std::string> messages();  // NVRHI's and the debug layer's since the last call
     std::string adapter_name() const;
+    std::pair<uint64_t, uint64_t> video_memory() const;  // (this process's use, its budget) in bytes
     int shader_model() const;   // 0x62 for 6.2 ...
     int binding_tier() const;
 
@@ -208,6 +210,9 @@ struct PipelineState {
     float slope_bias = 0.0f;
     float bias_clamp = 0.0f;
     bool stencil = false;
+    // both faces' stencil test (renderstates.Stencil's words, lower case), its masks and reference value
+    std::string stencil_func = "always", stencil_pass = "keep", stencil_fail = "keep", stencil_depth_fail = "keep";
+    int stencil_read_mask = 0xFF, stencil_write_mask = 0xFF, stencil_ref = 0;
     bool wireframe = false;
     // per colour target: enable, src, dst, op, src alpha, dst alpha, op alpha, write mask
     std::vector<std::tuple<bool, std::string, std::string, std::string, std::string, std::string, std::string, int>>
@@ -232,6 +237,8 @@ struct Draw {
     uint64_t index_offset = 0;
     uint32_t count = 0, instances = 1, first = 0, base_vertex = 0, first_instance = 0;
     std::string push;  // push constants' bytes
+    uint64_t root_offset = 0;  // added to every root constant buffer view's address (a draw's slot of one buffer)
+    std::vector<nvrhi::ResourceHandle> held;  // a kept draw's sets and tables: alive while it is (``bindings``)
 };
 
 class CommandList {
@@ -255,6 +262,9 @@ public:
     // (resource, before, after) recorded on the open list ahead of NVRHI's own barriers: a texture someone else
     // left in another state than NVRHI's permanent one (QRhi's reads of a texture the module handed over)
     void transitions(const std::vector<std::tuple<uintptr_t, int, int>>& items);
+    // every unordered access before it done before any after it: NVRHI places none between dispatches whose binding
+    // set did not change (one that adds into a buffer the last one wrote: the sky's spherical harmonics, face by face)
+    void uav_barrier();
     void draw(Framebuffer& fb, const Draw& d, bool indexed, float x, float y, float w, float h);
     void dispatch(const Draw& d, uint32_t x, uint32_t y, uint32_t z);
     void begin_timer(Timer& t);
@@ -274,6 +284,18 @@ std::string read_staging(Device& device, Staging& s);  // the pixels, rows packe
 // Recording into a command list someone else made (QRhi's, between beginExternal and endExternal): our heaps,
 // root signature, pipeline, tables and the draw; the render targets stay those the list has bound
 void record_external(Device& device, uintptr_t list, const Draw& d, bool indexed, float x, float y, float w, float h);
+// Many draws made once (``Draw`` kept by Python) into a foreign list, each with its instance count and root offset
+// this frame (0 instances: left out); what the draw before set is not set again
+void record_draws(Device& device, uintptr_t list, const std::vector<const Draw*>& draws,
+                  const std::vector<uint32_t>& instances, const std::vector<uint64_t>& offsets, float x, float y,
+                  float w, float h);
+// A compute dispatch into a foreign list (QRhi's, inside beginExternal of a compute pass): our heaps, root signature,
+// pipeline and tables; the barriers are the caller's (``transitions``, ``uav_barrier``)
+void record_dispatch(Device& device, uintptr_t list, const Draw& d, uint32_t x, uint32_t y, uint32_t z);
+void uav_barrier(uintptr_t list);  // every unordered access before it done before any after it
+// bytes of one buffer into another on a foreign list, both in the copy states already (resources by pointer)
+void copy_buffer(uintptr_t list, uintptr_t dst, uint64_t dst_offset, uintptr_t src, uint64_t src_offset,
+                 uint64_t size);
 
 // A QRhiTexture's resource and the state QRhi tracks it in; a QRhiBuffer's resource of a frame slot (interop.cpp)
 std::pair<uintptr_t, int> qrhi_texture(uintptr_t texture);

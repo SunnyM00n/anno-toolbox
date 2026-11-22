@@ -50,47 +50,55 @@ def _params(perceptual: bool):
 
 def encode_level(rgba: np.ndarray, perceptual: bool) -> bytes:
     """One mip level (``(h, w, 4)`` uint8) as BC7 blocks; sizes that are no multiple of 4 repeat the edge texels."""
-    h, w = rgba.shape[:2]
-    ph, pw = -(-h // 4) * 4, -(-w // 4) * 4
-    if (ph, pw) != (h, w):
-        rgba = np.pad(rgba, ((0, ph - h), (0, pw - w), (0, 0)), mode="edge")
-    return bytes(_module().compress_bc7(np.ascontiguousarray(rgba).tobytes(), pw, ph, _params(perceptual)))
+    height_px, width_px = rgba.shape[:2]
+    padded_height_px, padded_width_px = -(-height_px // 4) * 4, -(-width_px // 4) * 4
+    if (padded_height_px, padded_width_px) != (height_px, width_px):
+        rgba = np.pad(rgba, ((0, padded_height_px - height_px), (0, padded_width_px - width_px), (0, 0)), mode="edge")
+    return bytes(
+        _module().compress_bc7(
+            np.ascontiguousarray(rgba).tobytes(), padded_width_px, padded_height_px, _params(perceptual)
+        )
+    )
 
 
-def dds_header(width: int, height: int, mips: int, srgb: bool) -> bytes:
+def dds_header(width_px: int, height_px: int, mip_count: int, is_srgb: bool) -> bytes:
     """The header texconv writes for a BC7 file: a DX10 header, the top level's byte size as the linear size."""
-    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000 | (0x20000 if mips > 1 else 0)
-    size = -(-width // 4) * -(-height // 4) * 16
-    head = struct.pack("<4sIIIIIII", b"DDS ", 124, flags, height, width, size, 1, mips) + bytes(44)
+    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000 | (0x20000 if mip_count > 1 else 0)
+    size = -(-width_px // 4) * -(-height_px // 4) * 16
+    head = struct.pack("<4sIIIIIII", b"DDS ", 124, flags, height_px, width_px, size, 1, mip_count) + bytes(44)
     head += struct.pack("<II4s5I", 32, 0x4, b"DX10", 0, 0, 0, 0, 0)
-    head += struct.pack("<5I", 0x1000 | (0x400008 if mips > 1 else 0), 0, 0, 0, 0)
-    return head + struct.pack("<5I", DXGI_BC7_SRGB if srgb else DXGI_BC7, 3, 0, 1, 0)
+    head += struct.pack("<5I", 0x1000 | (0x400008 if mip_count > 1 else 0), 0, 0, 0, 0)
+    return head + struct.pack("<5I", DXGI_BC7_SRGB if is_srgb else DXGI_BC7, 3, 0, 1, 0)
 
 
-def encode_dds(levels: list[np.ndarray], srgb: bool, perceptual: bool) -> bytes:
+def encode_dds(levels: list[np.ndarray], is_srgb: bool, perceptual: bool) -> bytes:
     """A BC7 DDS of the mip levels (level 0 first)."""
-    h, w = levels[0].shape[:2]
-    return dds_header(w, h, len(levels), srgb) + b"".join(encode_level(level, perceptual) for level in levels)
+    height_px, width_px = levels[0].shape[:2]
+    return dds_header(width_px, height_px, len(levels), is_srgb) + b"".join(
+        encode_level(level, perceptual) for level in levels
+    )
 
 
 def solid_block(rgba: tuple[int, int, int, int]) -> bytes | None:
     """The BC7 block (mode 5: 7-bit colour, 8-bit alpha) that decodes to exactly ``rgba`` everywhere, or None when a
     colour channel has no 7-bit form. The encoder's own mode 6 shares one parity bit over all four channels and
     reads back opaque black as alpha 254."""
-    seven = [c >> 1 for c in rgba[:3]]
-    if any((v << 1 | v >> 6) != c for v, c in zip(seven, rgba[:3], strict=True)):
+    seven = [channel >> 1 for channel in rgba[:3]]
+    if any((seven_bit << 1 | seven_bit >> 6) != channel for seven_bit, channel in zip(seven, rgba[:3], strict=True)):
         return None
     bits = 1 << 5  # mode 5, no rotation
-    for i, v in enumerate(seven):
-        bits |= (v | v << 7) << (8 + 14 * i)  # both endpoints of the channel
+    for i, seven_bit in enumerate(seven):
+        bits |= (seven_bit | seven_bit << 7) << (8 + 14 * i)  # both endpoints of the channel
     bits |= (rgba[3] | rgba[3] << 8) << 50  # both alpha endpoints; every index 0
     return bits.to_bytes(16, "little")
 
 
-def solid_dds(rgba: tuple[int, int, int, int], size: int = 4) -> bytes | None:
-    """A one-colour BC7 texture of ``size`` squared with its mip chain, or None (see ``solid_block``)."""
+def solid_dds(rgba: tuple[int, int, int, int], size_px: int = 4) -> bytes | None:
+    """A one-colour BC7 texture of ``size_px`` squared with its mip chain, or None (see ``solid_block``)."""
     block = solid_block(rgba)
     if block is None:
         return None
-    mips = size.bit_length()
-    return dds_header(size, size, mips, False) + block * sum(max(1, -(-(size >> m) // 4)) ** 2 for m in range(mips))
+    mip_count = size_px.bit_length()
+    return dds_header(size_px, size_px, mip_count, False) + block * sum(
+        max(1, -(-(size_px >> mip) // 4)) ** 2 for mip in range(mip_count)
+    )

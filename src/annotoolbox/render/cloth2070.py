@@ -4,7 +4,7 @@ normal and the tangent frame the manager feeds packed into bytes, its place in `
 ``cObjectColor``.
 
 ``cloth_mesh(vertices, indices)`` is the mesh as the shader takes it, ``reposed`` its vertices moved, ``defines(values)``
-the variant, ``techniques`` the pair of a cloth's draws, ``ClothModel2070`` the ``frame2070.Model2070`` of a cloth.
+the variant, ``techniques`` the pair of a cloth's draws, ``CClothModel2070`` the ``frame2070.CModel2070`` of a cloth.
 docs/rendering/shader-compile.md section 10, "Cloth".
 """
 
@@ -15,8 +15,8 @@ import numpy as np
 from ..models.tangents import frames
 from . import gameshader as gs
 from .clothsim import on_surface, unit_bytes
-from .frame2070 import Model2070
-from .gamedraw import Mesh
+from .frame2070 import CModel2070
+from .gamedraw import CMesh
 
 FX = "data/system/shaders/fx/cloth.fx"
 EFFECTS = {0: FX}  # the CLOTH owner's table index -> effect; every shipped cloth material is 0 (materials-2070 3)
@@ -45,65 +45,70 @@ def effect(values: dict) -> str | None:
     return EFFECTS.get(int(values.get("ShaderIndex", 0)))
 
 
-def packed(v: np.ndarray) -> np.ndarray:
+def packed(vectors: np.ndarray) -> np.ndarray:
     """Unit vectors [n, 3] as the shader unpacks them (``GetColor`` reads ``.bgra``, then ``* 2 - 1``): bytes z, y,
     x, 255."""
-    b = unit_bytes(v)
-    return np.stack([b[:, 2], b[:, 1], b[:, 0], np.full(len(b), 255, np.uint8)], axis=1)
+    encoded = unit_bytes(vectors)
+    return np.stack([encoded[:, 2], encoded[:, 1], encoded[:, 0], np.full(len(encoded), 255, np.uint8)], axis=1)
 
 
-def cloth_mesh(vertices: np.ndarray, indices) -> Mesh:
+def cloth_mesh(vertices: np.ndarray, indices) -> CMesh:
     """A cloth file's vertices (position, normal, uv per row, as ``models.rdmmesh`` reads them) with one group's
     triangles in the layout ``cloth.fx`` takes: the normal and the tangent frame made from the triangles and uvs
     (``models.tangents``: the tangents stored negated, as the shader reads them)."""
-    v = np.asarray(vertices, np.float32)
+    rows = np.asarray(vertices, np.float32)
     index = np.asarray(indices, np.uint32)
-    pos, uv = [tuple(p) for p in v[:, :3].tolist()], [tuple(t) for t in v[:, 6:8].tolist()]
-    normals, tangents, bitangents = frames(pos, uv, index.tolist())
-    n = len(v)
-    data = np.zeros((n, STRIDE), np.uint8)
-    data[:, 0:12] = np.ascontiguousarray(v[:, :3], "<f4").view(np.uint8)
+    positions, uv = (
+        [tuple(position) for position in rows[:, :3].tolist()],
+        [tuple(texcoord) for texcoord in rows[:, 6:8].tolist()],
+    )
+    normals, tangents, bitangents = frames(positions, uv, index.tolist())
+    count = len(rows)
+    data = np.zeros((count, STRIDE), np.uint8)
+    data[:, 0:12] = np.ascontiguousarray(rows[:, :3], "<f4").view(np.uint8)
     data[:, 12:16] = packed(normals)
-    data[:, 16:24] = np.ascontiguousarray(v[:, 6:8], "<f4").view(np.uint8)
+    data[:, 16:24] = np.ascontiguousarray(rows[:, 6:8], "<f4").view(np.uint8)
     data[:, 24:40] = packed(-np.asarray(tangents)).astype("<u4").view(np.uint8)
     data[:, 40:56] = packed(-np.asarray(bitangents)).astype("<u4").view(np.uint8)
-    return Mesh(data.tobytes(), STRIDE, ELEMENTS, index, n)
+    return CMesh(data.tobytes(), STRIDE, ELEMENTS, index, count)
 
 
-def unpacked(b: np.ndarray) -> np.ndarray:
+def unpacked(encoded: np.ndarray) -> np.ndarray:
     """``packed``'s bytes (or its four integers) [n, 4] back as vectors [n, 3]."""
-    b = np.asarray(b, float)
-    return np.stack([b[:, 2], b[:, 1], b[:, 0]], axis=1) / 127.5 - 1.0
+    encoded = np.asarray(encoded, float)
+    return np.stack([encoded[:, 2], encoded[:, 1], encoded[:, 0]], axis=1) / 127.5 - 1.0
 
 
-def reposed(mesh: Mesh, positions: np.ndarray, normals: np.ndarray) -> bytes:
+def reposed(mesh: CMesh, positions: np.ndarray, normals: np.ndarray) -> bytes:
     """``cloth_mesh``'s vertices moved by the simulation (``render.clothmesh``): the positions and the packed normals
     written, the stored tangent and bitangent turned onto the new normal (their rest direction kept on the surface)."""
-    raw = np.frombuffer(mesh.rest or mesh.data, np.uint8).reshape(mesh.count, STRIDE).copy()
-    n = np.asarray(normals, float)
+    raw = np.frombuffer(mesh.m_rest or mesh.m_data, np.uint8).reshape(mesh.m_count, STRIDE).copy()
+    normals_array = np.asarray(normals, float)
     raw[:, 0:12] = np.ascontiguousarray(np.asarray(positions, "<f4")).view(np.uint8)
-    raw[:, 12:16] = packed(n)
-    for at in (24, 40):
-        t = unpacked(np.ascontiguousarray(raw[:, at : at + 16]).view("<u4"))
-        raw[:, at : at + 16] = packed(on_surface(t, n)).astype("<u4").view(np.uint8)
+    raw[:, 12:16] = packed(normals_array)
+    for offset_bytes in (24, 40):
+        tangent = unpacked(np.ascontiguousarray(raw[:, offset_bytes : offset_bytes + 16]).view("<u4"))
+        raw[:, offset_bytes : offset_bytes + 16] = (
+            packed(on_surface(tangent, normals_array)).astype("<u4").view(np.uint8)
+        )
     return raw.tobytes()
 
 
-class ClothModel2070(Model2070):
+class CClothModel2070(CModel2070):
     """A cloth in 2070's frame: its place in ``cMtxWorld`` (and times the camera in ``cMtxWorldViewProj``), its
     colour (rgba) in ``cObjectColor``, ``ripple`` its ``cClothRipple`` (size, normal and parallax strength)."""
 
     def __init__(self, draw, shadow=None) -> None:
         super().__init__(draw, shadow)
-        self.ripple = (1.0, 0.0, 0.0)
-        self.view_proj = np.identity(4)
+        self.m_ripple = (1.0, 0.0, 0.0)
+        self.m_view_proj = np.identity(4)
 
-    def fill_model(self, c: dict) -> None:
-        w = np.asarray(self.world, float)
-        gs.set_values(c.values(), {"cMtxWorld": gs.as_columns(w), "cMtxWorldViewProj": gs.as_columns(w @ self.view_proj),
-                                   "cObjectColor": [*self.color, 1.0][:4], "cObjectDamage": INTACT,
-                                   "cClothRipple": [*self.ripple, 0.0]})  # fmt: skip
+    def fill_model(self, constants: dict) -> None:
+        world_matrix = np.asarray(self.m_world, float)
+        gs.set_values(constants.values(), {"cMtxWorld": gs.as_columns(world_matrix), "cMtxWorldViewProj": gs.as_columns(world_matrix @ self.m_view_proj),
+                                   "cObjectColor": [*self.m_color, 1.0][:4], "cObjectDamage": INTACT,
+                                   "cClothRipple": [*self.m_ripple, 0.0]})  # fmt: skip
 
-    def prepare(self, rp, signature, batch, cam: gs.Camera, sun, frame_maps=None) -> None:
-        self.view_proj = cam.view @ cam.proj
-        super().prepare(rp, signature, batch, cam, sun, frame_maps)
+    def prepare(self, render_pass, signature, batch, camera: gs.SCamera, sun, frame_maps=None) -> None:
+        self.m_view_proj = camera.view @ camera.projection
+        super().prepare(render_pass, signature, batch, camera, sun, frame_maps)

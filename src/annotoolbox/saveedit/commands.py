@@ -9,64 +9,68 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..formats.savegame117 import Save
+    from ..formats.savegame117 import SSave
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    s = sub.add_parser(
+    command_parser = sub.add_parser(
         "save", help="show or change the player, name and money of a 117 savegame (.a8s; docs/formats/save-format.md)"
     )
-    save_sub = s.add_subparsers(dest="save_command", required=True)
+    save_sub = command_parser.add_subparsers(dest="save_command", required=True)
 
-    sp = save_sub.add_parser("show", help="the save's name, the player as its three places hold it, the money")
-    sp.add_argument("file", type=Path)
-    sp.set_defaults(func=cmd_save_show)
+    save_parser = save_sub.add_parser("show", help="the save's name, the player as its three places hold it, the money")
+    save_parser.add_argument("file", type=Path)
+    save_parser.set_defaults(func=cmd_save_show)
 
-    sp = save_sub.add_parser("edit", help="change the player in all three places, the save's name and/or the money")
-    sp.add_argument("file", type=Path)
-    _player_options(sp)
-    money = sp.add_mutually_exclusive_group()
+    save_parser = save_sub.add_parser(
+        "edit", help="change the player in all three places, the save's name and/or the money"
+    )
+    save_parser.add_argument("file", type=Path)
+    _participant_options(save_parser)
+    money = save_parser.add_mutually_exclusive_group()
     money.add_argument("--money", type=int, help="set the participant's money to this amount")
     money.add_argument("--add-money", type=int, help="add this amount to the participant's money (negative: take)")
-    sp.add_argument(
+    save_parser.add_argument(
         "--participant", type=int, default=41, help="whose money: a participant GUID (default 41, the human)"
     )
-    where = sp.add_mutually_exclusive_group(required=True)
+    where = save_parser.add_mutually_exclusive_group(required=True)
     where.add_argument("-o", "--out", type=Path, help="write the edited save here (a file, or a folder)")
     where.add_argument(
         "--in-place", action="store_true", help="overwrite the file; <file>.orig keeps the original (if none yet)"
     )
-    sp.set_defaults(func=cmd_save_edit)
+    save_parser.set_defaults(func=cmd_save_edit)
 
-    sp = save_sub.add_parser(
+    save_parser = save_sub.add_parser(
         "new", help="a new save from a template the game wrote (the dummy profile save of the setup flow)"
     )
-    sp.add_argument("--template", type=Path, required=True, help="a save the user's own game wrote")
-    sp.add_argument("--out", type=Path, required=True, help="a .a8s file, or the profile folder (<save name>.a8s)")
-    sp.add_argument("--overwrite", action="store_true", help="replace an existing file")
-    _player_options(sp)
-    sp.set_defaults(func=cmd_save_new)
+    save_parser.add_argument("--template", type=Path, required=True, help="a save the user's own game wrote")
+    save_parser.add_argument(
+        "--out", type=Path, required=True, help="a .a8s file, or the profile folder (<save name>.a8s)"
+    )
+    save_parser.add_argument("--overwrite", action="store_true", help="replace an existing file")
+    _participant_options(save_parser)
+    save_parser.set_defaults(func=cmd_save_new)
 
 
-def _player_options(sp: argparse.ArgumentParser) -> None:
-    sp.add_argument("--name", help="company name (also the profile name in the save unless --profile-name)")
-    sp.add_argument("--profile-name", help="SavegameProfileDisplayName in header and game setup")
+def _participant_options(save_parser: argparse.ArgumentParser) -> None:
+    save_parser.add_argument("--name", help="company name (also the profile name in the save unless --profile-name)")
+    save_parser.add_argument("--profile-name", help="SavegameProfileDisplayName in header and game setup")
     for key in ("color", "logo", "portrait"):
-        sp.add_argument(f"--{key}", type=lambda v: int(v, 0), help=f"{key} GUID")
-    sp.add_argument("--save-name", help="the save's own name (meta.a7s)")
+        save_parser.add_argument(f"--{key}", type=lambda value: int(value, 0), help=f"{key} GUID")
+    save_parser.add_argument("--save-name", help="the save's own name (meta.a7s)")
 
 
-def _player_changes(args: argparse.Namespace) -> dict[str, str | int]:
+def _participant_changes(args: argparse.Namespace) -> dict[str, str | int]:
     changes = {k: getattr(args, k) for k in ("name", "profile_name", "color", "logo", "portrait")}
-    return {k: v for k, v in changes.items() if v is not None}
+    return {k: value for k, value in changes.items() if value is not None}
 
 
-def _edited_save(save: Save, args: argparse.Namespace) -> Save:
+def _edited_save(save: SSave, args: argparse.Namespace) -> SSave:
     from ..formats import savegame117
 
-    changes = _player_changes(args)
+    changes = _participant_changes(args)
     if changes:
-        save = savegame117.set_player(save, **changes)
+        save = savegame117.set_participant(save, **changes)
     if args.save_name is not None:
         save = savegame117.set_save_name(save, args.save_name)
     return save
@@ -77,20 +81,20 @@ def cmd_save_show(args: argparse.Namespace) -> int:
 
     save = savegame117.read(args.file)
     print(f"{args.file}: save name {savegame117.save_name(save)!r}")
-    for part, p in savegame117.read_player(save).items():
-        text = f"  {part:14} name {p.name!r}"
-        if p.profile_name is not None:
-            text += f" profile {p.profile_name!r}"
-        text += f" colour {p.color} logo {p.logo} portrait {p.portrait}"
-        print(text + (f" custom flags {''.join(map(str, p.flags))}" if p.flags else ""))
+    for part, value in savegame117.read_participant(save).items():
+        text = f"  {part:14} name {value.name!r}"
+        if value.profile_name is not None:
+            text += f" profile {value.profile_name!r}"
+        text += f" colour {value.color} logo {value.logo} portrait {value.portrait}"
+        print(text + (f" custom flags {''.join(map(str, value.flags))}" if value.flags else ""))
     try:
         print(f"  money {savegame117.read_money(save):,}")
-    except savegame117.SaveError as e:
+    except savegame117.CSaveError as e:
         print(f"  money: {e}")
     return 0
 
 
-def _with_money(save: Save, args: argparse.Namespace) -> Save:
+def _with_money(save: SSave, args: argparse.Namespace) -> SSave:
     from ..formats import savegame117
 
     if args.money is None and args.add_money is None:
@@ -104,7 +108,7 @@ def _with_money(save: Save, args: argparse.Namespace) -> Save:
 def cmd_save_edit(args: argparse.Namespace) -> int:
     from ..formats import savegame117
 
-    if args.save_name is None and args.money is None and args.add_money is None and not _player_changes(args):
+    if args.save_name is None and args.money is None and args.add_money is None and not _participant_changes(args):
         raise ValueError(
             "nothing to change: give --name, --color, --logo, --portrait, --profile-name, --save-name, --money"
             " or --add-money"
@@ -130,7 +134,7 @@ def cmd_save_new(args: argparse.Namespace) -> int:
     if args.out.suffix.lower() == ".a8s":
         dest = args.out
     else:
-        if any(c in args.save_name for c in '\\/:*?"<>|'):
+        if any(char in args.save_name for char in '\\/:*?"<>|'):
             raise ValueError(f"{args.save_name!r} cannot be a file name")
         dest = args.out / f"{args.save_name}.a8s"
     if dest.exists() and not args.overwrite:

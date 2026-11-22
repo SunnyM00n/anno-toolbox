@@ -48,13 +48,13 @@ def shipped_tonemap(install: str):
     reflections by the game's compiler."""
     from annotoolbox.infra import dxc
     from annotoolbox.models import shadercache
-    from annotoolbox.sources.anno117 import Anno117Files
+    from annotoolbox.sources.anno117 import CAnno117Files
 
-    files = Anno117Files(install)
-    game = shadercache.GameShaders(files)
-    path = sorted(game.by_file[game.info(STEM).vanilla_hash])[0]
+    files = CAnno117Files(install)
+    game = shadercache.CGameShaders(files)
+    path = sorted(game.m_by_file[game.read_info(STEM).vanilla_hash])[0]
     shaders = {s.name: s.bytecode for s in shadercache.read_cached_shaders(files.read(path))}
-    compiler = dxc.Dxc.find(anno117=install)
+    compiler = dxc.CDxc.find(anno117=install)
     return path, shaders[VS], shaders[PS], compiler.reflect(shaders[VS]), compiler.reflect(shaders[PS])
 
 
@@ -68,7 +68,7 @@ class Tonemap:
 
         self.gpu = gpu
         _path, vs, ps, rvs, rps = shipped
-        self.plan = nativelayout.BindingPlan.of([rvs, rps])
+        self.plan = nativelayout.SBindingPlan.of([rvs, rps])
         elements, stride = nativelayout.float_elements(nativelayout.signature(vs))
         self.layouts = nativegpu.layouts(gpu, self.plan)
         self.pipeline = gpu.graphics_pipeline(
@@ -79,12 +79,12 @@ class Tonemap:
         vertices = np.concatenate([np.asarray(tri["float3"], np.float32), np.asarray(tri["float2"], np.float32)], 1)
         assert vertices.shape[1] * 4 == stride
         self.vbuf = gpu.buffer(vertices.nbytes, "vertex", name="triangle")
-        cb = next(c for c in rps.cbuffers if c.name == "cbPerFrame")
-        self.constants = gs.Constants(cb)
+        constant_buffer = next(buffer for buffer in rps.cbuffers if buffer.name == "cbPerFrame")
+        self.constants = gs.CConstants(constant_buffer)
         for key, value in gamepost.CONSTANTS.items():
             self.constants.set(key, value)
         self.constants.set("cGlobalFlags", 0)
-        self.cbuf = gpu.buffer((len(self.constants.data) + 255) // 256 * 256, "constant", name="cbPerFrame")
+        self.cbuf = gpu.buffer((len(self.constants.m_data) + 255) // 256 * 256, "constant", name="cbPerFrame")
         self.noise = gpu.texture(8, 8, "RGBA8_UNORM", name="noise")
         self.exposure = gpu.buffer(64, "structured", stride=16, name="exposure")
         self.cl = gpu.command_list()
@@ -98,24 +98,26 @@ class Tonemap:
 
     def write_constants(self, exposure: float = 0.55) -> None:
         self.constants.set("cExposure", exposure)
-        self.cl.write_buffer(self.cbuf, bytes(self.constants.data))
+        self.cl.write_buffer(self.cbuf, bytes(self.constants.m_data))
 
-    def resize(self, w: int, h: int) -> None:
+    def resize(self, width_px: int, height_px: int) -> None:
         """The HDR picture at the frame's size (the shader fetches it by pixel) and the sets that read it."""
         from annotoolbox.render import nativegpu
 
-        if self.size == (w, h):
+        if self.size == (width_px, height_px):
             return
-        x, y = np.meshgrid(np.linspace(0.0, 1.0, w, dtype=np.float32), np.linspace(0.0, 1.0, h, dtype=np.float32))
+        x, y = np.meshgrid(
+            np.linspace(0.0, 1.0, width_px, dtype=np.float32), np.linspace(0.0, 1.0, height_px, dtype=np.float32)
+        )
         hdr = np.stack([x * 6.0, y * 3.0, 0.4 + 2.0 * (1.0 - x) * y, np.ones_like(x)], -1).astype(np.float16)
-        self.hdr = self.gpu.texture(w, h, "RGBA16_FLOAT", name="hdr")
-        self.cl.write_texture(self.hdr, hdr.tobytes(), w * 8)
+        self.hdr = self.gpu.texture(width_px, height_px, "RGBA16_FLOAT", name="hdr")
+        self.cl.write_texture(self.hdr, hdr.tobytes(), width_px * 8)
         named = {"cbPerFrame": self.cbuf, "cBlueNoiseTex": self.noise, "cExposureBuffer": self.exposure,
                  "cTexture0": self.hdr}  # fmt: skip
         samplers = nativegpu.samplers(self.gpu, self.plan)
         self.sets = [nativegpu.binding_set(self.gpu, lay, spec, named, samplers)
                      for lay, spec in zip(self.layouts, self.plan.layouts, strict=True)]  # fmt: skip
-        self.size = (w, h)
+        self.size = (width_px, height_px)
 
     def submit(self) -> None:
         """What was written goes to the GPU, on the device's queue ahead of what QRhi records next."""
@@ -129,7 +131,7 @@ def _view_class():
     from annotoolbox.render import nativegpu, nativepass, rhiview
     from annotoolbox.render.shaders import FLAT_FS, FLAT_VS
 
-    class ProbeView(rhiview.RhiView):
+    class ProbeView(rhiview.CRhiView):
         """A view that draws route ``mode`` ("a", "b", or "" for none) and a small triangle of QRhi's over it."""
 
         def __init__(self, shipped, mode: str) -> None:
@@ -151,7 +153,7 @@ def _view_class():
                 self.scene = Tonemap(gpu, self.shipped, ["RGBA8_UNORM"], "D32")
             elif self.mode == "b":
                 self.own = nativegpu.own_device()
-                self.copy = nativepass.Composite(ctx, COPY_FS)
+                self.copy = nativepass.CComposite(ctx, COPY_FS)
 
         def released(self, ctx) -> None:
             if self.scene is not None:
@@ -159,15 +161,15 @@ def _view_class():
                 self.scene = None
                 nativegpu.detach(self.rhi())
 
-        def draw(self, ctx, screen, size) -> None:
+        def draw(self, ctx, screen, size_px) -> None:
             if self.clock.isValid():
                 self.intervals.append(self.clock.nsecsElapsed() / 1e6)
             self.clock.start()
-            w, h = size
+            width_px, height_px = size_px
             if self.mode == "a":
-                self._route_a(ctx, screen, w, h)
+                self._route_a(ctx, screen, width_px, height_px)
             elif self.mode == "b":
-                self._route_b(ctx, screen, w, h)
+                self._route_b(ctx, screen, width_px, height_px)
             else:
                 screen.use()
                 screen.clear(0.1, 0.1, 0.12, 1.0)
@@ -178,42 +180,42 @@ def _view_class():
             prog["pointSize"].value, prog["alpha"].value, prog["gain"].value = 1.0, 1.0, 1.0
             vao.render()
 
-        def _route_a(self, ctx, screen, w, h) -> None:
+        def _route_a(self, ctx, screen, width_px, height_px) -> None:
             scene = self.scene
-            scene.resize(w, h)
+            scene.resize(width_px, height_px)
             scene.write_constants(0.55 + 0.05 * np.sin(len(self.intervals) * 0.2))  # a list of ours every frame
             scene.submit()
-            rt, _rp, _sig = ctx.render_target(screen, clear=True)
+            rt, _rp, _sig = ctx.render_target(screen, is_cleared=True)
             module = nativegpu.load()
 
-            def run(cb, batch) -> None:
-                cb.beginPass(rt, QColor(20, 20, 30), QRhiDepthStencilClearValue(0.0, 0), batch,
+            def run(command_buffer, batch) -> None:
+                command_buffer.beginPass(rt, QColor(20, 20, 30), QRhiDepthStencilClearValue(0.0, 0), batch,
                              QRhiCommandBuffer.BeginPassFlag.ExternalContent)  # fmt: skip
-                cb.beginExternal()
+                command_buffer.beginExternal()
                 t0 = time.perf_counter()
-                module.record_external(scene.gpu, nativegpu.command_list(cb), scene.pipeline, scene.sets, 3,
-                                       (0.0, 0.0, float(w), float(h)), [scene.vbuf])  # fmt: skip
+                module.record_external(scene.gpu, nativegpu.command_list(command_buffer), scene.pipeline, scene.sets, 3,
+                                       (0.0, 0.0, float(width_px), float(height_px)), [scene.vbuf])  # fmt: skip
                 self.record_us.append((time.perf_counter() - t0) * 1e6)
-                cb.endExternal()
-                cb.endPass()
+                command_buffer.endExternal()
+                command_buffer.endPass()
 
             ctx.native_pass(run)
             scene.gpu.end_frame()
 
-        def _route_b(self, ctx, screen, w, h) -> None:
-            if self.scene is None or self.scene.size != (w, h):
+        def _route_b(self, ctx, screen, width_px, height_px) -> None:
+            if self.scene is None or self.scene.size != (width_px, height_px):
                 self.scene = Tonemap(self.own, self.shipped, ["RGBA8_UNORM"], "")
-                self.scene.resize(w, h)
-                self.target = self.own.texture(w, h, "RGBA8_UNORM", usage="target", name="frame")
+                self.scene.resize(width_px, height_px)
+                self.target = self.own.texture(width_px, height_px, "RGBA8_UNORM", usage="target", name="frame")
                 self.fb = self.own.framebuffer([self.target])
-                self.staging = self.own.staging(w, h, "RGBA8_UNORM")
-                self.frame_tex = ctx.texture((w, h), 4)
-            s = self.scene
+                self.staging = self.own.staging(width_px, height_px, "RGBA8_UNORM")
+                self.frame_tex = ctx.texture((width_px, height_px), 4)
+            scene = self.scene
             t0 = time.perf_counter()
-            s.cl.clear_color(self.target, 0.0, 0.0, 0.0, 0.0)  # a new target holds no defined pixels until cleared
-            s.cl.draw(self.fb, s.pipeline, s.sets, 3, vertex_buffers=[s.vbuf])
-            s.cl.copy_to_staging(self.staging, self.target)
-            s.submit()
+            scene.cl.clear_color(self.target, 0.0, 0.0, 0.0, 0.0)  # a new target holds no defined pixels until cleared
+            scene.cl.draw(self.fb, scene.pipeline, scene.sets, 3, vertex_buffers=[scene.vbuf])
+            scene.cl.copy_to_staging(self.staging, self.target)
+            scene.submit()
             data = self.own.read(self.staging)
             self.own.end_frame()
             self.native_ms.append((time.perf_counter() - t0) * 1e3)
@@ -226,8 +228,8 @@ def _view_class():
     return ProbeView
 
 
-def _median(xs: list[float]) -> float:
-    return round(statistics.median(xs), 3) if xs else 0.0
+def _median(values: list[float]) -> float:
+    return round(statistics.median(values), 3) if values else 0.0
 
 
 def offscreen(shipped, sizes, frames: int, out: Path) -> dict:
@@ -237,27 +239,27 @@ def offscreen(shipped, sizes, frames: int, out: Path) -> dict:
     results: dict = {}
     for mode in ("", "a", "b"):
         view = ProbeView(shipped, mode)
-        for w, h in sizes:
+        for width_px, height_px in sizes:
             times = []
             for i in range(frames + 3):
                 t0 = time.perf_counter()
-                img = view.picture(w, h)
+                image = view.picture(width_px, height_px)
                 if i >= 3:  # the first frames make the resources
                     times.append((time.perf_counter() - t0) * 1e3)
-                if view.failed:
-                    raise RuntimeError(f"route {mode or 'none'}: {view.failed}")
-            row = results.setdefault(f"{w}x{h}", {})
+                if view.m_failed:
+                    raise RuntimeError(f"route {mode or 'none'}: {view.m_failed}")
+            row = results.setdefault(f"{width_px}x{height_px}", {})
             row[mode or "none"] = {"frame_ms": _median(times)}
             if mode == "a":
                 row["a"]["record_us"] = _median(view.record_us[-frames:])
-                if (w, h) == sizes[0]:
-                    img.save(str(out / "route-a.png"))
+                if (width_px, height_px) == sizes[0]:
+                    image.save(str(out / "route-a.png"))
             if mode == "b":
                 row["b"]["native_render_and_read_ms"] = _median(view.native_ms[-frames:])
-                if (w, h) == sizes[0]:
-                    px = np.frombuffer(view.picture_b, np.uint8).reshape(h, w, 4)
-                    _save_rgba(px, out / "route-b.png")
-                    img.save(str(out / "route-b-in-qrhi.png"))
+                if (width_px, height_px) == sizes[0]:
+                    pixels = np.frombuffer(view.picture_b, np.uint8).reshape(height_px, width_px, 4)
+                    _save_rgba(pixels, out / "route-b.png")
+                    image.save(str(out / "route-b-in-qrhi.png"))
         messages = view.scene.gpu.messages() if view.scene is not None else []
         results.setdefault("messages", {})[mode or "none"] = messages[:20]
         view.release() if hasattr(view, "release") else None
@@ -293,22 +295,22 @@ def on_screen(shipped, mode: str, seconds: float = 3.0) -> dict:
     view.close()
     gaps = view.intervals[3:]
     out = {"frames": len(gaps), "median_ms": _median(gaps), "p95_ms": round(float(np.percentile(gaps, 95)), 3) if gaps
-           else 0.0, "max_ms": round(max(gaps), 3) if gaps else 0.0, "failed": view.failed}  # fmt: skip
+           else 0.0, "max_ms": round(max(gaps), 3) if gaps else 0.0, "failed": view.m_failed}  # fmt: skip
     view.deleteLater()
     return out
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog=EPILOG,
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog=EPILOG,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)  # fmt: skip
-    ap.add_argument("--anno117", default=os.environ.get("ANNO117_DIR", ""), help="the Anno 117 install")
-    ap.add_argument("--out", type=Path, default=ROOT / "out" / "native-probe")
-    ap.add_argument("--frames", type=int, default=30)
-    ap.add_argument("--sizes", default=",".join(f"{w}x{h}" for w, h in SIZES))
-    ap.add_argument("--no-window", action="store_true", help="skip the on-screen pacing run")
-    args = ap.parse_args(argv)
+    parser.add_argument("--anno117", default=os.environ.get("ANNO117_DIR", ""), help="the Anno 117 install")
+    parser.add_argument("--out", type=Path, default=ROOT / "out" / "native-probe")
+    parser.add_argument("--frames", type=int, default=30)
+    parser.add_argument("--sizes", default=",".join(f"{width_px}x{height_px}" for width_px, height_px in SIZES))
+    parser.add_argument("--no-window", action="store_true", help="skip the on-screen pacing run")
+    args = parser.parse_args(argv)
     if not args.anno117:
-        ap.error("--anno117 (or ANNO117_DIR) is needed: the shaders are the install's")
+        parser.error("--anno117 (or ANNO117_DIR) is needed: the shaders are the install's")
     from PySide6.QtWidgets import QApplication
 
     from annotoolbox.render import nativegpu
@@ -319,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication([])
     args.out.mkdir(parents=True, exist_ok=True)
     shipped = shipped_tonemap(args.anno117)
-    sizes = [tuple(int(v) for v in s.split("x")) for s in args.sizes.split(",")]
+    sizes = [tuple(int(number) for number in size_text.split("x")) for size_text in args.sizes.split(",")]
     result = {"shader_file": shipped[0], "sizes": offscreen(shipped, sizes, args.frames, args.out)}
     if not args.no_window:
         result["on_screen"] = {mode or "none": on_screen(shipped, mode) for mode in ("", "a", "b")}

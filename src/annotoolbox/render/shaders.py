@@ -179,15 +179,25 @@ MODEL_FS = (
 #version 330
 uniform sampler2D diffuseTex; uniform bool textured; uniform vec3 tint;
 uniform sampler2D normalTex; uniform bool hasNormal; uniform float emissive;
-uniform int kind;  // 0 opaque (cut-out), 1 the water shader's parts (see-through), 2 banner leaves, 3 decals
+uniform int kind;  // 0 opaque (cut-out), 1 the water shader's parts (see-through), 2 banner leaves, 3 decals, 4 foam
 uniform float opacity; uniform vec4 flip;  // flipbook: cell x, cell y, grid x, grid y (grid 0: none)
 uniform vec2 flipTiling;
+uniform vec3 foam; uniform float foamTime;  // a foam sheet: the two samples' speeds, its opacity; the seconds
 in vec3 vWorld; in vec3 vNormal; in vec2 vUv; out vec4 color;
 """
     + LIGHT
     + PERTURB
     + """
 void main() {
+    if (kind == 4) {  // 2070's foam sheet (docs/falls.md): its map is data, two samples scrolling down, not a colour
+        vec4 a = texture(diffuseTex, vUv - vec2(0.0, fract(foam.x * foamTime)));  // a plain (not sRGB) read
+        vec4 b = texture(diffuseTex, vUv - vec2(0.0, fract(foam.y * foamTime)));
+        vec3 n = normalize(vNormal);
+        if (dot(n, eye - vWorld) < 0.0) n = -n;
+        vec3 grey = vec3(pow(a.r * b.r, 2.2)) * tint;  // the product of both reds, decoded together
+        color = vec4(fogged(lit(grey, n, vWorld, 1.0), vWorld), clamp(a.a * b.b * foam.z, 0.0, 1.0));
+        return;
+    }
     vec2 uv = flip.z > 0.0 ? (fract(vUv * flipTiling) + flip.xy) / flip.zw : vUv;
     vec4 base = textured ? texture(diffuseTex, uv) : vec4(0.35, 0.35, 0.35, 1.0);
     if (kind == 3) {  // a decal: blended by its alpha and opacity, in the sun's shadow like the ground under it

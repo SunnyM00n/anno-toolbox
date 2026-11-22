@@ -2,7 +2,7 @@
 
 ``read_layout(obj, node, version)`` finds where a Random/Sequence, Actor-Mixer or Switch container keeps its children
 and the table behind them (a Random container's weights, a Switch container's value table); ``render`` puts a changed
-layout back. A container whose tail does not read to its exact end is refused (``LayoutError``) rather than guessed:
+layout back. A container whose tail does not read to its exact end is refused (``CLayoutError``) rather than guessed:
 the older banks' containers are found by the objects that name them (``formats/bnkgraph.child_block``) and about one in
 a hundred has a tail of another shape. ``docs/sound/bank-objects.md`` has the layouts.
 """
@@ -13,17 +13,17 @@ import struct
 from dataclasses import dataclass, field
 
 from ..formats import bnkgraph
-from ..formats.bnk import HircObject
-from ..formats.bnkmusic import Reader
+from ..formats.bnk import SHircObject
+from ..formats.bnkmusic import CReader
 from ..infra.i18n import tr
 
 
-class LayoutError(ValueError):
+class CLayoutError(ValueError):
     """The container's tail is not one of the layouts this editor writes."""
 
 
 @dataclass
-class Layout:
+class SLayout:
     """A container's child list at ``at`` in its payload and what follows it. ``playlist`` (Random/Sequence): the
     entries (child id, weight) in the file's order, a child once or several times; ``table`` (Switch): per value the
     nodes it plays, ``rest`` the bytes after the table."""
@@ -35,79 +35,81 @@ class Layout:
     rest: bytes = b""
 
 
-def child_span(obj: HircObject, node: bnkgraph.Node, version: int) -> tuple[int, int]:
-    """Where a container's child list starts and where it ends in the payload (``LayoutError``: not found exactly)."""
+def child_span(hirc_object: SHircObject, node: bnkgraph.SNode, version: int) -> tuple[int, int]:
+    """Where a container's child list starts and where it ends in the payload (``CLayoutError``: not found exactly)."""
     if not node.exact:
-        raise LayoutError(tr("sound.child_list_not_found_exactly", type_name=obj.type_name, id=obj.id))
-    at = bnkgraph.child_block(obj, bnkgraph.family(version), set(node.children))
+        raise CLayoutError(tr("sound.child_list_not_found_exactly", type_name=hirc_object.type_name, id=hirc_object.id))
+    at = bnkgraph.child_block(hirc_object, bnkgraph.family(version), set(node.children))
     if at is None:
-        raise LayoutError(tr("sound.child_list_not_found", type_name=obj.type_name, id=obj.id))
+        raise CLayoutError(tr("sound.child_list_not_found", type_name=hirc_object.type_name, id=hirc_object.id))
     return at, at + 4 + 4 * len(node.children)
 
 
-def read_layout(obj: HircObject, node: bnkgraph.Node, version: int) -> Layout:
+def read_layout(hirc_object: SHircObject, node: bnkgraph.SNode, version: int) -> SLayout:
     """The layout of a container whose graph ``node`` was read exactly."""
-    if obj.type not in (bnkgraph.RANSEQ, bnkgraph.MIXER, bnkgraph.SWITCH):
-        raise LayoutError(
+    if hirc_object.type not in (bnkgraph.RANSEQ, bnkgraph.MIXER, bnkgraph.SWITCH):
+        raise CLayoutError(
             tr(
                 "sound.only_random_sequence_actor_mixer",
-                type_name=obj.type_name,
-                id=obj.id,
+                type_name=hirc_object.type_name,
+                id=hirc_object.id,
             )
         )
-    at, after = child_span(obj, node, version)
-    pay = obj.payload
-    out = Layout(at, list(node.children))
+    at, after = child_span(hirc_object, node, version)
+    pay = hirc_object.payload
+    out = SLayout(at, list(node.children))
     try:
-        if obj.type == bnkgraph.RANSEQ:
+        if hirc_object.type == bnkgraph.RANSEQ:
             out.playlist = _read_playlist(pay, after, node.children)
-        elif obj.type == bnkgraph.MIXER:
+        elif hirc_object.type == bnkgraph.MIXER:
             if len(pay) != after:
-                raise LayoutError(
+                raise CLayoutError(
                     tr(
                         "sound.bytes_follow_children",
-                        type_name=obj.type_name,
-                        id=obj.id,
+                        type_name=hirc_object.type_name,
+                        id=hirc_object.id,
                         value=len(pay) - after,
                     )
                 )
         else:
             out.table, out.rest = _read_table(pay, after)
     except struct.error as exc:
-        raise LayoutError(tr("sound.tail_not_read", type_name=obj.type_name, id=obj.id, exc=exc)) from exc
+        raise CLayoutError(
+            tr("sound.tail_not_read", type_name=hirc_object.type_name, id=hirc_object.id, exc=exc)
+        ) from exc
     return out
 
 
 def _read_playlist(pay: bytes, after: int, children: list[int]) -> list[tuple[int, int]]:
     count = struct.unpack_from("<H", pay, after)[0]
     if len(pay) != after + 2 + 8 * count:
-        raise LayoutError(tr("sound.playlist_not_end_container"))
+        raise CLayoutError(tr("sound.playlist_not_end_container"))
     pairs = [struct.unpack_from("<II", pay, after + 2 + 8 * i) for i in range(count)]
     if not {i for i, _w in pairs} <= set(children):
-        raise LayoutError(tr("sound.playlist_names_objects_not_children"))
+        raise CLayoutError(tr("sound.playlist_names_objects_not_children"))
     return pairs
 
 
 def _read_table(pay: bytes, after: int) -> tuple[dict[int, list[int]], bytes]:
-    r = Reader(pay)
-    r.pos = after
+    reader = CReader(pay)
+    reader.m_pos = after
     table = {}
-    for _ in range(r.u32()):
-        value = r.u32()
-        table[value] = [r.u32() for _ in range(r.u32())]
-    return table, pay[r.pos :]
+    for _ in range(reader.u32()):
+        value = reader.u32()
+        table[value] = [reader.u32() for _ in range(reader.u32())]
+    return table, pay[reader.m_pos :]
 
 
-def render(obj: HircObject, lay: Layout) -> HircObject:
+def render(hirc_object: SHircObject, lay: SLayout) -> SHircObject:
     """``obj`` with the child list, playlist and value table of ``lay`` (the bytes before the list are kept)."""
-    out = obj.payload[: lay.at] + struct.pack("<I", len(lay.children))
-    out += b"".join(struct.pack("<I", c) for c in lay.children)
-    if obj.type == bnkgraph.RANSEQ:
+    out = hirc_object.payload[: lay.at] + struct.pack("<I", len(lay.children))
+    out += b"".join(struct.pack("<I", child) for child in lay.children)
+    if hirc_object.type == bnkgraph.RANSEQ:
         out += struct.pack("<H", len(lay.playlist))
-        out += b"".join(struct.pack("<II", c, w) for c, w in lay.playlist)
-    elif obj.type == bnkgraph.SWITCH:
+        out += b"".join(struct.pack("<II", child, weight) for child, weight in lay.playlist)
+    elif hirc_object.type == bnkgraph.SWITCH:
         out += struct.pack("<I", len(lay.table))
         for value, nodes in lay.table.items():
-            out += struct.pack("<II", value, len(nodes)) + b"".join(struct.pack("<I", n) for n in nodes)
+            out += struct.pack("<II", value, len(nodes)) + b"".join(struct.pack("<I", node) for node in nodes)
         out += lay.rest
-    return HircObject(obj.type, obj.id, out)
+    return SHircObject(hirc_object.type, hirc_object.id, out)

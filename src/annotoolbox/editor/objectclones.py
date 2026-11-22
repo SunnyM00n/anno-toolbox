@@ -15,20 +15,26 @@ from ..formats import filedb
 from ..formats.a7mread import area_objects
 from ..islands import editorassets, islandedits
 from ..islands.islandwater import next_serial
-from .templatedonors import TemplateDonors
+from .templatedonors import CTemplateDonors
 
-Found = tuple[filedb.Tag, filedb.Tag]  # (the objects list, the first object of that asset)
+Found = tuple[filedb.STag, filedb.STag]  # (the objects list, the first object of that asset)
 
 
-def samples(isl, groups: tuple[str, ...]) -> dict[int, Found]:
+def samples(island, groups: tuple[str, ...]) -> dict[int, Found]:
     """GUID -> the objects list and the first object of that asset over ``groups`` of the island's areas."""
     found: dict[int, Found] = {}
-    for _area, doc, _ids in isl._areas_data():
+    for _area, doc, _ids in island._areas_data():
         for group in groups:
-            objs = area_objects(doc, group)
-            for o in objs.children if objs is not None else []:
-                if isinstance(o, filedb.Tag) and o.find("guid") is not None and o.find("Position") is not None:
-                    found.setdefault(struct.unpack_from("<I", o.find("guid").data)[0], (objs, o))
+            objects_list = area_objects(doc, group)
+            for object_tag in objects_list.children if objects_list is not None else []:
+                if (
+                    isinstance(object_tag, filedb.STag)
+                    and object_tag.find("guid") is not None
+                    and object_tag.find("Position") is not None
+                ):
+                    found.setdefault(
+                        struct.unpack_from("<I", object_tag.find("guid").data)[0], (objects_list, object_tag)
+                    )
     return found
 
 
@@ -49,18 +55,18 @@ def is_copy(entry: dict) -> bool:
     return bool(entry.get("guid") and (entry.get("cfg") or entry.get("clone")))
 
 
-def set_variation(o: filedb.Tag, variation: int) -> None:
+def set_variation(object_tag: filedb.STag, variation: int) -> None:
     """The copy's ``Variation`` (the index into its asset's model list); one the sample does not store (0) is added
     after ``ID`` only for a value other than 0."""
-    attr = o.find("Variation")
-    if attr is not None:
-        attr.data = struct.pack("<I", variation)
+    variation_attrib = object_tag.find("Variation")
+    if variation_attrib is not None:
+        variation_attrib.data = struct.pack("<I", variation)
     elif variation:
-        at = [c.name for c in o.children].index("ID") + 1
-        o.children.insert(at, filedb.Attrib("Variation", struct.pack("<I", variation)))
+        at = [child.name for child in object_tag.children].index("ID") + 1
+        object_tag.children.insert(at, filedb.SAttrib("Variation", struct.pack("<I", variation)))
 
 
-def _from_donors(donors: TemplateDonors, entry: dict, home: Found) -> Found | None:
+def _from_donors(donors: CTemplateDonors, entry: dict, home: Found) -> Found | None:
     """A vanilla object of the entry's asset or template from another island, to be added to the island's own objects
     list (``home``'s)."""
     donor = donors.find(int(entry["guid"]), entry.get("template", ""))
@@ -72,7 +78,7 @@ def place_copies(
     found: dict[int, Found],
     templates: dict[int, str] | None = None,
     plain_templates: tuple[str, ...] = (),
-    donors: TemplateDonors | None = None,
+    donors: CTemplateDonors | None = None,
 ) -> tuple[dict, int, list]:
     """Write the copies of ``edits["added_objects"]`` into the island: of an object of the entry's asset (``found``,
     from ``samples``), else of one of its template (``templates``: GUID -> template), else of one the game's other
@@ -95,10 +101,14 @@ def place_copies(
         if sample is None:
             missing.append(f"guid:{entry['guid']}")
             continue
-        objs, base = sample
-        o = editorassets.clone(base, int(entry["guid"]), next_serial(objs, base), entry["position"], entry["rotation"])
-        islandedits.set_object(o, {**{k: entry[k] for k in ("position", "rotation")}, "scale": entry.get("scale", 1)})
-        set_variation(o, int(entry.get("variation", 0)))
-        objs.children.append(o)
+        objects_list, base = sample
+        object_tag = editorassets.clone(
+            base, int(entry["guid"]), next_serial(objects_list, base), entry["position"], entry["rotation"]
+        )
+        islandedits.set_object(
+            object_tag, {**{k: entry[k] for k in ("position", "rotation")}, "scale": entry.get("scale", 1)}
+        )
+        set_variation(object_tag, int(entry.get("variation", 0)))
+        objects_list.children.append(object_tag)
         added += 1
     return {**edits, "added_objects": rest}, added, missing

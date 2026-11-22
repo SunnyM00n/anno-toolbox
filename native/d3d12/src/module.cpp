@@ -66,6 +66,7 @@ static std::vector<nvrhi::IBindingSet*> bindings_of(const nb::list& sets) {
             out.push_back(nb::cast<Table*>(h)->get());
         else
             throw Error("a draw's bindings are Sets and Tables");
+        if (!out.back()) throw Error("a released set or table in a draw's bindings");
     }
     return out;
 }
@@ -110,6 +111,13 @@ static PipelineState state_of(const nb::dict& s) {
     if (auto v = get("slope_bias")) p.slope_bias = nb::cast<float>(v);
     if (auto v = get("bias_clamp")) p.bias_clamp = nb::cast<float>(v);
     if (auto v = get("stencil")) p.stencil = nb::cast<bool>(v);
+    if (auto v = get("stencil_func")) p.stencil_func = nb::cast<std::string>(v);
+    if (auto v = get("stencil_pass")) p.stencil_pass = nb::cast<std::string>(v);
+    if (auto v = get("stencil_fail")) p.stencil_fail = nb::cast<std::string>(v);
+    if (auto v = get("stencil_depth_fail")) p.stencil_depth_fail = nb::cast<std::string>(v);
+    if (auto v = get("stencil_read_mask")) p.stencil_read_mask = nb::cast<int>(v);
+    if (auto v = get("stencil_write_mask")) p.stencil_write_mask = nb::cast<int>(v);
+    if (auto v = get("stencil_ref")) p.stencil_ref = nb::cast<int>(v);
     if (auto v = get("wireframe")) p.wireframe = nb::cast<bool>(v);
     if (auto v = get("colors")) p.colors = nb::cast<std::vector<std::string>>(v);
     if (auto v = get("depth")) p.depth = nb::cast<std::string>(v);
@@ -139,6 +147,7 @@ NB_MODULE(_nativegpu, m) {
     nb::class_<Buffer>(m, "Buffer")
         .def_ro("size", &Buffer::size)
         .def_prop_ro("gpu_address", &Buffer::gpu_address)
+        .def_prop_ro("native", &Buffer::native, "its ID3D12Resource*")
         .def("release", &Buffer::release);
     nb::class_<Texture>(m, "Texture")
         .def_prop_ro("width", [](Texture& t) { return t.desc.width; })
@@ -160,6 +169,11 @@ NB_MODULE(_nativegpu, m) {
         .def("release", &Framebuffer::release);
     nb::class_<Staging>(m, "Staging").def("release", &Staging::release);
     nb::class_<Timer>(m, "Timer").def("release", &Timer::release);
+    // a draw made once and recorded every frame (``record_draws``): it keeps the pipeline and buffers it names alive
+    // (``draw_item``'s keep_alive) and its sets' objects; one of them released raises when it is recorded
+    nb::class_<Draw>(m, "DrawItem")
+        .def_ro("count", &Draw::count)
+        .def_prop_ro("indexed", [](Draw& d) { return d.index_buffer != nullptr; });
 
     nb::class_<Device>(m, "Device")
         .def_static("attach", &Device::attach, "device"_a, "queue"_a, nb::rv_policy::take_ownership,
@@ -171,6 +185,7 @@ NB_MODULE(_nativegpu, m) {
         .def_prop_ro("adapter", &Device::adapter_name)
         .def_prop_ro("shader_model", &Device::shader_model)
         .def_prop_ro("binding_tier", &Device::binding_tier)
+        .def_prop_ro("video_memory", &Device::video_memory)
         .def_prop_ro("errors", [](Device& d) { return d.log.errors(); })
         .def_prop_ro("native", [](Device& d) { return uintptr_t(d.d3d.Get()); })
         .def_rw("keep_frames", &Device::keep_frames)
@@ -233,7 +248,7 @@ NB_MODULE(_nativegpu, m) {
                 nb::gil_scoped_release unlocked;  // the driver may compile for a while
                 return graphics_pipeline(d, v, h, m, p, i, layouts, s);
             },
-            "vs"_a, "ps"_a, "input_layout"_a, "layouts"_a, "state"_a, "hs"_a = nb::none(), "ds"_a = nb::none(),
+            "vs"_a, "ps"_a.none(), "input_layout"_a.none(), "layouts"_a, "state"_a, "hs"_a = nb::none(), "ds"_a = nb::none(),
             nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership)
         .def("wrap_texture", &Device::wrap_texture, "resource"_a, "format"_a, "kind"_a = "", "name"_a = "",
              nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership,
@@ -274,6 +289,12 @@ NB_MODULE(_nativegpu, m) {
         .def("open", &CommandList::open)
         .def("close", &CommandList::close)
         .def("execute", &CommandList::execute, nb::call_guard<nb::gil_scoped_release>())
+        .def_prop_ro(
+            "native",
+            [](CommandList& c) {
+                return uintptr_t(c.get()->getNativeObject(nvrhi::ObjectTypes::D3D12_GraphicsCommandList).pointer);
+            },
+            "its ID3D12GraphicsCommandList* (the tests record a foreign list's checks into it)")
         .def(
             "write_buffer",
             [](CommandList& c, Buffer& b, const nb::bytes& data, uint64_t offset) {
@@ -294,6 +315,8 @@ NB_MODULE(_nativegpu, m) {
              "src_layer"_a, "src_mip"_a, "width"_a, "height"_a)
         .def("transitions", &CommandList::transitions, "items"_a,
              "(resource, before, after) transitions ahead of NVRHI's own barriers on the open list")
+        .def("uav_barrier", &CommandList::uav_barrier,
+             "every unordered access before it done before any after it (NVRHI places none for an unchanged set)")
         .def(
             "draw",
             [](CommandList& c, Framebuffer& fb, Pipeline& p, const nb::list& bindings, uint32_t count,
@@ -341,4 +364,42 @@ NB_MODULE(_nativegpu, m) {
         "device"_a, "list"_a, "pipeline"_a, "bindings"_a, "count"_a, "viewport"_a, "vertex_buffers"_a = nb::list(),
         "index_buffer"_a = nb::none(), "index32"_a = true, "instances"_a = 1, "first"_a = 0, "push"_a = nb::bytes(""),
         "a draw recorded into a command list someone else owns (QRhi's, inside beginExternal), into its bound targets");
+    m.def(
+        "draw_item",
+        [](Pipeline& p, const nb::list& bindings, uint32_t count, const nb::list& vertex_buffers,
+           nb::handle index_buffer, bool index32, const nb::bytes& push) {
+            auto* d = new Draw(draw_of(p, bindings, count, 1, 0, 0, 0, vertex_buffers, index_buffer, index32, 0, push));
+            // its sets' objects held: a set let go while the draw is kept would leave it a freed pointer
+            for (nb::handle h : bindings)
+                d->held.push_back(nb::isinstance<Set>(h) ? nb::cast<Set*>(h)->handle : nb::cast<Table*>(h)->handle);
+            return d;
+        },
+        "pipeline"_a, "bindings"_a, "count"_a, "vertex_buffers"_a = nb::list(), "index_buffer"_a = nb::none(),
+        "index32"_a = true, "push"_a = nb::bytes(""), nb::keep_alive<0, 1>(), nb::keep_alive<0, 4>(),
+        nb::keep_alive<0, 5>(), nb::rv_policy::take_ownership,
+        "a draw made once for record_draws (indexed when it has an index buffer); it keeps its pipeline and buffers "
+        "alive, and its sets' objects");
+    m.def(
+        "record_draws",
+        [](Device& device, uintptr_t list, const std::vector<const Draw*>& draws,
+           const std::vector<uint32_t>& instances, const std::vector<uint64_t>& offsets,
+           std::tuple<float, float, float, float> viewport) {
+            auto [x, y, w, h] = viewport;
+            record_draws(device, list, draws, instances, offsets, x, y, w, h);
+        },
+        "device"_a, "list"_a, "draws"_a, "instances"_a, "offsets"_a, "viewport"_a,
+        "DrawItems recorded into a foreign list, each with its instances and root offset (cbModel's slot) this frame");
+    m.def(
+        "record_dispatch",
+        [](Device& device, uintptr_t list, Pipeline& p, const nb::list& bindings, std::tuple<uint32_t, uint32_t,
+           uint32_t> groups) {
+            Draw d = draw_of(p, bindings, 0, 1, 0, 0, 0, nb::list(), nb::none(), true, 0, nb::bytes(""));
+            auto [x, y, z] = groups;
+            record_dispatch(device, list, d, x, y, z);
+        },
+        "device"_a, "list"_a, "pipeline"_a, "bindings"_a, "groups"_a,
+        "a compute dispatch recorded into a command list someone else owns (QRhi's, inside beginExternal)");
+    m.def("uav_barrier", &uav_barrier, "list"_a, "a barrier between every unordered access before and after it");
+    m.def("copy_buffer", &copy_buffer, "list"_a, "dst"_a, "dst_offset"_a, "src"_a, "src_offset"_a, "size"_a,
+          "bytes between two buffers (ID3D12Resource*) on a foreign list, both in their copy states");
 }

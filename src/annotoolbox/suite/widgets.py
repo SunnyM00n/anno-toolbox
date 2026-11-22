@@ -1,9 +1,10 @@
 """Qt pieces every app's windows share: OK / Cancel, a search over a list in a dialog, the colour dialog, the Edit menu.
 
-``ListPicker`` / ``pick_from_list`` ask for one entry of a list the caller builds for each search text;
+``CListPicker`` / ``pick_from_list`` ask for one entry of a list the caller builds for each search text;
 ``read_only_table`` / ``add_row`` the plain tables of the viewers; ``pick_qcolor`` is the colour dialog;
 ``edit_menu`` adds the Edit menu with Undo and Redo to a window; ``run_alone`` shows an app's window on its own.
-``ask_keep`` is the Save / Discard / Cancel question every app asks before unkept edits go; ``enable_unless`` greys a
+``ask_keep`` is the Save / Discard / Cancel question every app asks before unkept edits go; ``may_close`` is what a
+page's close handler asks first (the shell's two-step close, docs/app-api.md "Closing"); ``enable_unless`` greys a
 control and says why; ``stop_button``: a long job's Stop; ``access_keys`` / ``add_docks`` give titles access keys.
 """
 
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from ..infra.i18n import tr
 from . import theme
-from .settings import Settings, settings_file
+from .settings import CSettings, settings_file
 
 ROLE = 256  # Qt.UserRole: the entry's value
 
@@ -60,7 +61,7 @@ def stop_button(window, stop: Callable[[], None]) -> QPushButton:
 def read_only_table(columns: tuple[str, ...]) -> QTableWidget:
     """A table of whole-row selection that cannot be typed into, headed by the (translated) ``columns``."""
     table = QTableWidget(0, len(columns))
-    table.setHorizontalHeaderLabels([tr(c) for c in columns])
+    table.setHorizontalHeaderLabels([tr(column_key) for column_key in columns])
     table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
     table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -71,14 +72,14 @@ def add_row(table: QTableWidget, cells: list[str], data: object = None) -> int:
     """A row of ``cells`` at the end of ``table`` (``data`` kept on its first cell under ``ROLE``); its index."""
     row = table.rowCount()
     table.insertRow(row)
-    for col, text in enumerate(cells):
-        table.setItem(row, col, QTableWidgetItem(text))
+    for column, text in enumerate(cells):
+        table.setItem(row, column, QTableWidgetItem(text))
     if data is not None:
         table.item(row, 0).setData(ROLE, data)
     return row
 
 
-class ListPicker(QDialog):
+class CListPicker(QDialog):
     """A search over ``rows(query)`` (pairs of the text shown and the value); the first row is current.
 
     ``chosen`` is the current row's value after a double click or OK. With ``value`` the dialog has an editable value
@@ -93,60 +94,60 @@ class ListPicker(QDialog):
         rows: Callable[[str], list[tuple[str, object]]],
         *,
         value: str | None = None,
-        size: tuple[int, int] = (520, 560),
+        size_px: tuple[int, int] = (520, 560),
         placeholder: str = "",
     ) -> None:
         super().__init__(parent)
-        self.rows, self.chosen = rows, None
+        self.m_rows, self.m_chosen = rows, None
         self.setWindowTitle(title)
-        self.search = QLineEdit(placeholderText=placeholder or tr("common.search"))
-        self.list = QListWidget()
-        self.value = QLineEdit(value) if value is not None else None
+        self.m_search = QLineEdit(placeholderText=placeholder or tr("common.search"))
+        self.m_list = QListWidget()
+        self.m_value = QLineEdit(value) if value is not None else None
         layout = QVBoxLayout(self)
         parts = [QLabel(hint)] if hint else []
-        parts += [self.search, self.list]
-        if self.value is not None:
-            parts += [QLabel(tr("common.value_lower")), self.value]
+        parts += [self.m_search, self.m_list]
+        if self.m_value is not None:
+            parts += [QLabel(tr("common.value_lower")), self.m_value]
         for widget in (*parts, ok_cancel(self)):
             layout.addWidget(widget)
-        self.search.textChanged.connect(lambda _t: self.fill())
-        self.list.itemDoubleClicked.connect(lambda _i: self.accept())
-        if self.value is not None:
-            self.list.currentItemChanged.connect(self._take)
+        self.m_search.textChanged.connect(lambda _t: self.fill())
+        self.m_list.itemDoubleClicked.connect(lambda _i: self.accept())
+        if self.m_value is not None:
+            self.m_list.currentItemChanged.connect(self._take)
         self.fill()
-        self.resize(*size)
+        self.resize(*size_px)
 
     def _take(self, current: QListWidgetItem | None, _previous) -> None:
         if current is not None:
-            self.value.setText(str(current.data(ROLE)))
+            self.m_value.setText(str(current.data(ROLE)))
 
     def fill(self) -> None:
         # signals blocked: the first row becoming current must not overwrite the value line
-        self.list.blockSignals(True)
-        self.list.clear()
-        for label, value in self.rows(self.search.text()):
+        self.m_list.blockSignals(True)
+        self.m_list.clear()
+        for label, value in self.m_rows(self.m_search.text()):
             item = QListWidgetItem(label)
             item.setData(ROLE, value)
-            self.list.addItem(item)
-        if self.list.count():
-            self.list.setCurrentRow(0)
-        self.list.blockSignals(False)
+            self.m_list.addItem(item)
+        if self.m_list.count():
+            self.m_list.setCurrentRow(0)
+        self.m_list.blockSignals(False)
 
     def accept(self) -> None:
-        item = self.list.currentItem()
-        if self.value is not None:
-            self.chosen = self.value.text().strip()
+        item = self.m_list.currentItem()
+        if self.m_value is not None:
+            self.m_chosen = self.m_value.text().strip()
         else:
-            self.chosen = item.data(ROLE) if item is not None else None
+            self.m_chosen = item.data(ROLE) if item is not None else None
         super().accept()
 
 
 def pick_from_list(
     parent, title: str, hint: str, rows: Callable[[str], list[tuple[str, object]]], **options
 ) -> object | None:
-    """The value of the entry chosen in a ``ListPicker`` (``options`` as its keywords), None when cancelled."""
-    dialog = ListPicker(parent, title, hint, rows, **options)
-    return dialog.chosen if dialog.exec() and dialog.chosen is not None else None
+    """The value of the entry chosen in a ``CListPicker`` (``options`` as its keywords), None when cancelled."""
+    dialog = CListPicker(parent, title, hint, rows, **options)
+    return dialog.m_chosen if dialog.exec() and dialog.m_chosen is not None else None
 
 
 def pick_qcolor(parent, start: QColor, alpha: bool = False) -> QColor | None:
@@ -174,6 +175,17 @@ def ask_keep(parent, title: str, text: str, save: Callable[[], object]) -> bool:
     return answer != buttons.Cancel
 
 
+CLOSE_AGREED = "close_agreed"  # the dynamic property the shell sets on a page that said yes to ``can_close``
+
+
+def may_close(window) -> bool:
+    """A page's ``closeEvent`` asks this first: True when the shell already got the page's yes (its ``can_close``
+    asked the questions), else the page asks them now. The yes is used once."""
+    agreed = bool(window.property(CLOSE_AGREED))
+    window.setProperty(CLOSE_AGREED, False)
+    return agreed or window.can_close()
+
+
 def ask_choice(parent, title: str, text: str, choices: Iterable[tuple], default: str, escape: str) -> str:
     """A question with its own buttons. ``choices`` are (key, label or a standard button, role); Enter takes
     ``default``, Esc and closing the box ``escape``; the key of the button clicked."""
@@ -189,13 +201,14 @@ def ask_choice(parent, title: str, text: str, choices: Iterable[tuple], default:
 
 
 def kept_switch(window, menu: QMenu, text: str, changed: Callable[[], object], key: tuple[str, str],
-                on: bool = True) -> QAction:  # fmt: skip
-    """A checkable menu entry kept in the settings: ``key`` is (app, name) in ``window.settings.apps``, ``on`` its
-    state before anyone set it. The setting follows every change; ``changed`` runs when the person picks the entry."""
+                checked_by_default: bool = True) -> QAction:  # fmt: skip
+    """A checkable menu entry kept in the settings: ``key`` is (app, name) in ``window.settings.apps``,
+    ``checked_by_default`` its state before anyone set it. The setting follows every change; ``changed`` runs when the
+    person picks the entry."""
     app, name = key
     action = menu.addAction(text, changed)
     action.setCheckable(True)
-    action.setChecked(bool(window.settings.apps.get(app, {}).get(name, on)))
+    action.setChecked(bool(window.settings.apps.get(app, {}).get(name, checked_by_default)))
     action.toggled.connect(lambda state: window.settings.apps.setdefault(app, {}).__setitem__(name, state))
     return action
 
@@ -228,7 +241,9 @@ def enable_unless(item, why: str = "", tip: str = "") -> None:
 
 def access_letters(texts: Iterable[str]) -> str:
     """The access keys (``&x``) the texts carry, in lower case."""
-    return "".join(t[i + 1].lower() for t in texts for i in range(len(t) - 1) if t[i] == "&" and t[i + 1] != "&")
+    return "".join(
+        text[i + 1].lower() for text in texts for i in range(len(text) - 1) if text[i] == "&" and text[i + 1] != "&"
+    )
 
 
 def access_keys(titles: Iterable[str], avoid: str = "") -> list[str]:
@@ -241,60 +256,67 @@ def access_keys(titles: Iterable[str], avoid: str = "") -> list[str]:
         if "&" in text.replace("&&", ""):
             out.append(text)
             continue
-        starts = [i for i, c in enumerate(text) if c.isalnum() and (i == 0 or not text[i - 1].isalnum())]
-        order = starts + [i for i, c in enumerate(text) if c.isalnum() and i not in starts]
-        at = next((i for i in order if text[i].lower() not in taken), None)
-        if at is None:
+        starts = [
+            i for i, character in enumerate(text) if character.isalnum() and (i == 0 or not text[i - 1].isalnum())
+        ]
+        order = starts + [i for i, character in enumerate(text) if character.isalnum() and i not in starts]
+        key_index = next((i for i in order if text[i].lower() not in taken), None)
+        if key_index is None:
             out.append(text)
             continue
-        taken.add(text[at].lower())
-        out.append(f"{text[:at]}&{text[at:]}")
+        taken.add(text[key_index].lower())
+        out.append(f"{text[:key_index]}&{text[key_index:]}")
     return out
 
 
 def assign_access_keys(actions: Iterable[QAction], shown_together: Iterable[list[QAction]], avoid: str = "") -> None:
     """Give the actions without an access key one that no other action of a list they are shown in carries (a page of
     buttons, a menu), and none of the letters ``avoid``; an action that has one keeps it."""
-    groups = [list(g) for g in shown_together]
-    for act in actions:
-        if "&" in act.text().replace("&&", ""):
+    groups = [list(group) for group in shown_together]
+    for action in actions:
+        if "&" in action.text().replace("&&", ""):
             continue
-        away = avoid + "".join(access_letters(o.text() for o in g if o is not act) for g in groups if act in g)
-        act.setText(access_keys([act.text()], away)[0])
+        away = avoid + "".join(
+            access_letters(other.text() for other in group if other is not action)
+            for group in groups
+            if action in group
+        )
+        action.setText(access_keys([action.text()], away)[0])
 
 
 def menu_groups(menu) -> list[list[QAction]]:
     """The entries of a menu or menu bar and, below them, of each submenu: the lists whose keys must differ."""
-    entries = [a for a in menu.actions() if not a.isSeparator()]
+    entries = [action for action in menu.actions() if not action.isSeparator()]
     out = [entries]
-    for a in entries:
-        if a.menu() is not None:
-            out += menu_groups(a.menu())
+    for action in entries:
+        if action.menu() is not None:
+            out += menu_groups(action.menu())
     return out
 
 
 def add_docks(menu: QMenu, docks: Iterable) -> None:
     """The docks' show/hide actions in ``menu``, each title with an access key of its own."""
     actions = [dock.toggleViewAction() for dock in docks]
-    for act, text in zip(actions, access_keys(a.text() for a in actions), strict=True):
-        act.setText(text)
-        menu.addAction(act)
+    for action, text in zip(actions, access_keys(dock_action.text() for dock_action in actions), strict=True):
+        action.setText(text)
+        menu.addAction(action)
 
 
-def run_alone(window_class, app: str, size: tuple[int, int], game: str | None = None, *opened) -> int:
-    """An app's window alone, on the suite's settings: ``window_class(settings, path)`` shown at ``size``, the game
+def run_alone(window_class, app: str, size_px: tuple[int, int], game: str | None = None, *opened) -> int:
+    """An app's window alone, on the suite's settings: ``window_class(settings, path)`` shown at ``size_px``, the game
     asked for (else the one the app had open last, ``settings.apps[app]``) opened with ``open_game(game, *opened)``;
     the settings are saved when the window closes. Returns Qt's exit code."""
-    qt = QApplication.instance() or QApplication([sys.argv[0]])
-    qt.setStyle("Fusion")
+    application = QApplication.instance() or QApplication([sys.argv[0]])
+    application.setStyle("Fusion")
     settings_path = settings_file()
-    window = window_class(Settings.load(settings_path), settings_path)
-    theme.apply(window, window.settings.theme)
-    window.resize(*size)
+    settings = CSettings.load(settings_path)  # the window keeps this one: read here, so any window class fits
+    window = window_class(settings, settings_path)
+    theme.apply(window, settings.theme)
+    window.resize(*size_px)
     window.show()
-    game = game or window.settings.apps.get(app, {}).get("game")
+    game = game or settings.apps.get(app, {}).get("game")
     if game:
         window.open_game(game, *opened)
-    code = qt.exec()
-    window.settings.save(settings_path)
+    code = application.exec()
+    settings.save(settings_path)
     return code

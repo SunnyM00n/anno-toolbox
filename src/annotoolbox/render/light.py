@@ -27,28 +27,30 @@ LOOK2070 = {
 UNDERWATER = {"light": (3.5, 3.5, 3.5)}
 
 
-def srgb_hex(c: int) -> tuple[float, float, float]:
+def srgb_hex(packed: int) -> tuple[float, float, float]:
     """A colour as written (#rrggbb) in linear light."""
-    return tuple((((c >> k) & 255) / 255.0) ** 2.2 for k in (16, 8, 0))
+    return tuple((((packed >> k) & 255) / 255.0) ** 2.2 for k in (16, 8, 0))
 
 
-def lin(c) -> tuple:
-    return tuple(float(v) ** 2.2 for v in c)
+def lin(colour) -> tuple:
+    return tuple(float(component) ** 2.2 for component in colour)
 
 
-def light(opts, size: float) -> dict:
-    """The sun, ambient, sky, fog and frame finish of the look ``opts`` (``ViewOptions``) chooses, for an island
-    ``size`` tiles wide."""
+def light(options, size_tiles: float) -> dict:
+    """The sun, ambient, sky, fog and frame finish of the look ``opts`` (``SViewOptions``) chooses, for an island
+    ``size_tiles`` tiles wide."""
     flat = np.array([SUN_EDITOR[0], 0, SUN_EDITOR[2]])
     flat /= np.linalg.norm(flat)
-    if opts.look2070 or opts.underwater:
-        el = math.radians(LOOK2070["elevation"])
+    if options.look2070 or options.underwater:
+        elevation = math.radians(LOOK2070["elevation"])
         amb, sun = lin(LOOK2070["ambient"]), lin(LOOK2070["sun"])
-        under = {"uwLight": UNDERWATER["light"], "uwCaustics": float(opts.caustics)} if opts.underwater else {}
+        under = {"uwLight": UNDERWATER["light"], "uwCaustics": float(options.caustics)} if options.underwater else {}
         return {
             **under,
-            "sunDir": (flat[0] * math.cos(el), math.sin(el), flat[2] * math.cos(el)),
-            "sunColor": tuple(s - a for s, a in zip(sun, amb, strict=True)),
+            "sunDir": (flat[0] * math.cos(elevation), math.sin(elevation), flat[2] * math.cos(elevation)),
+            "sunColor": tuple(
+                sun_channel - ambient_channel for sun_channel, ambient_channel in zip(sun, amb, strict=True)
+            ),
             "ambientMode": 2,
             "flatAmbient": amb,
             "sky": (2, lin(LOOK2070["zenith"]), lin(LOOK2070["horizon"]), LOOK2070["fall_off"]),
@@ -56,27 +58,29 @@ def light(opts, size: float) -> dict:
             "finish": 2,
             "exposure": 1.0,
         }
-    if opts.game_light:
+    if options.game_light:
         from . import gamelook
 
         look = gamelook.look()
-        el = math.radians(look["sun_elevation"])
-        sh = [tuple(-v for v in c) if k in (3, 4, 7) else tuple(c) for k, c in enumerate(look["sky_sh"])]
+        elevation = math.radians(look["sun_elevation"])
+        harmonics = [
+            tuple(-value for value in row) if k in (3, 4, 7) else tuple(row) for k, row in enumerate(look["sky_sh"])
+        ]
         return {
-            "sunDir": (flat[0] * math.cos(el), math.sin(el), flat[2] * math.cos(el)),
+            "sunDir": (flat[0] * math.cos(elevation), math.sin(elevation), flat[2] * math.cos(elevation)),
             "sunColor": tuple(look["sun_diffuse"]),
             "ambientMode": 1,
-            "sh": sh,
+            "sh": harmonics,
             "shFactor": look["ambient_factor"],
             "sky": (1, tuple(look["sky_zenith"]), tuple(look["sky_horizon"]), 3.0),
             "fogColor": tuple(look["sky_horizon"]),
             "finish": 1,
             "exposure": look["exposure"],
         }
-    colors = viewcolors.palette(opts.scheme)
+    colors = viewcolors.palette(options.scheme)
     return {
         "sunDir": tuple(SUN_EDITOR),
-        "sunColor": tuple(c * 2.6 / math.pi for c in srgb_hex(0xFFF0D8)),
+        "sunColor": tuple(channel * 2.6 / math.pi for channel in srgb_hex(0xFFF0D8)),
         "ambientMode": 0,
         "hemiSky": srgb_hex(0xDFEFFF),
         "hemiGround": srgb_hex(0x4A4036),
@@ -87,5 +91,5 @@ def light(opts, size: float) -> dict:
         "fogColor": lin(colors["fog"]),
         "finish": 0,
         "exposure": 1.05,
-        "fog": (size * 1.6, size * 4),
+        "fog": (size_tiles * 1.6, size_tiles * 4),
     }

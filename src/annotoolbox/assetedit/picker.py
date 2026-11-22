@@ -15,17 +15,17 @@ from PySide6.QtGui import QColor
 
 from ..infra.i18n import alternatives, tr
 from ..suite.widgets import pick_from_list, pick_qcolor
-from .assetdoc import AssetDocument
-from .schema import ValueSpec
+from .assetdoc import CAssetDocument
+from .schema import SValueSpec
 
 LISTED = 300  # rows the asset picker lists at once
 
 
-def allows(doc: AssetDocument, spec: ValueSpec, guid: int) -> bool:
+def allows(doc: CAssetDocument, spec: SValueSpec, guid: int) -> bool:
     """Whether the asset may be named by a value of this definition (its template, its properties)."""
     if spec.allowed_templates and doc.template(guid) not in spec.allowed_templates:
         return False
-    needs = {n for n in spec.needed_property.split(";") if n}
+    needs = {name for name in spec.needed_property.split(";") if name}
     allowed = set(spec.allowed_properties)
     if needs or allowed:
         have = set(doc.layers(guid).property_names())
@@ -34,17 +34,24 @@ def allows(doc: AssetDocument, spec: ValueSpec, guid: int) -> bool:
     return True
 
 
-def candidates(doc: AssetDocument, spec: ValueSpec, query: str = "", limit: int = LISTED) -> list[int]:
+def candidates(doc: CAssetDocument, spec: SValueSpec, query: str = "", limit: int = LISTED) -> list[int]:
     """The assets a reference may take, matching ``query`` (GUID, name or template, case-insensitive), the change set's
     new assets first."""
-    q = query.strip().lower()
-    pool = [g for g in doc.changes.new if g not in doc.changes.removed] + [e.guid for e in doc.index.entries]
+    lowered_query = query.strip().lower()
+    pool = [pool_guid for pool_guid in doc.m_changes.m_new if pool_guid not in doc.m_changes.m_removed] + [
+        entry.guid for entry in doc.m_index.m_entries
+    ]
     out, seen = [], set()
     for guid in pool:
         if guid in seen or not doc.exists(guid):
             continue
         seen.add(guid)
-        if q and q not in str(guid) and q not in doc.name(guid).lower() and q not in doc.template(guid).lower():
+        if (
+            lowered_query
+            and lowered_query not in str(guid)
+            and lowered_query not in doc.name(guid).lower()
+            and lowered_query not in doc.template(guid).lower()
+        ):
             continue
         if allows(doc, spec, guid):
             out.append(guid)
@@ -53,32 +60,34 @@ def candidates(doc: AssetDocument, spec: ValueSpec, query: str = "", limit: int 
     return out
 
 
-def asset_hint(spec: ValueSpec) -> str:
+def asset_hint(spec: SValueSpec) -> str:
     parts = []
     if spec.allowed_templates:
         parts.append(tr("assets.templates_names", names=", ".join(spec.allowed_templates)))
     if spec.needed_property:
-        parts.append(tr("assets.needs_names", names=alternatives([n for n in spec.needed_property.split(";") if n])))
+        parts.append(
+            tr("assets.needs_names", names=alternatives([name for name in spec.needed_property.split(";") if name]))
+        )
     return "; ".join(parts) or tr("assets.any_asset")
 
 
-def pick_asset(parent, doc: AssetDocument, spec: ValueSpec) -> int | None:
+def pick_asset(parent, doc: CAssetDocument, spec: SValueSpec) -> int | None:
     """The GUID chosen among the assets the value may name, None when cancelled."""
 
     def rows(query: str) -> list[tuple[str, object]]:
         return [
-            (f"{doc.name(g) or tr('assets.no_name')}  ·  {g}  ·  {doc.template(g)}", g)
-            for g in candidates(doc, spec, query)
+            (f"{doc.name(guid) or tr('assets.no_name')}  ·  {guid}  ·  {doc.template(guid)}", guid)
+            for guid in candidates(doc, spec, query)
         ]
 
     return pick_from_list(parent, tr("assets.pick_asset_name", name=spec.name), asset_hint(spec), rows)
 
 
-def pick_file(parent, paths: list[str], spec: ValueSpec) -> str | None:
+def pick_file(parent, paths: list[str], spec: SValueSpec) -> str | None:
     """A game file chosen among those the value's filter allows, None when cancelled."""
 
     def rows(query: str) -> list[tuple[str, object]]:
-        return [(p, p) for p in files_for(paths, spec.file_filter, query)]
+        return [(path, path) for path in files_for(paths, spec.file_filter, query)]
 
     title = tr("assets.pick_file_name", name=spec.name)
     return pick_from_list(parent, title, spec.file_filter or tr("assets.any_file"), rows)
@@ -90,16 +99,16 @@ def pick_file(parent, paths: list[str], spec: ValueSpec) -> str | None:
 def from_argb(text: str) -> QColor:
     """The colour a value means (a signed or unsigned 32-bit number, alpha in the high byte); black when it is none."""
     try:
-        n = int(text.strip()) & 0xFFFFFFFF
+        argb = int(text.strip()) & 0xFFFFFFFF
     except ValueError:
         return QColor(0, 0, 0, 255)
-    return QColor((n >> 16) & 255, (n >> 8) & 255, n & 255, n >> 24)
+    return QColor((argb >> 16) & 255, (argb >> 8) & 255, argb & 255, argb >> 24)
 
 
 def to_argb(color: QColor) -> str:
     """The value text of a colour: the signed 32-bit number the games' files use."""
-    n = (color.alpha() << 24) | (color.red() << 16) | (color.green() << 8) | color.blue()
-    return str(n - 2**32 if n >= 2**31 else n)
+    argb = (color.alpha() << 24) | (color.red() << 16) | (color.green() << 8) | color.blue()
+    return str(argb - 2**32 if argb >= 2**31 else argb)
 
 
 def pick_colour(parent, text: str) -> str | None:
@@ -113,12 +122,14 @@ def pick_colour(parent, text: str) -> str | None:
 
 def files_for(paths: list[str], file_filter: str, query: str = "", limit: int = LISTED) -> list[str]:
     """The game's files a file name value may take: those matching its filter (``*.png;*.dds``) and the query."""
-    patterns = [p.strip().lower() for p in file_filter.replace(",", ";").split(";") if p.strip()]
-    q = query.strip().lower()
+    patterns = [pattern.strip().lower() for pattern in file_filter.replace(",", ";").split(";") if pattern.strip()]
+    lowered_query = query.strip().lower()
     out = []
     for path in paths:
         low = path.lower()
-        if (not patterns or any(fnmatch.fnmatchcase(low.rsplit("/", 1)[-1], p) for p in patterns)) and q in low:
+        if (
+            not patterns or any(fnmatch.fnmatchcase(low.rsplit("/", 1)[-1], pattern) for pattern in patterns)
+        ) and lowered_query in low:
             out.append(path)
             if len(out) >= limit:
                 break

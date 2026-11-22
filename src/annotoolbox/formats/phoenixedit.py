@@ -2,7 +2,7 @@
 
 ``phoenix`` turns a file into the tree and back; this module changes it. Start at ``set_field`` / ``objects`` for
 edits of a shipped file, ``new_object`` for an object with every stored field as the shipped files have them, and
-``WidgetFile`` for a widget file of our own with custom properties and bindings
+``CWidgetFile`` for a widget file of our own with custom properties and bindings
 (``docs/formats/phoenix-scene-format.md``, "Editing and new files" and "Bindings").
 """
 
@@ -37,22 +37,22 @@ IMAGE_ASSET = "232cec0d"
 def walk(node: dict):
     """Every object of the subtree, pre-order."""
     yield node
-    for e in node["fields"]:
-        for o in e["objs"]:
-            yield from walk(o)
+    for entry in node["fields"]:
+        for child in entry["objs"]:
+            yield from walk(child)
 
 
 def get_entry(node: dict, field: str) -> dict | None:
     """The present field entry named ``field`` (name or hash), or None."""
-    for e in node["fields"]:
-        if field in (e["field"]["name"], e["field"]["hash"]):
-            return e
+    for entry in node["fields"]:
+        if field in (entry["field"]["name"], entry["field"]["hash"]):
+            return entry
     return None
 
 
 def objects(node: dict, field: str) -> list[dict]:
-    e = get_entry(node, field)
-    return e["objs"] if e else []
+    entry = get_entry(node, field)
+    return entry["objs"] if entry else []
 
 
 def u32_of(node: dict, field: str) -> int:
@@ -60,30 +60,30 @@ def u32_of(node: dict, field: str) -> int:
 
 
 def object_name(node: dict) -> str | None:
-    e = get_entry(node, NAME_FIELD)
-    if e is not None and "raw" in e and len(e["raw"]) > 1:
-        return decode_string(e["raw"])
+    entry = get_entry(node, NAME_FIELD)
+    if entry is not None and "raw" in entry and len(entry["raw"]) > 1:
+        return decode_string(entry["raw"])
     return None
 
 
 def find_named(root: dict, name: str) -> list[dict]:
-    return [n for n in walk(root) if object_name(n) == name]
+    return [node for node in walk(root) if object_name(node) == name]
 
 
 def find_parent(root: dict, node: dict) -> tuple[dict, dict]:
     """The object and field entry holding ``node``."""
-    for n in walk(root):
-        for e in n["fields"]:
-            if any(o is node for o in e["objs"]):
-                return n, e
+    for parent in walk(root):
+        for entry in parent["fields"]:
+            if any(child is node for child in entry["objs"]):
+                return parent, entry
     raise KeyError("node not in this tree")
 
 
 def get_ref(node: dict, field: str) -> str | None:
     """The GUID an asset reference field points at, or None when it is unset."""
-    e = get_entry(node, field)
-    if e is not None and "raw" in e and e["raw"][:1] == b"\x01":
-        return str(uuid.UUID(bytes_le=e["raw"][5:21]))
+    entry = get_entry(node, field)
+    if entry is not None and "raw" in entry and entry["raw"][:1] == b"\x01":
+        return str(uuid.UUID(bytes_le=entry["raw"][5:21]))
     return None
 
 
@@ -92,74 +92,76 @@ def get_ref(node: dict, field: str) -> str | None:
 
 def has_field(node: dict, field: str) -> bool:
     """Whether the object's layout has ``field`` (name or hash), present or not: the older layouts lack some."""
-    return any(field in (f["name"], f["hash"]) for _, f in node.get("layout", ()))
+    return any(field in (field_info["name"], field_info["hash"]) for _, field_info in node.get("layout", ()))
 
 
 def _layout_index(node: dict, field: str) -> int:
-    idx = next((i for i, (_, f) in enumerate(node["layout"]) if field in (f["name"], f["hash"])), None)
-    if idx is None:
+    index = next((i for i, (_, f) in enumerate(node["layout"]) if field in (f["name"], f["hash"])), None)
+    if index is None:
         raise KeyError(f"{field} is not a field of {node['schema_type']}")
-    return idx
+    return index
 
 
 def _entry(node: dict, field: str) -> dict:
     """The entry of ``field``, made present (an empty raw value, the presence bit set) if it was absent."""
-    idx = _layout_index(node, field)
-    rec, f = node["layout"][idx]
-    for e in node["fields"]:
-        if e["field"] is f:
-            return e
+    index = _layout_index(node, field)
+    record, field_info = node["layout"][index]
+    for existing in node["fields"]:
+        if existing["field"] is field_info:
+            return existing
     mask = bytearray(node["mask"])
-    mask[idx // 8] |= 0x80 >> (idx % 8)
+    mask[index // 8] |= 0x80 >> (index % 8)
     node["mask"] = bytes(mask)
-    order = {id(g): i for i, (_, g) in enumerate(node["layout"])}
-    entry = {"field": f, "record": rec["hash"], "objs": [], "raw": b""}
-    pos = next((k for k, e in enumerate(node["fields"]) if order[id(e["field"])] > idx), len(node["fields"]))
-    node["fields"].insert(pos, entry)
+    order = {id(other_field): i for i, (_, other_field) in enumerate(node["layout"])}
+    entry = {"field": field_info, "record": record["hash"], "objs": [], "raw": b""}
+    position = next(
+        (k for k, existing in enumerate(node["fields"]) if order[id(existing["field"])] > index), len(node["fields"])
+    )
+    node["fields"].insert(position, entry)
     return entry
 
 
 def set_field(node: dict, field: str, value) -> None:
     """Set a plain field (by name or hash) of an object node; an absent field becomes present."""
-    e = _entry(node, field)
-    e["raw"] = encode_value(int(e["field"]["code"], 16), value)
-    e["objs"] = []
-    e.pop("head", None)
+    entry = _entry(node, field)
+    entry["raw"] = encode_value(int(entry["field"]["code"], 16), value)
+    entry["objs"] = []
+    entry.pop("head", None)
 
 
 def set_raw(node: dict, field: str, raw: bytes) -> None:
     """Set a field to already encoded bytes (a boxed value, a reference, an empty list)."""
-    e = _entry(node, field)
-    e["raw"] = raw
-    e["objs"] = []
-    e.pop("head", None)
+    entry = _entry(node, field)
+    entry["raw"] = raw
+    entry["objs"] = []
+    entry.pop("head", None)
 
 
-def set_objects(node: dict, field: str, objs: list[dict]) -> None:
-    """Set an object field: a list (0x4201) to ``objs``, a single or embedded object (0x4200, 0x4000) to one."""
-    e = _entry(node, field)
-    code = int(e["field"]["code"], 16)
-    e.pop("raw", None)
-    e.pop("head", None)
+def set_objects(node: dict, field: str, children: list[dict]) -> None:
+    """Set an object field: a list (0x4201) to ``children``, a single or embedded object (0x4200, 0x4000) to one."""
+    entry = _entry(node, field)
+    code = int(entry["field"]["code"], 16)
+    entry.pop("raw", None)
+    entry.pop("head", None)
     if code == 0x4201:
-        if not objs:
-            e["raw"], e["objs"] = b"\x00", []
+        if not children:
+            entry["raw"], entry["objs"] = b"\x00", []
             return
-        e["head"], e["objs"] = leb128.encode(len(objs)), list(objs)
+        entry["head"], entry["objs"] = leb128.encode(len(children)), list(children)
     elif code in (0x4200, 0x4000):
-        if len(objs) != 1:
+        if len(children) != 1:
             raise ValueError(f"{field} holds one object")
-        e["head"], e["objs"] = b"", list(objs)
+        entry["head"], entry["objs"] = b"", list(children)
     else:
         raise ValueError(f"{field} is not an object field")
 
 
 def set_ref(node: dict, field: str, type_hash: str, guid: str) -> None:
     """Point an asset reference field (0x4300/0x4400) at another file."""
-    e = get_entry(node, field)
-    if e is None:
+    entry = get_entry(node, field)
+    if entry is None:
         raise KeyError(f"{field} not present")
-    e["raw"] = ref_bytes(type_hash, guid)
+    entry["raw"] = ref_bytes(type_hash, guid)
 
 
 TEXT_STYLE = "c697c96c"  # the type hash a label's TextStyle reference carries
@@ -181,12 +183,12 @@ def set_name(node: dict, name: str) -> None:
 
 def set_color(node: dict, field: str, rgb: tuple[int, int, int]) -> None:
     """A ColorType field (ColorTint, BackgroundColor) to a plain colour: no palette entry, the given RGB."""
-    (ctype,) = objects(node, field)
-    set_raw(ctype, "ColorPaletteAsset", b"\x00")
-    set_field(ctype, "974ece0d", 0)
-    (color,) = objects(ctype, "Color")
-    for fname, v in zip(("5767df55", "3aba3bbe", "4ad0cf31"), rgb, strict=True):
-        set_field(color, fname, v)
+    (color_type,) = objects(node, field)
+    set_raw(color_type, "ColorPaletteAsset", b"\x00")
+    set_field(color_type, "974ece0d", 0)
+    (color,) = objects(color_type, "Color")
+    for field_name, channel in zip(("5767df55", "3aba3bbe", "4ad0cf31"), rgb, strict=True):
+        set_field(color, field_name, channel)
 
 
 # Moving objects between trees
@@ -200,46 +202,46 @@ def clone_object(node: dict, fresh: bool = True, salt: str = "") -> dict:
     rebuild writes the same bytes."""
     remap: dict[bytes, bytes] = {}
     if fresh:
-        for n in walk(node):
-            if n.get("guid") is not None and n.get("flags") is not None:
-                remap[n["guid"]] = uuid.uuid5(uuid.NAMESPACE_OID, salt + n["guid"].hex()).bytes_le
+        for descendant in walk(node):
+            if descendant.get("guid") is not None and descendant.get("flags") is not None:
+                remap[descendant["guid"]] = uuid.uuid5(uuid.NAMESPACE_OID, salt + descendant["guid"].hex()).bytes_le
 
-    def copy(n: dict) -> dict:
-        out = {k: v for k, v in n.items() if k not in ("fields", "start")}
-        out["guid"] = remap.get(n.get("guid"), n.get("guid"))
-        out["fields"] = []
-        for e in n["fields"]:
-            e2 = {**e, "objs": [copy(o) for o in e["objs"]]}
+    def copy(source_node: dict) -> dict:
+        result = {key: value for key, value in source_node.items() if key not in ("fields", "start")}
+        result["guid"] = remap.get(source_node.get("guid"), source_node.get("guid"))
+        result["fields"] = []
+        for entry in source_node["fields"]:
+            entry_copy = {**entry, "objs": [copy(child) for child in entry["objs"]]}
             for key in ("raw", "head"):
-                if key in e2:
+                if key in entry_copy:
                     for old, new in remap.items():
-                        e2[key] = e2[key].replace(old, new)
-            out["fields"].append(e2)
-        return out
+                        entry_copy[key] = entry_copy[key].replace(old, new)
+            result["fields"].append(entry_copy)
+        return result
 
     return copy(node)
 
 
-def insert_object(entry: dict, obj: dict, index: int | None = None) -> None:
+def insert_object(entry: dict, child: dict, index: int | None = None) -> None:
     """Insert an object into an object-list field entry (0x4201) and update its count."""
     if int(entry["field"]["code"], 16) != 0x4201:
         raise ValueError(f"{entry['field']['name']} is not an object list")
-    objs = entry["objs"]
-    objs.insert(len(objs) if index is None else index, obj)
-    entry["head"] = leb128.encode(len(objs))
+    children = entry["objs"]
+    children.insert(len(children) if index is None else index, child)
+    entry["head"] = leb128.encode(len(children))
     entry.pop("raw", None)
 
 
-def adopt(target, source, obj: dict) -> None:
-    """Make the types of ``obj`` (taken from the ``source`` Decoder) known to the ``target`` Decoder's type table.
+def adopt(target, source, node: dict) -> None:
+    """Make the types of ``node`` (taken from the ``source`` Decoder) known to the ``target`` Decoder's type table.
     The layout versions must agree: an object is stored in the layout its file names for each record."""
-    for n in walk(obj):
-        for rec in type_chain(source.s, n["schema_type"]) + [f"{n['type']:08x}"]:
-            g = source.guid_of.get(rec)
-            if g is None:
+    for descendant in walk(node):
+        for record in type_chain(source.m_schema, descendant["schema_type"]) + [f"{descendant['type']:08x}"]:
+            layout_guid = source.m_guid_of.get(record)
+            if layout_guid is None:
                 continue
-            if target.guid_of.setdefault(rec, g) != g:
-                raise ValueError(f"layout version of {rec} differs: {target.guid_of[rec]} vs {g}")
+            if target.m_guid_of.setdefault(record, layout_guid) != layout_guid:
+                raise ValueError(f"layout version of {record} differs: {target.m_guid_of[record]} vs {layout_guid}")
 
 
 # Constructing
@@ -307,54 +309,56 @@ def new_object(
     schema = full_schema(schema)
     versions = versions or {}
     layout = file_layout(schema, type_hash, versions)
-    n = len(layout)
-    mask = bytearray((n + 7) // 8)
-    for i in range(1, n):  # bit 0 is the Object base, never stored
+    field_count = len(layout)
+    mask = bytearray((field_count + 7) // 8)
+    for i in range(1, field_count):  # bit 0 is the Object base, never stored
         mask[i // 8] |= 0x80 >> (i % 8)
     node = {
         "flags": None if root else (2 if guid else 0),
         "guid": guid if (root or guid) else None,
         "type": int(type_hash, 16),
         "schema_type": type_hash,
-        "n": n,
+        "n": field_count,
         "mask": bytes(mask),
         "layout": layout,
         "fields": [],
     }
-    for rec, f in layout[1:]:
-        code = int(f["code"], 16)
-        e = {"field": f, "record": rec["hash"], "objs": []}
+    for record, field_info in layout[1:]:
+        code = int(field_info["code"], 16)
+        entry = {"field": field_info, "record": record["hash"], "objs": []}
         if code == 0x4000:
-            e["head"], e["objs"] = b"", [new_object(schema, f["elem"], versions=versions)]
+            entry["head"], entry["objs"] = b"", [new_object(schema, field_info["elem"], versions=versions)]
         else:
-            e["raw"] = _empty_value(code)
-        node["fields"].append(e)
-    chain = [r["hash"] for r in chain_records(schema, type_hash)]
-    for (rec_hash, fname), value in DEFAULTS.items():
-        if rec_hash in chain and any(fname in (f["name"], f["hash"]) for _, f in layout):
-            set_field(node, fname, value)
+            entry["raw"] = _empty_value(code)
+        node["fields"].append(entry)
+    chain = [record["hash"] for record in chain_records(schema, type_hash)]
+    for (rec_hash, field_name), value in DEFAULTS.items():
+        if rec_hash in chain and any(
+            field_name in (field_info["name"], field_info["hash"]) for _, field_info in layout
+        ):
+            set_field(node, field_name, value)
     if type_hash in ASSET_TYPES:
         set_field(node, "AssetType", ASSET_TYPES[type_hash])
     return node
 
 
-def component(schema: dict, template_guid: str, name: str, uid: int, versions: dict[str, str] | None = None) -> dict:
+def component(schema: dict, template: str, name: str, identifier: int, versions: dict[str, str] | None = None) -> dict:
     """A ComponentInstance of a shipped component template (NumberToString ...)."""
-    c = new_object(schema, "51a18126", versions=versions)
-    set_field(c, "UniqueId", uid)
-    set_raw(c, "ComponentTemplate", ref_bytes(COMPONENT_TEMPLATE, template_guid))
-    set_field(c, NAME_FIELD, name)
-    return c
+    component_node = new_object(schema, "51a18126", versions=versions)
+    set_field(component_node, "UniqueId", identifier)
+    set_raw(component_node, "ComponentTemplate", ref_bytes(COMPONENT_TEMPLATE, template))
+    set_field(component_node, NAME_FIELD, name)
+    return component_node
 
 
 def image_asset(
-    schema: dict, guid: str, image_id: str, size: tuple[float, float], versions: dict[str, str] | None = None
+    schema: dict, guid: str, image_id: str, size_px: tuple[float, float], versions: dict[str, str] | None = None
 ) -> dict:
     """An ImageAsset root: one picture (``ImageId``, the 1080p size), no nine-slice, no atlas."""
-    a = new_object(schema, IMAGE_ASSET, guid=uuid.UUID(guid).bytes_le, root=True, versions=versions)
-    set_field(a, "ImageId", image_id)
-    set_field(a, "Size", size)
-    return a
+    asset = new_object(schema, IMAGE_ASSET, guid=uuid.UUID(guid).bytes_le, root=True, versions=versions)
+    set_field(asset, "ImageId", image_id)
+    set_field(asset, "Size", size_px)
+    return asset
 
 
 # Bindings
@@ -362,8 +366,8 @@ def image_asset(
 
 def _ids(text: str) -> dict[str, int]:
     """``"Name id Name id ..."`` (ids in hex above 0x80000000) as name -> UniqueId."""
-    w = text.split()
-    return {w[i]: 0x80000000 + int(w[i + 1], 16) for i in range(0, len(w), 2)}
+    words = text.split()
+    return {words[i]: 0x80000000 + int(words[i + 1], 16) for i in range(0, len(words), 2)}
 
 
 # built-in widget properties as binding ends, from the game's own tables (phoenix-scene-format "Built-in properties")
@@ -429,10 +433,10 @@ ELEMENT_OBJECT = 0x30000002  # the element's game object (DataMode 4)
 def property_value(schema: dict, path: list[int], kind: str, value, versions: dict[str, str] | None = None) -> dict:
     """A PropertyValue: an instance's own value of a property of its template (``path``: UniqueIds, a component's
     first) as a boxed ``kind`` of BOXED_CODE."""
-    v = new_object(schema, "2df5f3e4", versions=versions)
-    set_field(v, "PropertyIdPath", list(path))
-    set_raw(v, "Value", boxed(BOXED_CODE[kind], value))
-    return v
+    value_node = new_object(schema, "2df5f3e4", versions=versions)
+    set_field(value_node, "PropertyIdPath", list(path))
+    set_raw(value_node, "Value", boxed(BOXED_CODE[kind], value))
+    return value_node
 
 
 def unique_id(base: int, *parts: str) -> int:
@@ -440,7 +444,7 @@ def unique_id(base: int, *parts: str) -> int:
     return base | (zlib.crc32("/".join(parts).encode("utf-8")) & 0x0FFFFFFF)
 
 
-class WidgetFile:
+class CWidgetFile:
     """A ContainerWidgetTemplate being assembled: custom properties, child instances, data objects, property
     containers, custom property containers and identity bindings, written into the root by ``finish``.
 
@@ -448,49 +452,51 @@ class WidgetFile:
     widget's custom properties); ``bind`` joins two of them (phoenix-scene-format "Bindings")."""
 
     def __init__(self, schema: dict, root: dict, versions: dict[str, str] | None = None) -> None:
-        self.schema = full_schema(schema)
-        self.versions = versions or {}
-        self.root = root
-        self.instances: list[dict] = list(objects(root, "WidgetInstances"))
-        self.properties: list[dict] = []
-        self.data_objects: list[dict] = []  # each a b0dd1389 with its path of 7e4fae85 entries
-        self._dobj_index: dict[int | None, int] = {}
-        self.containers: list[dict] = []  # PropertyContainer
-        self.self_containers: list[dict] = []  # CustomPropertyContainer
-        self.bindings: list[tuple[tuple[str, int], tuple[str, int]]] = []
-        self.uids: dict[str, int] = {}
+        self.m_schema = full_schema(schema)
+        self.m_versions = versions or {}
+        self.m_root = root
+        self.m_instances: list[dict] = list(objects(root, "WidgetInstances"))
+        self.m_properties: list[dict] = []
+        self.m_data_objects: list[dict] = []  # each a b0dd1389 with its path of 7e4fae85 entries
+        self._m_data_object_index: dict[int | None, int] = {}
+        self.m_containers: list[dict] = []  # PropertyContainer
+        self.m_self_containers: list[dict] = []  # CustomPropertyContainer
+        self.m_bindings: list[tuple[tuple[str, int], tuple[str, int]]] = []
+        self.m_unique_ids: dict[str, int] = {}
 
     def _new(self, type_hash: str) -> dict:
-        return new_object(self.schema, type_hash, versions=self.versions)
+        return new_object(self.m_schema, type_hash, versions=self.m_versions)
 
     def add_property(self, name: str, kind: str, default=None) -> int:
         """A public custom property of the widget (``kind`` of PROPERTY_TYPES); returns its UniqueId."""
-        if name in self.uids:
+        if name in self.m_unique_ids:
             raise ValueError(f"custom property {name} twice")
-        uid = unique_id(0x10000000, name)
-        if uid in self.uids.values():
+        identifier = unique_id(0x10000000, name)
+        if identifier in self.m_unique_ids.values():
             raise ValueError(f"UniqueId of {name} collides")
-        p = self._new("1294a820")
-        set_field(p, "UniqueId", uid)
-        set_field(p, "PropertyType", PROPERTY_TYPES[kind])
+        custom_property = self._new("1294a820")
+        set_field(custom_property, "UniqueId", identifier)
+        set_field(custom_property, "PropertyType", PROPERTY_TYPES[kind])
         if kind in BOXED_CODE:  # an event, an action, an array or a game object has no default (an empty box)
-            set_raw(p, "DefaultValue", boxed(BOXED_CODE[kind], ZERO[kind] if default is None else default))
-        set_field(p, "PropertyNameCrc", zlib.crc32(name.encode("utf-8")))
-        set_field(p, NAME_FIELD, name)
-        self.properties.append(p)
-        self.uids[name] = uid
-        return uid
+            set_raw(
+                custom_property, "DefaultValue", boxed(BOXED_CODE[kind], ZERO[kind] if default is None else default)
+            )
+        set_field(custom_property, "PropertyNameCrc", zlib.crc32(name.encode("utf-8")))
+        set_field(custom_property, NAME_FIELD, name)
+        self.m_properties.append(custom_property)
+        self.m_unique_ids[name] = identifier
+        return identifier
 
     def add_instance(self, node: dict) -> dict:
-        self.instances.append(node)
+        self.m_instances.append(node)
         return node
 
     def data_object(self, instance: dict | int | None) -> int:
         """The index of the data object for ``instance`` (a direct child), of the widget itself (None), or of a
         list's element or item widget (``ELEMENT`` / ``ITEM``, in a list widget file)."""
         key = None if instance is None else instance if isinstance(instance, int) else id(instance)
-        if key in self._dobj_index:
-            return self._dobj_index[key]
+        if key in self._m_data_object_index:
+            return self._m_data_object_index[key]
         item = self._new("7e4fae85")
         if instance is None:
             set_field(item, "DataMode", 1)
@@ -499,62 +505,68 @@ class WidgetFile:
         else:
             set_field(item, "DataMode", 0)
             set_raw(item, "b25f63de", ref_bytes(INSTANCE_REF, instance["guid"]))
-        dobj = self._new("b0dd1389")
-        set_objects(dobj, "15a30137", [item])
-        self.data_objects.append(dobj)
-        self._dobj_index[key] = len(self.data_objects) - 1
-        return self._dobj_index[key]
+        data_node = self._new("b0dd1389")
+        set_objects(data_node, "15a30137", [item])
+        self.m_data_objects.append(data_node)
+        self._m_data_object_index[key] = len(self.m_data_objects) - 1
+        return self._m_data_object_index[key]
 
     def end(self, instance: dict | int | None, path: list[int], field: int = 1) -> tuple[str, int]:
         """A binding end: a property path (UniqueIds) on a child instance, the widget itself or a list's element or
         item (``data_object``), the whole value of its last property or, with ``field`` 2 / 3 / 4, its x / y / z (a
         scale or a position). An event at the source fires whatever the target is (an event, an action)."""
-        pc = self._new("1bb72d66")
-        ids = []
-        for i, uid in enumerate(path):
-            pid = self._new("6e5a7f0e")
-            set_field(pid, "UniqueId", uid)
+        property_container = self._new("1bb72d66")
+        path_ids = []
+        for i, identifier in enumerate(path):
+            path_id = self._new("6e5a7f0e")
+            set_field(path_id, "UniqueId", identifier)
             if i == len(path) - 1 and field != 1:
-                set_field(pid, "PropertyField", field)
-            ids.append(pid)
-        set_objects(pc, "PropertyPath", ids)
-        set_field(pc, "a86f2815", self.data_object(instance))
-        set_field(pc, "UseCount", 0)
-        self.containers.append(pc)
-        return ("pc", len(self.containers) - 1)
+                set_field(path_id, "PropertyField", field)
+            path_ids.append(path_id)
+        set_objects(property_container, "PropertyPath", path_ids)
+        set_field(property_container, "a86f2815", self.data_object(instance))
+        set_field(property_container, "UseCount", 0)
+        self.m_containers.append(property_container)
+        return ("pc", len(self.m_containers) - 1)
 
     def own(self, name: str) -> tuple[str, int]:
         """A binding end: one of this widget's own custom properties."""
-        index = next(i for i, p in enumerate(self.properties) if object_name(p) == name)
-        cpc = self._new("9df79719")
-        set_field(cpc, "CustomPropertyIndex", index)
-        set_field(cpc, "UseCount", 0)
-        self.self_containers.append(cpc)
-        return ("cpc", len(self.self_containers) - 1)
+        index = next(
+            (i for i, custom_property in enumerate(self.m_properties) if object_name(custom_property) == name), None
+        )
+        if index is None:
+            raise KeyError(f"{name} is not a custom property of this widget file")
+        custom_container = self._new("9df79719")
+        set_field(custom_container, "CustomPropertyIndex", index)
+        set_field(custom_container, "UseCount", 0)
+        self.m_self_containers.append(custom_container)
+        return ("cpc", len(self.m_self_containers) - 1)
 
-    def bind(self, src: tuple[str, int], dst: tuple[str, int]) -> None:
-        self.bindings.append((src, dst))
+    def bind(self, source_end: tuple[str, int], target_end: tuple[str, int]) -> None:
+        self.m_bindings.append((source_end, target_end))
 
     def finish(self, salt: str) -> dict:
         """Write everything into the root; ``salt`` makes the bindings' profile ids stable per widget file."""
-        offset = {"pc": 0, "cpc": len(self.containers)}  # constants (8e4aa971) would sit between: none written
-        holders = {"pc": self.containers, "cpc": self.self_containers}
-        out = []
-        for k, (src, dst) in enumerate(self.bindings):
-            b = self._new("edcf0433")
-            set_objects(b, "ConverterInstance", [self._new("c346a1bd")])
-            set_field(b, "28c38074", [offset[src[0]] + src[1]])
-            set_field(b, "cec4084b", [offset[dst[0]] + dst[1]])
-            set_field(b, "ProfileID", str(uuid.uuid5(uuid.NAMESPACE_URL, f"anno-toolbox/ui/{salt}/binding/{k}")))
-            for kind, i in (src, dst):
+        index_offset = {"pc": 0, "cpc": len(self.m_containers)}  # constants (8e4aa971) would sit between: none written
+        holders = {"pc": self.m_containers, "cpc": self.m_self_containers}
+        binding_nodes = []
+        for k, (source_end, target_end) in enumerate(self.m_bindings):
+            binding = self._new("edcf0433")
+            set_objects(binding, "ConverterInstance", [self._new("c346a1bd")])
+            set_field(binding, "28c38074", [index_offset[source_end[0]] + source_end[1]])
+            set_field(binding, "cec4084b", [index_offset[target_end[0]] + target_end[1]])
+            set_field(
+                binding, "ProfileID", str(uuid.uuid5(uuid.NAMESPACE_URL, f"anno-toolbox/ui/{salt}/binding/{k}"))
+            )
+            for kind, i in (source_end, target_end):
                 node = holders[kind][i]
                 set_field(node, "UseCount", u32_of(node, "UseCount") + 1)
-            out.append(b)
-        set_objects(self.root, "WidgetInstances", self.instances)
-        set_objects(self.root, "18b0dff0", self.properties)
-        set_objects(self.root, "a4336119", out)
-        set_objects(self.root, "8fda299c", self.data_objects)
-        set_objects(self.root, "PropertyContainers", self.containers)
-        set_objects(self.root, "8e4aa971", [])
-        set_objects(self.root, "7ff8905c", self.self_containers)
-        return self.root
+            binding_nodes.append(binding)
+        set_objects(self.m_root, "WidgetInstances", self.m_instances)
+        set_objects(self.m_root, "18b0dff0", self.m_properties)
+        set_objects(self.m_root, "a4336119", binding_nodes)
+        set_objects(self.m_root, "8fda299c", self.m_data_objects)
+        set_objects(self.m_root, "PropertyContainers", self.m_containers)
+        set_objects(self.m_root, "8e4aa971", [])
+        set_objects(self.m_root, "7ff8905c", self.m_self_containers)
+        return self.m_root

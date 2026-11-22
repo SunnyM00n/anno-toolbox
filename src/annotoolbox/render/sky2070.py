@@ -4,7 +4,7 @@ glow and three samples of the engine's noise volume as clouds. Anno 1404's ``Sky
 scattering and a cloud cube (``frame1404``).
 
 ``dome()`` is the sphere, ``sky_values(sun)`` the constants by name, ``read_volume(files)`` the noise volume's slices,
-``SkyDome(ctx, stages, dummies)`` the draw; ``SkyCube(ctx, stages, dummies)`` the sky rendered into the cube the
+``CSkyDome(ctx, stages, dummies)`` the draw; ``CSkyCube(ctx, stages, dummies)`` the sky rendered into the cube the
 water reflects (``SkyCubeMap``). docs/rendering/shader-compile.md section 10, "Sky" and "The ocean's waves".
 """
 
@@ -25,8 +25,8 @@ from PySide6.QtGui import (
 
 from ..models import ddsdecode
 from . import gameshader as gs
-from .fxcdraw import FxcDraw, volume_of
-from .gamedraw import Mesh, Program
+from .fxcdraw import CFxcDraw, volume_of
+from .gamedraw import CMesh, CProgram
 
 FX = "data/system/shaders/fx/sky.fx"
 TECHNIQUE = "Sky"
@@ -49,39 +49,39 @@ def ring_index(rings: int, segments: int) -> np.ndarray:
     index = []
     for i in range(rings):
         for j in range(segments):
-            a, b = i * (segments + 1) + j, (i + 1) * (segments + 1) + j
-            index += [a, b, a + 1, a + 1, b, b + 1]
+            lower, upper = i * (segments + 1) + j, (i + 1) * (segments + 1) + j
+            index += [lower, upper, lower + 1, lower + 1, upper, upper + 1]
     return np.array(index, np.uint32)
 
 
-def dome(rings: int = RINGS, segments: int = SEGMENTS) -> Mesh:
+def dome(rings: int = RINGS, segments: int = SEGMENTS) -> CMesh:
     """A unit sphere of ``rings`` x ``segments`` quads, positions only (``p3``)."""
-    verts = []
+    vertices = []
     for i in range(rings + 1):
         polar = math.pi * i / rings
         for j in range(segments + 1):
-            a = 2 * math.pi * j / segments
-            verts.append((math.sin(polar) * math.cos(a), math.cos(polar), math.sin(polar) * math.sin(a)))
-    data = np.array(verts, "<f4")
-    return Mesh(data.tobytes(), 12, ((0, 7, 3, 0),), ring_index(rings, segments), len(verts))
+            angle = 2 * math.pi * j / segments
+            vertices.append((math.sin(polar) * math.cos(angle), math.cos(polar), math.sin(polar) * math.sin(angle)))
+    data = np.array(vertices, "<f4")
+    return CMesh(data.tobytes(), 12, ((0, 7, 3, 0),), ring_index(rings, segments), len(vertices))
 
 
 def sky_values(sun) -> dict:
-    """The sky's own constants (``frame2070.Sun2070``): the clouds' colour and density, their two turns."""
+    """The sky's own constants (``frame2070.SSun2070``): the clouds' colour and density, their two turns."""
     return {"cCloudColor": [*sun.cloud_color, sun.cloud_density], **cloud_turns(sun.seconds)}
 
 
-def rotation_y(a: float) -> np.ndarray:
+def rotation_y(angle_rad: float) -> np.ndarray:
     """Direct3D's ``D3DXMatrixRotationY`` (row vectors, 3 x 3)."""
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]])
+    cosine, sine = math.cos(angle_rad), math.sin(angle_rad)
+    return np.array([[cosine, 0.0, -sine], [0.0, 1.0, 0.0], [sine, 0.0, cosine]])
 
 
-def yaw_pitch(yaw: float, pitch: float) -> np.ndarray:
+def yaw_pitch(yaw_rad: float, pitch_rad: float) -> np.ndarray:
     """Direct3D's ``D3DXMatrixRotationYawPitchRoll`` without roll (row vectors, 3 x 3): the pitch about x, then the
     yaw about y."""
-    c, s = math.cos(pitch), math.sin(pitch)
-    return np.array([[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]]) @ rotation_y(yaw)
+    cosine, sine = math.cos(pitch_rad), math.sin(pitch_rad)
+    return np.array([[1.0, 0.0, 0.0], [0.0, cosine, sine], [0.0, -sine, cosine]]) @ rotation_y(yaw_rad)
 
 
 def cloud_turns(seconds: float) -> dict:
@@ -96,110 +96,125 @@ def face_values(face: int) -> dict:
     return {"cMtxSkyCubeFace": gs.as_columns(yaw_pitch(*FACE_TURNS[face]))}
 
 
-def face_quad() -> Mesh:
+def face_quad() -> CMesh:
     """The sky manager's quad over a face: (-1, 1), (1, 1), (-1, -1), (1, -1) at z 0 (``p3``), drawn as a strip."""
-    v = np.array([[-1, 1, 0], [1, 1, 0], [-1, -1, 0], [1, -1, 0]], "<f4")
-    return Mesh(v.tobytes(), 12, ((0, 7, 3, 0),), np.array([0, 1, 2, 2, 1, 3], np.uint32), 4)
+    corners = np.array([[-1, 1, 0], [1, 1, 0], [-1, -1, 0], [1, -1, 0]], "<f4")
+    return CMesh(corners.tobytes(), 12, ((0, 7, 3, 0),), np.array([0, 1, 2, 2, 1, 3], np.uint32), 4)
 
 
 def read_volume(files) -> list[np.ndarray]:
     """In the background: the noise volume's first level, slice by slice (RGBA bytes), as stored."""
-    dds = ddsdecode.DdsFile(files.read(VOLUME))
+    dds = ddsdecode.CDdsFile(files.read(VOLUME))
     return [np.ascontiguousarray(dds.level(0, 0, z)) for z in range(dds.slices(0))]
 
 
-class SkyDome:
-    """The sky's draw (``stages``: the technique's ``PassStages``) and its clouds once they are read: 2070's noise
+class CSkyDome:
+    """The sky's draw (``stages``: the technique's ``SPassStages``) and its clouds once they are read: 2070's noise
     volume (``set_volume``, its own) or 1404's cloud cube (``cube``, the caller's); the old engine's games share it."""
 
     def __init__(self, ctx, stages, dummies) -> None:
-        self.ctx = ctx
+        self.m_ctx = ctx
         # both faces: from inside the sphere each view ray meets one face in front, whichever way it is wound
         state = replace(stages.state, cull="none")
-        self.draw_call = FxcDraw(ctx, Program(stages.vs, stages.ps), dome(), state, dummies)
+        self.m_draw_call = CFxcDraw(ctx, CProgram(stages.vertex_stage, stages.pixel_stage), dome(), state, dummies)
         # the clouds' density is the map's alpha (2070's noise volume, 1404's cube): none while it loads or with the
         # clouds switched off, not a white overcast
-        self.draw_call.fallbacks = {"cTexture0": NO_CLOUDS}
-        self.volume = self.cube = None
+        self.m_draw_call.m_fallbacks = {"cTexture0": NO_CLOUDS}
+        self.m_volume = self.m_cube = None
 
     def set_volume(self, slices: list[np.ndarray]) -> None:
-        if self.volume is None:
-            self.volume = volume_of(self.ctx, slices)
+        if self.m_volume is None:
+            self.m_volume = volume_of(self.m_ctx, slices)
 
     def maps(self) -> dict:
-        found = self.volume if self.volume is not None else self.cube
+        found = self.m_volume if self.m_volume is not None else self.m_cube
         return {"cTexture0": found} if found is not None else {}
 
     def release(self) -> None:
-        self.draw_call.release()
-        if self.volume is not None:
-            self.ctx.later(self.volume)
-            self.volume = None
+        self.m_draw_call.release()
+        if self.m_volume is not None:
+            self.m_ctx.later(self.m_volume)
+            self.m_volume = None
 
 
-class SkyCube:
+class CSkyCube:
     """The sky as the sky manager renders it each frame into ``RT_SKY_CUBEMAP`` for the water to reflect: the
     ``SkyCubeMap`` technique (``stages``) once per face over ``face_quad`` with that face's ``cMtxSkyCubeFace``, the
     frame's light and the clouds of the noise volume (``set_volume``); gamma values, mirrored at the horizon."""
 
     def __init__(self, ctx, stages, dummies) -> None:
-        self.ctx = ctx
+        self.m_ctx = ctx
         state = replace(stages.state, cull="none", depth_test=False, depth_write=False)
-        program, quad = Program(stages.vs, stages.ps), face_quad()
-        self.draws = [FxcDraw(ctx, program, quad, state, dummies) for _face in range(6)]
-        for d in self.draws:
-            d.fallbacks = {"cTexture0": NO_CLOUDS}
-        self.volume = None
-        self.texture = None  # the cube, made on first use
-        self.targets: list = []  # per face (render target, its pass descriptor)
+        program, quad = CProgram(stages.vertex_stage, stages.pixel_stage), face_quad()
+        self.m_draws = [CFxcDraw(ctx, program, quad, state, dummies) for _face in range(6)]
+        for draw in self.m_draws:
+            draw.m_fallbacks = {"cTexture0": NO_CLOUDS}
+        self.m_volume = None
+        self.m_texture = None  # the cube, made on first use
+        self.m_targets: list = []  # per face (render target, its pass descriptor)
 
     def set_volume(self, slices: list[np.ndarray]) -> None:
-        if self.volume is None:
-            self.volume = volume_of(self.ctx, slices)
+        if self.m_volume is None:
+            self.m_volume = volume_of(self.m_ctx, slices)
 
     def _targets(self) -> None:
-        if self.texture is not None:
+        if self.m_texture is not None:
             return
-        rhi = self.ctx.rhi
+        rhi = self.m_ctx.m_rhi
         flags = QRhiTexture.Flag.CubeMap | QRhiTexture.Flag.RenderTarget
-        self.texture = rhi.newTexture(QRhiTexture.Format.RGBA16F, QSize(CUBE_SIDE, CUBE_SIDE), 1, flags)
-        self.texture.create()
+        self.m_texture = rhi.newTexture(QRhiTexture.Format.RGBA16F, QSize(CUBE_SIDE, CUBE_SIDE), 1, flags)
+        self.m_texture.create()
         for face in range(6):
-            attachment = QRhiColorAttachment(self.texture)
+            attachment = QRhiColorAttachment(self.m_texture)
             attachment.setLayer(face)
-            desc = QRhiTextureRenderTargetDescription()
-            desc.setColorAttachments([attachment])
-            rt = rhi.newTextureRenderTarget(desc)
-            rp = rt.newCompatibleRenderPassDescriptor()
-            rt.setRenderPassDescriptor(rp)
-            rt.create()
-            self.targets.append((rt, rp))
+            description = QRhiTextureRenderTargetDescription()
+            description.setColorAttachments([attachment])
+            render_target = rhi.newTextureRenderTarget(description)
+            pass_descriptor = render_target.newCompatibleRenderPassDescriptor()
+            render_target.setRenderPassDescriptor(pass_descriptor)
+            render_target.create()
+            self.m_targets.append((render_target, pass_descriptor))
 
     def render(self, fill) -> QRhiTexture:
         """The six faces as passes of the frame (``fill(c)``: the camera, light and sky values by name, as the dome
         takes them); the cube, to bind as ``tSkyEnv``."""
         self._targets()
-        maps = {"cTexture0": self.volume} if self.volume is not None else {}
+        maps = {"cTexture0": self.m_volume} if self.m_volume is not None else {}
         size = (CUBE_SIDE, CUBE_SIDE)
-        for face, (draw, (rt, rp)) in enumerate(zip(self.draws, self.targets, strict=True)):
+        for face, (draw, (render_target, pass_descriptor)) in enumerate(zip(self.m_draws, self.m_targets, strict=True)):
 
-            def run(cb, batch, draw=draw, rt=rt, rp=rp, face=face) -> None:
-                draw.prepare(rp, (1, 1), batch, maps, lambda c: (fill(c), gs.set_values(c.values(), face_values(face))))
-                cb.beginPass(rt, QColor.fromRgbF(0, 0, 0, 0), QRhiDepthStencilClearValue(1.0, 0), batch)
-                draw.draw(cb, size)
-                cb.endPass()
+            def run(
+                command_buffer,
+                batch,
+                draw=draw,
+                render_target=render_target,
+                pass_descriptor=pass_descriptor,
+                face=face,
+            ) -> None:
+                draw.prepare(
+                    pass_descriptor,
+                    (1, 1),
+                    batch,
+                    maps,
+                    lambda constants: (fill(constants), gs.set_values(constants.values(), face_values(face))),
+                )
+                command_buffer.beginPass(
+                    render_target, QColor.fromRgbF(0, 0, 0, 0), QRhiDepthStencilClearValue(1.0, 0), batch
+                )
+                draw.draw(command_buffer, size)
+                command_buffer.endPass()
 
-            self.ctx.native_pass(run)
-        return self.texture
+            self.m_ctx.native_pass(run)
+        return self.m_texture
 
     def release(self) -> None:
-        for d in self.draws:
-            d.release()
-        for rt, rp in self.targets:
-            self.ctx.later(rt)
-            self.ctx.later(rp)
-        self.targets = []
-        for t in (self.texture, self.volume):
-            if t is not None:
-                self.ctx.later(t)
-        self.texture = self.volume = None
+        for draw in self.m_draws:
+            draw.release()
+        for render_target, pass_descriptor in self.m_targets:
+            self.m_ctx.later(render_target)
+            self.m_ctx.later(pass_descriptor)
+        self.m_targets = []
+        for texture in (self.m_texture, self.m_volume):
+            if texture is not None:
+                self.m_ctx.later(texture)
+        self.m_texture = self.m_volume = None

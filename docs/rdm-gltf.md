@@ -7,8 +7,8 @@ is described in [`formats/rdm.md`](formats/rdm.md).
 ## Install and run
 
 The toolchain is part of the Toolbox. The installed program ([`installer.md`](installer.md)) has it as
-`AnnoToolbox rdm ...` and `AnnoToolbox export` (a terminal runs its `AnnoToolbox.com`). A developer's checkout has it too, light (no window
-library) or full (with the windows):
+`AnnoToolbox rdm ...` and `AnnoToolbox export` (a terminal runs its `AnnoToolbox.com`). A developer's checkout has it
+too. It comes in two forms: light (no window library) or full (with the windows):
 
 ```bash
 pip install -e .                  # light: the standard library only; `anno-toolbox rdm ...` and `export`
@@ -43,39 +43,50 @@ anno-toolbox rdm relayout old_model.rdm -o for117/              # rewritten into
 anno-toolbox rdm layouts                                        # the vertex layouts the games ship
 ```
 
-Every command takes files and folders (searched recursively) and never overwrites a file without `--force`. Notes
+Every command takes files and folders (searched recursively). No command overwrites a file without `--force`. Notes
 say what a command dropped, computed or could not keep. `anno-toolbox rdm <command> --help` lists the options.
 
 **Blender:** use File > Import > glTF 2.0 and File > Export > glTF 2.0. Export with *Include > Custom Properties*
 on. The extras this tool wrote then come back where Blender keeps them, and the import restores those stored values
-exactly. Without them, the import still writes every field the game reads from the geometry, skins and keys, and
-says what it rebuilt or left at zero (`--like original.rdm` gives back the joint boxes, layouts and material order).
-Tangents need not be exported: a missing tangent frame is computed. Animations need no *Always Sample*. This is not
-yet tried with Blender itself: the tests stand in for it by stripping the extras and adding what Blender adds.
+exactly. Without them, the import still writes every field the game reads from the geometry, skins and keys. It says
+what it rebuilt or left at zero (`--like original.rdm` gives back the joint boxes, layouts and material order).
+
+Tangents need not be exported, because a missing tangent frame is computed. Animations need no *Always Sample*. This
+is not yet tried with Blender itself. The tests stand in for it by stripping the extras and adding what Blender adds.
 
 ## The rule: exactly what the source holds
 
 Nothing added, nothing lost, in both directions.
 
-- **Export** writes the source's meshes, submeshes, materials, joints and animations and nothing else. glTF needs
-  two things RDM does not have: the **scene** (glTF shows only nodes in a scene) and, when several files go into one
-  document (a LOD chain), one **file node** per file. Both are marked as the export's own (`extras.rdm.helper`) and
-  removed again on import. There is no armature, root or dummy node, no extra joint, no placeholder material and no
-  default value the source does not hold. Where glTF wants data the source does not have, the export writes the
-  least glTF accepts and marks it (`extras.rdm.implied`): the weights of a mesh with one bone per vertex
-  (255, 0, 0, 0) and the bone indices of a rigid part of a skeleton (all on its first joint). The import drops them
-  again.
+- **Export** writes the source's meshes, submeshes, materials, joints and animations and nothing else. glTF needs two
+  things RDM does not have:
+  - the **scene** (glTF shows only nodes in a scene);
+  - when several files go into one document (a LOD chain), one **file node** per file.
+
+  Both are marked as the export's own (`extras.rdm.helper`) and removed again on import. There is no armature, root or
+  dummy node, no extra joint, no placeholder material and no default value the source does not hold. Where glTF wants
+  data the source does not have, the export writes the least glTF accepts and marks it (`extras.rdm.implied`). These
+  are the weights of a mesh with one bone per vertex (255, 0, 0, 0) and the bone indices of a rigid part of a skeleton
+  (all on its first joint). The import drops them again.
 - **Import** takes what the RDM file can hold. It drops, with a note, what a modelling tool added on its own:
-  cameras, lights, empties, the armature object, extra UV maps and colour layers the layout has no place for, and a
-  bone the tool added that no vertex weighs. It **refuses**, with a message, what it cannot drop without changing
-  the model: a primitive without a material (a submesh names one), a joint that scales, morph targets, a bone that
-  carries weights but is not the source's, and repeated joint names. It never writes a placeholder: an empty name
-  stays empty, and an unknown joint box stays zero and is reported.
+  - cameras, lights and empties;
+  - the armature object;
+  - extra UV maps and colour layers the layout has no place for;
+  - a bone the tool added that no vertex weighs.
+
+  It **refuses**, with a message, what it cannot drop without changing the model:
+  - a primitive without a material (a submesh names one);
+  - a joint that scales;
+  - morph targets;
+  - a bone that carries weights but is not the source's;
+  - repeated joint names.
+
+  It never writes a placeholder: an empty name stays empty, and an unknown joint box stays zero and is reported.
 - **Order, names and counts** are kept: mesh order, submesh order and material indices, material order, joint order
   and indices (a vertex's bone indices are remapped only when a modelling tool reordered the skin), track order,
   vertex count and order where the document still has them.
 
-How it is proven, on synthetic files (`tests/rdmsamples.py`):
+How it is proven, on synthetic files (`tests/rdmfiles.py`):
 
 - `rdm -> glTF -> rdm` is **byte-identical** for static, skinned and animation files in all four forms and both axes
   conventions, for a LOD chain and for a big-endian source (`test_rdmgltf.py`).
@@ -87,10 +98,14 @@ How it is proven, on synthetic files (`tests/rdmsamples.py`):
 - Every addition of a modelling tool listed above is dropped or refused (`test_gltfrdm.py`).
 
 On the games' own files (every `.rdm` of the 2070 Complete Edition, 3,836, and every 10th of Anno 117's, 1,945),
-every file came back identical in every field through `export` and `import`, and through the writer alone (byte
-order and the size of 2070's early mesh record aside, which are not content). The run found two things the synthetic
-files had not: a `-0.0` coordinate lost its sign in the un-mirroring, and 117 ships animations with two tracks on
-one joint. Both are fixed and in the tests.
+every file came back identical in every field through `export` and `import`, and through the writer alone. Byte order
+and the size of 2070's early mesh record are aside, because they are not content. The run found two things the
+synthetic files had not:
+
+- a `-0.0` coordinate lost its sign in the un-mirroring;
+- 117 ships animations with two tracks on one joint.
+
+Both are fixed and in the tests.
 
 `rdm diff a.rdm b.glb --values` shows the same for any file: it compares the source with what the import of the
 glTF would write, element by element and value by value.
@@ -122,7 +137,7 @@ Note: the run over the games' own files was made on 2026-11-07.
 are the conjugates of glTF's (`rigmath.py`).
 
 **Axes.** Anno's model space is left-handed (y up), and glTF's is right-handed. By default the export mirrors on x
-(positions, directions, joints and keys, the winding turned), which a sign change undoes exactly. `--axes anno`
+(positions, directions, joints and keys, with the winding turned). A sign change undoes this exactly. `--axes anno`
 keeps the stored values (what earlier tools wrote).
 
 **Import of a model made elsewhere:**
@@ -167,15 +182,20 @@ anno-toolbox rdm granny model.glb [-o model.gr2] [--game anno1404|anno1701] [--a
                                      [--place GAME_FOLDER] [--force]
 ```
 
-It imports the glTF as for an `.rdm` and writes one `.gr2` (`formats/grannywrite.py`, 64-bit, one stored section):
-a model per skeleton (a rigid mesh gets a bone of its own), the tangent frame from the triangles and UVs, linear
-curves for the keys, and the usual quaternion (RDM keeps its conjugate). `--game anno1701` multiplies the lengths by
-32 and writes 39.37 units a metre.
+It imports the glTF as for an `.rdm` and writes one `.gr2` (`formats/grannywrite.py`, 64-bit, one stored section). The
+file holds:
 
-`--place data/graphics/objects/custom` also writes the model config and info file that name the `.gr2` as lying in
+- a model per skeleton (a rigid mesh gets a bone of its own);
+- the tangent frame from the triangles and UVs;
+- linear curves for the keys;
+- the usual quaternion (RDM keeps its conjugate).
+
+`--game anno1701` multiplies the lengths by 32 and writes 39.37 units a metre.
+
+`--place data/graphics/objects/custom` also writes the model config and info file. They name the `.gr2` as lying in
 that folder of the game's files (1701: `.mcf` and `.info`; 1404: `.cfg` and `.ifo`). They carry one material per
-material name, whose diffuse texture is `<mesh>_<material>_diff.tga` (1701) or `.png` (1404, which loads its
-`_0.dds`). Nothing is written when a file exists, unless `--force` is given.
+material name. The diffuse texture is `<mesh>_<material>_diff.tga` (1701) or `.png` (1404, which loads its `_0.dds`).
+Nothing is written when a file exists, unless `--force` is given.
 
 The Granny runtime that both History Editions ship reads such a `.gr2`, converts it and evaluates its curves as
 written. No written file has been placed in either game yet ([`formats/granny.md`](formats/granny.md), "Writing").
@@ -192,7 +212,7 @@ anno-toolbox rdm from-granny <file.gr2 | folder> -o out/ --to anno2070|anno2205|
 The `.gr2` becomes the RDM records the glTF export already makes (`rdm/grannygltf.py`) and goes straight to the RDM
 writer in the target game's layouts (`rdm/grannyrdm.py`), with no glTF between, so nothing is quantised twice. The
 Toolbox's Export (and the viewer's File > Export) has it as **.gr2 to .rdm** with a game choice. The container is the
-same in all four games; what differs is the layouts each game ships (`rdm layouts`; read off the installs, 2026-11-17):
+same in all four games. What differs is the layouts each game ships (`rdm layouts`; read off the installs):
 
 | Game | Static | Vertex colours | Cloth | Skin |
 |---|---|---|---|---|
@@ -201,40 +221,59 @@ same in all four games; what differs is the layouts each game ships (`rdm layout
 | 1800 | the same | none shipped: left out, said | as 117 | `+ I4b` (word 1), or with two bones a vertex the 16-bone layout `+ I4b x4 + W4b x4` (word 16) |
 | 2205 | the same | none shipped | none shipped: written as a plain mesh, said | as 1800 |
 
-What is carried: meshes with their material groups (the file's material names, in the order of first use), the
-normals, the first UV set, the tangent frame (Granny's own is not read: it is made from the triangles and UVs around
-Granny's normals, stored negated as the games store it), vertex colours (bytes B, G, R, A as 2070 stores them; not
-carried when every vertex is white), skin weights and bone numbers through the mesh's bindings (a rigid mesh on one
-bone), the skeletons as joints, and every animation as an animation file of its own, sampled at its time step: the
-file's own as `<name>_anim.rdm`, and each `.gr2` of `--anims` whose tracks mostly (75 %) name the model's bones as
-`<its name>.rdm`. A clip is made for the model's biggest skeleton and the levels of detail lack some bones; the missing
-tracks are left out. A mesh whose colours pin some vertices and not all is a cloth ([`formats/granny.md`](formats/granny.md), "Cloth pins") and is
-written as `<name>_cloth.rdm`. A file with animations, or with bone numbers on its vertices, is written as a skin;
-otherwise as a static mesh (a rigid mesh's bone is then not needed: its vertices are in the model already).
+What is carried:
+
+- meshes with their material groups (the file's material names, in the order of first use);
+- the normals and the first UV set;
+- the tangent frame (Granny's own is not read: it is made from the triangles and UVs around Granny's normals, stored
+  negated as the games store it);
+- vertex colours (bytes B, G, R, A as 2070 stores them; not carried when every vertex is white);
+- skin weights and bone numbers through the mesh's bindings (a rigid mesh on one bone);
+- the skeletons as joints;
+- every animation as an animation file of its own, sampled at its time step.
+
+The animation files are named as follows. The file's own is `<name>_anim.rdm`. Each `.gr2` of `--anims` whose tracks
+mostly (75 %) name the model's bones is `<its name>.rdm`. A clip is made for the model's biggest skeleton, and the
+levels of detail lack some bones, so the missing tracks are left out.
+
+A mesh whose colours pin some vertices and not all is a cloth ([`formats/granny.md`](formats/granny.md), "Cloth
+pins"). It is written as `<name>_cloth.rdm`. A file with animations, or with bone numbers on its vertices, is written
+as a skin. Otherwise it is written as a static mesh (a rigid mesh's bone is then not needed: its vertices are in the
+model already).
 
 The rules applied:
 
-- **Units.** 1701 counts 32 units a tile and 1404 one, both RDM games count one a tile (2070 and 117: engine-placement;
-  1800 and 2205 taken as the same, **[I]** not checked). Every length (vertices, joints' moves, keys' moves) is divided
-  by the source's tile; the source is read off the file's art tool info (39.37 units a metre: 1701). `--scale`
-  overrides the factor.
-- **Axes.** All of them are y up and back = -z, and a Granny mesh keeps its winding: over 148 converted 1404 and 139
-  1701 meshes the median share of triangles that run counter-clockwise against their normals is 1.00, as in 117's
-  own files. `--axes turn` turns the model half a turn about y (a rotation, so skins and keys stay exact: a vertex in
-  bone space is where it was).
+- **Units.** 1701 counts 32 units a tile and 1404 one. Both RDM games count one a tile (2070 and 117:
+  engine-placement; 1800 and 2205 taken as the same, **[I]** not checked). Every length (vertices, joints' moves,
+  keys' moves) is divided by the source's tile. The source is read off the file's art tool info (39.37 units a metre:
+  1701). `--scale` overrides the factor.
+- **Axes.** All of them are y up and back = -z, and a Granny mesh keeps its winding. Over 148 converted 1404 and 139
+  1701 meshes, the median share of triangles that run counter-clockwise against their normals is 1.00, as in 117's own
+  files. `--axes turn` turns the model half a turn about y. This is a rotation, so skins and keys stay exact: a vertex
+  in bone space is where it was.
 - **Boxes and names.** The stored box is the box of the half-float positions as written, so it holds every vertex
   drawn. Mesh, joint and material names are the source's.
 
-Checked, 2026-11-17: on the synthetic writer (`tests/test_granny_rdm.py`: a mesh, a skin with weights and an
-animation, the units, the half turn, the 16-bone layout, colours and cloth, the command and the export, read back with
-our reader: vertices, weights and joints equal within the half-float and byte quantisation), and on the installs: 213
-files of 1404 and 203 of 1701 (every 25th and 18th) converted for all four games and read back. For 117, every output
-held to 117's conventions (`rdm validate`, the layouts read off the install): no deviation but two source files whose
-meshes share a name, and a median tangent frame agreement of 1.00. Not converted (error with a reason, 2 of 203 in
-1701): a file whose skeletons share a joint name (a rider and its horse), which 117 would merge into one skin that
-names its joints one way. No converted file was placed in a game. Not done: the model config that names the `.rdm`
-(a 117 config needs its material blocks and the textures converted; the `.rdm` holds names only), and cloth's
-simulation settings.
+What was checked:
+
+- The synthetic writer (`tests/formats/test_granny_rdm.py`) covers a mesh, a skin with weights and an animation, the units,
+  the half turn, the 16-bone layout, colours and cloth, the command and the export. They are read back with our
+  reader: vertices, weights and joints are equal within the half-float and byte quantisation.
+- On the installs, 213 files of 1404 and 203 of 1701 (every 25th and 18th) were converted for all four games and read
+  back.
+- For 117, every output held to 117's conventions (`rdm validate`, the layouts read off the install). The only
+  deviation is two source files whose meshes share a name. The median tangent frame agreement is 1.00.
+
+What is not converted: a file whose skeletons share a joint name (a rider and its horse) gives an error with a reason
+(2 of 203 in 1701). 117 would merge such skeletons into one skin that names its joints one way.
+
+No converted file was placed in a game. Not done:
+
+- the model config that names the `.rdm` (a 117 config needs its material blocks and the textures converted; the
+  `.rdm` holds names only);
+- cloth's simulation settings.
+
+Note: the layouts were read off the installs, and the checks above were made, on 2026-11-17.
 
 ## Compared with rdm4
 
@@ -275,11 +314,17 @@ toolchain does instead:
 | reads no `C4b` colours (issue 97) | every element the format has, colours byte for byte |
 | no batch mode (issue 100) | every command over folders |
 
-Added here: `inspect` and `diff` (every element and value of a file, so a modder sees that nothing was added),
-`validate` (the conventions of Anno 117's own files), `relayout` (a model rewritten into Anno 117's layouts, every
-filled value listed), LOD chains in one document, big-endian files and a library API. Not matched: a per-frame
-vertex stream (none ships; glTF has no place for it, so it is refused, not guessed), and morph targets and scaling
-keys, which no RDM key can hold.
+Added here:
+
+- `inspect` and `diff` (every element and value of a file, so a modder sees that nothing was added);
+- `validate` (the conventions of Anno 117's own files);
+- `relayout` (a model rewritten into Anno 117's layouts, every filled value listed);
+- LOD chains in one document;
+- big-endian files;
+- a library API.
+
+Not matched: a per-frame vertex stream (none ships; glTF has no place for it, so it is refused, not guessed), and
+morph targets and scaling keys, which no RDM key can hold.
 
 ## The choice of format
 

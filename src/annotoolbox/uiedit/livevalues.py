@@ -23,23 +23,23 @@ SETTING = "live_values"  # the View switch, in the app's settings
 FROM_GAME, FROM_RECORDING = N_("ui.live_values_from_game"), N_("ui.live_values_from_recorded")
 
 
-def recordings(window) -> liverecord.Recordings:
-    return liverecord.Recordings(Path(window.settings.workspace or appdata()) / liverecord.FOLDER)
+def recordings(window) -> liverecord.CRecordings:
+    return liverecord.CRecordings(Path(window.settings.workspace or appdata()) / liverecord.FOLDER)
 
 
 def asked(window) -> tuple[list[str], str] | None:
     """The UI states to ask and the open file's GUID (empty for a scene file, whose own widgets are asked)."""
-    if window.game is None or window.doc is None or window.top is None:
+    if window.game is None or window.doc is None or window.m_top is None:
         return None
-    entry = window.game.files.entries.get(window.doc.key)
-    path = entry.path if entry else window.doc.key
+    entry = window.game.m_files.m_entries.get(window.doc.m_key)
+    path = entry.path if entry else window.doc.m_key
     own = linkscenes.scene_state(path)
     if own:
         return [own], ""
-    return linkscenes.states_for([path]) or window.game.files.scene_states([path]), window.top.guid or ""
+    return linkscenes.states_for([path]) or window.game.m_files.scene_states([path]), window.m_top.guid or ""
 
 
-def take(window, wait: bool = False) -> None:
+def take(window, is_waiting: bool = False) -> None:
     """Ask the running game for what the open file's widgets show; the answer is held and recorded."""
     found = asked(window)
     if found is None:
@@ -52,16 +52,16 @@ def take(window, wait: bool = False) -> None:
     if not states:
         window.statusBar().showMessage(tr("ui.file_in_no_scene"))
         return
-    key, game, build = window.doc.key, window.game.key, link.status().build
+    key, game, build = window.doc.m_key, window.game.m_key, link.status().build
     window.statusBar().showMessage(tr("ui.asking_game_live_values"))
-    window.background.run(
-        lambda: link.ui_values(states, file), lambda reply: taken(window, reply, key, game, build), wait
+    window.m_background.run(
+        lambda: link.ui_values(states, file), lambda reply: taken(window, reply, key, game, build), is_waiting
     )
 
 
 def taken(window, reply, key: str, game: str, build: str) -> None:
     """The game's answer to ``take``: held for the file it was asked for, recorded, the preview laid out again."""
-    if isinstance(reply, Exception) or not reply.ok:
+    if isinstance(reply, Exception) or not reply.is_ok:
         why = getattr(reply, "message", "") or str(reply) or "?"
         window.statusBar().showMessage(tr("ui.game_gave_no_live_values", why=why))
         return
@@ -77,18 +77,18 @@ def taken(window, reply, key: str, game: str, build: str) -> None:
     window._redraw()
 
 
-def held(window) -> liverecord.Held | None:
+def held(window) -> liverecord.SHeld | None:
     """The values held for the open file: taken in this run, else its recording (read once per file opened)."""
     if window.game is None or window.doc is None:
         return None
-    here = (window.game.key, window.doc.key)
+    here = (window.game.m_key, window.doc.m_key)
     if getattr(window, "live_loaded", None) != here:
         window.live_held, window.live_loaded = recordings(window).load(*here), here
         _show_label(window, window.live_held)
     return window.live_held
 
 
-def _shown(window) -> liverecord.Held | None:
+def _shown(window) -> liverecord.SHeld | None:
     action = getattr(window, "values_action", None)
     return held(window) if action is not None and action.isChecked() else None
 
@@ -116,8 +116,8 @@ def use_recorded(window) -> None:
 def clear_recorded(window) -> None:
     if window.game is None or window.doc is None:
         return
-    recordings(window).clear(window.game.key, window.doc.key)
-    window.live_held, window.live_loaded = None, (window.game.key, window.doc.key)
+    recordings(window).clear(window.game.m_key, window.doc.m_key)
+    window.live_held, window.live_loaded = None, (window.game.m_key, window.doc.m_key)
     _show_label(window, None)
     window.statusBar().showMessage(tr("ui.recorded_values_cleared"))
     window._redraw()
@@ -142,29 +142,31 @@ def asset_lookup(settings, key: str):
     index = assetgame.installed_index(settings, key, settings.workspace or appdata())
     if index is None:
         return None
-    assets = gamedata.Assets.from_index(index, lambda _language: {})
+    assets = gamedata.CAssets.from_index(index, lambda _language: {})
 
     def look(guid: int) -> tuple[str, str] | None:
-        entry = index.by_guid.get(guid)
+        entry = index.m_by_guid.get(guid)
         return (entry.name, assets.icon(guid) or "") if entry is not None else None
 
     return look
 
 
-def list_assigned(window, wait: bool = False) -> None:
+def list_assigned(window, is_waiting: bool = False) -> None:
     """The assets, images and portraits the held values name, with the installed game's names and icons."""
     found = held(window)
     if found is None:
         window.statusBar().showMessage(tr("ui.no_recorded_values"))
         return
-    settings, key, tree = window.settings, window.game.key, window.game.tree
+    settings, key, tree = window.settings, window.game.m_key, window.game.m_tree
 
     def work():
         look = asset_lookup(settings, key) or (lambda _guid: None)
-        return liverecord.assigned(found, look, lambda image: any(tree.exists(p) for p in pictures.candidates(image)))
+        return liverecord.assigned(
+            found, look, lambda image: any(tree.exists(path) for path in pictures.candidates(image))
+        )
 
     window.statusBar().showMessage(tr("ui.looking_up_assigned"))
-    window.background.run(work, lambda rows: _show_assigned(window, rows), wait)
+    window.m_background.run(work, lambda rows: _show_assigned(window, rows), is_waiting)
 
 
 def _show_assigned(window, rows) -> None:
@@ -178,27 +180,27 @@ def _show_assigned(window, rows) -> None:
         [tr("ui.element"), tr("ui.kind"), tr("ui.assigned_ref"), tr("common.name"), tr("ui.assigned_icon")]
     )
     words = {"asset": tr("ui.assigned_asset"), "image": tr("ui.assigned_image"), "portrait": tr("ui.assigned_portrait")}
-    for r in rows:
+    for row in rows:
         notes = {liverecord.NO_FILE: tr("ui.assigned_no_file"), liverecord.MADE_AT_RUN_TIME: tr("ui.assigned_run_time")}
-        where = notes.get(r.note, r.icon)
-        table.addTopLevelItem(QTreeWidgetItem([r.widget, words.get(r.what, r.what), r.ref, r.name, where]))
+        where = notes.get(row.note, row.icon)
+        table.addTopLevelItem(QTreeWidgetItem([row.widget, words.get(row.what, row.what), row.ref, row.name, where]))
     QVBoxLayout(dialog).addWidget(table)
     dialog.resize(900, 420)
     window.statusBar().showMessage(trn("ui.assigned_found", len(rows)))
     dialog.show()
 
 
-def element_keys(top: elements.Element | None) -> set[str]:
+def element_keys(top: elements.SElement | None) -> set[str]:
     """The keys the open file's elements are matched by (instance GUID, ``crc:<name CRC>``)."""
     keys: set[str] = set()
-    for el in top.walk() if top is not None else ():
-        keys.update(elements.keys(el))
+    for element in top.walk() if top is not None else ():
+        keys.update(elements.keys(element))
     return keys
 
 
-def _describe(window, found: liverecord.Held) -> str:
+def _describe(window, found: liverecord.SHeld) -> str:
     """Where the values are from, and how many no longer match the file (stale)."""
-    stale = found.unmatched(element_keys(window.top))
+    stale = found.unmatched(element_keys(window.m_top))
     text = tr(
         FROM_RECORDING if found.recorded else FROM_GAME,
         build=found.build or "?",
@@ -212,7 +214,7 @@ def _describe(window, found: liverecord.Held) -> str:
     return text
 
 
-def _show_label(window, found: liverecord.Held | None) -> None:
+def _show_label(window, found: liverecord.SHeld | None) -> None:
     label = getattr(window, "values_label", None)
     if label is None:
         return

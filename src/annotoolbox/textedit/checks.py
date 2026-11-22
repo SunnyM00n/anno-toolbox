@@ -1,7 +1,7 @@
 """What a translation must keep: placeholders, markup, line breaks, and what is only worth a warning (docs/text-editor.md,
 "What is checked"). Pure functions over two strings, the rest of the app asks ``check`` per text.
 
-``check(source, target, one_line=...)`` returns ``Problem``s, errors first; ``placeholders`` and ``tags`` are the
+``check(source, target, one_line=...)`` returns ``SProblem``s, errors first; ``placeholders`` and ``tags`` are the
 tokens it compares.
 """
 
@@ -21,7 +21,7 @@ _LONG_FACTOR, _LONG_EXTRA = 1.4, 12
 
 
 @dataclass(frozen=True)
-class Problem:
+class SProblem:
     severity: str
     kind: str  # placeholder, markup, braces, break, breaks, length, ends
     message: str
@@ -30,12 +30,12 @@ class Problem:
 def braces(text: str) -> tuple[list[str], bool]:
     """The ``{...}`` groups of a text, nesting kept (117's Lua expressions and holes), and whether all were closed."""
     out, depth, start, ok = [], 0, 0, True
-    for i, ch in enumerate(text):
-        if ch == "{":
+    for i, character in enumerate(text):
+        if character == "{":
             if depth == 0:
                 start = i
             depth += 1
-        elif ch == "}":
+        elif character == "}":
             if depth == 0:
                 ok = False
                 continue
@@ -56,12 +56,12 @@ def placeholders(text: str) -> list[str]:
 
 def tags(text: str) -> list[str]:
     """The rich-text tags of a text, as one spelling (``<br />`` is ``<br/>``)."""
-    return [re.sub(r"\s*/>$", "/>", t) for t in _TAG.findall(text)]
+    return [re.sub(r"\s*/>$", "/>", tag) for tag in _TAG.findall(text)]
 
 
 def _markup(text: str) -> list[str]:
     """The tags that must match: ``<br/>`` is left to the line break check (a translator may break lines elsewhere)."""
-    return [t for t in tags(text) if _name(t) != "br"]
+    return [tag for tag in tags(text) if _name(tag) != "br"]
 
 
 def _name(tag: str) -> str:
@@ -95,31 +95,31 @@ def _differences(source: list[str], target: list[str]) -> tuple[list[str], list[
     return sorted(missing.elements()), sorted(extra.elements())
 
 
-def check(source: str, target: str, one_line: bool = False) -> list[Problem]:
+def check(source: str, target: str, one_line: bool = False) -> list[SProblem]:
     """Everything wrong or doubtful about ``target`` as a translation of ``source``; errors first. ``one_line``: the
     game keeps one text per line, so a real line break would end the text."""
     if not target.strip():
-        return [Problem(WARNING, "length", tr("texts.text_empty"))] if source.strip() else []
-    out: list[Problem] = []
+        return [SProblem(WARNING, "length", tr("texts.text_empty"))] if source.strip() else []
+    out: list[SProblem] = []
     _, closed = braces(target)
     if not closed and braces(source)[1]:
-        out.append(Problem(ERROR, "braces", tr("texts.brace_no_partner")))
+        out.append(SProblem(ERROR, "braces", tr("texts.brace_no_partner")))
     missing, extra = _differences(placeholders(source), placeholders(target))
-    out += [Problem(ERROR, "placeholder", tr("texts.missing_token", token=t)) for t in missing]
-    out += [Problem(ERROR, "placeholder", tr("texts.token_not_source", token=t)) for t in extra]
+    out += [SProblem(ERROR, "placeholder", tr("texts.missing_token", token=token)) for token in missing]
+    out += [SProblem(ERROR, "placeholder", tr("texts.token_not_source", token=token)) for token in extra]
     missing, extra = _differences(_markup(source), _markup(target))
-    out += [Problem(ERROR, "markup", tr("texts.missing_tag_token", token=t)) for t in missing]
-    out += [Problem(ERROR, "markup", tr("texts.tag_not_source", token=t)) for t in extra]
+    out += [SProblem(ERROR, "markup", tr("texts.missing_tag_token", token=token)) for token in missing]
+    out += [SProblem(ERROR, "markup", tr("texts.tag_not_source", token=token)) for token in extra]
     if not (missing or extra):
         out += [
-            Problem(ERROR, "markup", tr("texts.left_open_closed_twice", token=t))
-            for t in (Counter(unbalanced(target)) - Counter(unbalanced(source))).elements()
+            SProblem(ERROR, "markup", tr("texts.left_open_closed_twice", token=token))
+            for token in (Counter(unbalanced(target)) - Counter(unbalanced(source))).elements()
         ]
     if one_line and "\n" in target:
-        out.append(Problem(ERROR, "break", tr("texts.game_keeps_one_text_per")))
+        out.append(SProblem(ERROR, "break", tr("texts.game_keeps_one_text_per")))
     elif breaks(source) != breaks(target):
         out.append(
-            Problem(
+            SProblem(
                 WARNING,
                 "breaks",
                 tr("texts.line_breaks_source", target=breaks(target), source=breaks(source)),
@@ -127,7 +127,7 @@ def check(source: str, target: str, one_line: bool = False) -> list[Problem]:
         )
     if len(target) > max(len(source) * _LONG_FACTOR, len(source) + _LONG_EXTRA):
         out.append(
-            Problem(
+            SProblem(
                 WARNING,
                 "length",
                 tr(
@@ -138,5 +138,5 @@ def check(source: str, target: str, one_line: bool = False) -> list[Problem]:
             )
         )
     if (source[:1].isspace(), source[-1:].isspace()) != (target[:1].isspace(), target[-1:].isspace()):
-        out.append(Problem(HINT, "ends", tr("texts.space_break_end_differs_source")))
-    return sorted(out, key=lambda p: (ERROR, WARNING, HINT).index(p.severity))
+        out.append(SProblem(HINT, "ends", tr("texts.space_break_end_differs_source")))
+    return sorted(out, key=lambda problem: (ERROR, WARNING, HINT).index(problem.severity))

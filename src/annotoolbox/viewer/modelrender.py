@@ -1,9 +1,9 @@
-"""The model view's renderer (no Qt): one ``modelscene.Scene`` by the game's own shaders (``gamepass``), with our
+"""The model view's renderer (no Qt): one ``modelscene.CScene`` by the game's own shaders (``gamepass``), with our
 plain look as the fallback for what they do not draw (``plainshading``; or as a look of its own, the editor's), sun
 shadows on a ground plane, skins posed on the GPU (``gpu_skin``), parts that spin or hang on joints (``modelposes``),
 the effects, the selection, ``pick``.
 
-``ModelRenderer(ctx, files)`` is the entry: ``show(scene)``, then ``render(fbo, size, camera, state)`` per frame;
+``CModelRenderer(ctx, files)`` is the entry: ``show(scene)``, then ``render(fbo, size_px, camera, state)`` per frame;
 files load in the background (``busy``). ``scripts/editor_shots.py viewer`` renders it offscreen. What differs from
 the game: docs/tool-suite.md "The viewer", "Drawn as the game draws".
 """
@@ -11,6 +11,7 @@ the game: docs/tool-suite.md "The viewer", "Drawn as the game draws".
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -19,21 +20,21 @@ from ..infra.i18n import tr
 from ..models import skinning
 from ..render import decalmesh, nativelook, picking, viewcolors
 from ..render import shaders as S
-from ..render.camera import MIRROR, OrbitCamera, gl, look_at, ortho, perspective
-from ..render.gameframe import Light
-from ..render.gamelight import Sky
+from ..render.camera import MIRROR, COrbitCamera, gl, look_at, ortho, perspective
+from ..render.gameframe import SLight
+from ..render.gamelight import SSky
 from ..render.light import LOOK2070
-from ..render.loader import Loader
+from ..render.loader import CLoader
 from ..render.modellibrary import banner_arrays
-from ..render.particledraw import ParticleDrawer, Placed, collect
+from ..render.particledraw import CParticleDrawer, SPlaced, collect
 from . import motion, plainshading
-from .clothplay import ClothPlayer
+from .clothplay import CClothPlayer
 from .gamepass import make_pass
-from .modelfiles import ModelFiles
-from .modellights import NIGHT, SHADERS, ModelLights, under
-from .modelposes import ModelPoses
-from .modelscene import BANNER_SHADER, WATER_SHADER, Material, Part, Scene
-from .states import States
+from .modelfiles import CModelFiles
+from .modellights import NIGHT, SHADERS, CModelLights, under
+from .modelposes import CModelPoses
+from .modelscene import BANNER_SHADER, FOAM_SHADER, WATER_SHADER, CScene, SMaterial, SPart
+from .states import SStates
 
 SHADOW_SIZE = 2048
 DECAL_SHADER = 6  # a decal laid as a mesh: blended over what is below in the game's-shaders look
@@ -45,7 +46,7 @@ MIRROR_F4 = MIRROR.astype("f4")  # as the instance buffer and the effects take i
 
 
 @dataclass
-class ViewState:
+class SViewState:
     """What a frame shows: the look, shadows, the ground, wireframe, effects, the time (seconds into the sequence or
     animation), the parts hidden and selected (config node paths: a node hides or selects every part below it)."""
 
@@ -55,16 +56,18 @@ class ViewState:
     ground: bool = True
     wireframe: bool = False
     particles: bool = True
+    # an effect a sequence starts shows only in its windows; False in views with no sequence player
+    gate_effects: bool = True
     time: float = 0.0
     animation: dict = field(default_factory=dict)  # part node -> (file, the time it started at, scale, loops)
     hidden: frozenset = frozenset()
     selected: str | None = None
     night: bool = False  # the game's look at night: its lights shine
     switches: dict = field(default_factory=dict)  # the own-shader frame's parts switched off (nativelook.FEATURES)
-    states: States = field(default_factory=States)  # the condition bits the sequence holds (viewer.states)
+    states: SStates = field(default_factory=SStates)  # the condition bits the sequence holds (viewer.states)
     cloth: bool = False  # cloths simulated (viewer.clothplay), else drawn at rest
     torn: bool = False  # the object damaged: a cloth that may tear lets its white pins go
-    quality: object = None  # the rendering quality of 117 and 1800 (render.quality.Quality; None: the best)
+    quality: object = None  # the rendering quality of 117 and 1800 (render.quality.SQuality; None: the best)
     # the view's clock (monotonic seconds) this frame and when ``night`` last switched: the time slices' fade
     now: float = 0.0
     night_changed: float = -math.inf
@@ -72,8 +75,25 @@ class ViewState:
 
     def shows(self, thing) -> bool:
         """Whether a part, effect, light or decal shows this frame: not hidden, its masks met, its time slices'
-        fade above 0."""
-        return not under(thing.node, self.hidden) and self.states.shown(thing.when) and self.fade(thing) > 0
+        fade above 0, an effect a sequence starts inside one of its windows."""
+        started = self._started_slot(thing)
+        return (
+            not under(thing.node, self.hidden)
+            and self.states.shown(thing.when)
+            and self.fade(thing) > 0
+            and (started < 0 or self.states.effect_age(started) is not None)
+        )
+
+    def _started_slot(self, thing) -> int:
+        """The slot a sequence starts ``thing`` by, -1 for a thing no sequence starts or where none is played."""
+        return getattr(thing, "started", -1) if self.gate_effects else -1
+
+    def effect_seconds(self, effect) -> float:
+        """The seconds into an effect's play: the view's time, or for one a sequence starts the time since its
+        element began (``SStates.effect_age``)."""
+        started = self._started_slot(effect)
+        age = self.states.effect_age(started) if started >= 0 else None
+        return self.time if age is None else age
 
     def fade(self, thing) -> float:
         """How far a thing's time slices let it show (0..1): its fade after the last switch of ``night``
@@ -87,33 +107,33 @@ class ViewState:
     def light_color(self, lamp) -> tuple[float, float, float]:
         """A config light's colour this frame: its graph's at ``time``, faded by its time slices."""
         k = self.fade(lamp)
-        return tuple(float(c) * k for c in lamp.color_at(self.time))
+        return tuple(float(channel) * k for channel in lamp.color_at(self.time))
 
 
 def part_bounds(part, mesh, place) -> tuple[np.ndarray, np.ndarray] | None:
     """The box (lo, hi) of a part's mesh (a banner's arrays or a file's meshes) at ``place`` in the view's axes (x
     mirrored); None for a mesh without vertices."""
-    verts = [mesh[0][0]] if part.banner is not None else [m.vertices for m in mesh.meshes]
-    points = [v[:, :3] @ place[:3, :3].T + place[:3, 3] for v in verts if len(v)]
+    verts = [mesh[0][0]] if part.banner is not None else [mesh_part.vertices for mesh_part in mesh.meshes]
+    points = [vertices[:, :3] @ place[:3, :3].T + place[:3, 3] for vertices in verts if len(vertices)]
     if not points:
         return None
-    p = np.concatenate(points) * (-1.0, 1.0, 1.0)
-    return p.min(axis=0), p.max(axis=0)
+    bounds_points = np.concatenate(points) * (-1.0, 1.0, 1.0)
+    return bounds_points.min(axis=0), bounds_points.max(axis=0)
 
 
-def ground_place(lo, hi) -> np.ndarray:
+def ground_place(min_bounds, max_bounds) -> np.ndarray:
     """Where the grey plane under a model of bounds ``lo``, ``hi`` (the view's axes) lies: at its lowest point (its
     own ground where it reaches y = 0), wide enough for its shadow; a part matrix (the instance mirrors it)."""
-    reach = max(float(np.linalg.norm(hi - lo)), 0.5) * 1.5
-    centre = (lo + hi) / 2
+    reach = max(float(np.linalg.norm(max_bounds - min_bounds)), 0.5) * 1.5
+    centre = (min_bounds + max_bounds) / 2
     place = np.diag([reach, 1.0, reach, 1.0]).astype("f4")
-    floor = 0.0 if lo[1] <= 0.0 <= hi[1] else lo[1]
+    floor = 0.0 if min_bounds[1] <= 0.0 <= max_bounds[1] else min_bounds[1]
     place[:3, 3] = (-centre[0], floor - 0.002, centre[2])
     return place
 
 
 @dataclass(frozen=True)
-class _Frame:
+class _SFrame:
     """What one frame's draws share: the camera's matrices and eye, the light, the sun's shadow map (None: none)."""
 
     view_proj: np.ndarray
@@ -123,7 +143,7 @@ class _Frame:
     shadow: object = None
 
 
-class ModelCamera(OrbitCamera):
+class CModelCamera(COrbitCamera):
     """The island view's orbit camera, for models of a few units: closer, and a far plane by the distance."""
 
     MIN_DISTANCE = 0.05
@@ -131,29 +151,29 @@ class ModelCamera(OrbitCamera):
 
     def planes(self) -> tuple[float, float]:
         """The near and far plane."""
-        return max(0.005, self.distance / 200), self.distance * 40 + 10
+        return max(0.005, self.m_distance_m / 200), self.m_distance_m * 40 + 10
 
     def proj(self, aspect: float) -> np.ndarray:
-        return perspective(self.fov, aspect, *self.planes())
+        return perspective(self.m_fov_rad, aspect, *self.planes())
 
     def zoom(self, steps: float, towards=None) -> None:
-        self.distance = min(500.0, max(self.MIN_DISTANCE, self.distance * 0.88**steps))
+        self.m_distance_m = min(500.0, max(self.MIN_DISTANCE, self.m_distance_m * 0.88**steps))
 
-    def frame(self, lo: np.ndarray, hi: np.ndarray) -> None:
+    def frame(self, min_bounds: np.ndarray, max_bounds: np.ndarray) -> None:
         """Look at a box (view space) from where it fills the view."""
-        self.target = ((lo + hi) / 2).astype("f4")
-        radius = max(float(np.linalg.norm(hi - lo)) / 2, 0.05)
-        self.distance = radius / math.sin(self.fov / 2) * 1.1
-        self.yaw, self.pitch = math.radians(-145), math.radians(25)
+        self.m_target = ((min_bounds + max_bounds) / 2).astype("f4")
+        radius = max(float(np.linalg.norm(max_bounds - min_bounds)) / 2, 0.05)
+        self.m_distance_m = radius / math.sin(self.m_fov_rad / 2) * 1.1
+        self.m_yaw_rad, self.m_pitch_rad = math.radians(-145), math.radians(25)
 
 
-class ModelRenderer(ModelLights, ModelPoses):
-    """Draws one scene at a time; ``files`` is the ``ModelFiles`` its parts load from."""
+class CModelRenderer(CModelLights, CModelPoses):
+    """Draws one scene at a time; ``files`` is the ``CModelFiles`` its parts load from."""
 
-    def __init__(self, ctx, files: ModelFiles) -> None:
-        self.ctx, self.files = ctx, files
+    def __init__(self, ctx, files: CModelFiles) -> None:
+        self.m_ctx, self.m_files = ctx, files
         P = ctx.program
-        self.prog = {
+        self.m_prog = {
             "model": P(vertex_shader=S.MODEL_VS, fragment_shader=S.MODEL_FS),
             "lit": P(vertex_shader=S.MODEL_VS, fragment_shader=plainshading.LIT_FS),
             "skin_model": P(vertex_shader=plainshading.SKIN_VS, fragment_shader=S.MODEL_FS),
@@ -166,58 +186,58 @@ class ModelRenderer(ModelLights, ModelPoses):
             "final": P(vertex_shader=S.FINAL_VS, fragment_shader=S.FINAL_FS),
             "overlay": P(vertex_shader=S.OVERLAY_VS, fragment_shader=S.OVERLAY_FS),
         }
-        self.fullscreen = {k: ctx.vertex_array(self.prog[k], []) for k in ("sky", "final")}
-        self.inst = ctx.buffer(MIRROR_F4.T.tobytes())  # one instance, the mirror (MODEL_VS takes rows as GLSL does)
-        self.loader = Loader()
-        self.scene: Scene | None = None
-        self.clock_parts = False
-        self.longest_fade = 0.0  # the scene's longest time slice fade (seconds): the view draws again while it runs
-        self.by_node: dict[str, tuple[int, Part]] = {}
-        self._rigs: dict = {}
-        self._frame: dict = {}  # this frame's places and joints, by part node
-        self.items: dict[int, list] = {}  # part index -> [(group key, vbo, ibo, count, vaos)]
-        self.textures: dict[str, object] = {}
-        self.failed: dict[str, str] = {}  # a texture file that did not load -> why (the Checks panel lists it)
-        self.messages: list[str] = []
-        self.box: tuple[np.ndarray, np.ndarray] | None = None
-        self.particles = ParticleDrawer(ctx)
-        self._dummy = ctx.texture((1, 1), 4, bytes([128, 128, 128, 255]))
-        self._dummy_3d = ctx.texture3d((2, 2, 2), 3, np.zeros(24, "f4").tobytes(), dtype="f4")
-        self._dummy_shadow = ctx.depth_texture((1, 1), np.ones(1, "f4").tobytes())
-        self._dummy_shadow.compare_func = "<="
-        self._targets = None
-        self._shadow = None
-        self._ground = None
-        self._decals: dict[int, dict] = {}
-        self.gpu_skin = True
-        self._rest_joints = ctx.texture((4, 1), 4, np.identity(4, "f4").tobytes(), dtype="f4")  # a skin not posed yet
-        self.state = ViewState()
-        self._lights = (0, b"", b"", b"")
-        self._game_drew = False  # the game's pass drew the frame before (its ground, effects and decals stand)
-        self.game_pass = make_pass(self)
-        self.cloths = ClothPlayer()
+        self.m_fullscreen = {k: ctx.vertex_array(self.m_prog[k], []) for k in ("sky", "final")}
+        self.m_inst = ctx.buffer(MIRROR_F4.T.tobytes())  # one instance, the mirror (MODEL_VS takes rows as GLSL does)
+        self.m_loader = CLoader()
+        self.m_scene: CScene | None = None
+        self.m_clock_parts = False
+        self.m_longest_fade = 0.0  # the scene's longest time slice fade (seconds): the view draws again while it runs
+        self.m_by_node: dict[str, tuple[int, SPart]] = {}
+        self._m_rigs: dict = {}
+        self._m_frame: dict = {}  # this frame's places and joints, by part node
+        self.m_items: dict[int, list] = {}  # part index -> [(group key, vbo, ibo, count, vaos)]
+        self.m_textures: dict[str, object] = {}
+        self.m_failed: dict[str, str] = {}  # a texture file that did not load -> why (the Checks panel lists it)
+        self.m_messages: list[str] = []
+        self.m_box: tuple[np.ndarray, np.ndarray] | None = None
+        self.m_particles = CParticleDrawer(ctx)
+        self._m_dummy = ctx.texture((1, 1), 4, bytes([128, 128, 128, 255]))
+        self._m_dummy_3d = ctx.texture3d((2, 2, 2), 3, np.zeros(24, "f4").tobytes(), dtype="f4")
+        self._m_dummy_shadow = ctx.depth_texture((1, 1), np.ones(1, "f4").tobytes())
+        self._m_dummy_shadow.compare_func = "<="
+        self._m_targets = None
+        self._m_shadow = None
+        self._m_ground = None
+        self._m_decals: dict[int, dict] = {}
+        self.m_gpu_skin = True
+        self._m_rest_joints = ctx.texture((4, 1), 4, np.identity(4, "f4").tobytes(), dtype="f4")  # a skin not posed yet
+        self.m_state = SViewState()
+        self._m_lights = (0, b"", b"", b"")
+        self._m_game_drew = False  # the game's pass drew the frame before (its ground, effects and decals stand)
+        self.m_game_pass = make_pass(self)
+        self.m_cloths = CClothPlayer()
 
     # loading
-    def show(self, scene: Scene) -> None:
+    def show(self, scene: CScene) -> None:
         """Draw this scene from now on; its files start loading."""
         self.release_scene()
-        self.scene, self.box, self._game_drew = scene, None, False
-        self.failed = {}  # what this scene fails to load: the textures that failed before are tried again
-        self.textures = {k: v for k, v in self.textures.items() if v is not None}
-        self.by_node = {part.node: (k, part) for k, part in enumerate(scene.parts)}
-        self.clock_parts = any(motion.on_the_clock(part.motion) for part in scene.parts)  # the view ticks with them
-        self.longest_fade = max((t[2] for thing in (*scene.parts, *scene.effects, *scene.lights, *scene.decals)
+        self.m_scene, self.m_box, self._m_game_drew = scene, None, False
+        self.m_failed = {}  # what this scene fails to load: the textures that failed before are tried again
+        self.m_textures = {k: v for k, v in self.m_textures.items() if v is not None}
+        self.m_by_node = {part.node: (k, part) for k, part in enumerate(scene.m_parts)}
+        self.m_clock_parts = any(motion.on_the_clock(part.motion) for part in scene.m_parts)  # the view ticks with them
+        self.m_longest_fade = max((t[2] for thing in (*scene.m_parts, *scene.m_effects, *scene.m_lights, *scene.m_decals)
                                  for t in thing.times), default=0.0)  # fmt: skip
-        self._rigs: dict[str, skinning.Rig | None] = {}
-        self._frame: dict = {}
-        self.cloths.clear()
-        for k, part in enumerate(scene.parts):
+        self._m_rigs: dict[str, skinning.CRig | None] = {}
+        self._m_frame: dict = {}
+        self.m_cloths.clear()
+        for k, part in enumerate(scene.m_parts):
             self._ask(f"mesh:{k}", lambda part=part: self._mesh_of(part))
-        for e in scene.effects:
-            self._ask("fx:" + e.file, lambda f=e.file: self.files.effect(f))
+        for e in scene.m_effects:
+            self._ask("fx:" + e.file, lambda f=e.file: self.m_files.effect(f))
 
     def _ask(self, key: str, work):
-        found = self.loader.get(key, work)
+        found = self.m_loader.get(key, work)
         if isinstance(found, Exception):
             self.say(tr("viewer.name_kind_error", name=key.split(":", 1)[-1], kind=type(found).__name__, error=found))
             return None
@@ -225,31 +245,31 @@ class ModelRenderer(ModelLights, ModelPoses):
 
     def say(self, text: str) -> None:
         """Add a note for the view's message line (once)."""
-        if text not in self.messages:
-            self.messages.append(text)
+        if text not in self.m_messages:
+            self.m_messages.append(text)
 
-    def _mesh_of(self, part: Part):
-        return banner_arrays(part.banner) if part.banner is not None else self.files.mesh(part.mesh)
+    def _mesh_of(self, part: SPart):
+        return banner_arrays(part.banner) if part.banner is not None else self.m_files.mesh(part.mesh)
 
     def busy(self) -> int:
         """Files still loading, and the game's shaders still compiling while their look is shown."""
-        return self.loader.pending() + (self.game_pass.busy() if self.state.look == SHADERS else 0)
+        return self.m_loader.pending() + (self.m_game_pass.busy() if self.m_state.look == SHADERS else 0)
 
-    def shown_parts_in(self, state: ViewState) -> bool:
+    def shown_parts_in(self, state: SViewState) -> bool:
         """Whether every part ``state`` shows has its mesh in, or failed to read; a part a condition bit hides (a
         fountain's water, the lobster farm's) is never read, so it is not waited for."""
-        for k, part in enumerate(self.scene.parts if self.scene else []):
-            if k in self.items or not state.shows(part):
+        for k, part in enumerate(self.m_scene.m_parts if self.m_scene else []):
+            if k in self.m_items or not state.shows(part):
                 continue
-            future = self.loader.futures.get(f"mesh:{k}")
+            future = self.m_loader.m_futures.get(f"mesh:{k}")
             if future is None or not future.done() or not isinstance(future.result(), Exception):
                 return False
         return True
 
     def changed(self) -> bool:
         """Something loaded since the last call (the window draws again)."""
-        if self.loader.changed.is_set():
-            self.loader.changed.clear()
+        if self.m_loader.m_changed.is_set():
+            self.m_loader.m_changed.clear()
             return True
         return False
 
@@ -258,128 +278,140 @@ class ModelRenderer(ModelLights, ModelPoses):
         do not take) is kept in ``failed`` and, with ``missing`` (a colour map), drawn as the missing-file checker."""
         if not path:
             return None
-        most = getattr(self.state.quality, "max_texture", 0) or 0  # the rendering quality's largest map (117, 1800)
+        most = getattr(self.m_state.quality, "max_texture", 0) or 0  # the rendering quality's largest map (117, 1800)
         key = ("s:" if srgb else "l:") + (f"{most}:" if most else "") + path
-        if key in self.textures:
-            return self.textures[key] if self.textures[key] is not None or not missing else self._missing_texture()
+        if key in self.m_textures:
+            return self.m_textures[key] if self.m_textures[key] is not None or not missing else self._missing_texture()
         job = f"tex:{most}:{path}"
-        got = self._ask(job, lambda: self.files.texture(path, most))
+        got = self._ask(job, lambda: self.m_files.texture(path, most))
         if got is None:
-            future = self.loader.futures.get(job)
+            future = self.m_loader.m_futures.get(job)
             if future is not None and future.done():
-                self.textures[key] = None
-                exc = future.result()  # the loader hands the exception back as the result
-                self.failed[path] = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else "does not read"
+                self.m_textures[key] = None
+                error = future.result()  # the loader hands the exception back as the result
+                self.m_failed[path] = (
+                    f"{type(error).__name__}: {error}" if isinstance(error, Exception) else "does not read"
+                )
                 return self._missing_texture() if missing else None
             return None
-        w, h, comps, raw = got
-        tex = self.ctx.texture((w, h), comps, raw, internal_format=0x8C43 if srgb else None)  # SRGB8_ALPHA8
-        tex.build_mipmaps()
-        tex.anisotropy = 8.0
-        self.textures[key] = tex
-        return tex
+        width, height, comps, raw = got
+        texture = self.m_ctx.texture(
+            (width, height), comps, raw, internal_format=0x8C43 if srgb else None
+        )  # SRGB8_ALPHA8
+        texture.build_mipmaps()
+        texture.anisotropy = 8.0
+        self.m_textures[key] = texture
+        return texture
 
     def _missing_texture(self):
-        return viewcolors.missing_texture(self.ctx, self.textures)
+        return viewcolors.missing_texture(self.m_ctx, self.m_textures)
 
-    def _items(self, k: int, part: Part) -> list | None:
+    def _items(self, k: int, part: SPart) -> list | None:
         """The GPU side of a part, made once its mesh is in: per mesh and submesh group a buffer pair and its VAOs."""
-        if k in self.items:
-            return self.items[k]
+        if k in self.m_items:
+            return self.m_items[k]
         mesh = self._ask(f"mesh:{k}", lambda: self._mesh_of(part))
         if mesh is None:
             return None
         out = []
         if part.banner is not None:
-            verts, idx = mesh[0]
-            out.append(self._item("leaves", verts, idx, True))
+            verts, indices = mesh[0]
+            out.append(self._item("leaves", verts, indices, True))
         else:
-            for i, m in enumerate(mesh.meshes):
-                for key, idx in m.groups.items():
-                    if len(idx) and not part.material(key).hidden:
-                        skin = (m, mesh) if m.skinned else (None, None)
-                        out.append(self._item(key, m.vertices, idx, False, *skin))
-                        out[-1]["data"], out[-1]["mesh"] = m, i
-        self.items[k] = out
+            for i, mesh_part in enumerate(mesh.meshes):
+                for key, indices in mesh_part.groups.items():
+                    if len(indices) and not part.material(key).hidden:
+                        skin = (mesh_part, mesh) if mesh_part.skinned else (None, None)
+                        out.append(self._item(key, mesh_part.vertices, indices, False, *skin))
+                        out[-1]["data"], out[-1]["mesh"] = mesh_part, i
+        self.m_items[k] = out
         self._grow_box(part, mesh)
         return out
 
-    def _item(self, key, verts: np.ndarray, idx: np.ndarray, banner: bool, skinned=None, file=None) -> dict:
+    def _item(self, key, verts: np.ndarray, indices: np.ndarray, banner: bool, skinned=None, file=None) -> dict:
         """One mesh group on the GPU: its buffers and a VAO for the main and the shadow pass; a skinned one keeps its
         mesh and file so ``_pose`` can move it."""
-        ctx = self.ctx
-        gpu = skinned is not None and self.gpu_skin
-        if gpu:  # the joints and weights ride along, the shader poses
+        ctx = self.m_ctx
+        is_gpu_skinned = skinned is not None and self.m_gpu_skin
+        if is_gpu_skinned:  # the joints and weights ride along, the shader poses
             verts = np.concatenate([verts, skinned.joints.astype("f4"), skinned.weights.astype("f4")], axis=1)
-        vbo = ctx.buffer(np.ascontiguousarray(verts, "f4").tobytes(), dynamic=skinned is not None and not gpu)
-        ibo = ctx.buffer(np.ascontiguousarray(idx, "u4").tobytes())
-        fmt = ("3f 3f 2f 2f", "pos", "normal", "uv", "corner") if banner else ("3f 3f 2f", "pos", "normal", "uv")
+        vertex_buffer = ctx.buffer(
+            np.ascontiguousarray(verts, "f4").tobytes(), dynamic=skinned is not None and not is_gpu_skinned
+        )
+        index_buffer = ctx.buffer(np.ascontiguousarray(indices, "u4").tobytes())
+        buffer_format = (
+            ("3f 3f 2f 2f", "pos", "normal", "uv", "corner") if banner else ("3f 3f 2f", "pos", "normal", "uv")
+        )
         kind = "banner" if banner else "model"
         programs = (("main", kind), ("depth", "depth_" + kind)) + ((("lit", "lit"),) if not banner else ())
-        if gpu:
-            fmt = ("3f 3f 2f 4f 4f", "pos", "normal", "uv", "joints", "weights")
+        if is_gpu_skinned:
+            buffer_format = ("3f 3f 2f 4f 4f", "pos", "normal", "uv", "joints", "weights")
             programs = (("main", "skin_model"), ("depth", "skin_depth"), ("lit", "skin_lit"))
         vaos = {
             name: ctx.vertex_array(
-                self.prog[prog], [(vbo, *fmt), (self.inst, "16f/i", "inst")], index_buffer=ibo, index_element_size=4,
+                self.m_prog[prog], [(vertex_buffer, *buffer_format), (self.m_inst, "16f/i", "inst")], index_buffer=index_buffer, index_element_size=4,
                 skip_errors=True,
             )
             for name, prog in programs
         }  # fmt: skip
-        tris = None if banner else np.asarray(idx, np.int64)[: len(idx) // 3 * 3].reshape(-1, 3)
-        return {"key": key, "vbo": vbo, "ibo": ibo, "vaos": vaos, "skinned": skinned, "file": file, "pose": UNPOSED, "idx": idx,
-                "verts": None if banner else verts[:, :8], "tris": tris, "posed": None, "gpu": gpu,
+        tris = None if banner else np.asarray(indices, np.int64)[: len(indices) // 3 * 3].reshape(-1, 3)
+        return {"key": key, "vbo": vertex_buffer, "ibo": index_buffer, "vaos": vaos, "skinned": skinned, "file": file, "pose": UNPOSED, "idx": indices,
+                "verts": None if banner else verts[:, :8], "tris": tris, "posed": None, "gpu": is_gpu_skinned,
                 "joints": None, "matrices": None}  # fmt: skip
 
-    def _grow_box(self, part: Part, mesh) -> None:
+    def _grow_box(self, part: SPart, mesh) -> None:
         found = part_bounds(part, mesh, part.matrix)
         if found is not None:
-            lo, hi = found
-            self.box = (lo, hi) if self.box is None else (np.minimum(self.box[0], lo), np.maximum(self.box[1], hi))
+            min_bounds, max_bounds = found
+            self.m_box = (
+                (min_bounds, max_bounds)
+                if self.m_box is None
+                else (np.minimum(self.m_box[0], min_bounds), np.maximum(self.m_box[1], max_bounds))
+            )
 
     # frames
-    def _frame_targets(self, w: int, h: int):
-        if self._targets is None or self._targets["size"] != (w, h):
+    def _frame_targets(self, width_px: int, height_px: int):
+        if self._m_targets is None or self._m_targets["size"] != (width_px, height_px):
             self._release_targets()
-            ctx = self.ctx
+            ctx = self.m_ctx
             samples = min(4, ctx.max_samples)
-            color = ctx.renderbuffer((w, h), 4, samples=samples, dtype="f2")
-            depth = ctx.depth_renderbuffer((w, h), samples=samples)
-            resolved = ctx.texture((w, h), 4, dtype="f2")
-            self._targets = {"size": (w, h), "color": color, "depth": depth, "resolved": resolved,
+            color = ctx.renderbuffer((width_px, height_px), 4, samples=samples, dtype="f2")
+            depth = ctx.depth_renderbuffer((width_px, height_px), samples=samples)
+            resolved = ctx.texture((width_px, height_px), 4, dtype="f2")
+            self._m_targets = {"size": (width_px, height_px), "color": color, "depth": depth, "resolved": resolved,
                              "msaa": ctx.framebuffer([color], depth), "resolve": ctx.framebuffer([resolved])}  # fmt: skip
-        return self._targets
+        return self._m_targets
 
-    def render(self, fbo, size: tuple[int, int], camera: OrbitCamera, state: ViewState) -> None:
-        """One frame of the scene into ``fbo`` (``size`` pixels)."""
-        ctx = self.ctx
-        w, h = max(1, size[0]), max(1, size[1])
-        lt = self._light(state)
-        t = self._frame_targets(w, h)
+    def render(self, fbo, size_px: tuple[int, int], camera: COrbitCamera, state: SViewState) -> None:
+        """One frame of the scene into ``fbo`` (``size_px`` pixels)."""
+        ctx = self.m_ctx
+        width, height = max(1, size_px[0]), max(1, size_px[1])
+        light_values = self._light(state)
+        targets = self._frame_targets(width, height)
         view, eye = camera.view(), camera.eye()
-        view_proj = camera.proj(w / h) @ view
-        self._frame, self.state = {}, state
-        self.cloths.next_frame(MIRROR[:3, :3] @ np.asarray(eye, float), camera.fov)  # the eye in model space
-        self._motion = self._motion_env(state, view, lt)
+        view_proj = camera.proj(width / height) @ view
+        self._m_frame, self.m_state = {}, state
+        self.m_cloths.next_frame(MIRROR[:3, :3] @ np.asarray(eye, float), camera.m_fov_rad)  # the eye in model space
+        self._m_motion = self._motion_env(state, view, light_values)
         drawn = self._drawn(state)
-        self._lights = self._light_set(state)
-        shadow = self._shadow_pass(drawn, lt) if state.shadows and self.box is not None else None
-        frame = _Frame(view_proj, view, lt, eye, shadow)
-        t["msaa"].use()
-        ctx.viewport = (0, 0, w, h)
-        t["msaa"].clear(0, 0, 0, 1, depth=1.0)
-        self._sky(view_proj, lt, eye)
+        self._m_lights = self._light_set(state)
+        shadow = self._shadow_pass(drawn, light_values) if state.shadows and self.m_box is not None else None
+        frame = _SFrame(view_proj, view, light_values, eye, shadow)
+        targets["msaa"].use()
+        ctx.viewport = (0, 0, width, height)
+        targets["msaa"].clear(0, 0, 0, 1, depth=1.0)
+        self._sky(view_proj, light_values, eye)
         ctx.enable(ctx.DEPTH_TEST)
         ctx.wireframe = state.wireframe
-        game_ground = state.look == SHADERS and bool(self._by_game("ground", None))  # as of the frame before
-        if state.ground and self.box is not None and not game_ground:  # else in the game's G-buffer (gameground)
+        game_ground = state.look == SHADERS and bool(self._by_game("m_ground", None))  # as of the frame before
+        if state.ground and self.m_box is not None and not game_ground:  # else in the game's G-buffer (gameground)
             self._draw_ground(frame)
-        see_through = (WATER_SHADER, DECAL_SHADER) if state.look == SHADERS else (WATER_SHADER,)
+        see_through = (WATER_SHADER, FOAM_SHADER) + ((DECAL_SHADER,) if state.look == SHADERS else ())
         blended = [d for d in drawn if d[0].material(d[1]["key"]).shader in see_through]
         opaque = [d for d in drawn if d[0].material(d[1]["key"]).shader not in see_through]
         if state.look == SHADERS:  # water too, unless switched off (frame-117-viewer.md 7)
             water = [d for d in blended if self._is_water(d)] if state.switches.get("water", True) else []
-            rest = self._game_shaders(opaque + water, t["msaa"], (w, h), camera, lt)
+            rest = self._game_shaders(opaque + water, targets["msaa"], (width, height), camera, light_values)
             opaque = [d for d in rest if not self._is_water(d)]
             blended = [d for d in blended if not any(d is x for x in water)] + [d for d in rest if self._is_water(d)]
         streets = [d for d in opaque if d[0].material(d[1]["key"]).shader == STREET_SHADER]
@@ -397,54 +429,68 @@ class ModelRenderer(ModelLights, ModelPoses):
             self._draw(part, item, place, replace(frame, shadow=None))
         ctx.wireframe = False
         if state.particles:  # tested against the depth, never written (moderngl keeps the mask per framebuffer)
-            t["msaa"].depth_mask = False
+            targets["msaa"].depth_mask = False
             self._draw_particles(state, view, view_proj, eye)
-            t["msaa"].depth_mask = True
+            targets["msaa"].depth_mask = True
         ctx.disable(ctx.BLEND)
-        self._finish(t, fbo, (w, h), lt)
+        self._finish(targets, fbo, (width, height), light_values)
         if state.selected is not None:
-            self._draw_selection(state, view_proj, fbo, (w, h))
+            self._draw_selection(state, view_proj, fbo, (width, height))
 
-    def _game_shaders(self, opaque: list, target, size, camera, lt: dict) -> list:
+    def _game_shaders(self, opaque: list, target, size_px, camera, light_values: dict) -> list:
         """The groups the game's own shaders draw, drawn (``gamepass``); what is left for our plain look: all of them
         while the shaders compile or when the pass cannot draw, a group that failed, a kind the pass leaves."""
-        self._game_drew = False
-        why = self.game_pass.why_not()
+        self._m_game_drew = False
+        why = self.m_game_pass.why_not()
         if why:
             self.say(why)
             return opaque
-        day = NIGHT if self.state.night else 1.0
-        sh = [tuple(c * day for c in rgb) for rgb in lt.get("sh", [(0.0, 0.0, 0.0)] * 9)]  # a 2070 pass has its own sky
-        sun = tuple(c * day for c in lt["sunColor"])
-        light = Light(tuple(lt["sunDir"]), sun, tuple(c * lt.get("shFactor", 1.0) * 0.886 for c in sh[0]))
-        sky = (
-            Sky(tuple(lt["sunDir"]), sun, tuple(sh), lt.get("shFactor", 1.0), self.state.night) if "sh" in lt else None
+        day = NIGHT if self.m_state.night else 1.0
+        harmonics = [
+            tuple(channel * day for channel in rgb) for rgb in light_values.get("sh", [(0.0, 0.0, 0.0)] * 9)
+        ]  # a 2070 pass has its own sky
+        sun = tuple(channel * day for channel in light_values["sunColor"])
+        light = SLight(
+            tuple(light_values["sunDir"]),
+            sun,
+            tuple(channel * light_values.get("shFactor", 1.0) * 0.886 for channel in harmonics[0]),
         )
-        self.game_pass.switches = nativelook.with_quality(self.state.switches, self.state.quality)
-        self.game_pass.quality = self.state.quality
-        ground = ground_place(*self.box) if self.state.ground and self.box is not None else None
-        rest = self.game_pass.draw(opaque, target, size, camera, light, sky, ground)
+        sky = (
+            SSky(
+                tuple(light_values["sunDir"]),
+                sun,
+                tuple(harmonics),
+                light_values.get("shFactor", 1.0),
+                self.m_state.night,
+            )
+            if "sh" in light_values
+            else None
+        )
+        self.m_game_pass.m_switches = nativelook.with_quality(self.m_state.switches, self.m_state.quality)
+        self.m_game_pass.m_quality = self.m_state.quality
+        ground = ground_place(*self.m_box) if self.m_state.ground and self.m_box is not None else None
+        rest = self.m_game_pass.draw(opaque, target, size_px, camera, light, sky, ground)
         if rest is None:
             self.say(tr("viewer.compiling_games_shaders_once_they"))
             return opaque
-        self._game_drew = True
+        self._m_game_drew = True
         return rest
 
     def _by_game(self, name: str, default):
         """What the game's pass says it drew itself (its ``ground``, ``drawn_effects``, ``drawn_decals``): only of a
         frame it drew. A pass that failed or waits keeps what it said last, and the view's own would stay away."""
-        return getattr(self.game_pass, name, default) if self._game_drew else default
+        return getattr(self.m_game_pass, name, default) if self._m_game_drew else default
 
     @staticmethod
     def _is_water(drawn) -> bool:
         part, item, _place = drawn
         return part.material(item["key"]).shader == WATER_SHADER
 
-    def _drawn(self, state: ViewState) -> list:
+    def _drawn(self, state: SViewState) -> list:
         """(part, item, place) of every part shown, its pose applied when it plays an animation; a part on a joint
         whose model is not in yet waits."""
         out = []
-        for k, part in enumerate(self.scene.parts if self.scene else []):
+        for k, part in enumerate(self.m_scene.m_parts if self.m_scene else []):
             if not state.shows(part):
                 continue
             items = self._items(k, part) or []
@@ -455,16 +501,16 @@ class ModelRenderer(ModelLights, ModelPoses):
                 if item["skinned"] is not None:
                     self._pose(part, item, state)
                 elif part.cloth is not None:
-                    self.cloths.pose(part, item, state, place, getattr(self, "_motion", None))
+                    self.m_cloths.pose(part, item, state, place, getattr(self, "_m_motion", None))
                 out.append((part, item, place))
         return out
 
-    def pick(self, size: tuple[int, int], camera: OrbitCamera, state: ViewState, x: float, y: float) -> str | None:
-        """The node of the part under pixel (x, y) of a ``size`` view, as the parts stand at ``state``; None for none.
+    def pick(self, size_px: tuple[int, int], camera: COrbitCamera, state: SViewState, x: float, y: float) -> str | None:
+        """The node of the part under pixel (x, y) of a ``size_px`` view, as the parts stand at ``state``; None for none.
         Call it with the context current (skinned parts are posed on the way)."""
-        w, h = max(1, size[0]), max(1, size[1])
-        origin, direction = picking.ray(camera.proj(w / h) @ camera.view(), (w, h), x, y)
-        self._frame = {}
+        width, height = max(1, size_px[0]), max(1, size_px[1])
+        origin, direction = picking.ray(camera.proj(width / height) @ camera.view(), (width, height), x, y)
+        self._m_frame = {}
         best: tuple[float, str] | None = None
         for part, item, place in self._drawn(state):
             if item.get("verts") is None or part.material(item["key"]).hidden:
@@ -476,83 +522,93 @@ class ModelRenderer(ModelLights, ModelPoses):
                 best = (found, part.node)
         return best[1] if best else None
 
-    def _draw_decals(self, state: ViewState, frame: _Frame, kind: int) -> None:
+    def _draw_decals(self, state: SViewState, frame: _SFrame, kind: int) -> None:
         """The config's decals of the pass ``kind`` (``decalmesh.pass_of``) on the ground under them, blended over
         what is drawn so far, without writing depth."""
-        if self.scene is None or not self.scene.decals:
+        if self.m_scene is None or not self.m_scene.m_decals:
             return
-        by_game = self._by_game("drawn_decals", set()) if state.look == SHADERS else set()
-        ctx, target = self.ctx, self._targets["msaa"]
+        by_game = self._by_game("m_drawn_decals", set()) if state.look == SHADERS else set()
+        ctx, target = self.m_ctx, self._m_targets["msaa"]
         ctx.enable(ctx.BLEND)
         ctx.blend_func = ctx.SRC_ALPHA, ctx.ONE_MINUS_SRC_ALPHA
         target.depth_mask = False
-        for k, decal in enumerate(self.scene.decals):
+        for k, decal in enumerate(self.m_scene.m_decals):
             if decalmesh.pass_of(decal.kind, decal.on_streets) != kind:
                 continue
             place = self.place(decal, state)
             if place is None or not state.shows(decal) or decal.node in by_game:
                 continue
-            if k not in self._decals:
-                self._decals[k] = self._item("decal", *plainshading.decal_quad(decal.extents), False)
-            part = Part(decal.node, "", place, default=decal.material)
-            self._draw(part, self._decals[k], place, frame, decal=True)
+            if k not in self._m_decals:
+                self._m_decals[k] = self._item("decal", *plainshading.decal_quad(decal.extents), False)
+            part = SPart(decal.node, "", place, default=decal.material)
+            self._draw(part, self._m_decals[k], place, frame, decal=True)
         target.depth_mask = True
         ctx.disable(ctx.BLEND)
 
-    def _draw(self, part: Part, item: dict, place, frame: _Frame, decal: bool = False) -> None:
-        mat = part.material(item["key"])
-        banner = mat.shader == BANNER_SHADER
-        water = mat.shader == WATER_SHADER
-        if self.state.look == SHADERS and not banner and not water:  # in the frame's light (plainshading)
-            return self._draw_lit(mat, item, place, frame, decal or mat.shader == DECAL_SHADER)
-        prog = self.prog["skin_model" if item.get("gpu") else "banner" if banner else "model"]
+    def _draw(self, part: SPart, item: dict, place, frame: _SFrame, decal: bool = False) -> None:
+        material = part.material(item["key"])
+        banner = material.shader == BANNER_SHADER
+        water = material.shader == WATER_SHADER
+        foam = (
+            material.foam if material.shader == FOAM_SHADER else ()
+        )  # a sheet's speeds and opacity: a plain read, not lit by us
+        if (
+            self.m_state.look == SHADERS and not banner and not water and not foam
+        ):  # in the frame's light (plainshading)
+            return self._draw_lit(material, item, place, frame, decal or material.shader == DECAL_SHADER)
+        prog = self.m_prog["skin_model" if item.get("gpu") else "banner" if banner else "model"]
         self._bind_joints(prog, item)
         prog["viewProj"].write(gl(frame.view_proj))
         if "view" in prog:
             prog["view"].write(gl(frame.view))
         prog["part"].write(gl(place))
-        self._put_light(prog, frame.lt, frame.eye, None if water else frame.shadow)
-        tex = self._texture(mat.diffuse, True, missing=True)
-        nrm = self._texture(mat.normal, False) if not banner else None
-        prog["textured"].value = tex is not None
-        (tex or self._dummy).use(0)
+        self._put_light(prog, frame.lt, frame.eye, None if water or foam else frame.shadow)
+        texture = self._texture(material.diffuse, not foam, missing=True)
+        normal = self._texture(material.normal, False) if not banner else None
+        prog["textured"].value = texture is not None
+        (texture or self._m_dummy).use(0)
         prog["diffuseTex"].value = 0
         if "hasNormal" in prog:
-            prog["hasNormal"].value = nrm is not None
-            (nrm or self._dummy).use(2)
+            prog["hasNormal"].value = normal is not None
+            (normal or self._m_dummy).use(2)
             prog["normalTex"].value = 2
-        color = mat.color if tex is not None or banner or water else (0.6, 0.6, 0.6)
+        color = material.color if texture is not None or banner or water else (0.6, 0.6, 0.6)
         prog["tint"].value = tuple(float(min(c, 1.5)) for c in color)
         prog["emissive"].value = 0.0
-        prog["kind"].value = 1 if water or decal else 2 if banner else 0
+        prog["kind"].value = 4 if foam else 1 if water or decal else 2 if banner else 0
+        if foam:
+            prog["foam"].value = tuple(float(v) for v in foam)
+            prog["foamTime"].value = time.monotonic() % 3600.0
         if "opacity" in prog:
-            prog["opacity"].value = mat.opacity if decal else 0.8
+            prog["opacity"].value = material.opacity if decal else 0.8
         if "flip" in prog:
             prog["flip"].value = (0, 0, 0, 0)
         if "uvOffset" in prog:
             prog["uvOffset"].value = (0.0, 0.0)
         item["vaos"]["main"].render()
 
-    def _draw_lit(self, mat: Material, item: dict, place, frame: _Frame, blended: bool) -> None:
+    def _draw_lit(self, material: SMaterial, item: dict, place, frame: _SFrame, blended: bool) -> None:
         """One group by our plain shading in the frame's light: its colour and normal maps, the sun, the sky and the
         config's lights."""
-        prog = self.prog["skin_lit" if item.get("gpu") else "lit"]
+        prog = self.m_prog["skin_lit" if item.get("gpu") else "lit"]
         self._bind_joints(prog, item)
         prog["viewProj"].write(gl(frame.view_proj))
         prog["part"].write(gl(place))
         self._put_light(prog, frame.lt, frame.eye, frame.shadow)
-        maps = (("diffuseTex", "textured", mat.diffuse, True), ("normalTex", "hasNormal", mat.normal, False))
+        maps = (("diffuseTex", "textured", material.diffuse, True), ("normalTex", "hasNormal", material.normal, False))
         for unit, (sampler, flag, path, srgb) in enumerate(maps):
-            tex = self._texture(path, srgb, missing=sampler == "diffuseTex")
-            (tex or self._dummy).use(unit)
+            texture = self._texture(path, srgb, missing=sampler == "diffuseTex")
+            (texture or self._m_dummy).use(unit)
             prog[sampler].value = unit
-            prog[flag].value = tex is not None
-        prog["tint"].value = tuple(float(min(c, 1.5)) for c in (mat.color if mat.diffuse else (0.6, 0.6, 0.6)))
-        prog["opacity"].value = mat.opacity
-        prog["dayLight"].value = NIGHT if self.state.night else 1.0
+            prog[flag].value = texture is not None
+        prog["tint"].value = tuple(
+            float(min(c, 1.5)) for c in (material.color if material.diffuse else (0.6, 0.6, 0.6))
+        )
+        prog["opacity"].value = material.opacity
+        prog["dayLight"].value = NIGHT if self.m_state.night else 1.0
         prog["kind"].value = 3 if blended else 0
         prog["uvOffset"].value = (0.0, 0.0)
-        count, pos, col, reach = self._lights
+        count, pos, col, reach = self._m_lights
         prog["lightCount"].value = count
         if count:
             prog["lightPos"].write(pos)
@@ -560,18 +616,18 @@ class ModelRenderer(ModelLights, ModelPoses):
             prog["lightReach"].write(reach)
         item["vaos"].get("lit", item["vaos"]["main"]).render()
 
-    def _shadow_pass(self, drawn: list, lt: dict):
-        ctx = self.ctx
-        if self._shadow is None:
-            tex = ctx.depth_texture((SHADOW_SIZE, SHADOW_SIZE))
-            tex.compare_func = "<="
-            tex.repeat_x = tex.repeat_y = False
-            self._shadow = (tex, ctx.framebuffer(depth_attachment=tex))
-        tex, fbo = self._shadow
-        lo, hi = self.box
-        reach = max(float(np.linalg.norm(hi - lo)), 0.5)
-        target = (lo + hi) / 2
-        sun = np.asarray(lt["sunDir"], "f4")
+    def _shadow_pass(self, drawn: list, light_values: dict):
+        ctx = self.m_ctx
+        if self._m_shadow is None:
+            depth_texture = ctx.depth_texture((SHADOW_SIZE, SHADOW_SIZE))
+            depth_texture.compare_func = "<="
+            depth_texture.repeat_x = depth_texture.repeat_y = False
+            self._m_shadow = (depth_texture, ctx.framebuffer(depth_attachment=depth_texture))
+        depth_texture, fbo = self._m_shadow
+        min_bounds, max_bounds = self.m_box
+        reach = max(float(np.linalg.norm(max_bounds - min_bounds)), 0.5)
+        target = (min_bounds + max_bounds) / 2
+        sun = np.asarray(light_values["sunDir"], "f4")
         lview = look_at(target + sun * reach * 2, target)
         m = ortho(reach, 0.01, reach * 4) @ lview
         fbo.use()
@@ -580,170 +636,186 @@ class ModelRenderer(ModelLights, ModelPoses):
         ctx.enable(ctx.DEPTH_TEST)
         ctx.disable(ctx.BLEND)
         for part, item, place in drawn:
-            mat = part.material(item["key"])
-            if mat.shader == WATER_SHADER:
+            material = part.material(item["key"])
+            if material.shader in (WATER_SHADER, FOAM_SHADER):
                 continue
-            prog = self.prog[
-                "skin_depth" if item.get("gpu") else "depth_banner" if mat.shader == BANNER_SHADER else "depth_model"
+            prog = self.m_prog[
+                "skin_depth"
+                if item.get("gpu")
+                else "depth_banner"
+                if material.shader == BANNER_SHADER
+                else "depth_model"
             ]
             self._bind_joints(prog, item)
             prog["viewProj"].write(gl(m))
             if "view" in prog:
                 prog["view"].write(gl(lview))
             prog["part"].write(gl(place))
-            diffuse = self._texture(mat.diffuse, True)
+            diffuse = self._texture(material.diffuse, True)
             if "textured" in prog:
                 prog["textured"].value = diffuse is not None
-            (diffuse or self._dummy).use(0)
+            (diffuse or self._m_dummy).use(0)
             item["vaos"]["depth"].render()
-        return tex, m
+        return depth_texture, m
 
-    def _draw_ground(self, frame: _Frame) -> None:
+    def _draw_ground(self, frame: _SFrame) -> None:
         """A grey plane under the model at its lowest point, wide enough for its shadow."""
-        lo, hi = self.box
-        if self._ground is None:
+        min_bounds, max_bounds = self.m_box
+        if self._m_ground is None:
             quad = np.array([[-1, 0, -1, 0, 1, 0, 0, 0], [1, 0, -1, 0, 1, 0, 1, 0], [1, 0, 1, 0, 1, 0, 1, 1],
                              [-1, 0, 1, 0, 1, 0, 0, 1]], "f4")  # fmt: skip
-            self._ground = self._item("ground", quad, np.array([0, 1, 2, 0, 2, 3], "u4"), False)
-        place = ground_place(lo, hi)
-        ground = Part("", "", place, default=Material(color=(0.55, 0.55, 0.52)))
-        self._draw(ground, self._ground, place, frame)
+            self._m_ground = self._item("ground", quad, np.array([0, 1, 2, 0, 2, 3], "u4"), False)
+        place = ground_place(min_bounds, max_bounds)
+        ground = SPart("", "", place, default=SMaterial(color=(0.55, 0.55, 0.52)))
+        self._draw(ground, self._m_ground, place, frame)
 
-    def _sky(self, view_proj, lt: dict, eye) -> None:
-        self.ctx.disable(self.ctx.DEPTH_TEST)
-        sky = self.prog["sky"]
+    def _sky(self, view_proj, light_values: dict, eye) -> None:
+        self.m_ctx.disable(self.m_ctx.DEPTH_TEST)
+        sky = self.m_prog["sky"]
         sky["invViewProj"].write(gl(np.linalg.inv(view_proj)))
-        mode, zen, hor, fall = lt["sky"]
+        mode, zenith, horizon, fall = light_values["sky"]
         sky["skyMode"].value = mode
-        sky["zenith"].value, sky["horizon"].value, sky["fallOff"].value = zen, hor, fall
-        sky["below"].value = lt.get("skyBelow", hor)
-        self._put_light(sky, lt, eye, None)
-        self.fullscreen["sky"].render(vertices=3)
+        sky["zenith"].value, sky["horizon"].value, sky["fallOff"].value = zenith, horizon, fall
+        sky["below"].value = light_values.get("skyBelow", horizon)
+        self._put_light(sky, light_values, eye, None)
+        self.m_fullscreen["sky"].render(vertices=3)
 
-    def _finish(self, t: dict, fbo, size: tuple[int, int], lt: dict) -> None:
-        ctx = self.ctx
-        ctx.copy_framebuffer(t["resolve"], t["msaa"])
-        source, finish = t["resolved"], lt["finish"]
-        if self.state.look == SHADERS and hasattr(self.game_pass, "finish"):  # the game's grade and tone map
-            graded = self.game_pass.finish(source, size, self._lut())
-            source, finish = (graded, getattr(self.game_pass, "FINISH", 3)) if graded is not None else (source, finish)
+    def _finish(self, targets: dict, fbo, size_px: tuple[int, int], light_values: dict) -> None:
+        ctx = self.m_ctx
+        ctx.copy_framebuffer(targets["resolve"], targets["msaa"])
+        source, finish = targets["resolved"], light_values["finish"]
+        if self.m_state.look == SHADERS and hasattr(self.m_game_pass, "finish"):  # the game's grade and tone map
+            graded = self.m_game_pass.finish(source, size_px, self._lut())
+            source, finish = (
+                (graded, getattr(self.m_game_pass, "FINISH", 3)) if graded is not None else (source, finish)
+            )
         fbo.use()
-        ctx.viewport = (0, 0, *size)
+        ctx.viewport = (0, 0, *size_px)
         ctx.disable(ctx.DEPTH_TEST)
-        fin = self.prog["final"]
+        final_program = self.m_prog["final"]
         source.use(0)
-        fin["frame"].value = 0
-        fin["finish"].value = finish
-        fin["exposure"].value = lt["exposure"]
-        if "mood" in fin:
-            fin["mood"].value = LOOK2070["mood"]
-        lut = self._lut() if lt["finish"] == 1 else None
-        (lut or self._dummy_3d).use(1)
-        if "hasLut" in fin:
-            fin["hasLut"].value = lut is not None
-        if "lut" in fin:
-            fin["lut"].value = 1
-        self.fullscreen["final"].render(vertices=3)
+        final_program["frame"].value = 0
+        final_program["finish"].value = finish
+        final_program["exposure"].value = light_values["exposure"]
+        if "mood" in final_program:
+            final_program["mood"].value = LOOK2070["mood"]
+        lut = self._lut() if light_values["finish"] == 1 else None
+        (lut or self._m_dummy_3d).use(1)
+        if "hasLut" in final_program:
+            final_program["hasLut"].value = lut is not None
+        if "lut" in final_program:
+            final_program["lut"].value = 1
+        self.m_fullscreen["final"].render(vertices=3)
 
     def _lut(self):
         """The game's grade cube (117's ambient names it), when the files are 117's."""
-        if "lut" not in self.textures:
+        if "lut" not in self.m_textures:
             from ..render import gamelook
 
             def read():
-                return gamelook.read_lut(self.files.files.read(gamelook.lut_path(self.files.files)))
+                return gamelook.read_lut(self.m_files.m_files.read(gamelook.lut_path(self.m_files.m_files)))
 
-            got = self.loader.get("lut", read)
+            got = self.m_loader.get("lut", read)
             if got is None:
                 return None
             if isinstance(got, Exception):
-                self.textures["lut"] = None
+                self.m_textures["lut"] = None
                 return None
-            n = got.shape[0]
-            tex = self.ctx.texture3d((n, n, n), 3, np.ascontiguousarray(got, "f4").tobytes(), dtype="f4")
-            tex.repeat_x = tex.repeat_y = tex.repeat_z = False
-            self.textures["lut"] = tex
-        return self.textures["lut"]
+            size = got.shape[0]
+            texture = self.m_ctx.texture3d((size, size, size), 3, np.ascontiguousarray(got, "f4").tobytes(), dtype="f4")
+            texture.repeat_x = texture.repeat_y = texture.repeat_z = False
+            self.m_textures["lut"] = texture
+        return self.m_textures["lut"]
 
-    def _draw_particles(self, state: ViewState, view, view_proj, eye) -> None:
+    def _draw_particles(self, state: SViewState, view, view_proj, eye) -> None:
         items = []
-        by_game = self._by_game("drawn_effects", set()) if state.look == SHADERS else set()
-        for e in self.scene.effects if self.scene else []:
-            if not state.shows(e) or e.file in by_game:  # by_game: drawn by the game's own particle shader
+        by_game = self._by_game("m_drawn_effects", set()) if state.look == SHADERS else set()
+        for effect in self.m_scene.m_effects if self.m_scene else []:
+            if not state.shows(effect) or effect.file in by_game:  # by_game: drawn by the game's own particle shader
                 continue
-            effects = self._ask("fx:" + e.file, lambda f=e.file: self.files.effect(f))
-            place = self.place(e, state)
+            effects = self._ask("fx:" + effect.file, lambda effect_file=effect.file: self.m_files.effect(effect_file))
+            place = self.place(effect, state)
             if effects and place is not None:
-                faded = e.alpha * state.fade(e)  # its time slices' fade after View > Night [I]
-                items.append((effects, Placed(e.file, place.astype("f4"), e.tint, faded), MIRROR_F4[None]))
+                faded = effect.alpha * state.fade(effect)  # its time slices' fade after View > Night [I]
+                begun_s = state.time - state.effect_seconds(effect)  # a started effect plays from its element's start
+                items.append((effects, SPlaced(effect.file, place.astype("f4"), effect.tint, faded, begun_s=begun_s),
+                              MIRROR_F4[None]))  # fmt: skip
         if not items:
             return
         groups = collect(items, state.time, eye)
-        self.particles.draw(groups, lambda name: self._texture(name, False, missing=True), view, view_proj, eye)
+        self.m_particles.draw(groups, lambda name: self._texture(name, False, missing=True), view, view_proj, eye)
 
-    def _draw_selection(self, state: ViewState, view_proj, fbo, size) -> None:
+    def _draw_selection(self, state: SViewState, view_proj, fbo, size_px) -> None:
         """The box around the selected node's parts, over the finished frame."""
-        lo, hi = np.full(3, np.inf), np.full(3, -np.inf)
-        for k, part in enumerate(self.scene.parts if self.scene else []):
-            place = self.place(part, state) if under(part.node, (state.selected,)) and k in self.items else None
+        min_bounds, max_bounds = np.full(3, np.inf), np.full(3, -np.inf)
+        for k, part in enumerate(self.m_scene.m_parts if self.m_scene else []):
+            place = self.place(part, state) if under(part.node, (state.selected,)) and k in self.m_items else None
             found = part_bounds(part, self._ask(f"mesh:{k}", lambda: None), place) if place is not None else None
             if found is not None:
-                lo, hi = np.minimum(lo, found[0]), np.maximum(hi, found[1])
-        if not np.isfinite(lo).all():
+                min_bounds, max_bounds = np.minimum(min_bounds, found[0]), np.maximum(max_bounds, found[1])
+        if not np.isfinite(min_bounds).all():
             return
-        corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])], "f4")
+        corners = np.array(
+            [
+                [x, y, z]
+                for x in (min_bounds[0], max_bounds[0])
+                for y in (min_bounds[1], max_bounds[1])
+                for z in (min_bounds[2], max_bounds[2])
+            ],
+            "f4",
+        )
         edges = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)]
         rows = np.array([[*corners[i], 1.0, 0.82, 0.25, 1.0] for e in edges for i in e], "f4")
-        prog = self.prog["overlay"]
+        prog = self.m_prog["overlay"]
         prog["viewProj"].write(gl(view_proj))
         if "pointSize" in prog:
             prog["pointSize"].value = 1.0
-        vbo = self.ctx.buffer(rows.tobytes())
-        vao = self.ctx.vertex_array(prog, [(vbo, "3f 4f", "pos", "rgba")], skip_errors=True)
+        vertex_buffer = self.m_ctx.buffer(rows.tobytes())
+        vertex_array = self.m_ctx.vertex_array(prog, [(vertex_buffer, "3f 4f", "pos", "rgba")], skip_errors=True)
         fbo.use()
-        vao.render(self.ctx.LINES)
-        vao.release()
-        vbo.release()
+        vertex_array.render(self.m_ctx.LINES)
+        vertex_array.release()
+        vertex_buffer.release()
 
     # cleanup
     @staticmethod
     def _release_item(item: dict) -> None:
-        for vao in item["vaos"].values():
-            vao.release()
+        for vertex_array in item["vaos"].values():
+            vertex_array.release()
         if item.get("joints") is not None:
             item["joints"].release()
         item["vbo"].release()
         item["ibo"].release()
 
     def release_scene(self) -> None:
-        for items in [*self.items.values(), list(self._decals.values())]:
+        for items in [*self.m_items.values(), list(self._m_decals.values())]:
             for item in items:
                 self._release_item(item)
-        self.items, self._decals = {}, {}
-        self.game_pass.release_scene()
-        self.loader.close()
-        self.loader = Loader()
+        self.m_items, self._m_decals = {}, {}
+        self.m_game_pass.release_scene()
+        self.m_loader.close()
+        self.m_loader = CLoader()
 
     def _release_targets(self) -> None:
-        if self._targets is not None:
+        if self._m_targets is not None:
             for k in ("msaa", "resolve", "color", "depth", "resolved"):
-                self._targets[k].release()
-            self._targets = None
+                self._m_targets[k].release()
+            self._m_targets = None
 
     def release(self) -> None:
         self.release_scene()
-        self.game_pass.release()
-        self.loader.close()
+        self.m_game_pass.release()
+        self.m_loader.close()
         self._release_targets()
-        self.particles.release()
-        for tex in self.textures.values():
-            if tex is not None:
-                tex.release()
-        self.textures = {}
-        if self._ground is not None:  # what the renderer made for itself: a view makes a new one per game opened
-            self._release_item(self._ground)
-        own = (self._dummy, self._dummy_3d, self._dummy_shadow, self._rest_joints, self.inst)
-        for held in (*(self._shadow or ()), *own, *self.fullscreen.values(), *self.prog.values()):
+        self.m_particles.release()
+        for texture in self.m_textures.values():
+            if texture is not None:
+                texture.release()
+        self.m_textures = {}
+        if self._m_ground is not None:  # what the renderer made for itself: a view makes a new one per game opened
+            self._release_item(self._m_ground)
+        own = (self._m_dummy, self._m_dummy_3d, self._m_dummy_shadow, self._m_rest_joints, self.m_inst)
+        for held in (*(self._m_shadow or ()), *own, *self.m_fullscreen.values(), *self.m_prog.values()):
             held.release()
-        self._ground = self._shadow = None
-        self.fullscreen, self.prog = {}, {}
+        self._m_ground = self._m_shadow = None
+        self.m_fullscreen, self.m_prog = {}, {}

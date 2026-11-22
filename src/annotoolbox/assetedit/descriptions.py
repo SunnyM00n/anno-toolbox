@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .schema import PropertySpec, Schema, ValueSpec
+from .schema import SPropertySpec, SSchema, SValueSpec
 
 DATA = Path(__file__).parent / "data"
 
@@ -22,21 +22,23 @@ def load(key: str, folder: Path = DATA) -> dict[str, str]:
     try:
         data = json.loads((folder / f"descriptions-{key}.json").read_text(encoding="utf-8"))
         return {
-            k: v for k, v in data.get("descriptions", {}).items() if isinstance(k, str) and isinstance(v, str) and v
+            k: description
+            for k, description in data.get("descriptions", {}).items()
+            if isinstance(k, str) and isinstance(description, str) and description
         }
     except (OSError, ValueError, AttributeError):
         return {}
 
 
-def _spec(schema: Schema, key: str) -> PropertySpec | ValueSpec | None:
-    prop, _, rest = key.partition("/")
-    node = schema.properties.get(prop)
+def _spec(schema: SSchema, key: str) -> SPropertySpec | SValueSpec | None:
+    property_name, _, rest = key.partition("/")
+    node = schema.properties.get(property_name)
     for name in rest.split("/") if rest else ():
         node = node.child(name) if node is not None else None
     return node
 
 
-def apply(schema: Schema, table: dict[str, str]) -> int:
+def apply(schema: SSchema, table: dict[str, str]) -> int:
     """Fill the empty descriptions of ``schema`` from ``table``; returns how many were filled."""
     gained = 0
     for key, text in table.items():
@@ -48,6 +50,6 @@ def apply(schema: Schema, table: dict[str, str]) -> int:
     return gained
 
 
-def unresolved(schema: Schema, table: dict[str, str]) -> list[str]:
+def unresolved(schema: SSchema, table: dict[str, str]) -> list[str]:
     """The keys of ``table`` that name no property or value of ``schema``."""
     return [key for key in table if _spec(schema, key) is None]

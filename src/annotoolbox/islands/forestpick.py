@@ -15,14 +15,14 @@ def forest_kinds(island, types: dict) -> list[tuple[int, int]]:
     """The trees the forest brush plants, (GUID, variation), commonest first: the island's own, or
     2070's first tree assets on an island without trees. The page draws the same list."""
     counts: dict[tuple[int, int], int] = {}
-    for o in island.objects():
-        t = types.get(o.guid)
-        var = o.variation or 0
-        if t is not None and t.template == TREE_TEMPLATE and var < len(t.variations):
-            counts[(o.guid, var)] = counts.get((o.guid, var), 0) + 1
+    for placed in island.objects():
+        tree_type = types.get(placed.guid)
+        variation = placed.variation or 0
+        if tree_type is not None and tree_type.template == TREE_TEMPLATE and variation < len(tree_type.variations):
+            counts[(placed.guid, variation)] = counts.get((placed.guid, variation), 0) + 1
     if not counts:
-        return [(t.guid, 0) for t in tree_types(types)][:FOREST_KINDS]
-    return [k for k, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:FOREST_KINDS]]
+        return [(tree_type.guid, 0) for tree_type in tree_types(types)][:FOREST_KINDS]
+    return [key for key, _ in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:FOREST_KINDS]]
 
 
 def tile_pick(x: int, z: int) -> int:
@@ -31,5 +31,8 @@ def tile_pick(x: int, z: int) -> int:
 
 
 def tree_types(types: dict) -> list:
-    """The 2070 tree types (``objects2070.ObjectType``) in GUID order, which fixes their 117 GUIDs."""
-    return sorted((t for t in types.values() if t.template == TREE_TEMPLATE and t.variations), key=lambda t: t.guid)
+    """The 2070 tree types (``objects2070.SObjectType``) in GUID order, which fixes their 117 GUIDs."""
+    return sorted(
+        (tree_type for tree_type in types.values() if tree_type.template == TREE_TEMPLATE and tree_type.variations),
+        key=lambda tree_type: tree_type.guid,
+    )

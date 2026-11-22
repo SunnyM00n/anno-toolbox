@@ -13,32 +13,32 @@ from ...infra.i18n import tr
 
 
 def to_qcolor(rgba) -> QColor:
-    r, g, b, a = (min(1.0, max(0.0, float(v))) for v in rgba)
-    return QColor.fromRgbF(r, g, b, a)
+    red, green, blue, alpha = (min(1.0, max(0.0, float(component))) for component in rgba)
+    return QColor.fromRgbF(red, green, blue, alpha)
 
 
-class ColorButton(QPushButton):
+class CColorButton(QPushButton):
     picked = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
-        self.rgba: list[float] | None = None
+        self.m_rgba: list[float] | None = None
         self.clicked.connect(self._pick)
         self.set_color(None)
 
     def set_color(self, rgba) -> None:
-        self.rgba = [float(v) for v in rgba] if rgba is not None else None
-        if self.rgba is None:
+        self.m_rgba = [float(component) for component in rgba] if rgba is not None else None
+        if self.m_rgba is None:
             self.setText(tr("common.none"))
             self.setStyleSheet("")
             return
-        q = to_qcolor(self.rgba)
-        text = "#ffffff" if q.lightness() < 128 else "#000000"
-        self.setText(tr("islands.color_alpha", color=q.name(), alpha=f"{self.rgba[3]:.2f}"))
-        self.setStyleSheet(f"background-color: {q.name()}; color: {text};")
+        qcolor = to_qcolor(self.m_rgba)
+        text = "#ffffff" if qcolor.lightness() < 128 else "#000000"
+        self.setText(tr("islands.color_alpha", color=qcolor.name(), alpha=f"{self.m_rgba[3]:.2f}"))
+        self.setStyleSheet(f"background-color: {qcolor.name()}; color: {text};")
 
     def _pick(self) -> None:
-        start = to_qcolor(self.rgba) if self.rgba is not None else QColor("white")
+        start = to_qcolor(self.m_rgba) if self.m_rgba is not None else QColor("white")
         chosen = QColorDialog.getColor(start, self, tr("islands.tint"), QColorDialog.ColorDialogOption.ShowAlphaChannel)
         if chosen.isValid():
             self.picked.emit([chosen.redF(), chosen.greenF(), chosen.blueF(), chosen.alphaF()])

@@ -1,7 +1,7 @@
 """The state manager (``STMG`` chunk) of a Wwise bank's Init file: its state groups and the switch groups a game
 parameter drives, read and written (versions 112, 132 to 135, 172).
 
-``read(data, version)`` gives a ``StateManager``; ``render`` writes it back byte for byte. What is in the chunk, the
+``read(data, version)`` gives a ``SStateManager``; ``render`` writes it back byte for byte. What is in the chunk, the
 three layouts and what a group is: ``docs/sound/bank-objects.md`` "State and switch groups".
 """
 
@@ -11,13 +11,13 @@ import struct
 from dataclasses import dataclass, field
 
 from . import bnkgraph
-from .bnkmusic import Reader
+from .bnkmusic import CReader
 
 PARAMETER_SIZE = 21  # a game parameter: its id and 17 bytes (default, interpolation, attack, release)
 
 
 @dataclass
-class StateGroup:
+class SStateGroup:
     """A state group: its id, the default transition time (ms) and the custom transitions (from state, to state, ms)."""
 
     id: int
@@ -26,7 +26,7 @@ class StateGroup:
 
 
 @dataclass
-class SwitchGroup:
+class SSwitchGroup:
     """A switch group a game parameter drives: the parameter, a type byte and the points (parameter value, switch id,
     interpolation)."""
 
@@ -37,39 +37,45 @@ class SwitchGroup:
 
 
 @dataclass
-class StateManager:
+class SStateManager:
     head: bytes
-    states: list[StateGroup]
-    switches: list[SwitchGroup]
+    states: list[SStateGroup]
+    switches: list[SSwitchGroup]
     parameters: bytes  # the game parameters, with their count, and the tail: kept as read
 
 
-def read(data: bytes, version: int) -> StateManager:
+def read(data: bytes, version: int) -> SStateManager:
     """The chunk; ``ValueError`` when the game parameters and the tail do not fill what follows the switch groups."""
     layout = bnkgraph.layout(version)
-    r = Reader(data)
-    head = r.take(layout.stmg_head)
+    reader = CReader(data)
+    head = reader.take(layout.stmg_head)
     states = []
-    for _ in range(r.u32()):
-        ident, transition = r.u32(), r.u32()
-        states.append(StateGroup(ident, transition, [(r.u32(), r.u32(), r.u32()) for _ in range(r.u32())]))
+    for _ in range(reader.u32()):
+        ident, transition = reader.u32(), reader.u32()
+        states.append(
+            SStateGroup(ident, transition, [(reader.u32(), reader.u32(), reader.u32()) for _ in range(reader.u32())])
+        )
     switches = []
-    for _ in range(r.u32()):
-        ident, parameter, kind = r.u32(), r.u32(), r.u8()
-        switches.append(SwitchGroup(ident, parameter, kind, [(r.f32(), r.u32(), r.u32()) for _ in range(r.u32())]))
-    rest = data[r.pos :]
+    for _ in range(reader.u32()):
+        ident, parameter, kind = reader.u32(), reader.u32(), reader.u8()
+        switches.append(
+            SSwitchGroup(
+                ident, parameter, kind, [(reader.f32(), reader.u32(), reader.u32()) for _ in range(reader.u32())]
+            )
+        )
+    rest = data[reader.m_pos :]
     if len(rest) < 4 or len(rest) != 4 + struct.unpack_from("<I", rest)[0] * PARAMETER_SIZE + layout.stmg_tail:
         raise ValueError("the game parameters do not fill the state manager")
-    return StateManager(head, states, switches, rest)
+    return SStateManager(head, states, switches, rest)
 
 
-def render(sm: StateManager) -> bytes:
-    out = sm.head + struct.pack("<I", len(sm.states))
-    for g in sm.states:
-        out += struct.pack("<III", g.id, g.transition, len(g.custom))
-        out += b"".join(struct.pack("<III", *c) for c in g.custom)
-    out += struct.pack("<I", len(sm.switches))
-    for s in sm.switches:
-        out += struct.pack("<IIBI", s.id, s.parameter, s.kind, len(s.points))
-        out += b"".join(struct.pack("<fII", *p) for p in s.points)
-    return out + sm.parameters
+def render(state_manager: SStateManager) -> bytes:
+    out = state_manager.head + struct.pack("<I", len(state_manager.states))
+    for group in state_manager.states:
+        out += struct.pack("<III", group.id, group.transition, len(group.custom))
+        out += b"".join(struct.pack("<III", *custom) for custom in group.custom)
+    out += struct.pack("<I", len(state_manager.switches))
+    for switch in state_manager.switches:
+        out += struct.pack("<IIBI", switch.id, switch.parameter, switch.kind, len(switch.points))
+        out += b"".join(struct.pack("<fII", *point) for point in switch.points)
+    return out + state_manager.parameters

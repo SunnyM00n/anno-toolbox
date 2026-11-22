@@ -1,5 +1,5 @@
 """The tables under the mod tree (Qt): the load order the loader gives the mods that are on, the problems found before
-the start, and what the last start's log said per mod. ``OrderView``, ``IssueView`` and ``LogView`` are the entries;
+the start, and what the last start's log said per mod. ``COrderView``, ``CIssueView`` and ``CLogView`` are the entries;
 ``docs/mod-manager.md`` "The window".
 """
 
@@ -9,8 +9,8 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
 
 from ..infra.i18n import tr
-from ..modloader.loadlog import LoadLog
-from .checks import PROBLEM, Issue, Plan
+from ..modloader.loadlog import SLoadLog
+from .checks import PROBLEM, SIssue, SPlan
 
 BAD = QBrush(QColor("#c0392b"))
 
@@ -25,29 +25,36 @@ def _setup(tree: QTreeWidget, columns: list[str], root_decorated: bool = False) 
     tree.header().setStretchLastSection(True)
 
 
-class OrderView(QTreeWidget):
+class COrderView(QTreeWidget):
     """The mods in the order the loader applies them: a later mod's files replace an earlier one's."""
 
     def __init__(self) -> None:
         super().__init__()
         _setup(self, ["#", "ModID", tr("common.name"), tr("common.version"), tr("mods.why_here")])
 
-    def set_plan(self, plan: Plan | None) -> None:
+    def set_plan(self, plan: SPlan | None) -> None:
         self.clear()
         for row in plan.rows if plan else ():
             QTreeWidgetItem(
-                self, [str(row.position), row.mod.mod_id, row.mod.name or row.mod.folder.name, row.mod.version, row.why]
+                self,
+                [
+                    str(row.position),
+                    row.mod.m_mod_id,
+                    row.mod.m_name or row.mod.m_folder.name,
+                    row.mod.m_version,
+                    row.why,
+                ],
             )
 
 
-class IssueView(QTreeWidget):
+class CIssueView(QTreeWidget):
     """The problems and notes, the problems first."""
 
     def __init__(self) -> None:
         super().__init__()
         _setup(self, ["", tr("mods.mod"), tr("mods.rule"), tr("mods.what")])
 
-    def set_issues(self, issues: list[Issue]) -> None:
+    def set_issues(self, issues: list[SIssue]) -> None:
         self.clear()
         for issue in sorted(issues, key=lambda i: (i.level != PROBLEM, i.mod, i.code)):
             item = QTreeWidgetItem(
@@ -64,7 +71,7 @@ class IssueView(QTreeWidget):
                 item.setForeground(0, BAD)
 
 
-class LogView(QTreeWidget):
+class CLogView(QTreeWidget):
     """The last start per mod: loaded or not, the patch time, and each problem line below its mod."""
 
     def __init__(self) -> None:
@@ -74,15 +81,15 @@ class LogView(QTreeWidget):
             [tr("mods.mod"), tr("common.version"), tr("mods.last_start"), tr("mods.patch_time")],
             root_decorated=True,
         )
-        self.summary = ""
+        self.m_summary = ""
 
-    def set_log(self, log: LoadLog | None) -> str:
+    def set_log(self, log: SLoadLog | None) -> str:
         """Show ``log``; returns its one-line summary (what to tell the person when there is none)."""
         self.clear()
         if log is None:
-            self.summary = tr("mods.no_mod_loader_log_mods")
-            return self.summary
-        for mod_id in log.order + [m for m in log.mods if m not in log.order]:
+            self.m_summary = tr("mods.no_mod_loader_log_mods")
+            return self.m_summary
+        for mod_id in log.order + [unordered for unordered in log.mods if unordered not in log.order]:
             run = log.mods[mod_id]
             said = tr("mods.loaded") if run.loaded else tr("mods.enabled_not_loaded")
             time = f"{run.seconds:.1f} s" if run.seconds is not None else ""
@@ -99,14 +106,14 @@ class LogView(QTreeWidget):
         counted = (
             tr("mods.n_mods_enabled", n=log.enabled) if log.enabled is not None else tr("mods.n_mods", n=len(log.mods))
         )
-        self.summary = tr(
+        self.m_summary = tr(
             "mods.problem_lines_log",
             counted=counted,
             total=total,
             n=log.problem_count,
             when=_when(log.modified),
         )
-        return self.summary
+        return self.m_summary
 
 
 def _when(stamp: float) -> str:

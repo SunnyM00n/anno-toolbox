@@ -3,7 +3,7 @@
 ``read_layout`` records what a reader drops: the version, the blocks (flags, members each), the members in order,
 their times, the zlib level, whether equal members share a copy. ``pack(layout, members, dest, original=...)`` writes
 it again from the members' contents, taking an unchanged member's stored bytes and a block's directory from the
-``Original`` (whatever compressed them); new members get a block at the end. ``differences`` names the rest.
+``SOriginal`` (whatever compressed them); new members get a block at the end. ``differences`` names the rest.
 """
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ FORMAT = 1
 LEVELS = (1, 6, 9, 0, 2, 3, 4, 5, 7, 8)  # tried in this order when the level of an archive is looked for
 SAMPLE = 8  # compressed members compared to find the level
 SAMPLE_BYTES = 1 << 20  # members above this are not used for it
-Namer = Callable[[rda.RdaEntry], str]
+Namer = Callable[[rda.SRdaEntry], str]
 
 # what ``differences`` can name
 ORDER, BLOCKS, STAMPS, COMPRESSION, SHARING, FILES = "order", "blocks", "stamps", "compression", "sharing", "files"
 
 
 @dataclass
-class Layout:
+class SLayout:
     """The shape of one archive. ``blocks`` is ``(flags, members)`` per block in file order (flag 8 is a deleted block;
     a V1.1 archive has none: one entry whose flag 1 says "compressed"); ``order`` holds the members of all blocks in
     order, deleted paths included; ``default_flags`` are the flags of a block of members the layout does not know."""
@@ -43,11 +43,11 @@ class Layout:
 
     @property
     def deleted(self) -> list[str]:
-        return [p for p, f in self._flagged() if f & rda.FLAG_DELETED]
+        return [path for path, flags in self._flagged() if flags & rda.FLAG_DELETED]
 
     @property
     def live(self) -> list[str]:
-        return [p for p, f in self._flagged() if not f & rda.FLAG_DELETED]
+        return [path for path, flags in self._flagged() if not flags & rda.FLAG_DELETED]
 
     def _flagged(self) -> Iterable[tuple[str, int]]:
         at = 0
@@ -56,10 +56,10 @@ class Layout:
                 yield path, flags
             at += count
 
-    def mapped(self, rename: Callable[[str], str | None]) -> Layout:
+    def mapped(self, rename: Callable[[str], str | None]) -> SLayout:
         """The layout with every path ``rename`` gives (None: the member is dropped, and its block shrinks); the
         first of two members that get one name stays."""
-        out = Layout(self.version, [], [], {}, self.level, self.dedup, self.default_flags)
+        out = SLayout(self.version, [], [], {}, self.level, self.dedup, self.default_flags)
         seen: set[str] = set()
         at = 0
         for flags, count in self.blocks:
@@ -83,39 +83,41 @@ class Layout:
         return {
             "format": FORMAT,
             "version": self.version,
-            "blocks": [list(b) for b in self.blocks],
+            "blocks": [list(block) for block in self.blocks],
             "order": self.order,
-            "stamps": [self.stamps.get(p, 0) for p in self.order],
+            "stamps": [self.stamps.get(path, 0) for path in self.order],
             "level": self.level,
             "dedup": self.dedup,
             "default_flags": self.default_flags,
         }
 
     @classmethod
-    def from_json(cls, data: Mapping) -> Layout:
+    def from_json(cls, data: Mapping) -> SLayout:
         if data.get("format", FORMAT) > FORMAT:
-            raise rda.RdaError("the archive layout was written by a newer version")
+            raise rda.CRdaError("the archive layout was written by a newer version")
         order = list(data["order"])
         stamps = dict(zip(order, data["stamps"], strict=True))
         return cls(
-            data["version"], [(int(f), int(n)) for f, n in data["blocks"]], order, stamps, int(data["level"]),
+            data["version"], [(int(flags), int(count)) for flags, count in data["blocks"]], order, stamps, int(data["level"]),
             bool(data["dedup"]), int(data["default_flags"]),
         )  # fmt: skip
 
 
-def default_layout(version: rda.RdaVersion, flags: int) -> Layout:
+def default_layout(version: rda.SRdaVersion, flags: int) -> SLayout:
     """The layout of an archive that has no original: no blocks, new members in blocks of ``flags``."""
-    return Layout(version.name, default_flags=flags)
+    return SLayout(version.name, default_flags=flags)
 
 
-def detect_level(archive: rda.RdaArchive, entries: Iterable[rda.RdaEntry]) -> int:
+def detect_level(archive: rda.CRdaArchive, entries: Iterable[rda.SRdaEntry]) -> int:
     """The zlib level the compressed members were made with: the first of ``LEVELS`` that reproduces the stored bytes
     of a sample (1 when none does; ``differences`` then names the compression)."""
     seed, sample = archive.version.seed, []
-    for e in entries:
-        if e.flags & rda.FLAG_COMPRESSED and not e.contiguous and 0 < e.size <= SAMPLE_BYTES:
-            raw = archive.stored_bytes(e)
-            sample.append((archive.read_entry(e), rda.decrypt(raw, seed) if e.flags & rda.FLAG_ENCRYPTED else raw))
+    for entry in entries:
+        if entry.flags & rda.FLAG_COMPRESSED and not entry.contiguous and 0 < entry.size <= SAMPLE_BYTES:
+            raw = archive.stored_bytes(entry)
+            sample.append(
+                (archive.read_entry(entry), rda.decrypt(raw, seed) if entry.flags & rda.FLAG_ENCRYPTED else raw)
+            )
             if len(sample) == SAMPLE:
                 break
     for level in LEVELS:
@@ -124,77 +126,81 @@ def detect_level(archive: rda.RdaArchive, entries: Iterable[rda.RdaEntry]) -> in
     return 1
 
 
-def read_layout(archive: rda.RdaArchive, name_of: Namer | None = None) -> Layout:
+def read_layout(archive: rda.CRdaArchive, name_of: Namer | None = None) -> SLayout:
     """The layout of ``archive``; ``name_of(entry)`` gives a member's path (default: as stored). Where a later block
     holds a path again, the later one is the member (as the game reads it) and the earlier block lets it go."""
-    name = name_of or (lambda e: e.path)
+    name = name_of or (lambda entry: entry.path)
     version = archive.version
     if version is rda.V1_1:
         entries = list(archive.entries.values())
-        packed = not entries or sum(bool(e.flags & rda.FLAG_COMPRESSED) for e in entries) * 2 >= len(entries)
-        layout = Layout(
+        packed = not entries or sum(bool(entry.flags & rda.FLAG_COMPRESSED) for entry in entries) * 2 >= len(entries)
+        layout = SLayout(
             version.name,
             [(int(packed), len(entries))] if entries else [],
             default_flags=rda.V1_FLAGS_ZLIB if packed else rda.V1_FLAGS_STORED,
         )
-        for e in entries:
-            layout.order.append(name(e))
-            layout.stamps[name(e)] = e.mtime
-            layout.stored_sizes[name(e)] = e.compressed_size
+        for entry in entries:
+            layout.order.append(name(entry))
+            layout.stamps[name(entry)] = entry.mtime
+            layout.stored_sizes[name(entry)] = entry.compressed_size
         layout.level = detect_level(archive, entries) if packed else 1
         return layout
     blocks: list[tuple[int, list[str]]] = []
     holder: dict[str, int] = {}
-    by_path: dict[str, rda.RdaEntry] = {}
+    by_path: dict[str, rda.SRdaEntry] = {}
     for block, entries in archive.block_members():
-        for e in entries:
-            holder[name(e)] = len(blocks)
+        for entry in entries:
+            holder[name(entry)] = len(blocks)
             if not block.flags & rda.FLAG_DELETED:
-                by_path[name(e)] = e
+                by_path[name(entry)] = entry
             else:
-                by_path.pop(name(e), None)
-        blocks.append((block.flags, [name(e) for e in entries]))
-    layout = Layout(version.name)
+                by_path.pop(name(entry), None)
+        blocks.append((block.flags, [name(entry) for entry in entries]))
+    layout = SLayout(version.name)
     seen: set[tuple[int, int]] = set()
     for index, (flags, paths) in enumerate(blocks):
-        kept = [p for p in paths if holder[p] == index]
+        kept = [path for path in paths if holder[path] == index]
         if paths and not kept:
             continue  # every member of the block is in a later one
         layout.blocks.append((flags, len(kept)))
         layout.order += kept
-        for p in kept:
-            e = by_path.get(p)
-            layout.stamps[p] = e.mtime if e else 0
-            if e is not None:
-                layout.stored_sizes[p] = e.compressed_size
-                if not e.contiguous:
-                    layout.dedup = layout.dedup or (e.offset, e.compressed_size) in seen
-                    seen.add((e.offset, e.compressed_size))
-    live = [f for f, n in layout.blocks if n and not f & rda.FLAG_DELETED]
+        for path in kept:
+            entry = by_path.get(path)
+            layout.stamps[path] = entry.mtime if entry else 0
+            if entry is not None:
+                layout.stored_sizes[path] = entry.compressed_size
+                if not entry.contiguous:
+                    layout.dedup = layout.dedup or (entry.offset, entry.compressed_size) in seen
+                    seen.add((entry.offset, entry.compressed_size))
+    live = [block_flags for block_flags, count in layout.blocks if count and not block_flags & rda.FLAG_DELETED]
     layout.default_flags = live[-1] if live else rda.FLAG_COMPRESSED
     layout.level = detect_level(archive, by_path.values())
     return layout
 
 
 @dataclass
-class Original:
+class SOriginal:
     """The archive a project was made from, to take what nobody changed from: its entries by layout path and its
-    directories (keyed as ``rda.RdaWriter`` looks them up)."""
+    directories (keyed as ``rda.CRdaWriter`` looks them up)."""
 
-    archive: rda.RdaArchive
-    entries: dict[str, rda.RdaEntry]
-    reuse: dict[tuple[str, bytes, int], bytes]  # directories and resident blobs, as ``rda.RdaWriter`` looks them up
+    archive: rda.CRdaArchive
+    entries: dict[str, rda.SRdaEntry]
+    reuse: dict[tuple[str, bytes, int], bytes]  # directories and resident blobs, as ``rda.CRdaWriter`` looks them up
 
-    def stored(self, path: str, flags: int) -> rda.Stored | None:
+    def stored(self, path: str, flags: int) -> rda.SStored | None:
         """The member as the archive stores it, when it lies there in a block of ``flags`` (not resident)."""
-        e = self.entries.get(path)
-        return rda.Stored(self.archive, e) if e is not None and not e.contiguous and e.flags == flags else None
+        entry = self.entries.get(path)
+        return (
+            rda.SStored(self.archive, entry)
+            if entry is not None and not entry.contiguous and entry.flags == flags
+            else None
+        )
 
 
-def original_of(archive: rda.RdaArchive, name_of: Namer | None = None) -> Original:
-    """``archive`` as an ``Original``; ``name_of`` names its members as ``read_layout`` did."""
-    name = name_of or (lambda e: e.path)
-    out = Original(archive, {name(e): e for e in archive.entries.values()}, {})
+def original_of(archive: rda.CRdaArchive, name_of: Namer | None = None) -> SOriginal:
+    """``archive`` as an ``SOriginal``; ``name_of`` names its members as ``read_layout`` did."""
+    name = name_of or (lambda entry: entry.path)
+    out = SOriginal(archive, {name(entry): entry for entry in archive.entries.values()}, {})
     if archive.version is not rda.V1_1:
         for block, entries in archive.block_members():
             if entries and not block.flags & rda.FLAG_DELETED:
@@ -207,33 +213,33 @@ def original_of(archive: rda.RdaArchive, name_of: Namer | None = None) -> Origin
 
 
 def pack(
-    layout: Layout,
+    layout: SLayout,
     members: Mapping[str, bytes | Path],
-    dest: str | Path,
+    destination: str | Path,
     stamps: Mapping[str, int] | None = None,
-    original: Original | None = None,
+    original: SOriginal | None = None,
     unchanged: Callable[[str], bool] = lambda _p: False,
 ) -> Path:
-    """The archive at ``dest`` (written whole or not at all) from ``members`` (path -> bytes or a file) in ``layout``.
+    """The archive at ``destination`` (written whole or not at all) from ``members`` (path -> bytes or a file) in ``layout``.
     ``stamps`` gives the time of these members (else the layout's, else 0). A member for which ``unchanged(path)`` holds
     is taken from ``original`` as it is stored there; a directory that comes out as one of the original's too."""
     version, times = rda.version_named(layout.version), {**layout.stamps, **(stamps or {})}
     known = set(layout.live)  # a path of a deleted block that has a member again is a new member
-    fresh = sorted(p for p in members if p not in known)
+    fresh = sorted(member for member in members if member not in known)
 
     def take(path: str, flags: int) -> tuple[str, rda.Member]:
         return path, (original and unchanged(path) and original.stored(path, flags)) or members[path]
 
     if version is rda.V1_1:
         flags = int(layout.default_flags != rda.V1_FLAGS_STORED)
-        keep = [p for p in layout.live if p in members] + fresh
-        return rda.write_v11_file(dest, [take(p, flags) for p in keep], times, compress=bool(flags))
-    resident = any(f & rda.FLAG_CONTIGUOUS for f, _n in layout.blocks) or bool(
+        keep = [member for member in layout.live if member in members] + fresh
+        return rda.write_v11_file(destination, [take(member, flags) for member in keep], times, compress=bool(flags))
+    resident = any(block_flags & rda.FLAG_CONTIGUOUS for block_flags, _n in layout.blocks) or bool(
         layout.default_flags & rda.FLAG_CONTIGUOUS
     )
     reuse = original.reuse if original else None
-    with rda.RdaWriter(
-        dest, version, times, dedup=layout.dedup, allow_resident=resident, reuse=reuse, allow_empty=True
+    with rda.CRdaWriter(
+        destination, version, times, dedup=layout.dedup, allow_resident=resident, reuse=reuse, allow_empty=True
     ) as writer:
         at = 0
         for flags, count in layout.blocks:
@@ -242,28 +248,30 @@ def pack(
             if not count:
                 writer.add_empty(flags)
             elif flags & rda.FLAG_DELETED:
-                writer.add_deleted([p for p in paths if p not in members])
+                writer.add_deleted([member for member in paths if member not in members])
             else:
-                writer.add_block([take(p, flags) for p in paths if p in members], flags, layout.level)
+                writer.add_block([take(member, flags) for member in paths if member in members], flags, layout.level)
         if fresh:
-            writer.add_block([take(p, layout.default_flags) for p in fresh], layout.default_flags, layout.level)
-    return Path(dest)
+            writer.add_block(
+                [take(member, layout.default_flags) for member in fresh], layout.default_flags, layout.level
+            )
+    return Path(destination)
 
 
-def differences(original: Layout, rebuilt: Layout) -> list[str]:
+def differences(original: SLayout, rebuilt: SLayout) -> list[str]:
     """What differs between two layouts, as ``ORDER``, ``BLOCKS``, ``STAMPS``, ``COMPRESSION``, ``SHARING``, ``FILES``
     (a member in one and not the other); empty when the layouts are the same."""
     out = []
     if set(original.order) != set(rebuilt.order):
         out.append(FILES)
-    common = [p for p in original.order if p in set(rebuilt.order)]
-    if common != [p for p in rebuilt.order if p in set(original.order)]:
+    common = [path for path in original.order if path in set(rebuilt.order)]
+    if common != [path for path in rebuilt.order if path in set(original.order)]:
         out.append(ORDER)
     if original.blocks != rebuilt.blocks:
         out.append(BLOCKS)
-    if any(original.stamps.get(p) != rebuilt.stamps.get(p) for p in common):
+    if any(original.stamps.get(path) != rebuilt.stamps.get(path) for path in common):
         out.append(STAMPS)
-    if any(original.stored_sizes.get(p) != rebuilt.stored_sizes.get(p) for p in common):
+    if any(original.stored_sizes.get(path) != rebuilt.stored_sizes.get(path) for path in common):
         out.append(COMPRESSION)
     if original.dedup != rebuilt.dedup:
         out.append(SHARING)

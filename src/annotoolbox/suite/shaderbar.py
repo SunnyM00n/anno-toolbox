@@ -18,63 +18,63 @@ from ..infra.i18n import tr
 WIDTH = 150  # pixels [ours]
 
 
-class ShaderBar(QObject):
+class CShaderBar(QObject):
     """The bar and its feed; ``changed`` carries the snapshot from the thread that reports to the window's."""
 
     changed = Signal(object)
 
     def __init__(self, window: QMainWindow) -> None:
         super().__init__(window)
-        self.widget = QWidget()  # the bar and the pause button, shown together
-        lay = QHBoxLayout(self.widget)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.bar = QProgressBar()
-        self.bar.setFixedWidth(WIDTH)
-        self.bar.setTextVisible(True)
-        self.pause = QToolButton()
-        self.pause.setAutoRaise(True)
-        self.pause.clicked.connect(lambda _c=False: shadertrack.pause(not shadertrack.paused()))
-        lay.addWidget(self.bar)
-        lay.addWidget(self.pause)
-        self.widget.hide()
+        self.m_widget = QWidget()  # the bar and the pause button, shown together
+        layout = QHBoxLayout(self.m_widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.m_bar = QProgressBar()
+        self.m_bar.setFixedWidth(WIDTH)
+        self.m_bar.setTextVisible(True)
+        self.m_pause = QToolButton()
+        self.m_pause.setAutoRaise(True)
+        self.m_pause.clicked.connect(lambda _c=False: shadertrack.pause(not shadertrack.paused()))
+        layout.addWidget(self.m_bar)
+        layout.addWidget(self.m_pause)
+        self.m_widget.hide()
         self.changed.connect(self.show_state)
-        self._remove = shadertrack.on_change(self._emit)
+        self._m_remove = shadertrack.on_change(self._emit)
         self.show_state(shadertrack.snapshot())
 
-    def _emit(self, state: shadertrack.Snapshot) -> None:
+    def _emit(self, state: shadertrack.SSnapshot) -> None:
         try:
             self.changed.emit(state)  # queued when it comes from another thread: the UI thread is never waited for
         except RuntimeError:  # the window closed meanwhile
             self.close()
 
-    def show_state(self, state: shadertrack.Snapshot) -> None:
+    def show_state(self, state: shadertrack.SSnapshot) -> None:
         if not state.busy:
-            self.widget.hide()
+            self.m_widget.hide()
             return
         paused = state.paused
-        self.pause.setVisible(bool(state.total))  # an island's own compiles are not the stage's to hold
-        self.pause.setText(tr("common.shader_resume") if paused else tr("common.shader_pause"))
-        self.pause.setToolTip(tr("common.shader_resume_tip") if paused else tr("common.shader_pause_tip"))
+        self.m_pause.setVisible(bool(state.total))  # an island's own compiles are not the stage's to hold
+        self.m_pause.setText(tr("common.shader_resume") if paused else tr("common.shader_pause"))
+        self.m_pause.setToolTip(tr("common.shader_resume_tip") if paused else tr("common.shader_pause_tip"))
         if state.total:  # a part of the start-up stage: n of m
-            self.bar.setRange(0, state.total)
-            self.bar.setValue(state.done)
-            self.bar.setFormat(tr("common.shader_progress_format"))
+            self.m_bar.setRange(0, state.total)
+            self.m_bar.setValue(state.done)
+            self.m_bar.setFormat(tr("common.shader_progress_format"))
         else:  # compiles of the island's own: no total to count to
-            self.bar.setRange(0, 0)
-            self.bar.setFormat(tr("common.shader_compiling_format", count=len(state.active)))
+            self.m_bar.setRange(0, 0)
+            self.m_bar.setFormat(tr("common.shader_compiling_format", count=len(state.active)))
         current = state.active[-1] if state.active else ""
-        self.bar.setToolTip(
+        self.m_bar.setToolTip(
             tr("common.shader_progress_tip_now", what=current) if current else tr("common.shader_progress_tip")
         )
-        self.widget.show()
+        self.m_widget.show()
 
     def close(self) -> None:
-        self._remove()
+        self._m_remove()
 
 
-def attach(window: QMainWindow) -> ShaderBar:
+def attach(window: QMainWindow) -> CShaderBar:
     """The bar in ``window``'s status bar (permanent: on the right, before what is added after it)."""
-    shader = ShaderBar(window)
-    window.statusBar().addPermanentWidget(shader.widget)
+    shader = CShaderBar(window)
+    window.statusBar().addPermanentWidget(shader.m_widget)
     window.destroyed.connect(lambda *_: shader.close())
     return shader

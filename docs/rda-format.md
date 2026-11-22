@@ -2,10 +2,13 @@
 
 Every Anno since 1404 keeps its data in `.rda` archives, in one of three versions: "Resource File V2.0" (1404, 2070),
 "Resource File V2.2" (the History Editions' own archives, 2205, 1800, 117) and "Crypted Resource File V1.1" (1701).
-V2.0 and V2.2 share one layout and differ only in integer width, magic encoding and the encryption seed. All integers
-are little endian. The references are RDAExplorer (`ext-tools/RDAExplorer`) and the AnnoRDA library by Lysann
-Schlegel (MIT). Every statement below about the games was checked against the installed archives (read only), and
-what the installed games do not contain is marked.
+V2.0 and V2.2 share one layout. They differ only in integer width, magic encoding and the encryption seed. All
+integers are little endian.
+
+The references are RDAExplorer (`ext-tools/RDAExplorer`) and the AnnoRDA library by Lysann Schlegel (MIT).
+
+Every statement below about the games was checked against the installed archives (read only). What the installed games
+do not contain is marked.
 
 Note: checked on 2026-11-07.
 
@@ -18,9 +21,10 @@ Note: checked on 2026-11-07.
 | V2.2 | `Resource File V2.2` as UTF-8 (18 bytes) | 64 bit | 1404 `ahe/a4he0.rda` and 1701 `ahe/a3he0.rda` (flags 0 only); 2205 (39 archives); 1800 (36); 117 (40) | 2205: 0 (714), 1 (3), 2 (7), 4 (15), 8 (62,222); 1800: 0 (5,161), 4 (4), 8 (606,981); 117: 0 (772), 8 (23,247) |
 
 Two files of 2070's `maindata`, `checksums.rda` and `addon_checksums.rda`, are not archives. They are text lists of
-`<32 hex digits> maindata/<name>.rda` lines. The game reads them (engine-notes "Anno 2070 archives"). The digest
-is not the MD5 of the installed archives, which patches replaced, and was not traced further. No archive carries a
-checksum or digest of its own: every field of the three headers below is accounted for.
+`<32 hex digits> maindata/<name>.rda` lines. The game reads them (engine-notes "Anno 2070 archives").
+
+The digest is not the MD5 of the installed archives, which patches replaced, and was not traced further. No archive
+carries a checksum or digest of its own: every field of the three headers below is accounted for.
 
 The block flags found in the wild, by value (the bits are the next section):
 
@@ -35,8 +39,8 @@ The block flags found in the wild, by value (the bits are the next section):
 | 8 | deleted | 2070, 1800, 2205, 117 |
 
 No installed archive has V2.2 with flags 3 or 7, V2.0 with flags 1 or 4, flags 5 or 6, or a resident block that is
-also deleted. `rda.py` reads and writes all of them (tests build each on synthetic data). Only the combinations
-above are confirmed on the games' own files.
+also deleted. `rda.py` reads and writes all of them (tests build each on synthetic data). Only the combinations above
+are confirmed on the games' own files.
 
 ## Layout
 
@@ -77,28 +81,34 @@ decompression they are `num_files` records of 520 + 5 × sizeof(uint) bytes:
 With flag 4 (the game calls it memory-resident), the block's file data is one blob directly before the file headers.
 The two uints right before the block header hold the blob's compressed and uncompressed size. So the file headers
 start at `O - 2 × sizeof(uint) - compressed_headers_size`, the blob starts at the file headers' start minus the
-blob's stored size, and `data_offset` is relative to the decoded blob. A resident entry's `compressed_size` equals
-its `uncompressed_size` even when the blob is compressed (the blob is the unit). Without flag 4, `data_offset` is
-absolute and every file is decrypted / decompressed on its own. Decryption comes before inflation, as in the game.
-Flags 1 and 2 apply to the file headers as well as to the data: there is no archive with a compressed directory and
+blob's stored size, and `data_offset` is relative to the decoded blob.
+
+A resident entry's `compressed_size` equals its `uncompressed_size` even when the blob is compressed (the blob is the
+unit). Without flag 4, `data_offset` is absolute and every file is decrypted / decompressed on its own. Decryption
+comes before inflation, as in the game.
+
+Flags 1 and 2 apply to the file headers as well as to the data. There is no archive with a compressed directory and
 stored data.
 
 A deleted block (flag 8, found alone, never with other bits) lists paths the archive does not have. Its directory is
-stored (sizes equal), every entry has offset, sizes and timestamp 0, and there is no data. 2070 groups many paths in
-a block (92 blocks, 3,104 paths in 17 archives, one block with 370). 1800, 2205 and 117 write one block per path
-(2205 repeats some paths: 62,222 blocks name 30,044 paths). No path is both live and deleted within one archive.
+stored (sizes equal), every entry has offset, sizes and timestamp 0, and there is no data.
+
+2070 groups many paths in a block (92 blocks, 3,104 paths in 17 archives, one block with 370). 1800, 2205 and 117 write
+one block per path (2205 repeats some paths: 62,222 blocks name 30,044 paths). No path is both live and deleted within
+one archive.
 
 The game keeps the paths of a deleted block as "no such file". 117's archive map (`formats/archive-map.md`) flags
-them deleted (22,836 entries on the installed 3.0 build against 23,247 deleted blocks in the five archives that have
-them; the difference is not traced), and a path that an older archive still holds is not found.
-`RdaArchive.deleted` returns these paths, and `entries` lacks them. Applying them to older archives is the caller's
-job: `sources.anno117` does it through the archive map, and `overlay.SourceTree` for 2070 does not yet. No 2070
+them deleted, and a path that an older archive still holds is not found. The map has 22,836 entries on the installed
+3.0 build, against 23,247 deleted blocks in the five archives that have them. The difference is not traced.
+
+`CRdaArchive.deleted` returns these paths, and `entries` lacks them. Applying them to older archives is the caller's
+job: `sources.anno117` does it through the archive map, and `overlay.CSourceTree` for 2070 does not yet. No 2070
 archive was checked for a deleted path that an earlier archive holds.
 
 ## Nested archives
 
 `.a6m`, `.a7m` and `.a7t` files and `rd3d.data` hold V2.2 archives themselves (117's islands, 1800's islands and
-textures). `RdaArchive.open_member(path)` reads one in memory; `RdaArchive.from_bytes` opens any archive held in
+textures). `CRdaArchive.open_member(path)` reads one in memory, and `CRdaArchive.from_bytes` opens any archive held in
 memory.
 
 ## Version 1.1 (Anno 1701)
@@ -134,27 +144,43 @@ Compression is zlib (the games write level 1: header `78 01`).
 
 ## Override order
 
-Anno 2070 loads `maindata/data0..5.rda`, the language packs `<lang>0..8.rda`, `patch1..8.rda`, `exedata.rda`,
-`addon0..1.rda`, `addon_<lang>0..1.rda` and last `patch9.rda`. A file in a later archive replaces the same path
-from an earlier one. `patch1..8` are mounted only when `checksums.rda` lists them, `patch9` unconditionally
-(engine-notes "Anno 2070 archives"). `overlay.SourceTree` reproduces that order (`README.md`, "Reading
-2070"). `tests/test_rda.py` checks the reader against archives written by a small test writer. Where the
-shipped archives overlap across these groups, the order picks the newer copy: the 15 `guidata` UI files from
-`exedata` (2012) over `patch3` (2011), and the two credits texts from `patch9` (2022) over `eng2` and `addon_eng1`.
+Anno 2070 loads these archives, in this order:
 
-Anno 1701 has no fixed override order. It mounts `data<n>.rda` (else `data<n>_<lang>.rda`) for n = 0, 1, ... up to
-the first gap. Of two entries for one path, it keeps the one with the newer timestamp (a tie keeps the earlier
-archive). `isd1701.Tree1701` reproduces it (`formats/anno1701-world-format.md`, "Archives").
+1. `maindata/data0..5.rda`;
+2. the language packs `<lang>0..8.rda`;
+3. `patch1..8.rda`;
+4. `exedata.rda`;
+5. `addon0..1.rda` and `addon_<lang>0..1.rda`;
+6. last, `patch9.rda`.
+
+A file in a later archive replaces the same path from an earlier one. `patch1..8` are mounted only when
+`checksums.rda` lists them, and `patch9` unconditionally (engine-notes "Anno 2070 archives"). `overlay.CSourceTree`
+reproduces that order (`README.md`, "Reading 2070"). `tests/formats/test_rda.py` checks the reader against archives written by
+a small test writer.
+
+Where the shipped archives overlap across these groups, the order picks the newer copy. The 15 `guidata` UI files come
+from `exedata` (2012) over `patch3` (2011). The two credits texts come from `patch9` (2022) over `eng2` and
+`addon_eng1`.
+
+Anno 1701 has no fixed override order. It mounts `data<n>.rda` (else `data<n>_<lang>.rda`) for n = 0, 1, ... up to the
+first gap. Of two entries for one path, it keeps the one with the newer timestamp (a tie keeps the earlier archive).
+`isd1701.CTree1701` reproduces it (`formats/anno1701-world-format.md`, "Archives").
 
 ## Reading
 
-`rda.RdaArchive(path, cache_dir)` (or `RdaArchive.from_bytes(data)`) detects the version from the magic, parses the
-index lazily and caches it (`<name>.index.json`, with the deleted paths). It offers `entries` (path to `RdaEntry`),
-`deleted`, `read` / `read_entry`, `open_member`, `extract` (whole-or-nothing, through a temp name) and `blocks()`
-(every block header with its flags and sizes, for tools). A later block overrides an earlier one for the same path,
-and a later deleted block removes it. Every archive of the six installed games reads: `tests/test_rda_variants.py`
-indexes all of them and reads the smallest two members of every flags kind (`ANNO1404_DIR`, `ANNO1701_DIR`,
-`ANNO2070_DIR`, `ANNO1800_DIR`, `ANNO2205_DIR`, `ANNO117_DIR`; each skips without its variable).
+`rda.CRdaArchive(path, cache_dir)` (or `CRdaArchive.from_bytes(data)`) detects the version from the magic, parses the
+index lazily and caches it (`<name>.index.json`, with the deleted paths). It offers:
+
+- `entries` (path to `SRdaEntry`) and `deleted`;
+- `read` / `read_entry` and `open_member`;
+- `extract` (whole-or-nothing, through a temp name);
+- `blocks()` (every block header with its flags and sizes, for tools).
+
+A later block overrides an earlier one for the same path, and a later deleted block removes it.
+
+Every archive of the six installed games reads. `tests/formats/test_rda_variants.py` indexes all of them and reads the
+smallest two members of every flags kind (`ANNO1404_DIR`, `ANNO1701_DIR`, `ANNO2070_DIR`, `ANNO1800_DIR`,
+`ANNO2205_DIR`, `ANNO117_DIR`; each skips without its variable).
 
 ## Writing
 
@@ -168,58 +194,76 @@ The writers:
 - `rda.write_v11` writes the 1701 layout (flags 7, or 6 with `compress=False`).
 
 `write_v20` and `write_v22` take `flags=` for any mix of compressed and encrypted (stored plus encrypted is 1404's
-and 2205's block kind). All read back through `RdaArchive` (`tests/test_rda.py`, `tests/test_rda_variants.py`).
+and 2205's block kind). All read back through `CRdaArchive` (`tests/formats/test_rda.py`, `tests/formats/test_rda_variants.py`).
 
-`rda.RdaWriter` writes the archives the game mounts:
+`rda.CRdaWriter` writes the archives the game mounts:
 
 - It writes to disk member by member (under `<name>.part`, moved into place by `close`).
 - A block holds many members (at most 10,000, so a block's directory stays a few MB).
 - A block takes any mix of flags 1 and 2 (stored, zlib, XOR, zlib + XOR) and a level per member (0 is stored
   deflate: it inflates as a copy).
 - Members of equal content, flags and level share one stored copy. The directory entry is only an offset and a size;
-  `RdaArchive.read_entry` and the game read each entry as given.
+  `CRdaArchive.read_entry` and the game read each entry as given.
 - `add_deleted(paths)` writes a deleted block.
 - `allow_resident=True` also allows flag 4: a block's members become one blob (flags 4, 5, 6, 7; built in memory, so
   a block is cut at 64 MiB of members) with the layout above. Without it flag 4 is refused, because 117's game
   refuses resident members (read from its code on 3.0).
 - A V2.0 archive stops with an error where an offset would pass 4 GiB (1404's largest archive is 1.4 GB).
 
-`rda.archive_path` refuses what the game cannot find (read from its code on 3.0): a path with a capital letter, a
-backslash, a leading `./` or `/`, blanks at an end, or over 259 characters. Only the looked-up path is normalised,
-never the stored one. An empty member is refused too (a size of 0 is never found). The directory sits right before
-its block header, and the last block points at the end of the file (`engine-modloader.md` "A
-mod's archives through the helper library"). `rda.write_v11_file` writes V1.1 to disk the same whole-or-nothing way
-(the directory comes first, so it takes the members as a list). The round trips through `RdaArchive` are in
-`tests/test_rda.py` and `tests/test_rda_variants.py`.
+`rda.archive_path` refuses what the game cannot find (read from its code on 3.0):
 
-Note: `rda.RdaWriter` was added on 2026-11-07.
+- a path with a capital letter or a backslash;
+- a leading `./` or `/`;
+- blanks at an end;
+- a path over 259 characters.
 
-### Writing an archive again as it was (2026-11-19)
+Only the looked-up path is normalised, never the stored one. An empty member is refused too (a size of 0 is never
+found). The directory sits right before its block header, and the last block points at the end of the file
+(`engine-modloader.md` "A mod's archives through the helper library").
 
-`formats/rdalayout.py` keeps what a reader drops and writes the archive back (docs/mod-import.md, section 16):
-`read_layout` (version, blocks with flags and counts, member order, times, zlib level, shared copies; deleted and empty
-blocks included), `pack(layout, members, dest, original=...)`, `differences` (names what a rebuild does not keep).
+`rda.write_v11_file` writes V1.1 to disk the same whole-or-nothing way (the directory comes first, so it takes the
+members as a list). The round trips through `CRdaArchive` are in `tests/formats/test_rda.py` and
+`tests/formats/test_rda_variants.py`.
+
+Note: `rda.CRdaWriter` was added on 2026-11-07.
+
+### Writing an archive again as it was
+
+`formats/rdalayout.py` keeps what a reader drops and writes the archive back (docs/mod-import.md, section 16). It
+offers three functions:
+
+- `read_layout` (version, blocks with flags and counts, member order, times, zlib level, shared copies; deleted and
+  empty blocks included);
+- `pack(layout, members, dest, original=...)`;
+- `differences` (names what a rebuild does not keep).
+
 It rests on four additions to `rda.py`:
 
-- `RdaWriter.add_empty(flags)`: a block that lists no file. The games' tools leave some at the end of an archive
-  (`eng2.rda` ends in five; 2070's `patch1` to `patch8` hold 18 to 53 each, 44 in `patch3`), and the archive's bytes include them.
-- `RdaWriter(allow_empty=True)`: members of size 0 are written (the shipped archives hold a few, with offset 0 and no
+- `CRdaWriter.add_empty(flags)`: a block that lists no file. The games' tools leave some at the end of an archive
+  (`eng2.rda` ends in five; 2070's `patch1` to `patch8` hold 18 to 53 each, 44 in `patch3`), and the archive's bytes
+  include them.
+- `CRdaWriter(allow_empty=True)`: members of size 0 are written (the shipped archives hold a few, with offset 0 and no
   stored bytes); without it they stay refused.
-- `rda.Stored(archive, entry)`: a member taken as it lies in another archive. The games' tool does not compress like zlib
-  (no level 0 to 9 reproduced a member), so a rebuilt archive keeps its stored bytes only this way. A `Stored` member
-  shares a copy only as it did in its archive.
-- `RdaWriter(reuse=...)`: a directory, or a resident block's blob, that comes out as one the original stored is written as
-  the original stored it (keyed by the BLAKE2 digest of the decoded bytes and the flags); otherwise it is compressed at
-  level 1. `RdaArchive.block_members`, `directory_of`, `blob_of` and `stored_bytes` give the writer's inputs.
+- `rda.SStored(archive, entry)`: a member taken as it lies in another archive. The games' tool does not compress like
+  zlib (no level 0 to 9 reproduced a member), so a rebuilt archive keeps its stored bytes only this way. A `Stored`
+  member shares a copy only as it did in its archive.
+- `CRdaWriter(reuse=...)`: a directory, or a resident block's blob, that comes out as one the original stored is written
+  as the original stored it (keyed by the BLAKE2 digest of the decoded bytes and the flags). Otherwise it is compressed
+  at level 1. `CRdaArchive.block_members`, `directory_of`, `blob_of` and `stored_bytes` give the writer's inputs.
 
-With these, every 2070 archive tried (`Data0` to `Data5`, `addon0`, `addon1`, `eng2`, `eng7`, `exedata`, `patch1` to
-`patch9`), two of 1404's and two of 2205's were written again to **the same bytes** from their members alone (read only;
-`tests/test_rdalayout.py` has the same on synthetic archives, `tests/test_archivemod.py` one shipped archive behind
-`ANNO2070_DIR`).
+With these, every 2070 archive tried was written again to **the same bytes** from its members alone (read only). The
+archives are `Data0` to `Data5`, `addon0`, `addon1`, `eng2`, `eng7`, `exedata` and `patch1` to `patch9`. Two of 1404's
+and two of 2205's were written again the same way. `tests/formats/test_rdalayout.py` has the same on synthetic archives, and
+`tests/suite/test_archivemod.py` one shipped archive behind `ANNO2070_DIR`.
+
+Note: this section was written on 2026-11-19.
 
 ## The command line
 
-`anno-toolbox rda list|info|extract|pack` (`commands.md`, `rda`) wraps the reader and the
-writers. `list` and `info` detect the version. `extract` refuses a member whose path leaves the target folder. `pack`
-takes `--version 1.1|2.0|2.2` and `--flags` (a mix of `stored`, `compressed`, `encrypted`, `resident`). The tests
-are in `tests/test_rda_cli.py`.
+`anno-toolbox rda list|info|extract|pack` (`commands.md`, `rda`) wraps the reader and the writers.
+
+- `list` and `info` detect the version.
+- `extract` refuses a member whose path leaves the target folder.
+- `pack` takes `--version 1.1|2.0|2.2` and `--flags` (a mix of `stored`, `compressed`, `encrypted`, `resident`).
+
+The tests are in `tests/formats/test_rda_cli.py`.

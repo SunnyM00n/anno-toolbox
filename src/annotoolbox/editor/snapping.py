@@ -1,7 +1,7 @@
 """Snapping a place or a turn to the grids the game builds on: tiles, half and quarter tiles, the diagonal lattice
 of a turned building, the 8-tile cells of the active map, eighth and 15-degree turns, and the ground.
 
-``Snap`` is the setting the tools keep (``mode``, ``turn``, ``ground``); ``Snap.place`` and ``Snap.yaw`` apply it.
+``SSnap`` is the setting the tools keep (``mode``, ``turn``, ``ground``); ``SSnap.place`` and ``SSnap.yaw`` apply it.
 The lattice and the eighths are 117's placement rules (island-editor-tools "Game rules"); every function
 works in Anno's x and z, a tile being one unit (island-editor "Full spec").
 """
@@ -17,9 +17,9 @@ MODES = ("off", "tile", "corner", "half", "quarter", "diagonal", "cell", "buildi
 TURNS = {"off": 0.0, "eighth": math.pi / 4, "15": math.radians(15), "quarter": math.pi / 2}
 
 
-def to_step(v: float, step: float, offset: float = 0.0) -> float:
+def to_step(value: float, step: float, offset: float = 0.0) -> float:
     """``v`` on the nearest point of ``offset + k * step``."""
-    return offset + round((v - offset) / step) * step
+    return offset + round((value - offset) / step) * step
 
 
 def tile_centre(x: float, z: float) -> tuple[float, float]:
@@ -33,8 +33,11 @@ def tile_corner(x: float, z: float) -> tuple[float, float]:
 def diagonal(x: float, z: float) -> tuple[float, float]:
     """The nearest point where ``x + z`` and ``z - x`` are whole: a tile corner or a tile centre, where the game
     puts the origin of an object turned by an odd eighth."""
-    u, v = round(x + z), round(z - x)  # the lattice is square in u and v, so rounding each finds the nearest
-    return (u - v) / 2, (u + v) / 2
+    sum_xz, difference_zx = (
+        round(x + z),
+        round(z - x),
+    )  # the lattice is square in u and v, so rounding each finds the nearest
+    return (sum_xz - difference_zx) / 2, (sum_xz + difference_zx) / 2
 
 
 def cell_corner(x: float, z: float) -> tuple[float, float]:
@@ -60,34 +63,34 @@ def snap_xz(x: float, z: float, mode: str) -> tuple[float, float]:
     return x, z
 
 
-def eighth(yaw: float) -> float:
+def eighth(yaw_rad: float) -> float:
     """A turn rounded to the eighth the game turns a slot's building by: the nearest of eight, a negative turn
     within 22.5 degrees reading as none."""
     step = math.pi / 4
-    return (round(yaw / step) % 8) * step
+    return (round(yaw_rad / step) % 8) * step
 
 
-def snap_yaw(yaw: float, turn: str) -> float:
+def snap_yaw(yaw_rad: float, turn: str) -> float:
     """``yaw`` (radians) on the steps of ``turn`` (``TURNS``), in 0 .. 2 pi."""
     step = TURNS[turn]
     if not step:
-        return yaw
+        return yaw_rad
     if turn == "eighth":
-        return eighth(yaw)
-    return (round(yaw / step) * step) % (2 * math.pi)
+        return eighth(yaw_rad)
+    return (round(yaw_rad / step) * step) % (2 * math.pi)
 
 
-def snap_rotation(q, turn: str) -> list[float]:
+def snap_rotation(rotation, turn: str) -> list[float]:
     """A turn about the vertical (quaternion x, y, z, w) rounded to the steps of ``turn``; a tilted one is kept."""
     step = TURNS[turn]
-    if not step or abs(q[0]) > 1e-4 or abs(q[2]) > 1e-4:
-        return [float(v) for v in q]
-    yaw = round(2 * math.atan2(q[1], q[3]) / step) * step
+    if not step or abs(rotation[0]) > 1e-4 or abs(rotation[2]) > 1e-4:
+        return [float(component) for component in rotation]
+    yaw = round(2 * math.atan2(rotation[1], rotation[3]) / step) * step
     return [0.0, math.sin(yaw / 2), 0.0, math.cos(yaw / 2)]
 
 
 @dataclass
-class Snap:
+class SSnap:
     """The snap setting of the tools: where a place lands (``mode``), what a turn steps by (``turn``), and whether
     a placed object sits on the ground."""
 
@@ -102,5 +105,5 @@ class Snap:
             y = float(height_at(x, z))
         return [x, y, z]
 
-    def yaw(self, yaw: float) -> float:
-        return snap_yaw(yaw, self.turn)
+    def yaw(self, yaw_rad: float) -> float:
+        return snap_yaw(yaw_rad, self.turn)

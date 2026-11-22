@@ -2,7 +2,7 @@
 stored (its rest pose: the engine's simulation moves the vertices, the viewer's do not), its place and colour in
 ``cbCloth``, its material's ``cCloth...`` maps.
 
-``defines(values)`` is the variant, ``ClothModel`` a ``frameforward.ForwardModel`` with ``cbCloth`` filled.
+``defines(values)`` is the variant, ``CClothModel`` a ``frameforward.CForwardModel`` with ``cbCloth`` filled.
 docs/rendering/shader-compile.md section 11 "Cloth".
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..models.shaderforward import switched_on
-from .frameforward import ForwardModel
+from .frameforward import CForwardModel
 
 FX = "data/shaders/fx/cloth.fx"
 TECHNIQUE = "Default"
@@ -31,11 +31,11 @@ def defines(values: dict) -> tuple:
     return (("NUM_BONES_PER_VERTEX", "0"), *((name, "") for name in OPTIONS if switched_on(values.get(name))))
 
 
-class ClothModel(ForwardModel):
+class CClothModel(CForwardModel):
     """A cloth in the forward frame: its place and colour in ``cbCloth`` (row vectors, as ``MUL(v, M)`` takes them)."""
 
-    def fill_model(self, c: dict) -> None:
-        super().fill_model(c)
-        if "cbCloth" in c:
-            c["cbCloth"].set("cClothWorldMtx", np.asarray(self.world, float).T)
-            c["cbCloth"].set("cClothConstant", [WHITE, 0, 0, 0])
+    def fill_model(self, constants: dict) -> None:
+        super().fill_model(constants)
+        if "cbCloth" in constants:
+            constants["cbCloth"].set("cClothWorldMtx", np.asarray(self.m_world, float).T)
+            constants["cbCloth"].set("cClothConstant", [WHITE, 0, 0, 0])

@@ -18,21 +18,21 @@ PROP_SETS = "data/base/config/engine/prop_sets.xml"  # the vegetation sets (isla
 FIELDS = {"ambient": "GlobalAmbientName", "vegetation": "VegetationPropSetName", "playable_area": "PlayableArea"}
 
 
-def read(gm: filedb.Tag) -> dict:
-    """The island's settings as plain values (a key is left out when the island has none of it); ``gm`` is the
+def read(session_manager: filedb.STag) -> dict:
+    """The island's settings as plain values (a key is left out when the island has none of it); ``session_manager`` is the
     ``GameSessionManager``."""
-    node = gm.find("SessionSettings")
+    node = session_manager.find("SessionSettings")
     out: dict = {}
     for key, name in FIELDS.items():
-        attr = node.find(name) if node is not None else None
-        if attr is None:
+        attribute = node.find(name) if node is not None else None
+        if attribute is None:
             continue
         if key == "ambient":
-            out[key] = attr.data.decode("utf-16-le")
+            out[key] = attribute.data.decode("utf-16-le")
         elif key == "vegetation":
-            out[key] = attr.data.decode("utf-8")
+            out[key] = attribute.data.decode("utf-8")
         else:
-            out[key] = list(struct.unpack("<4i", attr.data))
+            out[key] = list(struct.unpack("<4i", attribute.data))
     return out
 
 
@@ -41,35 +41,35 @@ def problem(key: str, value, grid: int) -> str | None:
     if key in ("ambient", "vegetation"):
         return None if str(value).strip() else tr("islands.sessions_key_empty", key=key)
     try:
-        x0, z0, x1, z1 = (int(v) for v in value)
+        min_x, min_z, max_x, max_z = (int(coordinate) for coordinate in value)
     except (TypeError, ValueError):
         return tr("islands.playable_area_not_four_numbers", area=value)
-    if not (0 <= x0 < x1 <= grid and 0 <= z0 < z1 <= grid):
+    if not (0 <= min_x < max_x <= grid and 0 <= min_z < max_z <= grid):
         return tr(
             "islands.playable_area_must_lie_inside",
-            area=(x0, z0, x1, z1),
+            area=(min_x, min_z, max_x, max_z),
             grid=grid,
         )
     return None
 
 
-def apply(gm: filedb.Tag, edit: dict, grid: int) -> dict:
-    """Write the edit file's ``session`` into the island (``gm``: its ``GameSessionManager``, ``grid`` its tiles);
+def apply(session_manager: filedb.STag, edit: dict, grid: int) -> dict:
+    """Write the edit file's ``session`` into the island (``session_manager``: its ``GameSessionManager``, ``grid`` its tiles);
     returns the keys ``set`` and ``unmatched``: what the island has no attribute for, and what the game would not take."""
-    node = gm.find("SessionSettings")
+    node = session_manager.find("SessionSettings")
     report: dict = {"set": [], "unmatched": []}
     for key, value in edit.items():
-        attr = node.find(FIELDS[key]) if node is not None and key in FIELDS else None
-        why = problem(key, value, grid) if attr is not None else tr("islands.session_key", key=key)
+        attribute = node.find(FIELDS[key]) if node is not None and key in FIELDS else None
+        why = problem(key, value, grid) if attribute is not None else tr("islands.session_key", key=key)
         if why:
             report["unmatched"].append(why)
             continue
         if key == "ambient":
-            attr.data = str(value).encode("utf-16-le")
+            attribute.data = str(value).encode("utf-16-le")
         elif key == "vegetation":
-            attr.data = str(value).encode("utf-8")
+            attribute.data = str(value).encode("utf-8")
         else:
-            attr.data = struct.pack("<4i", *(int(v) for v in value))
+            attribute.data = struct.pack("<4i", *(int(coordinate) for coordinate in value))
         report["set"].append(key)
     return report
 

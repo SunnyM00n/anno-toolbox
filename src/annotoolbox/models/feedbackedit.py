@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from ..infra.i18n import N_, english
 from . import cfgdoc, feedbackplay
-from .cfgdoc import Doc, Edit, Node
+from .cfgdoc import SDoc, SEdit, SNode
 from .feedbackread import element_kind
 
 KINDS = {0: N_("common.walk"), 1: N_("common.play"), 2: N_("common.wait"), 3: N_("common.branch"), 4: N_("common.walk_spline"), 6: N_("common.show_hide"),
@@ -29,42 +29,45 @@ TEMPLATES = {2: (("hasValue", "1"), ("elementType", "2"), ("MinTime", "1000"), (
 
 
 @dataclass(frozen=True)
-class Item:
+class SItem:
     """A ``FeedbackConfigs`` item: its index, node, its sequence definitions' nodes and state -> definition."""
 
     index: int
-    node: Node
-    definitions: tuple[Node, ...]
+    node: SNode
+    definitions: tuple[SNode, ...]
     states: dict[int, int]
 
 
 @dataclass(frozen=True, eq=False)
-class Bar:
+class SBar:
     """One element of a loop: its node and list, its type, where the timeline puts it (seconds), and whether the
     play reached it (else its length is nominal)."""
 
-    node: Node
-    parent: Node
+    node: SNode
+    parent: SNode
     kind: int
     start: float
     end: float
     played: bool
 
 
-def items(doc: Doc) -> list[Item]:
+def items(doc: SDoc) -> list[SItem]:
     configs = doc.root.path("FeedbackDefinition/FeedbackConfigs")
     out = []
-    for k, item in enumerate(configs.findall("i") if configs is not None else []):
+    for index, item in enumerate(configs.findall("i") if configs is not None else []):
         definitions = item.path("SequenceDefinitions")
         pairs = item.find("FeedbackLoops") or item.find("FeedbackLoops2")
         keys = pairs.findall("k") if pairs is not None else []
         values = pairs.findall("v") if pairs is not None else []
-        states = {int(a.text or 0): int(b.text or 0) for a, b in zip(keys, values, strict=False)}
-        out.append(Item(k, item, tuple(definitions.findall("i")) if definitions is not None else (), states))
+        states = {
+            int(key_node.text or 0): int(value_node.text or 0)
+            for key_node, value_node in zip(keys, values, strict=False)
+        }
+        out.append(SItem(index, item, tuple(definitions.findall("i")) if definitions is not None else (), states))
     return out
 
 
-def elements_of(item: Item, state: int, loop: int) -> Node | None:
+def elements_of(item: SItem, state: int, loop: int) -> SNode | None:
     """The ``Elements`` list of a loop of the definition a state plays (None: there is none)."""
     index = item.states.get(state)
     if index is None or not 0 <= index < len(item.definitions):
@@ -72,20 +75,20 @@ def elements_of(item: Item, state: int, loop: int) -> Node | None:
     return item.definitions[index].path(f"Loop{loop}/ElementContainer/Elements")
 
 
-def _nominal(e: Node) -> float:
+def _nominal(element: SNode) -> float:
     """An element's length without playing it: a wait's mean, a play's or a choice's shortest, an instant one's
     short bar."""
-    kind = element_kind(e)
+    kind = element_kind(element)
     if kind == 2:
-        return max((e.int("MinTime") + max(e.int("MaxTime"), e.int("MinTime"))) / 2000.0, SHORT)
+        return max((element.int("MinTime") + max(element.int("MaxTime"), element.int("MinTime"))) / 2000.0, SHORT)
     if kind in (1, 12):
-        return max(e.int("MinPlayTime") / 1000.0, NOMINAL if kind == 1 else 1.0)
+        return max(element.int("MinPlayTime") / 1000.0, NOMINAL if kind == 1 else 1.0)
     if kind in (0, 4, 11, 13):
         return NOMINAL
     return SHORT
 
 
-def bars(doc: Doc, item: Item, state: int, loop: int, movement: feedbackplay.Movement | None = None) -> list[Bar]:
+def bars(doc: SDoc, item: SItem, state: int, loop: int, movement: feedbackplay.SMovement | None = None) -> list[SBar]:
     """A loop's elements in order, each placed after the one before with the length the actor's play gives it (its
     first run), or a nominal one where the play did not reach it."""
     parent = elements_of(item, state, loop)
@@ -95,22 +98,32 @@ def bars(doc: Doc, item: Item, state: int, loop: int, movement: feedbackplay.Mov
     actor = feedback.actors[item.index] if item.index < len(feedback.actors) else None
     spans = {}
     if actor is not None and actor.states:
-        spans = {id(n): b - a for n, a, b in feedbackplay.play(feedback, actor, state, movement=movement).spans()}
-    out, t = [], 0.0
-    for e in parent.findall("i"):
-        played = id(e) in spans
-        length = max(spans[id(e)], 0.0) if played else _nominal(e)
+        spans = {
+            id(node): end - start
+            for node, start, end in feedbackplay.play(feedback, actor, state, movement=movement).spans()
+        }
+    out, cursor = [], 0.0
+    for element in parent.findall("i"):
+        played = id(element) in spans
+        length = max(spans[id(element)], 0.0) if played else _nominal(element)
         length = length if length > feedbackplay.TICK * 2 else SHORT
-        out.append(Bar(e, parent, element_kind(e), t, t + length, played))
-        t += length
+        out.append(SBar(element, parent, element_kind(element), cursor, cursor + length, played))
+        cursor += length
     return out
 
 
-def _leaf(node: Node, name: str) -> Node | None:
-    return next((c for c in node.children if cfgdoc.strip(c.name) == name and not c.children and c.data is None), None)
+def _leaf(node: SNode, name: str) -> SNode | None:
+    return next(
+        (
+            child
+            for child in node.children
+            if cfgdoc.strip(child.name) == name and not child.children and child.data is None
+        ),
+        None,
+    )
 
 
-def retimed(bar: Bar, seconds: float) -> list[Edit]:
+def retimed(bar: SBar, seconds: float) -> list[SEdit]:
     """The edits that give an element the length ``seconds`` (its bar's end dragged): a play's ``MinPlayTime``, a
     wait's or a choice's two times moved by the difference, a walk's ``SpeedFactorF`` scaled; [] for a kind whose
     length is not its own (an instant one, a walk at its sequence's speed)."""
@@ -136,35 +149,42 @@ def retimed(bar: Bar, seconds: float) -> list[Edit]:
     return out
 
 
-def moved(bar: Bar, to: int) -> Edit | None:
+def moved(bar: SBar, place: int) -> SEdit | None:
     """The element moved to place ``to`` among its loop's elements."""
-    siblings = [c for c in bar.parent.children if c is bar.node or c.name == bar.node.name]
-    here = next(i for i, c in enumerate(siblings) if c is bar.node)
-    to = min(max(to, 0), len(siblings) - 1)
-    if to == here:
+    siblings = [child for child in bar.parent.children if child is bar.node or child.name == bar.node.name]
+    here = next(i for i, child in enumerate(siblings) if child is bar.node)
+    place = min(max(place, 0), len(siblings) - 1)
+    if place == here:
         return None
-    step = next(i for i, c in enumerate(bar.parent.children) if c is siblings[to]) - next(
-        i for i, c in enumerate(bar.parent.children) if c is bar.node
+    step = next(i for i, child in enumerate(bar.parent.children) if child is siblings[place]) - next(
+        i for i, child in enumerate(bar.parent.children) if child is bar.node
     )
     return cfgdoc.move(bar.parent, bar.node, step, f"move {english(KINDS.get(bar.kind, 'element'))}")
 
 
-def removed(bar: Bar) -> Edit:
+def removed(bar: SBar) -> SEdit:
     return cfgdoc.remove(bar.parent, bar.node, f"remove {english(KINDS.get(bar.kind, 'element'))}")
 
 
-def new_element(doc: Doc, kind: int) -> Node | None:
+def new_element(doc: SDoc, kind: int) -> SNode | None:
     """An element of ``kind``: a copy of the file's first one of that kind, else (a newer game's file) a template
     of the fields the shipped files give it; None when neither is there."""
     for node in doc.root.iter():
         if node.name == "i" and node.children and element_kind(node) == kind:
             return cfgdoc.restyled(node, doc.newline)
     fields = TEMPLATES.get(kind)
-    sample = next((n for n in doc.root.iter() if n.name == "i" and n.find("elementType") is not None), None)
+    sample = next(
+        (
+            candidate
+            for candidate in doc.root.iter()
+            if candidate.name == "i" and candidate.find("elementType") is not None
+        ),
+        None,
+    )
     if fields is None or sample is None:
         return None
     node = copy.deepcopy(sample)
-    leaf = next(c for c in node.children if not c.children)
+    leaf = next(leaf_candidate for leaf_candidate in node.children if not leaf_candidate.children)
     node.children = []
     for name, value in fields:
         child = copy.deepcopy(leaf)
@@ -174,12 +194,12 @@ def new_element(doc: Doc, kind: int) -> Node | None:
     return node
 
 
-def added(parent: Node, after: Node | None, node: Node, kind: int) -> Edit:
+def added(parent: SNode, after: SNode | None, node: SNode, kind: int) -> SEdit:
     """``node`` put into a loop's elements after ``after`` (None: at the end)."""
-    at = next((i + 1 for i, c in enumerate(parent.children) if c is after), len(parent.children))
-    return cfgdoc.insert(parent, at, [node], f"add {english(KINDS.get(kind, 'element'))}")
+    insert_index = next((i + 1 for i, child in enumerate(parent.children) if child is after), len(parent.children))
+    return cfgdoc.insert(parent, insert_index, [node], f"add {english(KINDS.get(kind, 'element'))}")
 
 
-def part_path(doc: Doc, node: Node) -> str:
+def part_path(doc: SDoc, node: SNode) -> str:
     """The object tree's path of a node of the document ("" when it lists none)."""
-    return next((p.path for p in doc.parts().walk() if p.node is node), "")
+    return next((part.path for part in doc.parts().walk() if part.node is node), "")

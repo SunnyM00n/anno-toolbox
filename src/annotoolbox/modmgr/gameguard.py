@@ -20,7 +20,7 @@ from ..suite import livelink
 
 
 @dataclass(frozen=True)
-class GameState:
+class SGameState:
     game: str
     running: bool  # a process of the game is there
     linked: bool  # the live link has a game connected
@@ -40,15 +40,15 @@ def system_lister() -> set[str]:
     return tools.process_names()
 
 
-def state(game: str, lister: Callable[[], set[str]] | None = None) -> GameState:
+def state(game: str, lister: Callable[[], set[str]] | None = None) -> SGameState:
     lister = lister or system_lister
     exe = EXES.get(game, "").rsplit("/", 1)[-1].lower()
     link = livelink.current().status()
     names_it = not link.game or GAMES.get(game, game).lower() in link.game.lower()  # a link to another game: no
-    return GameState(game, bool(exe) and exe in lister(), link.connected and names_it)
+    return SGameState(game, bool(exe) and exe in lister(), link.connected and names_it)
 
 
-def change_warning(now: GameState, editing: str, active: str) -> str:
+def change_warning(now: SGameState, editing: str, active: str) -> str:
     """The sentence to show before a profile change while the game runs ("" when it does not)."""
     if not now.busy:
         return ""
@@ -62,15 +62,15 @@ def change_warning(now: GameState, editing: str, active: str) -> str:
     return text
 
 
-def reload_in_game(mod: str = "") -> livelink.Reply:
+def reload_in_game(mod: str = "") -> livelink.SReply:
     """Ask the running game to reload the assets and texts of its mods (the loader's hot reload). Without a link the
     reply says what to do by hand."""
     return livelink.current().reload(livelink.ASSETS, mod=mod, mode="full")
 
 
-def reload_text(reply: livelink.Reply, active: str) -> str:
+def reload_text(reply: livelink.SReply, active: str) -> str:
     """What to tell the person about a reload's reply, the active-profile trap included."""
     trap = " " + tr("mods.reloads_active_profile_not_one", active=active or tr("common.none"))
-    if reply.ok:
+    if reply.is_ok:
         return tr("mods.reload_asked_message", message=reply.message or reply.status) + trap
     return f"{reply.message or reply.status}.{trap}"

@@ -15,15 +15,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 _lock = threading.Lock()
-_active: dict[int, str] = {}  # the compiles in flight: token -> label
-_batch = (0, 0)  # (done, total) of the part that runs
-_pause = threading.Event()  # set: no new job of the start-up stage starts
-_listeners: list[Callable[[Snapshot], None]] = []
-_next = 0
+_g_active: dict[int, str] = {}  # the compiles in flight: token -> label
+_g_batch = (0, 0)  # (done, total) of the part that runs
+_g_pause = threading.Event()  # set: no new job of the start-up stage starts
+_g_listeners: list[Callable[[SSnapshot], None]] = []
+_g_next = 0
 
 
 @dataclass(frozen=True)
-class Snapshot:
+class SSnapshot:
     """``active``: the labels of the compiles in flight, oldest first; ``done`` of ``total``: the running part."""
 
     active: tuple[str, ...] = ()
@@ -36,27 +36,27 @@ class Snapshot:
         return bool(self.active) or self.total > 0
 
 
-def snapshot() -> Snapshot:
+def snapshot() -> SSnapshot:
     with _lock:
-        return Snapshot(tuple(_active.values()), *_batch, _pause.is_set())
+        return SSnapshot(tuple(_g_active.values()), *_g_batch, _g_pause.is_set())
 
 
-def on_change(listener: Callable[[Snapshot], None]) -> Callable[[], None]:
+def on_change(listener: Callable[[SSnapshot], None]) -> Callable[[], None]:
     """``listener(snapshot)`` after every change, on the thread that made it; returns the function that removes it."""
     with _lock:
-        _listeners.append(listener)
+        _g_listeners.append(listener)
 
     def remove() -> None:
         with _lock:
-            if listener in _listeners:
-                _listeners.remove(listener)
+            if listener in _g_listeners:
+                _g_listeners.remove(listener)
 
     return remove
 
 
 def _changed() -> None:
     with _lock:
-        now, listeners = Snapshot(tuple(_active.values()), *_batch, _pause.is_set()), list(_listeners)
+        now, listeners = SSnapshot(tuple(_g_active.values()), *_g_batch, _g_pause.is_set()), list(_g_listeners)
     for listener in listeners:
         try:
             listener(now)
@@ -67,38 +67,38 @@ def _changed() -> None:
 @contextmanager
 def compiling(label: str):
     """One compile in flight while the block runs (any thread)."""
-    global _next
+    global _g_next
     with _lock:
-        _next += 1
-        token = _next
-        _active[token] = label
+        _g_next += 1
+        token = _g_next
+        _g_active[token] = label
     _changed()
     try:
         yield
     finally:
         with _lock:
-            _active.pop(token, None)
+            _g_active.pop(token, None)
         _changed()
 
 
 def batch(done: int, total: int) -> None:
     """The running part's progress; ``batch(0, 0)`` when it ended."""
-    global _batch
+    global _g_batch
     with _lock:
-        _batch = (done, total)
+        _g_batch = (done, total)
         if not total:
-            _pause.clear()  # a pause belongs to the part it was made for
+            _g_pause.clear()  # a pause belongs to the part it was made for
     _changed()
 
 
 def paused() -> bool:
-    return _pause.is_set()
+    return _g_pause.is_set()
 
 
 def pause(flag: bool = True) -> None:
     """Hold back (or let go of) the jobs not yet started; a running one ends, a view's own compile is not held."""
     if flag:
-        _pause.set()
+        _g_pause.set()
     else:
-        _pause.clear()
+        _g_pause.clear()
     _changed()

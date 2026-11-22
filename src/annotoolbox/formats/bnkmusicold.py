@@ -11,146 +11,172 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import bnkbase, bnkcurves, bnkgraph, bnkmusic
-from .bnk import HircObject
-from .bnkmusic import PlaylistNode, Reader, SwitchTree, TransRule
+from .bnk import SHircObject
+from .bnkmusic import CReader, SPlaylistNode, SSwitchTree, STransRule
 
 SUB_TRACKS_FROM = 128  # the versions whose track names its sub-tracks after the playlist (read in 135)
 
 
 @dataclass(frozen=True)
-class OldSegment:
+class SOldSegment:
     children: list[int]  # the tracks the segment plays
     duration: float  # ms
     markers: list[tuple[int, float, bytes]]  # id, position in ms, name
 
 
-def _head(r: Reader, version: int) -> list[int]:
+def _head(reader: CReader, version: int) -> list[int]:
     """Past the flag byte and the node base (with its RTPC list) of a music object, then its child ids."""
-    r.u8()
-    bnkbase.skip_before_rtpc(r, version)
-    bnkcurves.read_rtpcs(r)
-    return [r.u32() for _ in range(r.u32())]
+    reader.u8()
+    bnkbase.skip_before_rtpc(reader, version)
+    bnkcurves.read_rtpcs(reader)
+    return [reader.u32() for _ in range(reader.u32())]
 
 
-def _check(obj: HircObject, version: int) -> None:
+def _check(hirc_object: SHircObject, version: int) -> None:
     if bnkgraph.family(version) == bnkgraph.NEW:
-        raise ValueError(f"{obj.type_name} {obj.id}: a bank of version {version} is bnkmusic's")
+        raise ValueError(f"{hirc_object.type_name} {hirc_object.id}: a bank of version {version} is bnkmusic's")
 
 
-def children(obj: HircObject, version: int) -> list[int]:
+def children(hirc_object: SHircObject, version: int) -> list[int]:
     """The objects a music segment, switch container or playlist container leads to (its child list)."""
-    _check(obj, version)
-    if obj.type not in (bnkmusic.MUSIC_SEGMENT, bnkmusic.MUSIC_SWITCH_CNTR, bnkmusic.MUSIC_RANSEQ_CNTR):
-        raise ValueError(f"{obj.type_name} {obj.id} is no music container")
-    return _head(Reader(obj.payload), version)
+    _check(hirc_object, version)
+    if hirc_object.type not in (bnkmusic.MUSIC_SEGMENT, bnkmusic.MUSIC_SWITCH_CNTR, bnkmusic.MUSIC_RANSEQ_CNTR):
+        raise ValueError(f"{hirc_object.type_name} {hirc_object.id} is no music container")
+    return _head(CReader(hirc_object.payload), version)
 
 
-def segment(obj: HircObject, version: int) -> OldSegment:
+def segment(hirc_object: SHircObject, version: int) -> SOldSegment:
     """A music segment read to its last byte (its markers' names are length-prefixed here, a zero-ended string in 172)."""
-    _check(obj, version)
-    if obj.type != bnkmusic.MUSIC_SEGMENT:
-        raise ValueError(f"{obj.type_name} {obj.id} is no music segment")
-    r = Reader(obj.payload)
-    kids = _head(r, version)
-    r.take(8 + 8 + 4 + 3)  # the meter: grid period and offset, tempo, beats per bar, beat value, flag
-    r.take(24 * r.u32())  # stingers
-    duration = r.f64()
-    marks = [(r.u32(), r.f64(), r.take(r.u32())) for _ in range(r.u32())]
-    if not r.done():
-        raise ValueError(f"segment {obj.id}: {len(obj.payload) - r.pos} unparsed bytes")
-    return OldSegment(kids, duration, marks)
+    _check(hirc_object, version)
+    if hirc_object.type != bnkmusic.MUSIC_SEGMENT:
+        raise ValueError(f"{hirc_object.type_name} {hirc_object.id} is no music segment")
+    reader = CReader(hirc_object.payload)
+    child_ids = _head(reader, version)
+    reader.take(8 + 8 + 4 + 3)  # the meter: grid period and offset, tempo, beats per bar, beat value, flag
+    reader.take(24 * reader.u32())  # stingers
+    duration = reader.f64()
+    marks = [(reader.u32(), reader.f64(), reader.take(reader.u32())) for _ in range(reader.u32())]
+    if not reader.done():
+        raise ValueError(f"segment {hirc_object.id}: {len(hirc_object.payload) - reader.m_pos} unparsed bytes")
+    return SOldSegment(child_ids, duration, marks)
 
 
-def track_sources(obj: HircObject, version: int) -> list[bnkgraph.Source]:
+def track_sources(hirc_object: SHircObject, version: int) -> list[bnkgraph.SSource]:
     """A music track's sources read to the track's last byte (flag byte, sources, playlist items, node base)."""
-    _check(obj, version)
-    if obj.type != bnkmusic.MUSIC_TRACK:
-        raise ValueError(f"{obj.type_name} {obj.id} is no music track")
+    _check(hirc_object, version)
+    if hirc_object.type != bnkmusic.MUSIC_TRACK:
+        raise ValueError(f"{hirc_object.type_name} {hirc_object.id} is no music track")
     fam = bnkgraph.family(version)
-    r = Reader(obj.payload)
-    r.u8()
-    sources = [bnkgraph.read_source(r, fam) for _ in range(r.u32())]
-    items = r.u32()
-    r.take(items * (4 + 4 + 4 + 4 * 8))  # track, source and event ids, then play at, trims and duration (f64)
+    reader = CReader(hirc_object.payload)
+    reader.u8()
+    sources = [bnkgraph.read_source(reader, fam) for _ in range(reader.u32())]
+    items = reader.u32()
+    reader.take(items * (4 + 4 + 4 + 4 * 8))  # track, source and event ids, then play at, trims and duration (f64)
     if items and version >= SUB_TRACKS_FROM:
-        r.u32()
-    for _ in range(r.u32()):  # clip automation: clip, type, then the points
-        r.take(8)
-        r.take(12 * r.u32())
-    bnkbase.skip_before_rtpc(r, version)
-    bnkcurves.read_rtpcs(r)
-    kind = r.u8()
+        reader.u32()
+    for _ in range(reader.u32()):  # clip automation: clip, type, then the points
+        reader.take(8)
+        reader.take(12 * reader.u32())
+    bnkbase.skip_before_rtpc(reader, version)
+    bnkcurves.read_rtpcs(reader)
+    kind = reader.u8()
     if kind == 3:  # a switch track: group type, group, default, the switch table, the transition
-        r.take(1 + 4 + 4)
-        r.take(4 * r.u32())
-        r.take(32)
-    r.take(4)  # look-ahead time
-    if not r.done():
-        raise ValueError(f"track {obj.id}: {len(obj.payload) - r.pos} unparsed bytes")
+        reader.take(1 + 4 + 4)
+        reader.take(4 * reader.u32())
+        reader.take(32)
+    reader.take(4)  # look-ahead time
+    if not reader.done():
+        raise ValueError(f"track {hirc_object.id}: {len(hirc_object.payload) - reader.m_pos} unparsed bytes")
     return sources
 
 
-def _container(obj: HircObject, version: int, kind: int) -> Reader:
+def _container(hirc_object: SHircObject, version: int, kind: int) -> CReader:
     """A reader past the head a playlist and a switch container share: flag, node base, children, the meter and the
     stingers (the segment's own head up to its duration)."""
-    _check(obj, version)
-    if obj.type != kind:
+    _check(hirc_object, version)
+    if hirc_object.type != kind:
         raise ValueError(
-            f"{obj.type_name} {obj.id} is no {'music switch' if kind == bnkmusic.MUSIC_SWITCH_CNTR else 'playlist'}"
+            f"{hirc_object.type_name} {hirc_object.id} is no {'music switch' if kind == bnkmusic.MUSIC_SWITCH_CNTR else 'playlist'}"
         )
-    r = Reader(obj.payload)
-    _head(r, version)
-    r.take(23)
-    r.take(24 * r.u32())
-    return r
+    reader = CReader(hirc_object.payload)
+    _head(reader, version)
+    reader.take(23)
+    reader.take(24 * reader.u32())
+    return reader
 
 
-def _rules(r: Reader, version: int) -> list[TransRule]:
+def _rules(reader: CReader, version: int) -> list[STransRule]:
     """The transition rules: as 172's, but 112's destination side ends after the entry type (24 bytes, not 26)."""
     old = bnkgraph.family(version) == bnkgraph.OLD
     out = []
-    for _ in range(r.u32()):
-        src = [r.u32() for _ in range(r.u32())]
-        dst = [r.u32() for _ in range(r.u32())]
-        a = (r.s32(), r.u32(), r.s32(), r.u32(), r.u32(), r.u8())
-        b = (r.s32(), r.u32(), r.s32(), r.u32(), r.u32(), r.u16(), r.u16(), 0 if old else r.u8(), 0 if old else r.u8())
-        out.append(TransRule(src, dst, *a, *b, r.take(30) if r.u8() else b""))
+    for _ in range(reader.u32()):
+        source_ids = [reader.u32() for _ in range(reader.u32())]
+        destination_ids = [reader.u32() for _ in range(reader.u32())]
+        source_side = (reader.s32(), reader.u32(), reader.s32(), reader.u32(), reader.u32(), reader.u8())
+        destination_side = (
+            reader.s32(),
+            reader.u32(),
+            reader.s32(),
+            reader.u32(),
+            reader.u32(),
+            reader.u16(),
+            reader.u16(),
+            0 if old else reader.u8(),
+            0 if old else reader.u8(),
+        )
+        out.append(
+            STransRule(
+                source_ids, destination_ids, *source_side, *destination_side, reader.take(30) if reader.u8() else b""
+            )
+        )
     return out
 
 
-def rules(obj: HircObject, version: int) -> list[TransRule]:
+def rules(hirc_object: SHircObject, version: int) -> list[STransRule]:
     """The transition rules of a playlist container or a music switch."""
-    if obj.type not in (bnkmusic.MUSIC_SWITCH_CNTR, bnkmusic.MUSIC_RANSEQ_CNTR):
-        raise ValueError(f"{obj.type_name} {obj.id} is no music container")
-    return _rules(_container(obj, version, obj.type), version)
+    if hirc_object.type not in (bnkmusic.MUSIC_SWITCH_CNTR, bnkmusic.MUSIC_RANSEQ_CNTR):
+        raise ValueError(f"{hirc_object.type_name} {hirc_object.id} is no music container")
+    return _rules(_container(hirc_object, version, hirc_object.type), version)
 
 
-def playlist(obj: HircObject, version: int) -> list[PlaylistNode]:
+def playlist(hirc_object: SHircObject, version: int) -> list[SPlaylistNode]:
     """A playlist container's nodes (the layout of 172's, read to the object's last byte)."""
-    r = _container(obj, version, bnkmusic.MUSIC_RANSEQ_CNTR)
-    _rules(r, version)
+    reader = _container(hirc_object, version, bnkmusic.MUSIC_RANSEQ_CNTR)
+    _rules(reader, version)
     nodes = [
-        PlaylistNode(r.u32(), r.u32(), r.u32(), r.u32(), r.s16(), r.s16(), r.s16(), r.u32(), r.u16(), r.u8(), r.u8())
-        for _ in range(r.u32())
+        SPlaylistNode(
+            reader.u32(),
+            reader.u32(),
+            reader.u32(),
+            reader.u32(),
+            reader.s16(),
+            reader.s16(),
+            reader.s16(),
+            reader.u32(),
+            reader.u16(),
+            reader.u8(),
+            reader.u8(),
+        )
+        for _ in range(reader.u32())
     ]
-    if not r.done():
-        raise ValueError(f"playlist {obj.id}: {len(obj.payload) - r.pos} unparsed bytes")
+    if not reader.done():
+        raise ValueError(f"playlist {hirc_object.id}: {len(hirc_object.payload) - reader.m_pos} unparsed bytes")
     return nodes
 
 
-def switch_tree(obj: HircObject, version: int) -> SwitchTree:
+def switch_tree(hirc_object: SHircObject, version: int) -> SSwitchTree:
     """A music switch's decision tree: the state or switch groups it decides by and the tree of 12-byte nodes whose
-    leaves name the objects to play (``SwitchTree.leaves``)."""
-    r = _container(obj, version, bnkmusic.MUSIC_SWITCH_CNTR)
-    _rules(r, version)
-    r.u8()  # continue playback
-    depth = r.u32()
-    args = [r.u32() for _ in range(depth)]
-    r.take(depth)  # the groups' types
-    size = r.u32()
-    r.u8()  # mode
-    start = r.pos
-    tree = r.take(size)
-    if not r.done():
-        raise ValueError(f"switch {obj.id}: {len(obj.payload) - r.pos} unparsed bytes")
-    return SwitchTree(args, start, tree)
+    leaves name the objects to play (``SSwitchTree.leaves``)."""
+    reader = _container(hirc_object, version, bnkmusic.MUSIC_SWITCH_CNTR)
+    _rules(reader, version)
+    reader.u8()  # continue playback
+    depth = reader.u32()
+    group_ids = [reader.u32() for _ in range(depth)]
+    reader.take(depth)  # the groups' types
+    size = reader.u32()
+    reader.u8()  # mode
+    start = reader.m_pos
+    tree = reader.take(size)
+    if not reader.done():
+        raise ValueError(f"switch {hirc_object.id}: {len(hirc_object.payload) - reader.m_pos} unparsed bytes")
+    return SSwitchTree(group_ids, start, tree)

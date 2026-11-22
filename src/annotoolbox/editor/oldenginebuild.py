@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from ..formats.rda import RdaArchive, write_v11, write_v20
+from ..formats.rda import CRdaArchive, write_v11, write_v20
 from ..infra.buildcache import copy_atomic, write_atomic
 from ..infra.i18n import tr
 from ..islands import islandedits
@@ -35,7 +35,7 @@ def backup_name(game_key: str, archive: Path) -> str:
 def _data_archives(game_key: str, install: Path) -> list[Path]:
     """The ``data<n>`` archives the game mounts, in order."""
     files = installs.GAMES[game_key].archives(install)
-    return [f for f in files if f.is_file() and re.fullmatch(r"data\d+", f.stem)]
+    return [file for file in files if file.is_file() and re.fullmatch(r"data\d+", file.stem)]
 
 
 def last_archives(game_key: str, install: Path) -> list[Path]:
@@ -43,8 +43,8 @@ def last_archives(game_key: str, install: Path) -> list[Path]:
     if game_key == "anno1701":
         return isd1701.archives(install)[-1:]
     last: dict[Path, Path] = {}
-    for f in _data_archives(game_key, install):
-        last[f.parent] = f
+    for file in _data_archives(game_key, install):
+        last[file.parent] = file
     return list(last.values())
 
 
@@ -52,7 +52,7 @@ def replacement(game_key: str, install: Path, backup_dir: Path) -> Callable[[Pat
     """For ``Game.tree``: a 1404 archive of ours is read as the game's own (its backup), 1701's added archive is left
     out, so the editor and a build always start from the game's files. Refused when a 1404 archive of ours has no
     backup: the files the game had in it would be missing from every build."""
-    ours = {f for f in last_archives(game_key, install) if is_ours(f)}
+    ours = {file for file in last_archives(game_key, install) if is_ours(file)}
     for archive in ours if game_key != "anno1701" else ():
         if not (backup := backup_dir / backup_name(game_key, archive)).is_file():
             raise gamebackups.no_copy(archive, backup)
@@ -65,8 +65,8 @@ def replacement(game_key: str, install: Path, backup_dir: Path) -> Callable[[Pat
     return replace
 
 
-def _stamps(archive: RdaArchive) -> dict[str, int]:
-    return {e.path: e.mtime for e in archive}
+def _stamps(archive: CRdaArchive) -> dict[str, int]:
+    return {entry.path: entry.mtime for entry in archive}
 
 
 def _rewritten(original: Path | None, extra: dict[str, bytes], islands: list[str], stamp: int) -> bytes:
@@ -74,10 +74,13 @@ def _rewritten(original: Path | None, extra: dict[str, bytes], islands: list[str
     files: dict[str, bytes] = {}
     stamps: dict[str, int] = {}
     if original is not None:
-        arc = RdaArchive(original)
-        files, stamps = {e.path: arc.read_entry(e) for e in arc if e.path != MARKER}, _stamps(arc)
+        archive = CRdaArchive(original)
+        files, stamps = (
+            {entry.path: archive.read_entry(entry) for entry in archive if entry.path != MARKER},
+            _stamps(archive),
+        )
     for path in extra:
-        for old in [p for p in files if p.lower() == path.lower()]:
+        for old in [file_path for file_path in files if file_path.lower() == path.lower()]:
             del files[old]
     files |= extra
     files[MARKER] = ("\r\n".join(islands) + "\r\n").encode("utf-8")
@@ -106,8 +109,8 @@ def archives_1404(
 ) -> dict[str, bytes]:
     """The archives that carry ``files`` (game path -> bytes): each goes into the last ``data`` archive of the group
     its winning copy is read from. ``written``: the islands among them, for the marker."""
-    last = {f.parent: f for f in last_archives("anno1404", install)}
-    mounted = {replace(f): f for f in _data_archives("anno1404", install) if replace(f) is not None}
+    last = {file.parent: file for file in last_archives("anno1404", install)}
+    mounted = {replace(file): file for file in _data_archives("anno1404", install) if replace(file) is not None}
     targets: dict[Path, dict[str, bytes]] = {}
     for path, data in files.items():
         winner = mounted.get(tree.archive_file(path))
@@ -123,7 +126,7 @@ def archives_1404(
     out = {}
     stamp = int(time.time())
     for target, extra in targets.items():
-        islands = [p for p in written if p in extra]
+        islands = [written_path for written_path in written if written_path in extra]
         out[target.relative_to(install).as_posix()] = _rewritten(replace(target), extra, islands, stamp)
         log(tr("islands.name_folder_n_files", name=target.name, folder=target.parent.name, n=len(extra)))
     return out
@@ -152,10 +155,10 @@ def edited_1701(tree, edits_dir: Path, log: Callable[[str], None] = print) -> tu
         if entry is None:
             log(tr("islands.no_source_island_skipped", name=path.name))
             continue
-        isl = isd1701.load(tree, source)
-        report = isc_edit.apply(isl, edits, shapes)
-        files[entry.path] = isl.write()
-        files |= _changed_header(tree, source, isl)
+        island = isd1701.load(tree, source)
+        report = isc_edit.apply(island, edits, shapes)
+        files[entry.path] = island.write()
+        files |= _changed_header(tree, source, island)
         written.append(entry.path)
         log(f"{source}: " + count_line(report))
         for miss in report["unmatched"]:
@@ -163,16 +166,16 @@ def edited_1701(tree, edits_dir: Path, log: Callable[[str], None] = print) -> tu
     return files, written
 
 
-def _changed_header(tree, source: str, isl: isd1701.Island1701) -> dict[str, bytes]:
+def _changed_header(tree, source: str, island: isd1701.CIsland1701) -> dict[str, bytes]:
     """The island's ``.isc`` (rivers, coast lines, properties) as a file of the build, only when an edit changed it."""
     header = source[: -len(".isd")] + ".isc"
-    entry, data = tree.entry_of(header), isl.write_header()
+    entry, data = tree.entry_of(header), island.write_header()
     return {entry.path: data} if entry is not None and data is not None and data != tree.read_bytes(header) else {}
 
 
 def archives_1701(tree, install: Path, files: dict[str, bytes], written: list[str]) -> dict[str, bytes]:
     """The new archive (name -> bytes) that carries ``files``, newer than the originals they replace."""
-    newest = max((tree.entry_of(p).mtime for p in written), default=0)
+    newest = max((tree.entry_of(written_path).mtime for written_path in written), default=0)
     stamp = max(int(time.time()), newest + 1)  # the newer copy wins, whatever the archive
     files = {**files, MARKER: ("\r\n".join(written) + "\r\n").encode("utf-8")}
     return {next_archive_1701(install): write_v11(files, stamp)}

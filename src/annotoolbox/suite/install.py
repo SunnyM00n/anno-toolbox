@@ -61,7 +61,7 @@ def launcher(exe: str | None = None) -> Path | None:
     same = where / Path(exe or sys.executable).name
     if same.is_file():
         return same
-    others = [p for p in sorted(where.glob("*.exe")) if p.name.lower() != UPDATER.lower()]
+    others = [candidate for candidate in sorted(where.glob("*.exe")) if candidate.name.lower() != UPDATER.lower()]
     return others[0] if len(others) == 1 else None
 
 

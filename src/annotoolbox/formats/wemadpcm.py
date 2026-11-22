@@ -30,17 +30,17 @@ def read(data: bytes):
     import numpy as np
 
     chunks = riff.chunks(data)
-    fmt = chunks.get(b"fmt ", b"")
-    if len(fmt) < 16:
+    format_chunk = chunks.get(b"fmt ", b"")
+    if len(format_chunk) < 16:
         raise ValueError("no format chunk")
-    _tag, channels, rate, _per_second, align = struct.unpack_from("<HHIIH", fmt)
+    _tag, channels, rate, _per_second, align = struct.unpack_from("<HHIIH", format_chunk)
     sub = align // max(channels, 1)
     if not channels or sub < 5:
         raise ValueError(f"ADPCM block of {align} bytes for {channels} channels")
     body = chunks.get(b"data", b"")
     blocks = np.frombuffer(body, np.uint8, len(body) // align * align).reshape(-1, channels, sub)
-    hist = blocks[..., 0].astype(np.int64) | (blocks[..., 1].astype(np.int64) << 8)
-    hist = np.where(hist >= 32768, hist - 65536, hist)
+    history = blocks[..., 0].astype(np.int64) | (blocks[..., 1].astype(np.int64) << 8)
+    history = np.where(history >= 32768, history - 65536, history)
     index = np.clip(blocks[..., 2].astype(np.int64), 0, 88)
     steps, moves = np.asarray(STEPS), np.asarray(INDEX)
     count = 2 * (sub - 4)
@@ -51,37 +51,39 @@ def read(data: bytes):
         delta = (
             (step >> 3) + (nibble & 1) * (step >> 2) + ((nibble >> 1) & 1) * (step >> 1) + ((nibble >> 2) & 1) * step
         )
-        hist = np.clip(hist + np.where(nibble & 8, -delta, delta), -32768, 32767)
+        history = np.clip(history + np.where(nibble & 8, -delta, delta), -32768, 32767)
         index = np.clip(index + moves[nibble & 7], 0, 88)
-        out[:, i] = hist
+        out[:, i] = history
     return out.reshape(-1), rate, channels
 
 
 def _sub_block(samples: array.array, start: int, step: int, state: list[int]) -> bytes:
     """One sub-block: the state the decoder starts from, then 64 nibbles (the samples from ``start``, every
     ``step``-th); ``state`` (predictor, index) moves on to the next block."""
-    pred, index = state
-    out = bytearray(struct.pack("<hBB", pred, index, 0))
+    predictor, index = state
+    out = bytearray(struct.pack("<hBB", predictor, index, 0))
     nibbles = []
     for i in range(BLOCK_SAMPLES):
-        at = start + i * step
-        target = samples[at] if at < len(samples) else pred  # a partial last block holds on
-        diff, nib, size = target - pred, 0, STEPS[index]
-        if diff < 0:
-            nib, diff = 8, -diff
+        sample_index = start + i * step
+        target = samples[sample_index] if sample_index < len(samples) else predictor  # a partial last block holds on
+        difference, nibble, size = target - predictor, 0, STEPS[index]
+        if difference < 0:
+            nibble, difference = 8, -difference
         for bit in (4, 2, 1):
-            if diff >= size:
-                nib |= bit
-                diff -= size
+            if difference >= size:
+                nibble |= bit
+                difference -= size
             size >>= 1
         full = STEPS[index]  # the decoder's own reconstruction, so the error does not run away
-        delta = (full >> 3) + (nib & 1) * (full >> 2) + ((nib >> 1) & 1) * (full >> 1) + ((nib >> 2) & 1) * full
-        pred = max(-32768, min(32767, pred + (-delta if nib & 8 else delta)))
-        index = max(0, min(88, index + INDEX[nib & 7]))
-        nibbles.append(nib)
+        delta = (
+            (full >> 3) + (nibble & 1) * (full >> 2) + ((nibble >> 1) & 1) * (full >> 1) + ((nibble >> 2) & 1) * full
+        )
+        predictor = max(-32768, min(32767, predictor + (-delta if nibble & 8 else delta)))
+        index = max(0, min(88, index + INDEX[nibble & 7]))
+        nibbles.append(nibble)
     for i in range(0, BLOCK_SAMPLES, 2):
         out.append(nibbles[i] | nibbles[i + 1] << 4)
-    state[:] = [pred, index]
+    state[:] = [predictor, index]
     return bytes(out)
 
 
@@ -91,11 +93,11 @@ def write(samples: array.array, rate: int, channels: int) -> bytes:
     states = [[0, 0] for _ in range(channels)]
     blocks = []
     for first in range(0, max(frames, 1), BLOCK_SAMPLES):
-        for c in range(channels):
-            blocks.append(_sub_block(samples, first * channels + c, channels, states[c]))
+        for channel in range(channels):
+            blocks.append(_sub_block(samples, first * channels + channel, channels, states[channel]))
     data = b"".join(blocks)
     align = 36 * channels
-    avg = round(rate * align / BLOCK_SAMPLES)
+    average_bytes_per_second = round(rate * align / BLOCK_SAMPLES)
     mask = {1: 4, 2: 3}[channels]
-    fmt = struct.pack("<HHIIHHHHI", 2, channels, rate, avg, align, 4, 6, 0, mask)[:24]
-    return riff.build([(b"fmt ", fmt), (b"data", data)])
+    format_chunk = struct.pack("<HHIIHHHHI", 2, channels, rate, average_bytes_per_second, align, 4, 6, 0, mask)[:24]
+    return riff.build([(b"fmt ", format_chunk), (b"data", data)])

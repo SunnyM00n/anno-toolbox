@@ -1,6 +1,6 @@
 """The live link's wire protocol, version 1: frames, the handshake, the session file and the message set.
 
-One module is the specification both ends are written against: ``encode_frame`` / ``FrameReader`` (a 4-byte length,
+One module is the specification both ends are written against: ``encode_frame`` / ``CFrameReader`` (a 4-byte length,
 then one JSON object), ``proof`` / ``verify`` (the token handshake), ``read_session`` (where the game says it
 listens), ``REQUESTS`` with ``check_request`` (the closed message set and its typed arguments) and ``needs_of`` (what a
 changed file needs). The client is ``linkclient``. docs/live-link.md sections 3 to 5.
@@ -44,11 +44,11 @@ _SESSION_SUFFIXES = (".a7m", ".a7t", ".a7minfo", ".a7me")
 _INCLUDE = re.compile(r'^\s*#\s*include\s+["<]([^">]+)[">]', re.MULTILINE)
 
 
-class FrameError(ValueError):
+class CFrameError(ValueError):
     """A frame that breaks the protocol: too long, not JSON, not an object."""
 
 
-class SessionError(ValueError):
+class CSessionError(ValueError):
     """A session file that is not the game's (wrong shape, a pipe name outside the link's own)."""
 
 
@@ -59,27 +59,27 @@ def encode_frame(message: dict) -> bytes:
     """The bytes of one frame: a 4-byte little-endian length, then the object as compact UTF-8 JSON."""
     body = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if len(body) > MAX_FRAME:
-        raise FrameError(f"a frame of {len(body)} bytes is over the {MAX_FRAME} a frame may hold")
+        raise CFrameError(f"a frame of {len(body)} bytes is over the {MAX_FRAME} a frame may hold")
     return struct.pack("<I", len(body)) + body
 
 
-class FrameReader:
+class CFrameReader:
     """Collects the bytes a channel delivers and hands out the whole frames in them, in order."""
 
     def __init__(self) -> None:
-        self._buffer = bytearray()
+        self._m_buffer = bytearray()
 
     def feed(self, data: bytes) -> list[dict]:
-        self._buffer += data
+        self._m_buffer += data
         frames = []
-        while len(self._buffer) >= 4:
-            (size,) = struct.unpack_from("<I", self._buffer)
+        while len(self._m_buffer) >= 4:
+            (size,) = struct.unpack_from("<I", self._m_buffer)
             if size > MAX_FRAME:
-                raise FrameError(f"a frame announces {size} bytes, over the {MAX_FRAME} a frame may hold")
-            if len(self._buffer) < 4 + size:
+                raise CFrameError(f"a frame announces {size} bytes, over the {MAX_FRAME} a frame may hold")
+            if len(self._m_buffer) < 4 + size:
                 break
-            body = bytes(self._buffer[4 : 4 + size])
-            del self._buffer[: 4 + size]
+            body = bytes(self._m_buffer[4 : 4 + size])
+            del self._m_buffer[: 4 + size]
             frames.append(_decode(body))
         return frames
 
@@ -88,9 +88,9 @@ def _decode(body: bytes) -> dict:
     try:
         message = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise FrameError(f"a frame that is not JSON: {error}") from error
+        raise CFrameError(f"a frame that is not JSON: {error}") from error
     if not isinstance(message, dict):
-        raise FrameError("a frame must be one JSON object")
+        raise CFrameError("a frame must be one JSON object")
     return message
 
 
@@ -116,7 +116,7 @@ def verify(token: str, purpose: str, value: str, given: object) -> bool:
 
 
 @dataclass(frozen=True)
-class SessionInfo:
+class SSessionInfo:
     """What the game writes at its start into ``live-link/session.json`` and deletes at its end."""
 
     pipe: str
@@ -133,50 +133,50 @@ def session_folder(user_dir: Path | None = None, game: str = DEFAULT_GAME) -> Pa
     return (user_dir or gametree.user_dir(game)) / SESSION_FOLDER
 
 
-def parse_session(text: str, game: str = "") -> SessionInfo:
-    """The session file's content; ``SessionError`` when it is not one the link would trust. ``game``: the game the file
+def parse_session(text: str, game: str = "") -> SSessionInfo:
+    """The session file's content; ``CSessionError`` when it is not one the link would trust. ``game``: the game the file
     is expected to belong to (its pipe and its own ``game`` field must say so); none, any of ``LINK_GAMES``."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError as error:
-        raise SessionError(f"not JSON: {error}") from error
+        raise CSessionError(f"not JSON: {error}") from error
     if not isinstance(data, dict):
-        raise SessionError("not an object")
+        raise CSessionError("not an object")
     pipe, token = data.get("pipe"), data.get("token")
     found = PIPE_PATTERN.fullmatch(pipe) if isinstance(pipe, str) else None
     if found is None or found[1] not in LINK_GAMES:
-        raise SessionError("the pipe is not one of the live link's")
+        raise CSessionError("the pipe is not one of the live link's")
     if game and (found[1] != game or str(data.get("game", game)) != game):
-        raise SessionError(f"the session is not {game}'s")
+        raise CSessionError(f"the session is not {game}'s")
     if not isinstance(token, str) or not 16 <= len(token) <= 128:
-        raise SessionError("no token")
+        raise CSessionError("no token")
     if data.get("protocol") != PROTOCOL:
-        raise SessionError(f"protocol {data.get('protocol')!r}, this client speaks {PROTOCOL}")
+        raise CSessionError(f"protocol {data.get('protocol')!r}, this client speaks {PROTOCOL}")
     fields = {k: str(data.get(k, "")) for k in ("game", "build", "library")}
-    pid = data.get("pid")
-    return SessionInfo(pipe, token, PROTOCOL, **fields, pid=pid if isinstance(pid, int) else 0)
+    process_id = data.get("pid")
+    return SSessionInfo(pipe, token, PROTOCOL, **fields, pid=process_id if isinstance(process_id, int) else 0)
 
 
-def read_session(user_dir: Path | None = None, game: str = DEFAULT_GAME) -> SessionInfo | None:
+def read_session(user_dir: Path | None = None, game: str = DEFAULT_GAME) -> SSessionInfo | None:
     """The running ``game``'s session, or None when there is no file or it is not a usable one."""
     path = session_folder(user_dir, game) / SESSION_FILE
     try:
         return parse_session(path.read_text(encoding="utf-8"), game)
-    except (OSError, SessionError):
+    except (OSError, CSessionError):
         return None
 
 
-def session_text(info: SessionInfo) -> str:
+def session_text(session: SSessionInfo) -> str:
     """The session file as the game writes it (a test double writes the same)."""
     return json.dumps(
         {
-            "pipe": info.pipe,
-            "token": info.token,
-            "protocol": info.protocol,
-            "game": info.game,
-            "build": info.build,
-            "library": info.library,
-            "pid": info.pid,
+            "pipe": session.pipe,
+            "token": session.token,
+            "protocol": session.protocol,
+            "game": session.game,
+            "build": session.build,
+            "library": session.library,
+            "pid": session.pid,
         },
         indent=2,
     )
@@ -186,7 +186,7 @@ def session_text(info: SessionInfo) -> str:
 
 
 @dataclass(frozen=True)
-class Arg:
+class SArg:
     """One argument of a request: ``kind`` is ``int``, ``name``, ``str``, ``names`` (a list of ``NAME``),
     ``paths`` (relative paths inside a mod), ``fields`` (value paths), ``numbers``, ``topics``, ``mode``, ``bool`` or ``values``
     (an object of ``NAME`` to a number or a bool, at most ``MAX_VALUES``)."""
@@ -196,28 +196,28 @@ class Arg:
     required: bool = False
 
 
-REQUESTS: dict[str, tuple[Arg, ...]] = {
-    "hello": (Arg("protocol", "int", True), Arg("client", "str", True), Arg("nonce", "name", True), Arg("proof", "str", True)),
-    "files.changed": (Arg("mod", "name"), Arg("paths", "paths", True)),
-    "reload.assets": (Arg("mode", "mode"),),
+REQUESTS: dict[str, tuple[SArg, ...]] = {
+    "hello": (SArg("protocol", "int", True), SArg("client", "str", True), SArg("nonce", "name", True), SArg("proof", "str", True)),
+    "files.changed": (SArg("mod", "name"), SArg("paths", "paths", True)),
+    "reload.assets": (SArg("mode", "mode"),),
     "reload.texts": (),
-    "reload.scenes": (Arg("mod", "name"), Arg("states", "names"), Arg("paths", "paths")),
+    "reload.scenes": (SArg("mod", "name"), SArg("states", "names"), SArg("paths", "paths")),
     "reload.ambient": (),
-    "reload.models": (Arg("mod", "name"), Arg("paths", "paths", True)),
-    "reload.effects": (Arg("mod", "name"), Arg("paths", "paths", True)),
-    "reload.banks": (Arg("mod", "name"), Arg("banks", "names", True)),
+    "reload.models": (SArg("mod", "name"), SArg("paths", "paths", True)),
+    "reload.effects": (SArg("mod", "name"), SArg("paths", "paths", True)),
+    "reload.banks": (SArg("mod", "name"), SArg("banks", "names", True)),
     "reload.session": (),
-    "select": (Arg("object", "int"), Arg("guid", "int")),
-    "jump": (Arg("object", "int"), Arg("session", "name"), Arg("position", "numbers")),
-    "read": (Arg("guid", "int"), Arg("object", "int"), Arg("fields", "fields", True)),
-    "ui.values": (Arg("states", "names", True), Arg("file", "name")),
+    "select": (SArg("object", "int"), SArg("guid", "int")),
+    "jump": (SArg("object", "int"), SArg("session", "name"), SArg("position", "numbers")),
+    "read": (SArg("guid", "int"), SArg("object", "int"), SArg("fields", "fields", True)),
+    "ui.values": (SArg("states", "names", True), SArg("file", "name")),
     "debug.list": (),
-    "debug.run": (Arg("command", "name", True), Arg("values", "values")),
-    "debug.cheat": (Arg("name", "name", True),),
+    "debug.run": (SArg("command", "name", True), SArg("values", "values")),
+    "debug.cheat": (SArg("name", "name", True),),
     "modules.list": (),
-    "modules.set": (Arg("module", "name", True), Arg("on", "bool", True)),
-    "subscribe": (Arg("topics", "topics", True),),
-    "unsubscribe": (Arg("topics", "topics", True),),
+    "modules.set": (SArg("module", "name", True), SArg("on", "bool", True)),
+    "subscribe": (SArg("topics", "topics", True),),
+    "unsubscribe": (SArg("topics", "topics", True),),
     "ping": (),
     "bye": (),
 }  # fmt: skip
@@ -250,29 +250,44 @@ def check_request(name: str, args: dict) -> str:
 
 def _check_value(kind: str, value: object) -> str:
     checks = {
-        "int": lambda v: isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 1 << 53,
-        "name": lambda v: isinstance(v, str) and NAME.fullmatch(v) is not None,
-        "str": lambda v: isinstance(v, (str, dict)),
-        "mode": lambda v: v in MODES,
-        "bool": lambda v: isinstance(v, bool),
-        "numbers": lambda v: _list(v, 3, lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)),
-        "names": lambda v: _list(v, 64, lambda x: isinstance(x, str) and NAME.fullmatch(x) is not None),
-        "fields": lambda v: _list(v, 64, lambda x: isinstance(x, str) and FIELD.fullmatch(x) is not None),
-        "topics": lambda v: _list(v, len(TOPICS), lambda x: x in TOPICS),
-        "values": lambda v: (
-            isinstance(v, dict)
-            and 0 < len(v) <= MAX_VALUES
-            and all(NAME.fullmatch(k) and isinstance(x, (int, float)) and abs(x) < 1 << 53 for k, x in v.items())
+        "int": lambda candidate: (
+            isinstance(candidate, int) and not isinstance(candidate, bool) and 0 <= candidate < 1 << 53
         ),
-        "paths": lambda v: _list(
-            v, MAX_PATHS, lambda x: isinstance(x, str) and len(x) <= MAX_PATH_LEN and not livelink.check_paths([x])
+        "name": lambda candidate: isinstance(candidate, str) and NAME.fullmatch(candidate) is not None,
+        "str": lambda candidate: isinstance(candidate, (str, dict)),
+        "mode": lambda candidate: candidate in MODES,
+        "bool": lambda candidate: isinstance(candidate, bool),
+        "numbers": lambda candidate: _list(
+            candidate, 3, lambda element: isinstance(element, (int, float)) and not isinstance(element, bool)
+        ),
+        "names": lambda candidate: _list(
+            candidate, 64, lambda element: isinstance(element, str) and NAME.fullmatch(element) is not None
+        ),
+        "fields": lambda candidate: _list(
+            candidate, 64, lambda element: isinstance(element, str) and FIELD.fullmatch(element) is not None
+        ),
+        "topics": lambda candidate: _list(candidate, len(TOPICS), lambda element: element in TOPICS),
+        "values": lambda candidate: (
+            isinstance(candidate, dict)
+            and 0 < len(candidate) <= MAX_VALUES
+            and all(
+                NAME.fullmatch(k) and isinstance(element, (int, float)) and abs(element) < 1 << 53
+                for k, element in candidate.items()
+            )
+        ),
+        "paths": lambda candidate: _list(
+            candidate,
+            MAX_PATHS,
+            lambda element: (
+                isinstance(element, str) and len(element) <= MAX_PATH_LEN and not livelink.check_paths([element])
+            ),
         ),
     }
     return "" if checks[kind](value) else f"is not a valid {kind}"
 
 
 def _list(value: object, most: int, item) -> bool:
-    return isinstance(value, list) and 0 < len(value) <= most and all(item(x) for x in value)
+    return isinstance(value, list) and 0 < len(value) <= most and all(item(element) for element in value)
 
 
 def request_frame(request_id: int, name: str, args: dict) -> dict:
@@ -291,8 +306,8 @@ def needs_of(path: str) -> str:
     """What the game needs for a changed mod file at ``path`` (relative, forward slashes): a reload kind of
     ``livelink.KINDS``, ``TEXTURE`` (a texture: the asset reload, then a new request), or ``RESTART``
     (docs/live-link.md section 1). The answer of ``files.changed`` carries it per path."""
-    p = PurePosixPath(path.lower())
-    name, suffix = p.name, p.suffix
+    file_path = PurePosixPath(path.lower())
+    name, suffix = file_path.name, file_path.suffix
     if suffix in _MODEL_SUFFIXES:
         return _MODEL_SUFFIXES[suffix]
     if suffix == ".dds":
@@ -304,7 +319,7 @@ def needs_of(path: str) -> str:
     if path.lower().startswith("data/ui/") or suffix in (".phx", ".phxl"):
         return livelink.SCENES
     if suffix == ".xml":
-        if "ambient" in p.parts:
+        if "ambient" in file_path.parts:
             return livelink.AMBIENT
         return livelink.TEXTS if name.startswith("texts") else livelink.ASSETS
     return RESTART
@@ -314,13 +329,13 @@ def effects_including(folder: Path, includes: Iterable[str]) -> list[str]:
     """The effect files (``.fx``, relative to the mod's ``folder``) whose ``#include`` lines name one of ``includes``
     (relative paths of changed ``.fxh`` files): the game follows no include, so the link reloads the effects that
     pull it in. docs/live-link.md section 1.1."""
-    wanted = {PurePosixPath(i.lower()).name for i in includes}
+    wanted = {PurePosixPath(include_path.lower()).name for include_path in includes}
     found = []
     for fx in sorted(Path(folder).rglob("*.fx")):
         try:
             text = fx.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if any(PurePosixPath(m.lower()).name in wanted for m in _INCLUDE.findall(text)):
+        if any(PurePosixPath(included.lower()).name in wanted for included in _INCLUDE.findall(text)):
             found.append(fx.relative_to(folder).as_posix())
     return found

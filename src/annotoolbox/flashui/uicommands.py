@@ -17,7 +17,7 @@ from ..formats import feuabc, feuedit, feuread, feuwrite
 from ..othergames import ui2205
 from ..othergames.installs import GAMES
 from . import uiexport
-from .uiproject import Project, changes
+from .uiproject import CProject, changes
 
 
 def _fail(message: str) -> int:
@@ -35,8 +35,8 @@ def game_folder(args: argparse.Namespace) -> Path:
     return path
 
 
-def open_ui(args: argparse.Namespace) -> ui2205.UiFiles:
-    return ui2205.UiFiles(GAMES["anno2205"].tree(game_folder(args)))
+def open_ui(args: argparse.Namespace) -> ui2205.CUiFiles:
+    return ui2205.CUiFiles(GAMES["anno2205"].tree(game_folder(args)))
 
 
 def movie_path(name: str) -> str:
@@ -47,57 +47,57 @@ def movie_path(name: str) -> str:
     return name if name.endswith(".feu") else name + ".feu"
 
 
-def _load(path: Path) -> Project:
-    return Project.load(path) if path.is_file() else Project(path)
+def _load(path: Path) -> CProject:
+    return CProject.load(path) if path.is_file() else CProject(path)
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    ui = open_ui(args)
-    for path in ui.movies():
-        m = ui.movie(path)
-        print(f"{path}  v{m.version}  {len(feuedit.texts(m))} texts  {len(feuedit.images(m))} images  "
-              f"{len(feuedit.fonts(m))} fonts")  # fmt: skip
+    ui_files = open_ui(args)
+    for path in ui_files.movies():
+        movie = ui_files.movie(path)
+        print(f"{path}  v{movie.version}  {len(feuedit.texts(movie))} texts  {len(feuedit.images(movie))} images  "
+              f"{len(feuedit.fonts(movie))} fonts")  # fmt: skip
     return 0
 
 
 def cmd_info(args: argparse.Namespace) -> int:
-    ui = open_ui(args)
-    m = ui.movie(movie_path(args.movie))
-    x0, x1, y0, y1 = m.stage
-    print(f"signature {m.signature.decode()}  version {m.version}  stage {(x1 - x0) / 20:g}x{(y1 - y0) / 20:g}  "
-          f"{m.rate:g} fps  {m.frame_count} frames  {len(m.tags)} tags")  # fmt: skip
-    for f in feuedit.fonts(m):
-        print(f"font {f.font_id}: {f.name} ({f.file})")
-    for code, img in feuedit.images(m):
+    ui_files = open_ui(args)
+    movie = ui_files.movie(movie_path(args.movie))
+    min_x, max_x, min_y, max_y = movie.stage
+    print(f"signature {movie.signature.decode()}  version {movie.version}  stage {(max_x - min_x) / 20:g}x{(max_y - min_y) / 20:g}  "
+          f"{movie.rate:g} fps  {movie.frame_count} frames  {len(movie.tags)} tags")  # fmt: skip
+    for font in feuedit.fonts(movie):
+        print(f"font {font.font_id}: {font.name} ({font.file})")
+    for code, image in feuedit.images(movie):
         print(
-            f"{'icon' if code == feuread.ATLAS_IMAGE else 'image'} {img.char_id}: {img.path} {img.width}x{img.height}"
+            f"{'icon' if code == feuread.ATLAS_IMAGE else 'image'} {image.char_id}: {image.path} {image.width}x{image.height}"
         )
-    for t in feuedit.texts(m):
-        print(f"text {t.char_id}: {t.text!r} font {t.font_id} {t.variable}".rstrip())
-    for block, tag in enumerate(feuedit.abc_tags(m)):
+    for text in feuedit.texts(movie):
+        print(f"text {text.char_id}: {text.text!r} font {text.font_id} {text.variable}".rstrip())
+    for block, tag in enumerate(feuedit.abc_tags(movie)):
         strings = feuabc.strings(feuread.read_abc(tag).abc)
         print(f"code block {block}: {len(strings)} strings")
         if args.strings:
-            for i, s in enumerate(strings, 1):
-                print(f"  {i}: {s!r}")
+            for i, string in enumerate(strings, 1):
+                print(f"  {i}: {string!r}")
     return 0
 
 
 def cmd_extract(args: argparse.Namespace) -> int:
     """The movie (and for a Flash tool, its re-signed copy) and the pictures it names."""
-    ui = open_ui(args)
+    ui_files = open_ui(args)
     path = movie_path(args.movie)
-    raw = ui.file(path)
+    raw = ui_files.file(path)
     out = Path(args.to)
     out.mkdir(parents=True, exist_ok=True)
     stem = path.rsplit("/", 1)[-1][: -len(".feu")]
     (out / f"{stem}.feu").write_bytes(raw)
     (out / f"{stem}.swf").write_bytes(feuwrite.resign(raw, b"FWS"))
     count = 0
-    for _, img in feuedit.images(feuread.read(raw)):
-        data = ui.image(img.path)
+    for _, image in feuedit.images(feuread.read(raw)):
+        data = ui_files.image(image.path)
         if data is not None:
-            target = out / "pictures" / uiexport.safe_name(ui2205.image_path(img.path)[len(ui2205.UI) :])
+            target = out / "pictures" / uiexport.safe_name(ui2205.image_path(image.path)[len(ui2205.UI) :])
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             count += 1
@@ -107,8 +107,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
 def cmd_export_images(args: argparse.Namespace) -> int:
     """Pictures as PNG files below a folder, with an index (``uiexport``): movies', shared, atlas icons."""
-    exporter = uiexport.Exporter(open_ui(args))
-    items: list[uiexport.Item] = []
+    exporter = uiexport.CExporter(open_ui(args))
+    items: list[uiexport.SItem] = []
     if args.all_movies:
         items += exporter.all_movie_items()
     else:
@@ -135,29 +135,38 @@ def cmd_to_swf(args: argparse.Namespace) -> int:
 def cmd_from_swf(args: argparse.Namespace) -> int:
     """A movie saved by a Flash tool back to the game's signature (a compressed one is unpacked first)."""
     raw = Path(args.input).read_bytes()
-    if raw[:3] == b"CWS":
-        raw = b"FWS" + raw[3:8] + zlib.decompress(raw[8:])
-    if raw[:3] not in feuread.FLASH_SIGNATURES:
-        return _fail(f"{args.input}: not an uncompressed or zlib-compressed Flash movie ({raw[:3]!r})")
-    data = feuwrite.resign(raw, feuread.SIGNATURE)
-    feuread.read(data)  # it must read as the game's movies do
+    try:
+        if raw[:3] == b"CWS":
+            raw = b"FWS" + raw[3:8] + zlib.decompress(raw[8:])
+        if raw[:3] not in feuread.FLASH_SIGNATURES:
+            return _fail(f"{args.input}: not an uncompressed or zlib-compressed Flash movie ({raw[:3]!r})")
+        data = feuwrite.resign(raw, feuread.SIGNATURE)
+        feuread.read(data)  # it must read as the game's movies do
+    except (zlib.error, feuread.CFeuError) as exc:
+        return _fail(f"{args.input}: {exc}")
     Path(args.output).write_bytes(data)
     return 0
+
+
+def _replacement(name: str) -> str:
+    """A replacement file as the edit file keeps it: absolute, as typed it is read from the working folder, while the
+    edit file's names are read from its own folder (``CProject.source``)."""
+    return str(Path(name).resolve())
 
 
 def cmd_set(args: argparse.Namespace) -> int:
     """One edit or replacement into the edit file."""
     project = _load(Path(args.edits))
     if args.what == "text":
-        project.add(movie_path(args.movie), feuedit.Edit("text", args.id, {"text": args.value}))
+        project.add(movie_path(args.movie), feuedit.SEdit("text", args.id, {"text": args.value}))
     elif args.what == "font":
-        project.add(movie_path(args.movie), feuedit.Edit("font", args.id, {"file": args.value}))
+        project.add(movie_path(args.movie), feuedit.SEdit("font", args.id, {"file": args.value}))
     elif args.what == "picture":
-        project.files[args.movie.lower()] = args.value
+        project.m_files[args.movie.lower()] = _replacement(args.value)
     elif args.what == "icon":
-        project.icons[args.movie] = args.value
+        project.m_icons[args.movie] = _replacement(args.value)
     elif args.what == "movie":
-        project.files[movie_path(args.movie)] = args.value
+        project.m_files[movie_path(args.movie)] = _replacement(args.value)
     print(f"saved {project.save()}")
     return 0
 
@@ -169,20 +178,23 @@ def _out(args: argparse.Namespace) -> tuple[Path, Path]:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    ui = open_ui(args)
-    project = Project.load(Path(args.edits))
-    files = changes(project, ui)
+    edits = Path(args.edits)
+    if not edits.is_file():
+        return _fail(f"{edits}: no such edit file")
+    ui_files = open_ui(args)
+    project = CProject.load(edits)
+    files = changes(project, ui_files)
     if not files:
         print("the edit file changes nothing")
         return 0
     built, backup = _out(args)
     if args.loose:
-        for p in ui2205.write_loose(files, built / "loose"):
-            print(p)
+        for path in ui2205.write_loose(files, built / "loose"):
+            print(path)
         return 0
     ui2205.build(files, ui2205.base_index(game_folder(args), backup), built)
-    for p in sorted(files):
-        print(f"  {p}")
+    for path in sorted(files):
+        print(f"  {path}")
     return 0
 
 
@@ -209,42 +221,42 @@ def register(sub) -> None:
     """The subcommands, into an ``add_subparsers`` group."""
 
     def add(name: str, func, help_: str) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, help=help_)
-        p.add_argument("--game", help="the Anno 2205 folder (default: ANNO2205_DIR)")
-        p.set_defaults(func=func)
-        return p
+        parser = sub.add_parser(name, help=help_)
+        parser.add_argument("--game", help="the Anno 2205 folder (default: ANNO2205_DIR)")
+        parser.set_defaults(func=func)
+        return parser
 
     add("list", cmd_list, "the UI movies of the install")
-    p = add("info", cmd_info, "a movie's fonts, images, texts and code")
-    p.add_argument("movie")
-    p.add_argument("--strings", action="store_true", help="list the code's string constants")
-    p = add("extract", cmd_extract, "a movie, its copy for a Flash tool and its pictures")
-    p.add_argument("movie")
-    p.add_argument("--to", required=True)
-    p = add("export-images", cmd_export_images, "pictures as PNG files with an index")
-    p.add_argument("--to", required=True, help="the folder to write into")
-    p.add_argument("--movie", action="append", help="a movie's pictures (a sub-folder per movie; repeatable)")
-    p.add_argument("--all-movies", action="store_true", help="every movie's pictures")
-    p.add_argument("--pictures", action="store_true", help="the shared pictures the movies point at (shared/)")
-    p.add_argument("--atlases", action="store_true", help="the atlases cut into their icons (atlases/<atlas>/)")
-    p.add_argument("--shared", action="store_true", help="--pictures and --atlases")
-    p.add_argument("--picture", action="append", help="one picture: its game path or a movie's image name")
+    parser = add("info", cmd_info, "a movie's fonts, images, texts and code")
+    parser.add_argument("movie")
+    parser.add_argument("--strings", action="store_true", help="list the code's string constants")
+    parser = add("extract", cmd_extract, "a movie, its copy for a Flash tool and its pictures")
+    parser.add_argument("movie")
+    parser.add_argument("--to", required=True)
+    parser = add("export-images", cmd_export_images, "pictures as PNG files with an index")
+    parser.add_argument("--to", required=True, help="the folder to write into")
+    parser.add_argument("--movie", action="append", help="a movie's pictures (a sub-folder per movie; repeatable)")
+    parser.add_argument("--all-movies", action="store_true", help="every movie's pictures")
+    parser.add_argument("--pictures", action="store_true", help="the shared pictures the movies point at (shared/)")
+    parser.add_argument("--atlases", action="store_true", help="the atlases cut into their icons (atlases/<atlas>/)")
+    parser.add_argument("--shared", action="store_true", help="--pictures and --atlases")
+    parser.add_argument("--picture", action="append", help="one picture: its game path or a movie's image name")
     for name, func, what in (("to-swf", cmd_to_swf, "for a Flash tool"), ("from-swf", cmd_from_swf, "for the game")):
-        p = add(name, func, f"re-sign a movie {what}")
-        p.add_argument("input")
-        p.add_argument("output")
-    p = add("set", cmd_set, "record an edit in an edit file")
-    p.add_argument("edits", help="the edit file (JSON; created when missing)")
-    p.add_argument("what", choices=("text", "font", "picture", "icon", "movie"))
-    p.add_argument("movie", help="the movie; for picture the picture's game path, for icon the atlas icon's name")
-    p.add_argument("value", help="the text, the font file, or the file that replaces")
-    p.add_argument("--id", type=int, default=0, help="the text field's or font's id (text, font)")
+        parser = add(name, func, f"re-sign a movie {what}")
+        parser.add_argument("input")
+        parser.add_argument("output")
+    parser = add("set", cmd_set, "record an edit in an edit file")
+    parser.add_argument("edits", help="the edit file (JSON; created when missing)")
+    parser.add_argument("what", choices=("text", "font", "picture", "icon", "movie"))
+    parser.add_argument("movie", help="the movie; for picture the picture's game path, for icon the atlas icon's name")
+    parser.add_argument("value", help="the text, the font file, or the file that replaces")
+    parser.add_argument("--id", type=int, default=0, help="the text field's or font's id (text, font)")
     for name, func, what in (("build", cmd_build, "build"), ("install", cmd_install, "install"),
                              ("uninstall", cmd_uninstall, "uninstall")):  # fmt: skip
-        p = add(name, func, f"{what} the mod (our archive and the archive index)")
+        parser = add(name, func, f"{what} the mod (our archive and the archive index)")
         if name == "build":
-            p.add_argument("edits")
-            p.add_argument("--loose", action="store_true", help="loose files instead of the archive")
-        p.add_argument("--out", required=True, help="the folder the build goes into")
-    p = add("editor", cmd_editor, "the editor window")
-    p.add_argument("edits", nargs="?", help="an edit file to open")
+            parser.add_argument("edits")
+            parser.add_argument("--loose", action="store_true", help="loose files instead of the archive")
+        parser.add_argument("--out", required=True, help="the folder the build goes into")
+    parser = add("editor", cmd_editor, "the editor window")
+    parser.add_argument("edits", nargs="?", help="an edit file to open")

@@ -6,9 +6,11 @@ a WAV or an Ogg file, and adds sounds and events. It keeps the result in the pro
 is in `tool-suite.md` section 24, and the formats are in
 `sound/bank-objects.md`.
 
-The app is tested on synthetic banks of the three layouts and, read-only, on the banks of the three installs (every
-bank written back byte for byte; edits made and read back). **Nothing was heard in a running game yet.** A test proves
-the file format, not that the engine plays it.
+The app is tested on synthetic banks of the three layouts.
+It is also tested read-only on the banks of the three installs: every bank is written back byte for byte, and edits
+are made and read back.
+**Nothing was heard in a running game yet.**
+A test proves the file format, not that the engine plays it.
 
 ## Using it
 
@@ -18,7 +20,9 @@ the file format, not that the engine plays it.
    children) and **Music** (segments, tracks, switch and playlist containers). Pick an object, and the top right shows
    what it is (kind, parent, children, codec, media, its properties).
 3. Edit with the forms on the right (each is one step on the undo stack, Ctrl+Z / Ctrl+Y):
-   - **Apply the settings**: volume (dB), pitch (cents) and the random pitch range of the picked Sound or container. Only the boxes you changed are written (a value the box clamps or rounds stays as the file has it).
+   - **Apply the settings**: volume (dB), pitch (cents) and the random pitch range of the picked Sound or container.
+     Only the boxes you changed are written.
+     A value the box clamps or rounds stays as the file has it.
    - **Apply the playlist**: a Random/Sequence container's playlist as `child:weight, child:weight` (a child may stand
      twice; the order is the order of a sequence).
    - **Replace the audio...**: a Sound (or a music track) plays another clip. Pick a WAV, Ogg, MP3 or FLAC file and, in
@@ -41,7 +45,7 @@ Programmatic use: `BankDoc(bytes).do(name, **args)` with the edits of `soundedit
 `add_attenuation_curve`, `remove_attenuation_curve`, `set_attenuation_slot`, `set_attenuation_rtpc`) and `groupedits`
 (`add_state_group`, `set_state_group`, `remove_state_group`, `add_switch_group`, `remove_switch_group`); `undo`,
 `redo`, `to_bytes`. Each edit has a label (`registry.label(name)`, `change the settings` for `set_props`) that the
-window's status line shows after it. An edit that cannot be made raises `EditError` with the sentence that says why.
+window's status line shows after it. An edit that cannot be made raises `CEditError` with the sentence that says why.
 
 ## What can be edited
 
@@ -61,16 +65,18 @@ window's status line shows after it. An edit that cannot be made raises `EditErr
 | State groups and switch groups driven by a game parameter, in the Init bank | yes | yes | yes |
 | Wwise Vorbis clips (ffmpeg with libvorbis, the codebook file) | yes | yes | yes |
 
-A container cannot be put under itself or under one of its own children (the bank would loop). The last child of a
-container can be taken out and others added back in every version. A Random/Sequence container's emptied list ends in
-six zero bytes and an Actor-Mixer's in four, which is how the older banks find it again
-(`sound/bank-objects.md`). A failed edit of any kind leaves the bank as it was.
+A container cannot be put under itself or under one of its own children (the bank would loop).
+The last child of a container can be taken out and others added back in every version.
+A Random/Sequence container's emptied list ends in six zero bytes and an Actor-Mixer's in four.
+That is how the older banks find it again (`sound/bank-objects.md`).
+A failed edit of any kind leaves the bank as it was.
 
 An edit that the layout of the container does not allow says so and leaves the bank as it was ("the playlist does not
-end the container", "the child list was not found"). It never guesses. These are not edited at all: buses, the states
-of a node, the positioning, effects, an attenuation's cone, the music switch's decision tree, a layer container's
-children, layers added or removed, and a transition rule's transition object. A bank in which nothing was changed is
-written back **byte for byte**.
+end the container", "the child list was not found"). It never guesses.
+These are not edited at all: buses, the states of a node, the positioning, effects, an attenuation's cone, the music
+switch's decision tree, a layer container's children, layers added or removed, and a transition rule's transition
+object.
+A bank in which nothing was changed is written back **byte for byte**.
 
 ## Audio
 
@@ -91,8 +97,8 @@ stores its audio:
 | Wwise ADPCM (IMA, 36 bytes a channel and block, 64 samples) | all three | nothing | the encoder is the inverse of the decoder the viewer plays 2205's clips with (round trip tested); **not heard in a game** |
 | Wwise Vorbis | all three | ffmpeg with libvorbis and `packed_codebooks_aoTuV_603.bin` in `tools/` | the writer is `formats/wwvorbis`, the writer of the converted building sounds; 1800's and 2205's Vorbis files are the same layout with 2205's own channel word (the file header written is checked against the games' own files; `sound/bank-objects.md` "Wwise Vorbis files in 1800 and 2205"); **not heard in 1800 or 2205**. ffmpeg is never shipped |
 
-Memory: PCM is large (a 10 s stereo clip is 1.9 MB), ADPCM is a quarter of that, and Vorbis a tenth. 117's sound
-effects and the music are Vorbis, so put a long clip in as Vorbis where you can.
+Memory: PCM is large (a 10 s stereo clip is 1.9 MB), ADPCM is a quarter of that, and Vorbis a tenth.
+117's sound effects and the music are Vorbis, so put a long clip in as Vorbis where you can.
 
 ## Music (Anno 117's banks)
 
@@ -124,23 +130,24 @@ effects and the music are Vorbis, so put a long clip in as Vorbis where you can.
 ## The waveform
 
 A bank picked in the list, the clip of a picked Sound and the clip **Play** plays are read and decoded off the
-window's thread; the bank or the Sound asked for last is the one shown or played, an older answer is dropped.
+window's thread.
+The bank or the Sound asked for last is the one shown or played, and an older answer is dropped.
 
 Picking a Sound or a music track draws its clip above the facts: the peaks of the samples (the lowest and highest
 sample of each pixel column, both channels together), with the clip's length and format under it. The clip is the one
 the **Play** button would play: an edit's, or else the bank's, or else the loose file. It is decoded in the same way
 the Play button decodes it: PCM and Wwise ADPCM directly, and Wwise Vorbis through the codebook file and ffmpeg or
-miniaudio (the same two tools that read an Ogg file). Without them the area says why it is empty. A clip over 40 MB is
-not drawn. A music track's segment draws
-its markers (entry and exit cues) as lines at their time in the clip. `soundedit/waveform.py` makes the peaks (no Qt),
-`soundedit/wavewidget.py` draws them.
+miniaudio (the same two tools that read an Ogg file). Without them the area says why it is empty.
+A clip over 40 MB is not drawn.
+A music track's segment draws its markers (entry and exit cues) as lines at their time in the clip.
+`soundedit/waveform.py` makes the peaks (no Qt), and `soundedit/wavewidget.py` draws them.
 
 ## Files
 
 A localised bank (the voices, `BNK_MUS_MAIN`) lives once in every language folder (`windows/en_us/<id>.bnk`,
-`windows/de_de/...`) besides the plain file. The game reads the copy of the audio language. **Save** therefore makes
-the same edits to every copy the game has (the music fix of `music.md`). An object that a copy lacks is
-reported, and the edit is skipped for that copy. All paths are the game's own
+`windows/de_de/...`) besides the plain file. The game reads the copy of the audio language.
+**Save** therefore makes the same edits to every copy the game has (the music fix of `music.md`).
+An object that a copy lacks is reported, and the edit is skipped for that copy. All paths are the game's own
 (`data/sound/generatedsoundbanks/windows/...`), so a mod folder or, for 1800 and 2205, the delivery archive has them
 where the game looks.
 
@@ -155,7 +162,8 @@ Pick an Attenuation, a Layer container, or a Sound or container of Anno 117's ba
 the "curve" form offers them: an attenuation's curves with the uses they serve, a layer's curve for each child and its
 RTPC entries, or a node's RTPC entries. Edit the points as `x:y:interpolation, ...` (interpolation 4 is linear, 9 is
 constant, 0 to 9 are the shapes Wwise has) and choose **Apply the curve**. A curve needs two points or more with x not
-going back. Otherwise the status line says why, and the bank is unchanged.
+going back.
+Otherwise the status line says why, and the bank is unchanged.
 
 **Add an RTPC to this object** takes a game parameter id and the property it drives (volume, pitch, low-pass), with the
 points typed. **Remove the RTPC**, **Add a curve to this attenuation** (with the use slot that takes it: 0 volume dry
@@ -172,17 +180,18 @@ Note: not heard in a game.
 ## Groups
 
 A state group, a switch group and each value of one is an id, the hash of its name. A Switch container or a Set-State
-or Set-Switch action names one by id, so a **new group needs no definition** for those. **New state or switch
-group...** asks for the kind, the name and the values. In the Init bank it adds the group to the state manager: a state
+or Set-Switch action names one by id, so a **new group needs no definition** for those.
+**New state or switch group...** asks for the kind, the name and the values. In the Init bank it adds the group to the state manager: a state
 group, or a switch group that a game parameter drives (with the game parameter and the points typed as
 `value:switch`). In any other bank it names the group and its values for the lists, and tells you their ids to type
 into the forms that take one.
 
 Open the Init bank (`1355168291`) to see the state manager's groups in the **Groups** list. Picking one shows its
 default transition time, its custom transitions or the game parameter that drives it. The Init bank is the game's own.
-Whether the engine reads an Init bank from a mod folder, and whether a state group that only a mod's bank uses works,
-are questions for the game (`sound/bank-objects.md` "State and switch groups"). The group
-names are not written to any info file.
+Whether the engine reads an Init bank from a mod folder is a question for the game.
+So is whether a state group that only a mod's bank uses works
+(`sound/bank-objects.md` "State and switch groups").
+The group names are not written to any info file.
 
 ## The older games
 
@@ -201,7 +210,7 @@ them shows a page instead of the bank tree:
   as input need ffmpeg. **Add a sound...** adds a sound that plays a new file in the picked sound's folder, with its
   values copied.
 - **Replace a spoken line...** lists the game's spoken lines (every `.mp3` that has a `.sp` beside it), takes a clip
-  and writes it as an MP3 with the `.sp` envelope made from its loudness (`OldSoundDoc.replace_speech`).
+  and writes it as an MP3 with the `.sp` envelope made from its loudness (`COldSoundDoc.replace_speech`).
 - **Add to a list...** puts the picked sound into a list the game draws from, at a weight (below an event where the
   game keeps events). A sound that was added plays in the game only once a list draws it (`sounddb.add_member`,
   `remove_member`; an id that the database lacks or that the list already holds is refused).
@@ -209,10 +218,10 @@ them shows a page instead of the bank tree:
   sequence, and each placed sound with its time and id. Edit the numbers and choose **Apply** (one undo step). **Add a
   sound...** places a sound id on the picked sequence, and **Remove** takes the picked placement away
   (`formats/sndtimeline`: `set_length`, `place`, `unplace`, `move`; the file is written in the shipped layout).
-- A clip is made ready on a thread (ffmpeg may run for an Ogg, FLAC or MP3 input), with a line in the status bar. The
-  document changes when it is done (`OldSoundDoc.prepare_clip` / `put_clip`, `prepare_speech` / `put_files`). A second
-  clip while the first runs is announced, not started. Picking a row never reads its clip: it only asks whether the
-  file exists.
+- A clip is made ready on a thread (ffmpeg may run for an Ogg, FLAC or MP3 input), with a line in the status bar.
+  The document changes when it is done (`COldSoundDoc.prepare_clip` / `put_clip`, `prepare_speech` / `put_files`).
+  A second clip while the first runs is announced, not started.
+  Picking a row never reads its clip: it only asks whether the file exists.
 - A path that an edit would write to must lie inside the game: `..`, a leading slash or a drive refuses the edit.
 - Each change is one undo step (Ctrl+Z, Ctrl+Y). **File > Save to the project** keeps the changed database and the
   clips under `sound-edits/<game>/` in the project's paths, and the project's build packs them with the other parts:
@@ -220,9 +229,11 @@ them shows a page instead of the bank tree:
 
 The viewer opens the same files read-only (tables of sounds, lists with their sounds' files, ambients). It also opens
 a model's `.snd` (the sounds on each animation sequence) and a spoken line's `.sp` (its loudness as bars). A
-double-click plays the file. This part is tested on synthetic files and, read-only, on the three installs (every
-database, timeline and envelope written back byte for byte, `tests/test_sounddb.py`). **Nothing was heard in a game.**
-Whether the games take a WAV for an MP3 sound, a clip of another length, or an added sound id is currently unknown.
+double-click plays the file. This part is tested on synthetic files.
+It is also tested read-only on the three installs: every database, timeline and envelope is written back byte for
+byte (`tests/soundedit/test_sounddb.py`).
+**Nothing was heard in a game.**
+It is currently unknown whether the games take a WAV for an MP3 sound, a clip of another length, or an added sound id.
 
 ## What to try, and in the game
 

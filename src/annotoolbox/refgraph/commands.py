@@ -14,18 +14,18 @@ GAMES = ("anno117", "anno1800", "anno2205", "anno2070", "anno1404", "anno1701")
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    r = sub.add_parser(
+    parser = sub.add_parser(
         "unreferenced",
         help="the files of an installed game that no other file names (and, with --who, what names a file): the "
         "reference graph is built once and kept beside the game; the list as CSV. 'Unreferenced' means no reference "
         "found in the data - the program may still load the file (docs/references.md)",
     )
-    r.add_argument("game", choices=GAMES)
-    r.add_argument("--folder", default="", help="the install (default: the folder in the suite's settings)")
-    r.add_argument("--csv", default="", help="write the unreferenced files here (path, suffix, archive)")
-    r.add_argument("--who", default="", help="list what names this game path, and what it names")
-    r.add_argument("--rebuild", action="store_true", help="read every file again, not the kept graph")
-    r.set_defaults(func=cmd_unreferenced)
+    parser.add_argument("game", choices=GAMES)
+    parser.add_argument("--folder", default="", help="the install (default: the folder in the suite's settings)")
+    parser.add_argument("--csv", default="", help="write the unreferenced files here (path, suffix, archive)")
+    parser.add_argument("--who", default="", help="list what names this game path, and what it names")
+    parser.add_argument("--rebuild", action="store_true", help="read every file again, not the kept graph")
+    parser.set_defaults(func=cmd_unreferenced)
 
 
 def cmd_unreferenced(args: argparse.Namespace) -> int:
@@ -41,17 +41,20 @@ def cmd_unreferenced(args: argparse.Namespace) -> int:
     cache = graph.cache_file(settings.index_dir(args.game), args.game)
     if args.rebuild and cache.exists():
         cache.unlink()
-    found = graph.build(tree, cache, lambda n, total: print(f"  {n} of {total} files", file=sys.stderr))
+    found = graph.build(tree, cache, lambda done, total: print(f"  {done} of {total} files", file=sys.stderr))
     if args.who:
         key = args.who.replace("\\", "/").lower()
         print("\n".join([f"named by ({len(found.referenced_by(key))}):", *found.referenced_by(key)]))
         print("\n".join([f"names ({len(found.references(key))}):", *found.references(key)]))
         return 0
-    verdicts = found.verdicts(tree.paths)
-    counts = {c: sum(1 for v in verdicts.values() if v == c) for c in rules.CLASSES}
+    verdicts = found.verdicts(tree.m_paths)
+    counts = {
+        verdict_class: sum(1 for verdict in verdicts.values() if verdict == verdict_class)
+        for verdict_class in rules.CLASSES
+    }
     print(
-        f"{args.game}: {len(tree.paths)} files, {found.scanned} read; "
-        + ", ".join(f"{c} {n}" for c, n in counts.items())
+        f"{args.game}: {len(tree.m_paths)} files, {found.m_scanned} read; "
+        + ", ".join(f"{verdict_class} {count}" for verdict_class, count in counts.items())
     )
     if args.csv:
         Path(args.csv).write_text(graph.unreferenced_csv(tree, found, verdicts), encoding="utf-8", newline="\n")

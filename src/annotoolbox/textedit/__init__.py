@@ -1,7 +1,7 @@
 """The text editor: a game's texts in two languages side by side, a translation made and checked, written into a project
 as the game reads it (ModOps for 117 and 1800, whole text files for the others).
 
-Start at ``textwindow.TextWindow`` (the suite's Texts app). The parts, each one job (no Qt unless said):
+Start at ``textwindow.CTextWindow`` (the suite's Texts app). The parts, each one job (no Qt unless said):
 
 - ``textfiles``: a text file read as entries with their places and written back, byte for byte when nothing changed
 - ``texttable``: a game's languages and one language as a table; ``textdoc``: the open game, the edits, their status, the filters

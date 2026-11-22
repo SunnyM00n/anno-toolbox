@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import struct
 
-from .rdmread import LETTERS, TYPE_SIZES, VertexElement
+from .rdmread import LETTERS, TYPE_SIZES, SVertexElement
 
 # Packed four-byte vectors (type 5): the subtype by usage, as the shipped files have them (rdm.md "Vertices").
 DIRECTION, COLOUR, SECOND_COLOUR, CLOTH_COLOUR, INDICES, WEIGHTS = 6, 2, 6, 4, 0, 2
@@ -53,32 +53,32 @@ KNOWN: dict[str, str] = {
 _TOKEN = re.compile(r"([PNGBTCWI])(\d)([hfsbc])")
 
 
-class LayoutError(ValueError):
+class CLayoutError(ValueError):
     """A layout name that does not describe RDM vertex elements."""
 
 
-def parse(name: str) -> tuple[VertexElement, ...]:
+def parse(name: str) -> tuple[SVertexElement, ...]:
     """The elements of a layout name, with the subtypes the games use (a second ``C4b`` is subtype 6, as 117's
-    plants; ``C4c`` subtype 4). Raises ``LayoutError`` for a name that is not one."""
-    out: list[VertexElement] = []
+    plants; ``C4c`` subtype 4). Raises ``CLayoutError`` for a name that is not one."""
+    out: list[SVertexElement] = []
     colours = 0
     for token in name.split("_"):
-        m = _TOKEN.fullmatch(token)
-        if not m:
-            raise LayoutError(f"{token!r} in {name!r} is not an element (letter, count, kind: P4h, N4b, T2f ...)")
-        letter, count, kind = m.group(1), int(m.group(2)), m.group(3)
+        match = _TOKEN.fullmatch(token)
+        if not match:
+            raise CLayoutError(f"{token!r} in {name!r} is not an element (letter, count, kind: P4h, N4b, T2f ...)")
+        letter, count, kind = match.group(1), int(match.group(2)), match.group(3)
         usage = LETTERS.index(letter)
         if kind in "bc":
             if count != 4:
-                raise LayoutError(f"{token!r}: a packed byte vector always counts 4")
-            out.append(VertexElement(usage, 5, _packed_subtype(usage, kind, colours), 1))
+                raise CLayoutError(f"{token!r}: a packed byte vector always counts 4")
+            out.append(SVertexElement(usage, 5, _packed_subtype(usage, kind, colours), 1))
             colours += usage == 5
             continue
         if letter in "CWI":
-            raise LayoutError(f"{token!r}: colours, weights and bone indices are packed bytes (C4b, W4b, I4b)")
-        out.append(VertexElement(usage, _KINDS[kind], 0, count))
+            raise CLayoutError(f"{token!r}: colours, weights and bone indices are packed bytes (C4b, W4b, I4b)")
+        out.append(SVertexElement(usage, _KINDS[kind], 0, count))
     if not out or out[0].usage != 0:
-        raise LayoutError(f"{name!r}: a layout starts with the position")
+        raise CLayoutError(f"{name!r}: a layout starts with the position")
     return tuple(out)
 
 
@@ -88,42 +88,42 @@ def _packed_subtype(usage: int, kind: str, colours_before: int) -> int:
             return CLOTH_COLOUR
         return COLOUR if colours_before == 0 else SECOND_COLOUR
     if kind == "c":
-        raise LayoutError(f"{LETTERS[usage]}4c: only colours are written 4c")
+        raise CLayoutError(f"{LETTERS[usage]}4c: only colours are written 4c")
     return {1: DIRECTION, 2: DIRECTION, 3: DIRECTION, 4: DIRECTION, 6: WEIGHTS, 7: INDICES}.get(usage, 0)
 
 
-def name_of(elements: tuple[VertexElement, ...] | list[VertexElement]) -> str:
-    return "_".join(e.code for e in elements)
+def name_of(elements: tuple[SVertexElement, ...] | list[SVertexElement]) -> str:
+    return "_".join(element.code for element in elements)
 
 
-def stride_of(elements: tuple[VertexElement, ...] | list[VertexElement]) -> int:
-    return sum(TYPE_SIZES[e.type] * e.count for e in elements)
+def stride_of(elements: tuple[SVertexElement, ...] | list[SVertexElement]) -> int:
+    return sum(TYPE_SIZES[element.type] * element.count for element in elements)
 
 
-def _format(e: VertexElement) -> str:
-    if e.type == 5:
+def _format(element: SVertexElement) -> str:
+    if element.type == 5:
         return "<4B"
-    return f"<{e.count}{_STRUCT[e.type]}"
+    return f"<{element.count}{_STRUCT[element.type]}"
 
 
-def decode(e: VertexElement, raw: bytes) -> tuple:
+def decode(element: SVertexElement, raw: bytes) -> tuple:
     """One element of one vertex: floats for half and float types, integers otherwise, four bytes when packed."""
-    return struct.unpack(_format(e), raw)
+    return struct.unpack(_format(element), raw)
 
 
-def encode(e: VertexElement, values) -> bytes:
+def encode(element: SVertexElement, values) -> bytes:
     """The bytes of one element of one vertex (the inverse of ``decode``; floats are rounded to the type)."""
-    if e.type in (6, 7):
-        return struct.pack(_format(e), *(float(v) for v in values))
-    return struct.pack(_format(e), *(int(v) for v in values))
+    if element.type in (6, 7):
+        return struct.pack(_format(element), *(float(value) for value in values))
+    return struct.pack(_format(element), *(int(value) for value in values))
 
 
 def weight_bytes(weights) -> tuple[int, ...]:
     """Skin weights as bytes summing to 255 (to 4 for four zeros), in their proportions: each rounded down, the units
     left over going to the largest remainders."""
     total = sum(weights) or 1.0
-    exact = [w * 255 / total for w in weights]
-    out = [int(c) for c in exact]
+    exact = [weight * 255 / total for weight in weights]
+    out = [int(channel_value) for channel_value in exact]
     for k in sorted(range(len(out)), key=lambda k: out[k] - exact[k])[: 255 - sum(out)]:
         out[k] += 1
     return tuple(out)

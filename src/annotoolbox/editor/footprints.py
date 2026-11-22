@@ -26,8 +26,8 @@ Polygons = list[list[tuple[float, float]]]
 
 def info_path(cfg: str) -> str:
     """The info file beside a model config (1701's ``.mcf``: an ``.info``)."""
-    stem, ext = cfg.rsplit(".", 1)
-    return stem + (".info" if ext.lower() == "mcf" else ".ifo")
+    stem, extension = cfg.rsplit(".", 1)
+    return stem + (".info" if extension.lower() == "mcf" else ".ifo")
 
 
 def read_footprint(ifo_text: str, ocf_text: str = "") -> Polygons:
@@ -44,13 +44,16 @@ def turn_of(rotation) -> float:
 
 def world(polygons: Polygons, position, rotation) -> list[np.ndarray]:
     """The polygons turned by ``rotation`` and moved to ``position`` (x, y, z): arrays of (x, z) rows."""
-    th = turn_of(rotation)
-    c, s = math.cos(th), math.sin(th)
+    angle = turn_of(rotation)
+    cosine, sine = math.cos(angle), math.sin(angle)
     out = []
-    for poly in polygons:
-        p = np.asarray(poly, float)
+    for polygon in polygons:
+        corners = np.asarray(polygon, float)
         out.append(
-            np.stack([p[:, 0] * c + p[:, 1] * s, -p[:, 0] * s + p[:, 1] * c], axis=1) + (position[0], position[2])
+            np.stack(
+                [corners[:, 0] * cosine + corners[:, 1] * sine, -corners[:, 0] * sine + corners[:, 1] * cosine], axis=1
+            )
+            + (position[0], position[2])
         )
     return out
 
@@ -64,14 +67,14 @@ def eighth_of(rotation) -> float | None:
 def on_grid(polygons: Polygons, position, rotation) -> bool:
     """Whether the footprint stands on the tile grid: for a quarter turn every corner on a whole tile corner, for an
     odd eighth the origin on the diagonal lattice."""
-    k = eighth_of(rotation)
-    if k is None:
+    eighth = eighth_of(rotation)
+    if eighth is None:
         return False
-    if k % 2:
+    if eighth % 2:
         x, z = position[0], position[2]
         return math.dist((x, z), diagonal(x, z)) <= TOLERANCE
-    pts = np.concatenate(world(polygons, position, rotation))
-    return bool(np.all(np.abs(pts - np.round(pts)) <= TOLERANCE))
+    corners = np.concatenate(world(polygons, position, rotation))
+    return bool(np.all(np.abs(corners - np.round(corners)) <= TOLERANCE))
 
 
 def snap_origin(polygons: Polygons, position, rotation) -> tuple[float, float]:
@@ -86,23 +89,24 @@ def snap_origin(polygons: Polygons, position, rotation) -> tuple[float, float]:
 
 def hull(points: np.ndarray) -> np.ndarray:
     """The convex hull of (x, z) points, counter-clockwise."""
-    pts = sorted(map(tuple, points))
-    if len(pts) < 3:
-        return np.asarray(pts)
+    sorted_points = sorted(map(tuple, points))
+    if len(sorted_points) < 3:
+        return np.asarray(sorted_points)
 
     def half(seq):
         out = []
-        for p in seq:
+        for point in seq:
             while (
                 len(out) >= 2
-                and (out[-1][0] - out[-2][0]) * (p[1] - out[-2][1]) - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])
+                and (out[-1][0] - out[-2][0]) * (point[1] - out[-2][1])
+                - (out[-1][1] - out[-2][1]) * (point[0] - out[-2][0])
                 <= 0
             ):
                 out.pop()
-            out.append(p)
+            out.append(point)
         return out
 
-    lower, upper = half(pts), half(reversed(pts))
+    lower, upper = half(sorted_points), half(reversed(sorted_points))
     return np.asarray(lower[:-1] + upper[:-1])
 
 
@@ -116,46 +120,50 @@ def inside(points: np.ndarray, hull: np.ndarray) -> np.ndarray:
     return np.all(cross >= -1e-9, axis=1)
 
 
-def cell_grid(polys: list[np.ndarray], step: float = 1.0, margin: int = 0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def cell_grid(
+    polygons: list[np.ndarray], step_tiles: float = 1.0, margin: int = 0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The ``step``-tile cells over the footprint ``polys``, ``margin`` cells wider on each side (cell ``i`` spans
     ``[i * step, (i + 1) * step]``): their centres (x, z rows), which of them lie under the footprint, and which
     are in the ring of cells touching it (a centre one step away from one under it, itself not under it)."""
-    pts = np.concatenate(polys)
-    x0, z0 = np.floor(pts.min(axis=0) / step).astype(int) - margin
-    x1, z1 = np.ceil(pts.max(axis=0) / step).astype(int) + margin
-    zz, xx = np.mgrid[z0:z1, x0:x1]
-    centres = (np.stack([xx.ravel(), zz.ravel()], axis=1) + 0.5) * step
+    points = np.concatenate(polygons)
+    min_x, min_z = np.floor(points.min(axis=0) / step_tiles).astype(int) - margin
+    max_x, max_z = np.ceil(points.max(axis=0) / step_tiles).astype(int) + margin
+    grid_z, grid_x = np.mgrid[min_z:max_z, min_x:max_x]
+    centres = (np.stack([grid_x.ravel(), grid_z.ravel()], axis=1) + 0.5) * step_tiles
     under = np.zeros(len(centres), bool)
     near = np.zeros(len(centres), bool)
-    for poly in polys:
-        shell = hull(poly)
+    for polygon in polygons:
+        shell = hull(polygon)
         under |= inside(centres, shell)
-        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            near |= inside(centres + (dx * step, dz * step), shell)
+        for offset_x, offset_z in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            near |= inside(centres + (offset_x * step_tiles, offset_z * step_tiles), shell)
     return centres, under, near & ~under
 
 
-def cell_centres(polys: list[np.ndarray], step: float = 1.0) -> np.ndarray:
+def cell_centres(polygons: list[np.ndarray], step_tiles: float = 1.0) -> np.ndarray:
     """The centres (x, z rows) of the ``step``-tile cells under the footprint ``polys``; a cell is under it when
     its centre is."""
-    centres, under, _ = cell_grid(polys, step)
+    centres, under, _ = cell_grid(polygons, step_tiles)
     return centres[under]
 
 
-def overlap(a: np.ndarray, b: np.ndarray) -> float:
+def overlap(first: np.ndarray, second: np.ndarray) -> float:
     """How deep the convex hulls of two polygons reach into each other along the axis they part on least (the
     separating-axis test); 0 when they only touch or are apart."""
     best = math.inf
-    for poly in (hull(a), hull(b)):
-        edge = np.roll(poly, -1, axis=0) - poly
-        for ex, ez in edge:
-            n = np.array([-ez, ex])
-            length = float(np.hypot(*n))
+    for polygon in (hull(first), hull(second)):
+        edge = np.roll(polygon, -1, axis=0) - polygon
+        for edge_x, edge_z in edge:
+            normal = np.array([-edge_z, edge_x])
+            length = float(np.hypot(*normal))
             if length == 0:
                 continue
-            n /= length
-            pa, pb = a @ n, b @ n
-            depth = min(pa.max(), pb.max()) - max(pa.min(), pb.min())
+            normal /= length
+            first_projection, second_projection = first @ normal, second @ normal
+            depth = min(first_projection.max(), second_projection.max()) - max(
+                first_projection.min(), second_projection.min()
+            )
             if depth <= 0:
                 return 0.0
             best = min(best, depth)

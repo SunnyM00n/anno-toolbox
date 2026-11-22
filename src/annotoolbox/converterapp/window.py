@@ -1,7 +1,7 @@
 """The Converter app's window: the entries by category on the left; on the right the chosen entry's sources, target and
 options (its command's own, as a form), Start and Stop, the progress and the log.
 
-``ConverterWindow`` is the page; ``make(shell)`` is what the suite calls. A page an extension registers at
+``CConverterWindow`` is the page; ``make(shell)`` is what the suite calls. A page an extension registers at
 ``features.CONVERTER_PAGES`` is a tab beside the entries. The run is ``runner.run`` on a background thread; the form is
 ``commandform``. docs/converter-app.md, "The window".
 """
@@ -39,24 +39,24 @@ from PySide6.QtWidgets import (
 from ..infra.i18n import N_, tr, trn
 from ..sources import gametree
 from ..suite import features, project
-from ..suite.background import Background
+from ..suite.background import CBackground
 from ..suite.widgets import pick_from_list
 from . import catalogue, commandform, gamefiles, runner
-from .form import OptionsForm
+from .form import COptionsForm
 
 APP = "converter"
 TITLE = N_("convert.converter")
 ROLE = Qt.ItemDataRole.UserRole
 
 
-class _Talk(QObject):
+class _CTalk(QObject):
     """A job's lines and steps, from its thread to the window's."""
 
     said = Signal(str)
     stepped = Signal(int, int)
 
 
-class _FitPage(QWidget):
+class _CFitPage(QWidget):
     """The scrolled page of the chosen entry: as tall as its wrapped texts need at its width, so the scroll area
     scrolls instead of pressing the option rows together (a wrapped label's height depends on its width)."""
 
@@ -65,71 +65,73 @@ class _FitPage(QWidget):
         self.fit()
 
     def fit(self) -> None:
-        lay = self.layout()
-        if lay is not None and lay.hasHeightForWidth():
-            wanted = lay.totalHeightForWidth(self.width())
+        layout = self.layout()
+        if layout is not None and layout.hasHeightForWidth():
+            wanted = layout.totalHeightForWidth(self.width())
             if wanted != self.minimumHeight():
                 self.setMinimumHeight(wanted)
 
 
-class ConverterWindow(QMainWindow):
+class CConverterWindow(QMainWindow):
     """The entries, the chosen one's form, the run; the pages extensions add beside them."""
 
     def __init__(self, settings, settings_path: Path | None = None, shell=None) -> None:
         super().__init__()
         self.setWindowTitle(tr(TITLE))
-        self.settings, self.settings_path = settings, settings_path
-        self.background = Background(self)
-        self.talk_qt = _Talk(self)
-        self.talk_qt.said.connect(self._log)
-        self.talk_qt.stepped.connect(self._step)
-        self.talk: runner.Talk | None = None
-        self.entries = {c.key: c for c in catalogue.entries()}
-        self.change = None
-        self.tree_cache: dict[str, object] = {}
+        self.m_settings, self.m_settings_path = settings, settings_path
+        self.m_background = CBackground(self)
+        self.m_talk_qt = _CTalk(self)
+        self.m_talk_qt.said.connect(self._log)
+        self.m_talk_qt.stepped.connect(self._step)
+        self.m_talk: runner.STalk | None = None
+        self.m_entries = {conversion.key: conversion for conversion in catalogue.entries()}
+        self.m_change = None
+        self.m_tree_cache: dict[str, object] = {}
         entries_page = self._build()
-        host = shell or SimpleNamespace(settings=settings, settings_path=settings_path)
-        self.pages = [(spec.title, spec.make(host)) for spec in features.extensions(features.CONVERTER_PAGES).values()]
-        if self.pages:
-            self.tabs = QTabWidget()
-            self.tabs.addTab(entries_page, tr("convert.files_page"))
-            for title, page in self.pages:
+        host = shell or SimpleNamespace(m_settings=settings, m_settings_path=settings_path)
+        self.m_pages = [
+            (spec.title, spec.make(host)) for spec in features.extensions(features.CONVERTER_PAGES).values()
+        ]
+        if self.m_pages:
+            self.m_tabs = QTabWidget()
+            self.m_tabs.addTab(entries_page, tr("convert.files_page"))
+            for title, page in self.m_pages:
                 if isinstance(page, QMainWindow):
                     page.setWindowFlags(Qt.WindowType.Widget)
-                self.tabs.addTab(page, tr(title))
-            self.setCentralWidget(self.tabs)
+                self.m_tabs.addTab(page, tr(title))
+            self.setCentralWidget(self.m_tabs)
         else:
-            self.tabs = None
+            self.m_tabs = None
             self.setCentralWidget(entries_page)
         self._menu()
-        self.choose(self.state.get("entry") or next(iter(self.entries), ""))
+        self.choose(self.state.get("entry") or next(iter(self.m_entries), ""))
 
     @property
     def state(self) -> dict:
-        return self.settings.apps.setdefault(APP, {})
+        return self.m_settings.apps.setdefault(APP, {})
 
     # building
     def _build(self) -> QWidget:
         left = QWidget()
-        lay = QVBoxLayout(left)
-        self.filter = QLineEdit(placeholderText=tr("convert.filter"))
-        self.filter.textChanged.connect(self._fill_tree)
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.currentItemChanged.connect(lambda item, _old: self._picked(item))
-        lay.addWidget(self.filter)
-        lay.addWidget(self.tree, 1)
+        layout = QVBoxLayout(left)
+        self.m_filter = QLineEdit(placeholderText=tr("convert.filter"))
+        self.m_filter.textChanged.connect(self._fill_tree)
+        self.m_tree = QTreeWidget()
+        self.m_tree.setHeaderHidden(True)
+        self.m_tree.currentItemChanged.connect(lambda item, _old: self._picked(item))
+        layout.addWidget(self.m_filter)
+        layout.addWidget(self.m_tree, 1)
         self._fill_tree()
         right = QSplitter(Qt.Orientation.Vertical)
         scroll = QScrollArea(widgetResizable=True)
         scroll.setWidget(self._detail())
         bottom = QWidget()
-        bottom_lay = QVBoxLayout(bottom)
-        bottom_lay.setContentsMargins(0, 0, 0, 0)
-        bottom_lay.addLayout(self._run_row())
-        self.log = QPlainTextEdit(readOnly=True)
-        self.log.setMaximumBlockCount(20000)
-        bottom_lay.addWidget(self.log, 1)
+        bottom_layout = QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.addLayout(self._run_row())
+        self.m_log = QPlainTextEdit(readOnly=True)
+        self.m_log.setMaximumBlockCount(20000)
+        bottom_layout.addWidget(self.m_log, 1)
         right.addWidget(scroll)
         right.addWidget(bottom)
         right.setSizes([620, 220])
@@ -140,67 +142,67 @@ class ConverterWindow(QMainWindow):
         return split
 
     def _detail(self) -> QWidget:
-        page = self.detail_page = _FitPage()
-        lay = QVBoxLayout(page)
-        self.heading = QLabel(wordWrap=True)
-        font = self.heading.font()
+        page = self.m_detail_page = _CFitPage()
+        layout = QVBoxLayout(page)
+        self.m_heading = QLabel(wordWrap=True)
+        font = self.m_heading.font()
         font.setBold(True)
-        self.heading.setFont(font)
-        self.summary = QLabel(wordWrap=True)
-        self.command = QLabel(wordWrap=True, textInteractionFlags=Qt.TextInteractionFlag.TextSelectableByMouse)
-        for label in (self.heading, self.summary, self.command):
-            lay.addWidget(label)
-        lay.addWidget(self._sources_box())
-        lay.addWidget(self._target_box())
-        self.options_box = QGroupBox(tr("common.options"))
-        self.form = OptionsForm(self.options_box, self.settings)
-        self.form.changed.connect(self._show_command)
-        lay.addWidget(self.options_box)
-        lay.addStretch(1)
+        self.m_heading.setFont(font)
+        self.m_summary = QLabel(wordWrap=True)
+        self.m_command = QLabel(wordWrap=True, textInteractionFlags=Qt.TextInteractionFlag.TextSelectableByMouse)
+        for label in (self.m_heading, self.m_summary, self.m_command):
+            layout.addWidget(label)
+        layout.addWidget(self._sources_box())
+        layout.addWidget(self._target_box())
+        self.m_options_box = QGroupBox(tr("common.options"))
+        self.m_form = COptionsForm(self.m_options_box, self.m_settings)
+        self.m_form.changed.connect(self._show_command)
+        layout.addWidget(self.m_options_box)
+        layout.addStretch(1)
         return page
 
     def _sources_box(self) -> QGroupBox:
         box = QGroupBox(tr("convert.sources"))
-        lay = QVBoxLayout(box)
+        layout = QVBoxLayout(box)
         row = QHBoxLayout()
         row.addWidget(QLabel(tr("common.game")))
-        self.game_box = QComboBox()
-        self.game_box.currentIndexChanged.connect(lambda _i: self.change is not None and self._show_command())
-        row.addWidget(self.game_box, 1)
-        lay.addLayout(row)
-        self.sources = QListWidget()
-        self.sources.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.sources.setMaximumHeight(140)
-        lay.addWidget(self.sources)
+        self.m_game_box = QComboBox()
+        self.m_game_box.currentIndexChanged.connect(lambda _i: self.m_change is not None and self._show_command())
+        row.addWidget(self.m_game_box, 1)
+        layout.addLayout(row)
+        self.m_sources = QListWidget()
+        self.m_sources.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.m_sources.setMaximumHeight(140)
+        layout.addWidget(self.m_sources)
         buttons = QHBoxLayout()
-        self.add_files_button = self._button(buttons, N_("convert.add_files"), self.add_files)
-        self.add_folder_button = self._button(buttons, N_("convert.add_folder"), self.add_folder)
-        self.from_game_button = self._button(buttons, N_("convert.from_game"), self.from_game)
-        self.type_button = self._button(buttons, N_("convert.type_value"), self.type_value)
+        self.m_add_files_button = self._button(buttons, N_("convert.add_files"), self.add_files)
+        self.m_add_folder_button = self._button(buttons, N_("convert.add_folder"), self.add_folder)
+        self.m_from_game_button = self._button(buttons, N_("convert.from_game"), self.from_game)
+        self.m_type_button = self._button(buttons, N_("convert.type_value"), self.type_value)
         self._button(buttons, N_("convert.remove"), self.remove_sources)
-        self._button(buttons, N_("convert.clear"), self.sources.clear)
-        lay.addLayout(buttons)
+        self._button(buttons, N_("convert.clear"), self.m_sources.clear)
+        layout.addLayout(buttons)
         return box
 
     def _target_box(self) -> QGroupBox:
         box = QGroupBox(tr("convert.target"))
         row = QHBoxLayout(box)
-        self.out = QLineEdit(self.state.get("out") or str(self.project_folder()))
+        self.m_out = QLineEdit(self.state.get("out") or str(self.project_folder()))
         row.addWidget(QLabel(tr("convert.output_folder")))
-        row.addWidget(self.out, 1)
+        row.addWidget(self.m_out, 1)
         self._button(row, N_("convert.pick"), self.pick_out)
-        self._button(row, N_("convert.project_folder"), lambda: self.out.setText(str(self.project_folder())))
+        self._button(row, N_("convert.project_folder"), lambda: self.m_out.setText(str(self.project_folder())))
         return box
 
     def _run_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.start_button = self._button(row, N_("convert.start"), self.start)
-        self.stop_button = self._button(row, N_("convert.stop"), self.stop)
-        self.stop_button.setEnabled(False)
-        self.progress = QProgressBar(textVisible=False)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
-        row.addWidget(self.progress, 1)
+        self.m_start_button = self._button(row, N_("convert.start"), self.start)
+        self.m_stop_button = self._button(row, N_("convert.stop"), self.stop)
+        self.m_stop_button.setEnabled(False)
+        self.m_progress = QProgressBar(textVisible=False)
+        self.m_progress.setRange(0, 1)
+        self.m_progress.setValue(0)
+        row.addWidget(self.m_progress, 1)
         return row
 
     @staticmethod
@@ -227,20 +229,20 @@ class ConverterWindow(QMainWindow):
             action = QAction(tr(text), self)
             if key is not None:
                 action.setShortcut(QKeySequence(key))
-            action.triggered.connect(lambda _c=False, s=slot: s())
+            action.triggered.connect(lambda _c=False, handler=slot: handler())
             menu.addAction(action)
 
     def _fill_tree(self) -> None:
-        words = self.filter.text().lower().split()
-        current = self.change.key if self.change is not None else ""
-        self.tree.blockSignals(True)
-        self.tree.clear()
-        for category, found in catalogue.by_category(list(self.entries.values())):
+        words = self.m_filter.text().lower().split()
+        current = self.m_change.key if self.m_change is not None else ""
+        self.m_tree.blockSignals(True)
+        self.m_tree.clear()
+        for category, found in catalogue.by_category(list(self.m_entries.values())):
             top = QTreeWidgetItem([tr(catalogue.CATEGORIES[category])])
             top.setFlags(Qt.ItemFlag.ItemIsEnabled)
             for change in found:
                 text = tr(change.title)
-                if words and not all(w in f"{text} {tr(change.summary)}".lower() for w in words):
+                if words and not all(word in f"{text} {tr(change.summary)}".lower() for word in words):
                     continue
                 item = QTreeWidgetItem([text])
                 item.setData(0, ROLE, change.key)
@@ -249,11 +251,11 @@ class ConverterWindow(QMainWindow):
                     item.setForeground(0, self.palette().placeholderText())
                 top.addChild(item)
                 if change.key == current:
-                    self.tree.setCurrentItem(item)
+                    self.m_tree.setCurrentItem(item)
             if top.childCount():
-                self.tree.addTopLevelItem(top)
+                self.m_tree.addTopLevelItem(top)
                 top.setExpanded(True)
-        self.tree.blockSignals(False)
+        self.m_tree.blockSignals(False)
 
     # choosing
     def _picked(self, item: QTreeWidgetItem | None) -> None:
@@ -263,129 +265,143 @@ class ConverterWindow(QMainWindow):
 
     def choose(self, key: str) -> None:
         """Show the entry ``key``: its texts, its sources and its options."""
-        change = self.entries.get(key)
+        change = self.m_entries.get(key)
         if change is None:
             return
-        self.change = change
+        self.m_change = change
         self.state["entry"] = key
         self._select_item(key)
-        self.heading.setText(tr(change.title))
-        self.summary.setText(tr(change.summary))
+        self.m_heading.setText(tr(change.title))
+        self.m_summary.setText(tr(change.summary))
         parser = commandform.parser_of(change)
-        self.form.show_fields(change, parser)
+        self.m_form.show_fields(change, parser)
         self._fill_games(change)
         self._show_source_buttons(change)
-        self.sources.clear()
-        self.start_button.setEnabled(parser is not None and self.talk is None)
+        self.m_sources.clear()
+        self.m_start_button.setEnabled(parser is not None and self.m_talk is None)
         self._show_command()
-        QTimer.singleShot(0, self.detail_page, self.detail_page.fit)  # once the new rows are laid out
+        QTimer.singleShot(0, self.m_detail_page, self.m_detail_page.fit)  # once the new rows are laid out
 
     def _select_item(self, key: str) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            top = self.tree.topLevelItem(i)
+        for i in range(self.m_tree.topLevelItemCount()):
+            top = self.m_tree.topLevelItem(i)
             for j in range(top.childCount()):
-                if top.child(j).data(0, ROLE) == key and self.tree.currentItem() is not top.child(j):
-                    self.tree.blockSignals(True)
-                    self.tree.setCurrentItem(top.child(j))
-                    self.tree.blockSignals(False)
+                if top.child(j).data(0, ROLE) == key and self.m_tree.currentItem() is not top.child(j):
+                    self.m_tree.blockSignals(True)
+                    self.m_tree.setCurrentItem(top.child(j))
+                    self.m_tree.blockSignals(False)
 
     def _fill_games(self, change) -> None:
-        self.game_box.clear()
+        self.m_game_box.clear()
         if change.source in ("files", "folder"):
-            self.game_box.addItem(tr("convert.files_on_disk"), "")
+            self.m_game_box.addItem(tr("convert.files_on_disk"), "")
         for key in change.games:
-            self.game_box.addItem(gametree.GAMES.get(key, key), key)
-        self.game_box.setEnabled(self.game_box.count() > 1)
+            self.m_game_box.addItem(gametree.GAMES.get(key, key), key)
+        self.m_game_box.setEnabled(self.m_game_box.count() > 1)
 
     def _show_source_buttons(self, change) -> None:
         on_disk = change.source in ("files", "folder")
-        self.add_files_button.setVisible(change.source == "files")
-        self.add_folder_button.setVisible(on_disk)
+        self.m_add_files_button.setVisible(change.source == "files")
+        self.m_add_folder_button.setVisible(on_disk)
         from_game = change.source in ("files", "game_paths") and bool(change.games)
-        self.from_game_button.setVisible(from_game or change.candidates is not None)
-        self.type_button.setVisible(change.source in ("values", "game_paths"))
+        self.m_from_game_button.setVisible(from_game or change.candidates is not None)
+        self.m_type_button.setVisible(change.source in ("values", "game_paths"))
 
     def _show_command(self) -> None:
-        change = self.change
+        change = self.m_change
         parser = commandform.parser_of(change) if change is not None else None
         if parser is None:
-            self.command.setText(tr("convert.not_in_build", command=" ".join(change.command)) if change else "")
+            self.m_command.setText(tr("convert.not_in_build", command=" ".join(change.command)) if change else "")
             return
         line = commandform.argv(change, parser, ["<source>"], "<target>", self.values())
-        self.command.setText(tr("convert.command_line", line=commandform.shown(program(), line)))
+        self.m_command.setText(tr("convert.command_line", line=commandform.shown(program(), line)))
 
     def values(self) -> dict:
         """The form's values, with what the window fills where the form left them empty: the game folders of the
         settings and the entry's own ``complete`` (the source game and the installs it needs)."""
-        change, values = self.change, self.form.values()
-        values.update({k: getattr(self.settings, v, "") for k, v in change.folders.items() if not values.get(k)})
+        change, values = self.m_change, self.m_form.values()
+        values.update(
+            {
+                dest: getattr(self.m_settings, setting, "")
+                for dest, setting in change.folders.items()
+                if not values.get(dest)
+            }
+        )
         if change.complete is not None:
-            game = self.game_box.currentData() or ""
-            values.update({k: v for k, v in change.complete(self.settings, values, game).items() if not values.get(k)})
+            game = self.m_game_box.currentData() or ""
+            values.update(
+                {
+                    dest: value
+                    for dest, value in change.complete(self.m_settings, values, game).items()
+                    if not values.get(dest)
+                }
+            )
         return values
 
     # sources and target
     def project_folder(self) -> Path:
-        return project.folder_of(self.settings) / gamefiles.FOLDER
+        return project.folder_of(self.m_settings) / gamefiles.FOLDER
 
     def add_sources(self, items: list[str]) -> None:
-        known = {self.sources.item(i).text() for i in range(self.sources.count())}
+        known = {self.m_sources.item(i).text() for i in range(self.m_sources.count())}
         for item in items:
             if item and item not in known:
-                self.sources.addItem(item)
+                self.m_sources.addItem(item)
                 known.add(item)
 
     def source_list(self) -> list[str]:
-        return [self.sources.item(i).text() for i in range(self.sources.count())]
+        return [self.m_sources.item(i).text() for i in range(self.m_sources.count())]
 
     def add_files(self) -> None:
-        if self.change is None or self.change.source != "files":
+        if self.m_change is None or self.m_change.source != "files":
             return
-        pattern = " ".join(f"*{s}" for s in self.change.suffixes) or "*"
+        pattern = " ".join(f"*{suffix}" for suffix in self.m_change.suffixes) or "*"
         names, _ = QFileDialog.getOpenFileNames(
-            self, tr("convert.choose_files"), "", f"{tr(self.change.title)} ({pattern})"
+            self, tr("convert.choose_files"), "", f"{tr(self.m_change.title)} ({pattern})"
         )
         self.add_sources(names)
 
     def add_folder(self) -> None:
-        if self.change is None or self.change.source not in ("files", "folder"):
+        if self.m_change is None or self.m_change.source not in ("files", "folder"):
             return
         name = QFileDialog.getExistingDirectory(self, tr("convert.choose_folder"))
         self.add_sources([name] if name else [])
 
     def type_value(self) -> None:
-        if self.change is None or self.change.source not in ("values", "game_paths"):
+        if self.m_change is None or self.m_change.source not in ("values", "game_paths"):
             return
-        text, ok = QInputDialog.getText(self, tr("convert.type_title"), tr("convert.type_hint"))
-        if ok:
+        text, is_accepted = QInputDialog.getText(self, tr("convert.type_title"), tr("convert.type_hint"))
+        if is_accepted:
             self.add_sources(commandform.values_of(text))
 
     def remove_sources(self) -> None:
-        for item in self.sources.selectedItems():
-            self.sources.takeItem(self.sources.row(item))
+        for item in self.m_sources.selectedItems():
+            self.m_sources.takeItem(self.m_sources.row(item))
 
     def pick_out(self) -> None:
-        name = QFileDialog.getExistingDirectory(self, tr("convert.output_folder"), self.out.text())
+        name = QFileDialog.getExistingDirectory(self, tr("convert.output_folder"), self.m_out.text())
         if name:
-            self.out.setText(name)
+            self.m_out.setText(name)
 
     def from_game(self) -> None:
         """Pick sources from the chosen game: its files (copied out as stored), its paths, or the entry's own list."""
-        change, game = self.change, self.game_box.currentData() or ""
-        if change is None or self.talk is not None:
+        change, game = self.m_change, self.m_game_box.currentData() or ""
+        if change is None or self.m_talk is not None:
             return
         if change.candidates is not None:
             self._busy(tr("convert.reading_game", game=gametree.GAMES.get(game, game or "?")))
-            self.background.run(lambda: change.candidates(self.settings), self._candidates_read)
+            self.m_background.run(lambda: change.candidates(self.m_settings), self._candidates_read)
             return
         if not game:
             self.statusBar().showMessage(tr("convert.choose_game"))
             return
-        if game in self.tree_cache:
-            self._pick_paths(game, self.tree_cache[game])
+        if game in self.m_tree_cache:
+            self._pick_paths(game, self.m_tree_cache[game])
             return
         self._busy(tr("convert.reading_game", game=gametree.GAMES.get(game, game)))
-        self.background.run(lambda: gamefiles.open_tree(self.settings, game), lambda r: self._tree_read(game, r))
+        self.m_background.run(
+            lambda: gamefiles.open_tree(self.m_settings, game), lambda result: self._tree_read(game, result)
+        )
 
     def _busy(self, text: str) -> None:
         self.statusBar().showMessage(text)
@@ -396,22 +412,22 @@ class ConverterWindow(QMainWindow):
             return
         self.statusBar().clearMessage()
         rows = result
-        chosen = pick_from_list(self, tr(self.change.title), tr("convert.pick_hint_values"),
-                                lambda q: [r for r in rows if q.lower() in r[0].lower()][:400])  # fmt: skip
+        chosen = pick_from_list(self, tr(self.m_change.title), tr("convert.pick_hint_values"),
+                                lambda query: [row for row in rows if query.lower() in row[0].lower()][:400])  # fmt: skip
         self.add_sources([chosen] if chosen else [])
 
     def _tree_read(self, game: str, result) -> None:
         if isinstance(result, Exception):
             self.statusBar().showMessage(tr("convert.game_not_read", error=result))
             return
-        self.tree_cache[game] = result
+        self.m_tree_cache[game] = result
         self.statusBar().clearMessage()
         self._pick_paths(game, result)
 
     def _pick_paths(self, game: str, tree) -> None:
-        change = self.change
+        change = self.m_change
         hint = tr("convert.pick_hint_paths") if change.source == "game_paths" else tr("convert.pick_hint_files")
-        rows = lambda q: [(p, p) for p in gamefiles.paths(tree, change.suffixes, q)]  # noqa: E731
+        rows = lambda query: [(game_path, game_path) for game_path in gamefiles.paths(tree, change.suffixes, query)]  # noqa: E731
         chosen = pick_from_list(self, tr("convert.pick_title", game=gametree.GAMES.get(game, game)), hint, rows)
         if not chosen:
             return
@@ -419,10 +435,10 @@ class ConverterWindow(QMainWindow):
             self.add_sources([chosen])
             return
         try:
-            folder = gamefiles.fresh_folder(self.settings, game)
+            folder = gamefiles.fresh_folder(self.m_settings, game)
             gamefiles.extract(tree, [chosen], folder)
-        except (OSError, ValueError, KeyError) as exc:
-            self.statusBar().showMessage(tr("convert.game_not_read", error=exc))
+        except (OSError, ValueError, KeyError) as error:
+            self.statusBar().showMessage(tr("convert.game_not_read", error=error))
             return
         self.add_sources([str(folder)])  # the folder, so the game path (and the kind it says) is kept
         self._log(tr("convert.picked", path=chosen, folder=folder))
@@ -430,62 +446,63 @@ class ConverterWindow(QMainWindow):
     # running
     def lines(self) -> list[list[str]]:
         """The command lines a Start runs: one per source when the entry runs per source, else one for all."""
-        change, parser = self.change, commandform.parser_of(self.change)
-        out, values, sources = Path(self.out.text().strip()), self.values(), self.source_list()
+        change, parser = self.m_change, commandform.parser_of(self.m_change)
+        out, values, sources = Path(self.m_out.text().strip()), self.values(), self.source_list()
         if not change.per_input:
             return [commandform.argv(change, parser, sources, str(out), values)]
         return [
-            commandform.argv(change, parser, [s], str(commandform.target_of(change, out, s)), values) for s in sources
+            commandform.argv(change, parser, [source], str(commandform.target_of(change, out, source)), values)
+            for source in sources
         ]
 
     def start(self) -> bool:
         """Run the entry on its sources; False (and the reason in the status line) when it cannot start."""
-        change = self.change
-        if change is None or self.talk is not None or commandform.parser_of(change) is None:
+        change = self.m_change
+        if change is None or self.m_talk is not None or commandform.parser_of(change) is None:
             return False
         why = self._refused()
         if why:
             self.statusBar().showMessage(why)
             return False
-        self.state["out"] = self.out.text().strip()
+        self.state["out"] = self.m_out.text().strip()
         lines = self.lines()
-        self.talk = runner.Talk(self.talk_qt.said.emit, self.talk_qt.stepped.emit)
-        talk, parser = self.talk, commandform.parser_of(change)
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.progress.setRange(0, 0)
+        self.m_talk = runner.STalk(self.m_talk_qt.said.emit, self.m_talk_qt.stepped.emit)
+        talk, parser = self.m_talk, commandform.parser_of(change)
+        self.m_start_button.setEnabled(False)
+        self.m_stop_button.setEnabled(True)
+        self.m_progress.setRange(0, 0)
         self.statusBar().showMessage(tr("convert.running"))
-        self.background.run(lambda: runner.run(change, parser, lines, talk, program()), self._finished)
+        self.m_background.run(lambda: runner.run(change, parser, lines, talk, program()), self._finished)
         return True
 
     def _refused(self) -> str:
         if not self.source_list():
             return tr("convert.no_sources")
-        out = self.out.text().strip()
+        out = self.m_out.text().strip()
         if not out:
             return tr("convert.no_target")
-        game = gamefiles.refused_target(Path(out), self.settings)
+        game = gamefiles.refused_target(Path(out), self.m_settings)
         return tr("convert.target_in_game", game=game) if game else ""
 
     def stop(self) -> None:
-        if self.talk is not None:
-            self.talk.stop.set()
+        if self.m_talk is not None:
+            self.m_talk.stop.set()
             self.statusBar().showMessage(tr("convert.stopping"))
 
     def _log(self, line: str) -> None:
-        self.log.appendPlainText(line)
+        self.m_log.appendPlainText(line)
 
     def _step(self, done: int, total: int) -> None:
         if total > 1:
-            self.progress.setRange(0, total)
-            self.progress.setValue(done)
+            self.m_progress.setRange(0, total)
+            self.m_progress.setValue(done)
 
     def _finished(self, outcome) -> None:
-        self.talk = None
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(1)
+        self.m_talk = None
+        self.m_start_button.setEnabled(True)
+        self.m_stop_button.setEnabled(False)
+        self.m_progress.setRange(0, 1)
+        self.m_progress.setValue(1)
         if isinstance(outcome, BaseException):
             message = tr("convert.job_failed", error=outcome)
         elif outcome.stopped:
@@ -493,12 +510,12 @@ class ConverterWindow(QMainWindow):
         elif outcome.failed:
             message = tr("convert.failed_count", failed=outcome.failed, total=len(outcome.statuses))
         else:
-            message = trn("convert.done", len(outcome.statuses), out=self.out.text().strip())
+            message = trn("convert.done", len(outcome.statuses), out=self.m_out.text().strip())
         self._log(message)
         self.statusBar().showMessage(message)
 
     def running(self) -> bool:
-        return self.talk is not None
+        return self.m_talk is not None
 
     def closeEvent(self, event) -> None:
         if self.running():
@@ -507,7 +524,7 @@ class ConverterWindow(QMainWindow):
                 event.ignore()
                 return
             self.stop()
-        for _title, page in self.pages:
+        for _title, page in self.m_pages:
             if not page.close():
                 event.ignore()
                 return
@@ -520,5 +537,5 @@ def program() -> str:
     return toolbox.PROG
 
 
-def make(shell) -> ConverterWindow:
-    return ConverterWindow(shell.settings, shell.settings_path, shell)
+def make(shell) -> CConverterWindow:
+    return CConverterWindow(shell.m_settings, shell.m_settings_path, shell)

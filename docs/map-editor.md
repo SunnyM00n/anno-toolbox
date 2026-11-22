@@ -1,12 +1,14 @@
 # The map editor: a user's guide and the files behind it
 
-The Toolbox's **Maps** app edits a game's sessions as maps: which islands lie where, the random slots that the map
-generator fills, the start positions, the map's size and its playable area. It can also grow the whole map on any of
-its four sides, derive three difficulties from one map, make mirrored copies, set mine slots and fertilities, and move
-the island complexes of the Aegyptus map as one. It writes what it changes as a mod that the game reads (Anno 117 and
-Anno 1800), or as the game's own world file or random-map template (Anno 2070, 1404 and 1701). The code is
-`src/annotoolbox/mapedit/` (its `__init__` lists the modules). **Nothing it writes has been started in a game
-yet.** The list of what to try is at the end.
+The Toolbox's **Maps** app edits a game's sessions as maps.
+It edits which islands lie where, the random slots that the map generator fills, the start positions, the map's size and its playable area.
+It can also grow the whole map on any of its four sides, derive three difficulties from one map, and make mirrored copies.
+It also sets mine slots and fertilities, and moves the island complexes of the Aegyptus map as one.
+It writes what it changes as a mod that the game reads (Anno 117 and Anno 1800).
+For Anno 2070, 1404 and 1701 it writes the game's own world file or random-map template.
+The code is `src/annotoolbox/mapedit/` (its `__init__` lists the modules).
+**Nothing it writes has been started in a game yet.**
+The list of what to try is at the end.
 
 Contents: [what modders expect](#what-modders-expect) · [the files per game](#the-files-per-game) ·
 [how a map is loaded and modded](#how-a-map-is-loaded-and-modded) · [the window](#the-window) ·
@@ -19,8 +21,9 @@ Contents: [what modders expect](#what-modders-expect) · [the files per game](#t
 
 ## What modders expect
 
-Two community tools edit map templates. Their behaviour was read from their READMEs (2026-11-13). Nothing of their
-code or pictures is used here.
+Two community tools edit map templates.
+Their behaviour was read from their READMEs.
+Nothing of their code or pictures is used here.
 
 | | TAMPER (Taludas Anno 117 Map Template Editor) | Community Map Editor (anno-mods `AnnoMapEditor`) |
 |---|---|---|
@@ -32,18 +35,27 @@ code or pictures is used here.
 | Checks | overlapping boxes, an XL slot needs 64 more tiles from the playable area's border, islands outside the playable area or half in the border, no spawn (blocks the export), fewer than 4 starters (blocks), more slots of a kind than the pool has islands | too many small, medium or large pool slots (the game uses each pool island once, extras are dropped), more than one continental island (drawing glitches), third-party and pirate slots may become small islands |
 | Writes | the `.a7tinfo`, its XML, a PNG of the map, a mod: three difficulties per region (easy, medium, hard derived by shrinking islands), the `.a7t` and `.a7te` as shipped, `assets.xml` with the `MapTemplate` assets and horizon islands, `modinfo.json`, texts | `.a7tinfo`, XML, a ready-to-play mod for the Old World's sandbox |
 
-What a modder expects from such a tool, taken from both: open the game's own templates without extracting by hand;
-see the islands as they look and the slots by kind; place, move, rotate and remove; a playable area and a border that
-are visible; the game's own size classes and pool limits checked before the export, with the rule named; a mod that
-loads without hand work; undo everywhere. What neither does: grow a map on the south or west side (it moves every
-position), or open the older games' worlds.
+What a modder expects from such a tool, taken from both:
+
+- open the game's own templates without extracting by hand
+- see the islands as they look and the slots by kind
+- place, move, rotate and remove
+- a playable area and a border that are visible
+- the game's own size classes and pool limits checked before the export, with the rule named
+- a mod that loads without hand work
+- undo everywhere
+
+What neither does: grow a map on the south or west side (it moves every position), or open the older games' worlds.
+
+Note: the READMEs were read on 2026-11-13.
 
 ## The files per game
 
 ### Anno 117 and Anno 1800: map templates
 
-A session's map is a **map template**, three files side by side (read from the 51 templates of 117 and the 93 of 1800,
-2026-11-13; FileDB is [`formats/filedb.md`](formats/filedb.md)):
+A session's map is a **map template**, three files side by side.
+They were read from the 51 templates of 117 and the 93 of 1800.
+FileDB is described in [`formats/filedb.md`](formats/filedb.md).
 
 | File | What | Layout |
 |---|---|---|
@@ -71,28 +83,35 @@ The three kinds of element:
 | 1 | a **random slot**: the map generator puts a pool island there | `Position`, `Size` (absent Small, 1 Medium, 2 Large, 3 XL), `Difficulty`, `Config/Type/id` (absent Normal), 117 `Locked` | 1,024 / 1,498 |
 | 2 | a **start position**: where a player's ships start | `Position` only (117 `Locked`) | 87 / 234 |
 
-Island types (`IslandType`, the same ids in both games, [`formats/enums-117.md`](formats/enums-117.md)): 0 Normal,
-1 Starter, 2 Decoration, 3 Third party, 4 Pirate, 5 Cliff island, 6 Reserved for a player, 7 Volcanic (117). The
-size classes and their largest island come from the game's `MapGenerator` asset (2002538): 117 Small 256, Medium
-320, Large and XL 432, Continental 2048; 1800 Small 192, Medium 272, Large 384. The pool is the `RandomIsland` assets
-(117: 74, 1800: 187): `FilePath`, `IslandRegion`, `IslandDifficulty`, `IslandType`, 117's `IslandPlaceholderSize`
-(an untagged island counts as Small). A placed island's own size is its `.a7minfo`'s `MapSize`; its pictures are the
-`_gamedata/<name>/` PNGs beside the `.a7m` (`mapimage.png`, `gamemapimage.png`, `activemapimage.png`, 117's
-`provincemapimage.png`).
+Island types (`IslandType`, the same ids in both games, [`formats/enums-117.md`](formats/enums-117.md)): 0 Normal, 1 Starter, 2 Decoration, 3 Third party, 4 Pirate, 5 Cliff island, 6 Reserved for a player, 7 Volcanic (117).
 
-Third parties and pirates are islands of their type (a fixed island with its file, or a slot of type 3 or 4); the
-characters who own them are the `MapTemplate` asset's `FixedPreplacedParticipants` (117) or the session's setup
-(1800). The `MapTemplate` asset ties it together: `TemplateFilename` (the `.a7t`; the other two are found beside
-it), `EnlargedTemplateFilename` with `EnlargeDLC`, `IsUsedByMapGenerator`, `MapTemplateType` (117) or
-`TemplateMapType` (1800), `TemplateRegion`, `TemplateSize`, `IslandSize`, and in 117 the `HorizonIslands` (models on
-the horizon, each at a world `Position` X, Y, Z: outside the map).
+The size classes and their largest island come from the game's `MapGenerator` asset (2002538).
+117 has Small 256, Medium 320, Large and XL 432, and Continental 2048.
+1800 has Small 192, Medium 272 and Large 384.
 
-### Anno 2205: sector maps
+The pool is the `RandomIsland` assets (117: 74, 1800: 187).
+They carry `FilePath`, `IslandRegion`, `IslandDifficulty`, `IslandType` and, in 117, `IslandPlaceholderSize` (an untagged island counts as Small).
+A placed island's own size is its `.a7minfo`'s `MapSize`.
+Its pictures are the `_gamedata/<name>/` PNGs beside the `.a7m` (`mapimage.png`, `gamemapimage.png`, `activemapimage.png`, 117's `provincemapimage.png`).
 
-A 2205 session is one baked map (`<name>.a6m`, [`formats/anno2205-map-format.md`](formats/anno2205-map-format.md)):
-the islands are part of its terrain, not placed by a template, and the session asset lists its areas by name. There
-is nothing to place, so the Maps app shows 2205 sessions read only (the session's picture, its areas) and the
-Islands app edits them.
+Third parties and pirates are islands of their type (a fixed island with its file, or a slot of type 3 or 4).
+The characters who own them are the `MapTemplate` asset's `FixedPreplacedParticipants` (117) or the session's setup (1800).
+The `MapTemplate` asset ties it together.
+Its fields are:
+
+- `TemplateFilename` (the `.a7t`; the other two are found beside it)
+- `EnlargedTemplateFilename` with `EnlargeDLC`
+- `IsUsedByMapGenerator`
+- `MapTemplateType` (117) or `TemplateMapType` (1800)
+- `TemplateRegion`, `TemplateSize` and `IslandSize`
+- in 117, the `HorizonIslands` (models on the horizon, each at a world `Position` X, Y, Z: outside the map)
+
+### Anno 2205: session maps
+
+A 2205 session is one baked map (`<name>.a6m`, [`formats/anno2205-map-format.md`](formats/anno2205-map-format.md)).
+The islands are part of its terrain, not placed by a template, and the session asset lists its areas by name.
+There is nothing to place, so the Maps app shows 2205 sessions read only (the session's picture, its areas).
+The Islands app edits them.
 
 ### Anno 2070, 1404 and 1701: world files
 
@@ -103,20 +122,29 @@ and [`formats/anno1701-world-format.md`](formats/anno1701-world-format.md), read
 | Game | Size | Islands | Start places |
 |---|---|---|---|
 | 2070 | `Width`, `Height` | `Islands`: `v` / `IslandConfig` with `Name`, `Filename`, `PositionX`, `PositionZ` (the top-left corner), `Width`, `Height`, `Direction` (0..3), `Type` (0 normal, 1 underwater build, 2 starter, 3 third party, 5 decoration) | `ArkSlots` (`x`, `y`) |
-| 1404 | `Width`, `Height` | the same `IslandConfig` (types 0 regular, 1 main, 2 start harbour, 3 corsair, 4 decoration, 5 Venetian, 6 volcano) | none in the world; the setup places the players |
+| 1404 | `Width`, `Height` | the same `IslandConfig` (types 0 regular, 1 main, 2 start harbor, 3 corsair, 4 decoration, 5 Venetian, 6 volcano) | none in the world; the setup places the players |
 | 1701 | `m_Width`, `m_Height` | `IslandConfig` with `m_Name`, `m_GOPFilename`, `m_XPosition`, `m_ZPosition`, `m_Width`, `m_Height`, `m_IslandDirection` | `PlayerPositions` (`x`, `y`) |
 
-The playable area is the whole world (no margin field); the island's picture is `<island>.png` or
-`<island>_minimap.png` beside its `.isd`. A world entry's `Width` and `Height` are its island's (every vanilla entry
-is square); an island added or swapped takes the file's own `Width`.
+The playable area is the whole world (no margin field).
+The island's picture is `<island>.png` or `<island>_minimap.png` beside its `.isd`.
+A world entry's `Width` and `Height` are its island's (every vanilla entry is square).
+An island added or swapped takes the file's own `Width`.
 
 ### Anno 2070, 1404 and 1701: random-map templates
 
-The random maps of these games are `.tww` files (the same tagged text, read and written byte for byte: 54 of 2070, 72
-of 1404, 170 of 1701, read 2026-11-13). Root `RandomMapTemplate`: `Name`, `Width`, `Height`, `IslandTemplates`
-(`k` / `v` / `Island`), `ResourceProfiles`, `PlayerPositions` and `PlayerPositionsEasymode` (`i` with `x`, `y`; empty
-in 2070 and 1404, four places in 108 of 1701's), 2070's and 1404's `WorldLightProfiles`, 1701's `Islands` (empty) and
-`HIDObjectConfigs`. An `Island` is a placeholder the game fills with an island of its size and climate:
+The random maps of these games are `.tww` files.
+They use the same tagged text, read and written byte for byte: 54 of 2070, 72 of 1404 and 170 of 1701.
+The root is `RandomMapTemplate`.
+Its fields are:
+
+- `Name`, `Width`, `Height`
+- `IslandTemplates` (`k` / `v` / `Island`)
+- `ResourceProfiles`
+- `PlayerPositions` and `PlayerPositionsEasymode` (`i` with `x`, `y`; empty in 2070 and 1404, four places in 108 of 1701's)
+- 2070's and 1404's `WorldLightProfiles`
+- 1701's `Islands` (empty) and `HIDObjectConfigs`
+
+An `Island` is a placeholder the game fills with an island of its size and climate:
 
 | Field | What | Values |
 |---|---|---|
@@ -125,31 +153,39 @@ in 2070 and 1404, four places in 108 of 1701's), 2070's and 1404's `WorldLightPr
 | `Climes` | the climates the island may come from, bits | 1, 2 (1701 also 3; eight 1701 islands write `Clime`) |
 | `Cultures`, `Fertilities`, `Resources` | 1701 only, bits | edited as numbers; a new placeholder takes the ones of the entry it copies |
 
-The Maps app shows each placeholder as a random slot whose size is one of the game's edges; the panel edits its edge,
-type and climate bits, and for 1701 its culture, fertility and resource bits (what each bit stands for was not read). Start places are 1701's `PlayerPositions` (the easy mode's list is kept as read).
+The Maps app shows each placeholder as a random slot whose size is one of the game's edges.
+The panel edits its edge, type and climate bits, and for 1701 its culture, fertility and resource bits (what each bit stands for was not read).
+Start places are 1701's `PlayerPositions` (the easy mode's list is kept as read).
+
+Note: the counts of the files were read on 2026-11-13.
 
 ## How a map is loaded and modded
 
-- **117 and 1800.** A new game takes a session's `MapTemplate`: a random one of those with `IsUsedByMapGenerator` of
-  the session's region, size and type, or the one a session names. The generator puts the fixed islands where the
-  template says, fills each random slot with a pool island of its size and type that is not used yet, and starts the
-  ships at the start positions. A mod can change a map in two ways, both read by the mod loader
-  (`engine-modloader.md`). **A file at the vanilla path** replaces the template for every new
-  game (TAMPER's and the Community Map Editor's way). **A new path plus a `MapTemplate` asset** added by ModOps
-  adds a map beside the vanilla ones. Savegames keep their islands; only a new game reads the template.
-- **2070, 1404 and 1701.** The world file is read when the scenario or map starts. There is no mod loader. A changed
-  world goes into an archive that wins over the game's own (the suite's project build does it: [`suite.md`](suite.md),
-  "Build and install").
+- **117 and 1800.**
+  A new game takes a session's `MapTemplate`.
+  That is a random one of those with `IsUsedByMapGenerator` of the session's region, size and type, or the one a session names.
+  The generator puts the fixed islands where the template says.
+  It fills each random slot with a pool island of its size and type that is not used yet.
+  It starts the ships at the start positions.
+  A mod can change a map in two ways, both read by the mod loader (`engine-modloader.md`).
+  **A file at the vanilla path** replaces the template for every new game (TAMPER's and the Community Map Editor's way).
+  **A new path plus a `MapTemplate` asset** added by ModOps adds a map beside the vanilla ones.
+  Savegames keep their islands, and only a new game reads the template.
+- **2070, 1404 and 1701.**
+  The world file is read when the scenario or map starts.
+  There is no mod loader.
+  A changed world goes into an archive that wins over the game's own (the suite's project build does it: [`suite.md`](suite.md), "Build and install").
 
 ## The window
 
 Start it with `python -m annotoolbox --app maps`, or press the **Maps** button of the suite.
 
-- **File > Open game** lists the games of the settings. The left list holds the game's maps (117 and 1800 templates,
-  the older games' worlds and random-map templates, 2205's sessions), with a filter. A map opens off the window's
-  thread, and its islands' grids and pictures are read there too. An island that is added or swapped is read there
-  before it is shown, and growing, keeping and writing run off the window's thread as well. A 2205 session is handed
-  to the Islands app when it runs beside this one.
+- **File > Open game** lists the games of the settings.
+  The left list holds the game's maps (117 and 1800 templates, the older games' worlds and random-map templates, 2205's sessions), with a filter.
+  A map opens off the window's thread, and its islands' grids and pictures are read there too.
+  An island that is added or swapped is read there before it is shown.
+  Growing, keeping and writing run off the window's thread as well.
+  A 2205 session is handed to the Islands app when it runs beside this one.
 - **The view, from above**, shows:
   - the sea and the map's edge
   - the margin outside the playable area, shaded, and the initial playable area, dashed
@@ -157,75 +193,87 @@ Start it with `python -m annotoolbox --app maps`, or press the **Maps** button o
   - each random slot as a square of its size class, coloured by its type, with its size letter in it
   - start positions as rings
 
-  The wheel zooms, the right button pans, and Home fits the map. North is up: x grows to the right (east) and z
-  upwards (north), in the same way TAMPER shows the 117 maps (the origin is in the south-west corner). A quarter turn
-  (`Rotation90` 1) turns an island counter-clockwise seen from above, as the game does
-  ([below](#what-the-vanilla-data-settles)).
-- **Select** with a click (Shift adds; a click on an island of a [complex](#island-complexes) selects the complex, Alt
-  only the island). **Move** by dragging (snapped to 8 tiles). **Rotate** with R (one fixed island in place, a
-  selection of several as a group about its centre). **Remove** with Delete, **duplicate** with Ctrl+D, and nudge with
-  the arrow keys (8 tiles). Ctrl+Z / Ctrl+Y undo and redo every edit, the growth included. **Map > Open the island in
-  the Islands app** opens the selected fixed island there.
-- **Add**: a random slot (size and type), a start position, a fixed island, or a complex of another map of the game. A
-  fixed island comes from the game's pool (its `RandomIsland` assets), from any island file of the game, or from a
-  file on disk (an island the Islands app built into the project).
-- **The panel** on the right edits the selection and the map. For the selection: position, size, type, `Rotation90`,
-  `MapFilePath`, `IslandLabel`, `FertilityGuids` as GUIDs and `RandomizeFertilities`; for a random-map template's
-  placeholder: its edge, type and climate bits. For the map: size, playable area and initial playable area. A larger
-  size grows the map on the east and north, and a map never shrinks. **Map > Grow the map...** grows it on any side.
-  **Map > Mirrored copies...**, **Edit > Mine slots and fertilities...** and **File > Write easy, medium and
-  hard...** (the three difficulties) are described below as well.
+  The wheel zooms, the right button pans, and Home or "Fit the map" fits the map.
+  The view is fitted when a map opens and on a resize until the user zooms or pans; after that a resize keeps the zoom and the pan.
+  North is up: x grows to the right (east) and z upwards (north), in the same way TAMPER shows the 117 maps (the origin is in the south-west corner).
+  A quarter turn (`Rotation90` 1) turns an island counter-clockwise seen from above, as the game does ([below](#what-the-vanilla-data-settles)).
+- **Select** with a click.
+  Shift adds.
+  A click on an island of a [complex](#island-complexes) selects the complex, and Alt selects only the island.
+- **Move** by dragging (snapped to 8 tiles).
+- **Rotate** with R (one fixed island in place, a selection of several as a group about its centre).
+- **Remove** with Delete, **duplicate** with Ctrl+D, and nudge with the arrow keys (8 tiles).
+- Ctrl+Z / Ctrl+Y undo and redo every edit, the growth included.
+- **Map > Open the island in the Islands app** opens the selected fixed island there.
+- **Add**: a random slot (size and type), a start position, a fixed island, or a complex of another map of the game.
+  A fixed island comes from the game's pool (its `RandomIsland` assets), from any island file of the game, or from a file on disk (an island the Islands app built into the project).
+- **The panel** on the right edits the selection and the map.
+  For the selection it edits position, size, type, `Rotation90`, `MapFilePath`, `IslandLabel`, `FertilityGuids` as GUIDs and `RandomizeFertilities`.
+  For a random-map template's placeholder it edits its edge, type and climate bits.
+  For the map it edits size, playable area and initial playable area.
+  A larger size grows the map on the east and north, and a map never shrinks.
+  **Map > Grow the map...** grows it on any side.
+  **Map > Mirrored copies...**, **Edit > Mine slots and fertilities...** and **File > Write easy, medium and hard...** (the three difficulties) are described below as well.
 - **Checks** lists the findings of the rules below, each with its element. A double click selects it.
 
 ## What the vanilla data settles
 
-The points below were checked against the games' own files (the probes read the installed games; nothing of them is
-kept).
+The points below were checked against the games' own files.
+The probes read the installed games, and nothing of them is kept.
 
-- **The sense of a quarter turn.** 117's campaign templates and many of 1800's sessions carry their fixed islands'
-  terrain baked into the session's height map. Each fixed island's own height map, turned every way, was compared with
-  the session's at its `Position` (correlation over the grid): unturned islands match unturned (13 in 117, 22 in 1800),
-  and `Rotation90` r always matches r turns of (u, v) -> (E - v, u) on the island's tiles (E the grid's edge): 117 one
-  island at 3, one at 2; 1800 eight at 1, six at 2, eight at 3, none against it. Seen from above with x east and z
-  north, that is **counter-clockwise**. The picture and the active area for the overlap check are both turned that
-  way. An island's map picture (`mapimage.png`) holds its north row first (57 of 60 of 117's islands; the other three
-  are near-symmetric), so it is drawn unflipped.
-- **Camera flights, channels 0 and 2.** Of the seven channels of a `Cam` or `Asset` track, 0 and 2 span the map, 1 is a
-  small height (3 to 55), 3 lies near 0.8 to 1.3, 4 and 5 are angles (300 to 360 and 0 to 360 degrees), 6 is empty. On
-  the Aegyptus map the object tracks' first keyframes sit on the session's objects read as (channel 0, channel 2) =
-  (x, z) to within 0.1 to 2 tiles, against more than 200 tiles read the other way round. So 0 is x and 2 is z, and only
-  those two move when a map grows; the angles need nothing.
-- **Grids are rows of z.** Read as rows of z, the session height map of 117's Celtic campaign matches each unturned
-  island's own heights at its `Position` with a correlation of 0.59 to 0.86 (by magnitude: the two count heights the
-  opposite way); read as rows of x below 0.55, but for one near-symmetric island. The bit grids (`Water`, rivers,
-  fords) are empty in every 117 template and set in two of 1800's only; there more of the set bits fall inside the
-  fixed islands' grids read as rows of z than as rows of x (0.8 % against 1.6 % outside), which agrees but does not
-  settle it alone. They share the height map's layout in the code.
+- **The sense of a quarter turn.**
+  117's campaign templates and many of 1800's sessions carry their fixed islands' terrain baked into the session's height map.
+  Each fixed island's own height map, turned every way, was compared with the session's at its `Position` (correlation over the grid).
+  Unturned islands match unturned (13 in 117, 22 in 1800).
+  `Rotation90` r always matches r turns of (u, v) -> (E - v, u) on the island's tiles (E the grid's edge): 117 one island at 3, one at 2; 1800 eight at 1, six at 2, eight at 3, none against it.
+  Seen from above with x east and z north, that is **counter-clockwise**.
+  The picture and the active area for the overlap check are both turned that way.
+  An island's map picture (`mapimage.png`) holds its north row first (57 of 60 of 117's islands; the other three are near-symmetric), so it is drawn unflipped.
+- **Camera flights, channels 0 and 2.**
+  Of the seven channels of a `Cam` or `Asset` track, 0 and 2 span the map.
+  1 is a small height (3 to 55), 3 lies near 0.8 to 1.3, 4 and 5 are angles (300 to 360 and 0 to 360 degrees), and 6 is empty.
+  On the Aegyptus map the object tracks' first keyframes sit on the session's objects read as (channel 0, channel 2) = (x, z) to within 0.1 to 2 tiles, against more than 200 tiles read the other way round.
+  So 0 is x and 2 is z, and only those two move when a map grows.
+  The angles need nothing.
+- **Grids are rows of z.**
+  Read as rows of z, the session height map of 117's Celtic campaign matches each unturned island's own heights at its `Position` with a correlation of 0.59 to 0.86 (by magnitude: the two count heights the opposite way).
+  Read as rows of x, the correlation is below 0.55, but for one near-symmetric island.
+  The bit grids (`Water`, rivers, fords) are empty in every 117 template and set in two of 1800's only.
+  There more of the set bits fall inside the fixed islands' grids read as rows of z than as rows of x (0.8 % against 1.6 % outside).
+  This agrees but does not settle it alone.
+  They share the height map's layout in the code.
 - **2070's `Direction` turns counter-clockwise too** ([below](#2070s-direction)): a world entry's `Direction` is
-  `Rotation90` unchanged, and `world/sectors2070.to_world` turns the island that way.
+  `Rotation90` unchanged, and `world/session/sessionblock.to_world` turns the island that way.
 
-Note: the first three points were checked on 2026-11-13, and 2070's `Direction` was settled on 2026-11-14. Until then
-`to_world` took a quarter turn as clockwise.
+Note: the first three points were checked on 2026-11-13, and 2070's `Direction` was settled on 2026-11-14.
+Until then `to_world` took a quarter turn as clockwise.
 
 ### 2070's Direction
 
-A 2070 world (`.www`) has a picture beside it (`.png`): the map turned 45 degrees about its centre, scaled so that a
-tile is a pixel along each diagonal (pixel x = x + z - W/2, pixel y = x - z + W/2, W the map's size). The frame was
-found on the first map by trying the turns, flips and scales against its unturned islands (only this one fits; the
-unturned islands of all 54 world files agree with it at a mean correlation of 0.77 over 353 islands). Each island's own
-heights, carried to the map by its `Direction` in each sense and compared with the picture's land: islands at 2 (the
-same in both senses) agree 0.82, islands at 1 and 3 agree 0.78 and 0.81 turned counter-clockwise, 0.47 and 0.52 turned
-clockwise; of 290 islands at 1 or 3, 287 agree better counter-clockwise (135 of 137 at 1, 152 of 153 at 3). So
-`Direction` d is d turns of (u, v) -> (H - v, u) on the island's tiles, as 117's `Rotation90` is. The installed-game
-test is `tests/test_maps2070.py` (`ANNO2070_DIR`).
+A 2070 world (`.www`) has a picture beside it (`.png`).
+The picture is the map turned 45 degrees about its centre, scaled so that a tile is a pixel along each diagonal (pixel x = x + z - W/2, pixel y = x - z + W/2, W the map's size).
+The frame was found on the first map by trying the turns, flips and scales against its unturned islands.
+Only this one fits.
+The unturned islands of all 54 world files agree with it at a mean correlation of 0.77 over 353 islands.
 
-**What the counter-clockwise sense changes, per map** (for the in-game list; read from the installed 2070 on
-2026-11-14, every fixed map of `maps2070.MAPS` with a world file). An island at `Direction` 1 or 3 stands differently
-than it did with the clockwise reading. The two senses differ by a half turn of the island in its own box, so its
-corner and box stay and its land turns over. Islands at 0 and 2 stand as before. "Tiles that change" counts the
-island's tiles whose land and sea swap under that half turn (its land against its land turned 180 degrees; an
-underwater island's land is its plateau). The table names the largest on each map, which is the island to look at
-first. Surface and underwater islands are counted alike. 573 of the 1,488 placements on the 53 maps turned.
+Each island's own heights were carried to the map by its `Direction` in each sense and compared with the picture's land:
+
+- islands at 2 (the same in both senses) agree 0.82
+- islands at 1 and 3 agree 0.78 and 0.81 turned counter-clockwise, and 0.47 and 0.52 turned clockwise
+- of 290 islands at 1 or 3, 287 agree better counter-clockwise (135 of 137 at 1, 152 of 153 at 3)
+
+So `Direction` d is d turns of (u, v) -> (H - v, u) on the island's tiles, as 117's `Rotation90` is.
+The installed-game test is `tests/world/maptemplate/test_maps2070.py` (`ANNO2070_DIR`).
+
+**What the counter-clockwise sense changes, per map** (for the in-game list).
+This covers every fixed map of `maps2070.MAPS` with a world file.
+An island at `Direction` 1 or 3 stands differently than it did with the clockwise reading.
+The two senses differ by a half turn of the island in its own box, so its corner and box stay and its land turns over.
+Islands at 0 and 2 stand as before.
+"Tiles that change" counts the island's tiles whose land and sea swap under that half turn (its land against its land turned 180 degrees; an underwater island's land is its plateau).
+The table names the largest on each map, which is the island to look at first.
+Surface and underwater islands are counted alike.
+573 of the 1,488 placements on the 53 maps turned.
 
 | Map | Islands | Placed differently | Most visible (tiles that change) |
 | --- | --- | --- | --- |
@@ -283,6 +331,8 @@ first. Surface and underwater islands are counted alike. 573 of the 1,488 placem
 | `testlevel_underwater_world` | 11 | 5 | `underwaterworld_u_x03` (Direction 3, 2,608 tiles) |
 | `testlevel_benchmark_1` | 10 | 3 | `n_d05` (Direction 1, 2,284 tiles) |
 
+Note: the table was read from the installed 2070 on 2026-11-14.
+
 ## The checks
 
 | Rule | Severity | Games |
@@ -297,13 +347,17 @@ first. Surface and underwater islands are counted alike. 573 of the 1,488 placem
 | the playable area outside the map | error | 117, 1800 |
 | the map not square | warning | 117, 1800 |
 
-The game itself checks none of this before it loads a map. An error means that the map will not work as it reads, and
-a warning means that the generator or the drawing may not do what the map shows. Run over the vanilla maps
-(2026-11-13), the checks name a few dense pool templates (8 to 10 Normal slots of a size against 7 pool islands) and
-the Gamescom template's press island (a file the game no longer ships), and nothing else. Fixed islands that overlap as a map ships
-them (the Aegyptus map's: an island owns the cells it marks active, `island-maps.md` "How Anno 117 handles the same
-needs"; 1800's story and battle-site islands) are complexes with designed seams, named only once an edit moves one
-against another. The 117 playable areas are not all on 4 tiles (1800's 203 / 195 margins), so that is no rule.
+The game itself checks none of this before it loads a map.
+An error means that the map will not work as it reads.
+A warning means that the generator or the drawing may not do what the map shows.
+
+Run over the vanilla maps, the checks name a few dense pool templates (8 to 10 Normal slots of a size against 7 pool islands) and the Gamescom template's press island (a file the game no longer ships), and nothing else.
+Fixed islands that overlap as a map ships them are complexes with designed seams.
+They are the Aegyptus map's (an island owns the cells it marks active, `island-maps.md` "How Anno 117 handles the same needs") and 1800's story and battle-site islands.
+They are named only once an edit moves one against another.
+The 117 playable areas are not all on 4 tiles (1800's 203 / 195 margins), so that is no rule.
+
+Note: the checks were run over the vanilla maps on 2026-11-13.
 
 ## Writing it
 
@@ -313,23 +367,23 @@ every other app's work. **File > Write as a mod folder...** writes a stand-alone
 
 - **Replace the vanilla map** (the default): the edited `.a7tinfo` at the template's own path, the `.a7t` and `.a7te`
   only when the size changed (they are the game's otherwise).
-- **As a new map**: the three files under `data/mods/<mod id>/maps/<name>/`, and a ModOps file that adds a
-  `MapTemplate` asset after the vanilla asset (a copy of the vanilla one with the new `TemplateFilename` and a GUID
-  from the project's range). The GUID offered is the highest free one of the range (the islands' numbering and the
-  asset editor's new assets take the lowest). A GUID outside the range, or one that another new map or new asset of
-  the project holds, is refused. A new map made from an enlarged template takes the enlarged map's horizon islands as
-  its own.
+- **As a new map**: the three files under `data/mods/<mod id>/maps/<name>/`, and a ModOps file that adds a `MapTemplate` asset after the vanilla asset.
+  The asset is a copy of the vanilla one with the new `TemplateFilename` and a GUID from the project's range.
+  The GUID offered is the highest free one of the range (the islands' numbering and the asset editor's new assets take the lowest).
+  A GUID outside the range, or one that another new map or new asset of the project holds, is refused.
+  A new map made from an enlarged template takes the enlarged map's horizon islands as its own.
 - **The older games**: the world file or random-map template at its own path.
 
 An unchanged template writes back byte for byte (the installed-game test checks every template of 117 and 1800).
 
 ## Growing a map on any side
 
-**Map > Grow the map...** takes four numbers of tiles (west, south, east and north), each a multiple of 64 (the
-`.a7te`'s chunk). Growing west or south moves every absolute position by that amount. The reason for this feature:
-community maps cut the margins to fit more islands, because growing south or west breaks quests, the origin being the
-south-west corner. The Maps app moves every reference it knows consistently, and lists each one it moved and each one
-it cannot move, so nothing breaks silently. This is for new games only: a savegame keeps its own frame.
+**Map > Grow the map...** takes four numbers of tiles (west, south, east and north), each a multiple of 64 (the `.a7te`'s chunk).
+Growing west or south moves every absolute position by that amount.
+The reason for this feature: community maps cut the margins to fit more islands, because growing south or west breaks quests, the origin being the south-west corner.
+The Maps app moves every reference it knows consistently.
+It lists each one it moved and each one it cannot move, so nothing breaks silently.
+This is for new games only: a savegame keeps its own frame.
 
 What it changes, by file:
 
@@ -338,30 +392,34 @@ What it changes, by file:
 - **`.a7t`**: the session's size, every grid moved and padded (below), every object, camera and camera sequence moved.
 - **`.a7te`**: the new dimensions and chunk list.
 - **`MapTemplate` asset** (117): each horizon island's `Position` X and Z moved (a ModOps file); 1800 has none.
-- **Other assets that hold the map's positions**: every asset of the asset lists with a position block, including the
-  scenario lists of 1800. A position block has an `X` and a `Z` child. A `...Position` block with only a `Z` counts
-  too, because its X is a value of 0 that was left out. A block without a `Z` is a screen position, such as the tech
-  tree's, and is not touched.
-  An asset is tied to a map by the `MapTemplate` GUID it holds, or by a session asset that names that template
-  (`Session` > `MapTemplate`). An asset that is tied to the grown map and to no other has each block moved by the same
-  amounts. This is one `replace` ModOp per block, in the same ModOps file, and the report line gives the old and new X
-  and Z. The moves add up over several growths. An asset that names another map, several maps or none is kept and
-  listed with that reason. A map written as a *new* map (own GUID) takes none of the old map's assets. The game's own
-  lists hold no such asset today (see the section below).
-- **Not changed, listed**: the island files (their coordinates are their own), Lua files that hold numbers in the
-  map's range near the template's name (literal positions a script may use), values only the program holds (the
-  camera's start, the generator's own spacing), the enlarged map's `EnlargementOffset` and `IslandShift` (kept; their
-  meaning past 0 is not known), and any part of the session file the scan does not know.
+- **Other assets that hold the map's positions**: every asset of the asset lists with a position block, including the scenario lists of 1800.
+  A position block has an `X` and a `Z` child.
+  A `...Position` block with only a `Z` counts too, because its X is a value of 0 that was left out.
+  A block without a `Z` is a screen position, such as the tech tree's, and is not touched.
 
-The report (shown in the window; kept in the project as `map-edits/reports/<name>.grow.json` and written beside a
-mod folder as `<mod id>.grow.json`, never inside the mod) lists every reference: the file, the place, `moved` with the
-old and new value or `kept` with the reason.
+  An asset is tied to a map by the `MapTemplate` GUID it holds, or by a session asset that names that template (`Session` > `MapTemplate`).
+  An asset that is tied to the grown map and to no other has each block moved by the same amounts.
+  This is one `replace` ModOp per block, in the same ModOps file, and the report line gives the old and new X and Z.
+  The moves add up over several growths.
+  An asset that names another map, several maps or none is kept and listed with that reason.
+  A map written as a *new* map (own GUID) takes none of the old map's assets.
+  The game's own lists hold no such asset today (see the section below).
+- **Not changed, listed**:
+  - the island files (their coordinates are their own)
+  - Lua files that hold numbers in the map's range near the template's name (literal positions a script may use)
+  - values only the program holds (the camera's start, the generator's own spacing)
+  - the enlarged map's `EnlargementOffset` and `IslandShift` (kept; their meaning past 0 is not known)
+  - any part of the session file the scan does not know
+
+The report is shown in the window.
+It is kept in the project as `map-edits/reports/<name>.grow.json` and written beside a mod folder as `<mod id>.grow.json`, never inside the mod.
+It lists every reference: the file, the place, `moved` with the old and new value or `kept` with the reason.
 
 ## Where 117 and 1800 keep absolute session positions
 
-The inventory the growth works from: every manager of every vanilla template's session file (117: 51, 1800: 93),
-read 2026-11-13, with what it holds and what the growth does. Units are tiles; the height maps have two samples per
-tile.
+The inventory the growth works from: every manager of every vanilla template's session file (117: 51, 1800: 93), with what it holds and what the growth does.
+Units are tiles.
+The height maps have two samples per tile.
 
 | Where | What | 117 | 1800 | Growth |
 |---|---|---|---|---|
@@ -385,14 +443,15 @@ tile.
 | other assets | the asset lists hold no other X/Z position block (scanned for `<X>`..`<Z>` blocks and position-named values; the table below the list says what the position-like fields are) | none | none | a mod's assets that hold one and belong to the map: moved (ModOps); others listed |
 | Lua scripts | 117: 2,530 files, 1800: 31; a number in a script is not known to be a position | | | listed: numbers in the map's range in scripts that name the template or session |
 
+Note: the inventory was read on 2026-11-13.
+
 ### Position-like fields of the asset lists
 
-The installed games' asset lists were searched for anything that could be a position. These are 1 list for 117, and
-for 1800 the main list and the 4 scenario lists of its add-ons (5 in all). Every asset's `Values` was walked for
-blocks with an `X` and a `Z`, for fields whose name says position, area, rectangle, point, camera, target, spawn, centre
-or offset, and for any value of two to four numbers. The result is that **the only absolute session positions in the
-asset lists are the `MapTemplate` horizon islands** (table above). Everything else that looks like a position is one
-of these:
+The installed games' asset lists were searched for anything that could be a position.
+These are 1 list for 117, and for 1800 the main list and the 4 scenario lists of its add-ons (5 in all).
+Every asset's `Values` was walked for blocks with an `X` and a `Z`, for fields whose name says position, area, rectangle, point, camera, target, spawn, centre or offset, and for any value of two to four numbers.
+The result is that **the only absolute session positions in the asset lists are the `MapTemplate` horizon islands** (table above).
+Everything else that looks like a position is one of these:
 
 | Field | What it is | Assets (117 / 1800) | Growth |
 |---|---|---|---|
@@ -405,43 +464,55 @@ of these:
 | `PosX`/`PosY`, `PathPosX`/`PathPosY`, `OptionPosX`/`OptionPosY`, `UIPosition`, `InputGoodPos` | positions on screen: recipes (79), expedition map options (43) and decisions, the residence menu | none / 1800 only | not a session position; never moved |
 | `WorldMapConfig/Camera/CenterX`, `CenterY` | the world map's camera | 1 / 1 | not a session position |
 
-So a quest, trigger or objective of the games reaches the map by a GUID (a template, a session, an object the session
-file holds), never by a coordinate of its own: moving the session file's objects moves what they point at. The growth
-therefore moves the asset blocks only for assets that carry an `X`/`Z` position and belong to the map (a mod's quest,
-or a later game version), by the rule in the list above. A quest that names a *region* or a whole session rather than
-one map is ambiguous when it holds a position, so it is kept.
+So a quest, trigger or objective of the games reaches the map by a GUID (a template, a session, an object the session file holds), never by a coordinate of its own.
+Moving the session file's objects moves what they point at.
+The growth therefore moves the asset blocks only for assets that carry an `X`/`Z` position and belong to the map (a mod's quest, or a later game version), by the rule in the list above.
+A quest that names a *region* or a whole session rather than one map is ambiguous when it holds a position, so it is kept.
 
-Only the game can show two things. First, whether a moved block of a custom asset lands where its map's objects do.
-Second, whether the ModOps path with an item index (`Item[2]`) is taken as written.
+Only the game can show two things:
+
+- whether a moved block of a custom asset lands where its map's objects do
+- whether the ModOps path with an item index (`Item[2]`) is taken as written
 
 Note: searched on 2026-11-15.
 
 ## Three difficulties from one map
 
-A 117 layout ships as three templates, `<layout>_easy`, `_medium` and `_hard`, each with its own `MapTemplate` asset
-whose `IslandSize` (Large, Medium, Small) is what the game setup's island-size choice picks. Compared over the ten
-layouts of 117 (2026-11-13): the three keep the same number of elements, the same start positions and the same third
-parties, pirates and starters; what changes is the size of the Normal slots the pool fills. From medium to easy two or
-so Small slots become Medium and two Medium become Large (chain: Small, Medium, Large 6, 4, 2 -> 4, 4, 4); from medium
-to hard the Large ones become Medium and two Medium become Small (6, 4, 2 -> 8, 4, 0); the Roman hard maps also make
-the XL starter slots Large. Vanilla re-lays the slots for each level; the derived maps keep every slot where it is.
+A 117 layout ships as three templates, `<layout>_easy`, `_medium` and `_hard`.
+Each has its own `MapTemplate` asset whose `IslandSize` (Large, Medium, Small) is what the game setup's island-size choice picks.
+Compared over the ten layouts of 117, the three keep the same number of elements, the same start positions and the same third parties, pirates and starters.
+What changes is the size of the Normal slots the pool fills.
+From medium to easy, two or so Small slots become Medium and two Medium become Large (chain: Small, Medium, Large 6, 4, 2 -> 4, 4, 4).
+From medium to hard, the Large ones become Medium and two Medium become Small (6, 4, 2 -> 8, 4, 0).
+The Roman hard maps also make the XL starter slots Large.
+Vanilla re-lays the slots for each level, and the derived maps keep every slot where it is.
 
-**File > Write easy, medium and hard...** takes the open map as the medium one and derives the other two by that rule
-(`variants.py`): `STEPS` (2) Normal slots one size up for easy, the ones with the most free sea around them first; for
-hard the Large ones one size down, then `STEPS` Medium ones, the most crowded first, and the XL starters Large. The
-Volcanic slots of the DLC's layouts keep their size (they do in all three vanilla levels). A resized slot keeps its centre. The three are written as three new maps (`<name>_easy`,
-`_medium`, `_hard`, three GUIDs, the assets' `IslandSize` Large, Medium, Small, used by the generator), or, when the
-open map is a vanilla `_medium` one and was not grown, over its two vanilla siblings. The checks run on each; what
-they find is listed before anything is written.
+**File > Write easy, medium and hard...** takes the open map as the medium one and derives the other two by that rule (`variants.py`).
+For easy, `STEPS` (2) Normal slots go one size up, the ones with the most free sea around them first.
+For hard, the Large ones go one size down, then `STEPS` Medium ones, the most crowded first, and the XL starters become Large.
+The Volcanic slots of the DLC's layouts keep their size (they do in all three vanilla levels).
+A resized slot keeps its centre.
+The three are written as three new maps (`<name>_easy`, `_medium`, `_hard`, three GUIDs, the assets' `IslandSize` Large, Medium, Small, used by the generator).
+When the open map is a vanilla `_medium` one and was not grown, they are written over its two vanilla siblings instead.
+The checks run on each, and what they find is listed before anything is written.
+
+Note: the ten layouts were compared on 2026-11-13.
 
 ## Mirrored copies
 
-**Map > Mirrored copies...** copies the selection (or turns it in place) across the playable area's centre: across
-the north-south line (x mirrored), across the east-west line (z mirrored), both (four copies: the quarters of a
-four-player map), or through the centre (a half turn). A slot or a start position mirrors exactly; a fixed island
-cannot be mirrored by the game (it only turns its grid), so its copy is turned two quarter turns, which keeps the
-side that faced the line facing it. Positions snap to 8 tiles; an odd margin (20 against 28) shifts a copy by up to
-4 tiles. The copies are selected after, so a check names any that overlap.
+**Map > Mirrored copies...** copies the selection (or turns it in place) across the playable area's centre.
+The choices are:
+
+- across the north-south line (x mirrored)
+- across the east-west line (z mirrored)
+- both (four copies: the quarters of a four-player map)
+- through the centre (a half turn)
+
+A slot or a start position mirrors exactly.
+A fixed island cannot be mirrored by the game (it only turns its grid), so its copy is turned two quarter turns, which keeps the side that faced the line facing it.
+Positions snap to 8 tiles.
+An odd margin (20 against 28) shifts a copy by up to 4 tiles.
+The copies are selected after, so a check names any that overlap.
 
 ## Mine slots and fertilities
 
@@ -455,48 +526,64 @@ each a list of `#32768` attributes alternating key and value:
 | `FertilitySetGUIDs` | 117 | an area index (2 bytes) | a `FertilitySet` GUID (4 bytes) | empty in all |
 | `FertilitiesPerAreaIndex` | 117 | an area index (2 bytes) | the fertility GUIDs of that area (4 bytes each) | empty in all |
 
-117's layouts are read from its savegames, which keep the generated template (`GameSessionManager/MapTemplate`) with
-these maps filled: area 1 (also 4) with one set and six or seven fertilities, a mine slot per `Slot` object of the
-island (`Slot ... Random`) with 0 or 1. **Edit > Mine slots and fertilities...** (a selected fixed island) lists the
-island's `Slot` objects (read from its `.a7m` off the window's thread) and the slots the element names, each with its
-value (117's `MineSlotActivation`: not listed, active, inactive; 1800's `MineSlotMapping`, shown in the same column as 117's
-form of the list: not listed, random, or a `Slot` asset of the game), and for 117 one row
-per area (index, set GUID, fertility GUIDs); **The area's set...** and **Add a fertility...** pick one of the game's
-`FertilitySet` or `Fertility` assets by name for the selected area, and the panel's `FertilityGuids` field has the same
-picker (`...`). The element's maps are rewritten from the dialog; an element the dialog
-did not touch keeps its bytes. Whether 117's generator keeps values a template sets, instead of dealing its own, is to
-try in the game.
+117's layouts are read from its savegames, which keep the generated template (`GameSessionManager/MapTemplate`) with these maps filled.
+Area 1 (also 4) has one set and six or seven fertilities.
+There is a mine slot per `Slot` object of the island (`Slot ... Random`) with 0 or 1.
+
+**Edit > Mine slots and fertilities...** (a selected fixed island) lists the island's `Slot` objects (read from its `.a7m` off the window's thread) and the slots the element names.
+Each is listed with its value.
+- 117's `MineSlotActivation` shows: not listed, active, inactive.
+- 1800's `MineSlotMapping` shows in the same column: not listed, random, or a `Slot` asset of the game.
+
+For 117 there is also one row per area (index, set GUID, fertility GUIDs).
+**The area's set...** and **Add a fertility...** pick one of the game's `FertilitySet` or `Fertility` assets by name for the selected area.
+The panel's `FertilityGuids` field has the same picker (`...`).
+The element's maps are rewritten from the dialog, and an element the dialog did not touch keeps its bytes.
+Whether 117's generator keeps values a template sets, instead of dealing its own, is to try in the game.
 
 ## Island complexes
 
-The Aegyptus map (`egypt_province_default_01`) is not made of slots: 39 fixed islands tile the Nile valley, their
-grids overlapping into four complexes of 10, 10, 10 and 9 islands (one per quarter; their active areas meet, so the
-land runs through). A **complex** is a set of fixed islands whose grids overlap, joined transitively (`placing.complexes`).
-A click on one island selects its complex; moving, turning (as a group about the complex's centre), duplicating and
-removing then act on all of it, so its seams stay where they are. **Add > A complex of another map...** reads another
-map of the game, lists its complexes and places the chosen one at the view's centre, its islands where they lie to
-each other. The checks do not flag islands of one complex overlapping each other.
+The Aegyptus map (`egypt_province_default_01`) is not made of slots.
+39 fixed islands tile the Nile valley, their grids overlapping into four complexes of 10, 10, 10 and 9 islands (one per quarter).
+Their active areas meet, so the land runs through.
+A **complex** is a set of fixed islands whose grids overlap, joined transitively (`placing.complexes`).
+A click on one island selects its complex.
+Moving, turning (as a group about the complex's centre), duplicating and removing then act on all of it, so its seams stay where they are.
+**Add > A complex of another map...** reads another map of the game, lists its complexes and places the chosen one at the view's centre, its islands where they lie to each other.
+The checks do not flag islands of one complex overlapping each other.
 
 ## What is built
 
-Names: a fixed island's fields in the code and the panel are 117's tags: `Rotation90` (`rotation90`),
-`MapFilePath` (`map_file_path`), `IslandLabel` (`island_label`), `FertilityGuids` (`fertility_guids`),
-`RandomizeFertilities` (`randomize_fertilities`) and `MineSlotActivation` (`mine_slot_activation`, which holds 1800's
-`MineSlotMapping` values for an 1800 map). The panel shows the tag as the label and says what it means in a tooltip. The
-older games' world files map their rotation, file and name onto the same fields.
+Names: a fixed island's fields in the code and the panel are 117's tags.
+The fields of `SElement` carry the tag names: `Rotation90`, `MapFilePath`, `IslandLabel`, `FertilityGuids`, `RandomizeFertilities`, `FertilitySetGUIDs`, `FertilitiesPerAreaIndex` and `MineSlotActivation` (which holds 1800's `MineSlotMapping` values for an 1800 map).
+The panel shows the tag as the label and says what it means in a tooltip.
+The older games' world files map their rotation, file and name onto the same fields.
 
-The data side: `mapedit/template.py` (the `.a7tinfo` model, byte for byte, with the mine slot and area maps),
-`mapedit/levelfile.py` (the `.a7te`), `mapedit/sessionfile.py` (the `.a7t` and its growth), `mapedit/grow.py` (the
-growth), `mapedit/pool.py` (the pool, size classes, pictures, `Slot` assets and an island's slot objects),
-`mapedit/rules.py` (the checks), `mapedit/worlds.py` (the older games' world files and random-map templates),
-`mapedit/placing.py` (turns, complexes, mirrored copies, group turns), `mapedit/variants.py` (the three
-difficulties), `mapedit/mapdoc.py` (the open map and its undo stack), `mapedit/references.py` (the report),
-`mapedit/mapmod.py` (the mod's files), `mapedit/projectpart.py`; the window: `mapedit/mapview.py`,
-`mapedit/mappanel.py`, `mapedit/mapdialogs.py`, `mapedit/mapwindow.py`. The fixed 2070 maps and the random sector
-write their `.a7tinfo` through `template` and their `.a7te` with `levelfile` (one writer each). Tests:
-`tests/test_mapedit.py`, `tests/test_mapedit_extras.py` (synthetic), `tests/test_mapedit_window.py` (the window and
-its dialogs, offscreen), `tests/test_mapedit_installed.py` (the installed
-games, with `ANNO117_DIR`, `ANNO1800_DIR`, `ANNO2070_DIR`, `ANNO1404_DIR`, `ANNO1701_DIR`).
+The data side:
+
+- `mapedit/template.py`: the `.a7tinfo` model, byte for byte, with the mine slot and area maps
+- `mapedit/levelfile.py`: the `.a7te`
+- `mapedit/sessionfile.py`: the `.a7t` and its growth
+- `mapedit/grow.py`: the growth
+- `mapedit/pool.py`: the pool, size classes, pictures, `Slot` assets and an island's slot objects
+- `mapedit/rules.py`: the checks
+- `mapedit/worlds.py`: the older games' world files and random-map templates
+- `mapedit/placing.py`: turns, complexes, mirrored copies, group turns
+- `mapedit/variants.py`: the three difficulties
+- `mapedit/mapdoc.py`: the open map and its undo stack
+- `mapedit/references.py`: the report
+- `mapedit/mapmod.py`: the mod's files
+- `mapedit/projectpart.py`
+
+The window: `mapedit/mapview.py`, `mapedit/mappanel.py`, `mapedit/mapdialogs.py` and `mapedit/mapwindow.py`.
+
+The fixed 2070 maps and the random session write their `.a7tinfo` through `template` and their `.a7te` with `levelfile` (one writer each).
+
+Tests:
+
+- `tests/mapedit/test_mapedit.py` and `tests/mapedit/test_mapedit_extras.py` (synthetic)
+- `tests/mapedit/test_mapedit_window.py` (the window and its dialogs, offscreen)
+- `tests/mapedit/test_mapedit_installed.py` (the installed games, with `ANNO117_DIR`, `ANNO1800_DIR`, `ANNO2070_DIR`, `ANNO1404_DIR`, `ANNO1701_DIR`)
 
 Three things are left open:
 

@@ -1,7 +1,7 @@
 """An object's fields as typed values: decoded from and encoded into the codec's tree by type code, with the names
 of enum values and the built-in properties a binding reaches on each widget class.
 
-``fields_of(node)`` lists every field of an object's layout (present or not) as a ``Field``; ``set_value`` writes
+``fields_of(node)`` lists every field of an object's layout (present or not) as a ``SField``; ``set_value`` writes
 one back through ``phoenixedit``. ``BUILTINS`` is the table of built-in properties
 (docs/formats/phoenix-scene-format.md, "Built-in properties"); ``ENUMS`` the value names the editor shows.
 """
@@ -56,13 +56,13 @@ def decode(code: int, raw: bytes):
     if code == ID:
         return str(uuid.UUID(bytes_le=raw[:16]))
     if code == U32_LIST:
-        n, used = leb128.decode(raw)
-        return list(struct.unpack(f"<{n}I", raw[used : used + 4 * n]))
+        length, used = leb128.decode(raw)
+        return list(struct.unpack(f"<{length}I", raw[used : used + 4 * length]))
     if code in REFS:
         return str(uuid.UUID(bytes_le=raw[5:21])) if raw[:1] == b"\x01" else None
     if code in REF_LISTS:
-        n, used = leb128.decode(raw)
-        return [str(uuid.UUID(bytes_le=raw[used + 20 * i + 4 : used + 20 * i + 20])) for i in range(n)]
+        length, used = leb128.decode(raw)
+        return [str(uuid.UUID(bytes_le=raw[used + 20 * i + 4 : used + 20 * i + 20])) for i in range(length)]
     if code == BOXED:
         return decode_boxed(raw)
     return raw
@@ -88,7 +88,7 @@ def encode(code: int, value) -> bytes:
 
 
 @dataclass
-class Field:
+class SField:
     """One field of an object: its schema record and field, whether the file stores it, its value or objects."""
 
     record: str
@@ -114,27 +114,27 @@ class Field:
         return self.code in PLAIN or self.code in REFS or self.code == BOXED
 
 
-def fields_of(node: dict) -> list[Field]:
+def fields_of(node: dict) -> list[SField]:
     """Every field of the object's layout, Object's base bit left out, in file order."""
-    entries = {id(e["field"]): e for e in node["fields"]}
+    entries = {id(entry["field"]): entry for entry in node["fields"]}
     out = []
-    for rec, f in node["layout"][1:] if node.get("layout") else []:
-        e = entries.get(id(f))
-        if e is None:
-            out.append(Field(rec["hash"], f, False))
-        elif e["objs"]:
-            out.append(Field(rec["hash"], f, True, None, tuple(e["objs"])))
+    for record, field in node["layout"][1:] if node.get("layout") else []:
+        entry = entries.get(id(field))
+        if entry is None:
+            out.append(SField(record["hash"], field, False))
+        elif entry["objs"]:
+            out.append(SField(record["hash"], field, True, None, tuple(entry["objs"])))
         else:
-            out.append(Field(rec["hash"], f, True, value_of(node, e)))
+            out.append(SField(record["hash"], field, True, value_of(node, entry)))
     return out
 
 
 def value_of(node: dict, entry: dict):
     """The value of a present plain entry (a label's TextStyle through its own form)."""
-    f = entry["field"]
-    if f["name"] == "TextStyle":
+    field = entry["field"]
+    if field["name"] == "TextStyle":
         return phoenixedit.get_ref(node, "TextStyle")
-    code = int(f["code"], 16)
+    code = int(field["code"], 16)
     if code in (OBJECTS, OBJECT) and entry.get("raw", b"\x00")[:1] == b"\x00":
         return None
     return decode(code, entry["raw"]) if "raw" in entry else None
@@ -142,25 +142,25 @@ def value_of(node: dict, entry: dict):
 
 def get(node: dict, field: str, default=None):
     """The value of the field ``field`` (name or hash), ``default`` when the file does not store it."""
-    e = phoenixedit.get_entry(node, field)
-    if e is None or "raw" not in e:
+    entry = phoenixedit.get_entry(node, field)
+    if entry is None or "raw" not in entry:
         return default
-    return value_of(node, e)
+    return value_of(node, entry)
 
 
 def set_value(node: dict, field: str, value) -> None:
     """Write ``value`` into the field ``field``: a plain value, a reference (a GUID, None to unset), a boxed
     ``(code, value)``; the field becomes present when it was not."""
-    f = _schema_field(node, field)
-    code = int(f["code"], 16)
-    if f["name"] == "TextStyle" and value is not None and phoenixedit.get_entry(node, field) is not None:
+    schema_field = _schema_field(node, field)
+    code = int(schema_field["code"], 16)
+    if schema_field["name"] == "TextStyle" and value is not None and phoenixedit.get_entry(node, field) is not None:
         phoenixedit.set_text_style(node, value)
     elif code in REFS:
-        type_hash = f.get("elem") or "00000000"
+        type_hash = schema_field.get("elem") or "00000000"
         phoenixedit.set_raw(node, field, phoenix.ref_bytes(type_hash, value) if value else b"\x00")
     elif code == BOXED:
-        inner, v = value
-        phoenixedit.set_raw(node, field, struct.pack("<H", inner) + (encode(inner, v) if inner else b""))
+        inner, item = value
+        phoenixedit.set_raw(node, field, struct.pack("<H", inner) + (encode(inner, item) if inner else b""))
     elif code in (I64, KEY, U64, I32):
         phoenixedit.set_raw(node, field, encode(code, value))
     else:
@@ -168,9 +168,9 @@ def set_value(node: dict, field: str, value) -> None:
 
 
 def _schema_field(node: dict, field: str) -> dict:
-    for _rec, f in node["layout"]:
-        if field in (f["name"], f["hash"]):
-            return f
+    for _rec, candidate in node["layout"]:
+        if field in (candidate["name"], candidate["hash"]):
+            return candidate
     raise KeyError(tr("ui.field_not_type", field=field, type=node["schema_type"]))
 
 
@@ -182,21 +182,21 @@ def color_of(node: dict, field: str = "ColorTint") -> tuple[str | None, int, tup
     objs = phoenixedit.objects(node, field)
     if not objs:
         return None
-    ctype = objs[0]
+    color_object = objs[0]
     rgb = (255, 255, 255)
-    color = phoenixedit.objects(ctype, "Color")
+    color = phoenixedit.objects(color_object, "Color")
     if color:
-        rgb = tuple(int(get(color[0], h, 255)) for h in ("5767df55", "3aba3bbe", "4ad0cf31"))
-    return get(ctype, "ColorPaletteAsset"), int(get(ctype, "ReferencedColor", 0) or 0), rgb
+        rgb = tuple(int(get(color[0], channel, 255)) for channel in ("5767df55", "3aba3bbe", "4ad0cf31"))
+    return get(color_object, "ColorPaletteAsset"), int(get(color_object, "ReferencedColor", 0) or 0), rgb
 
 
 def set_color(node: dict, field: str, rgb: tuple[int, int, int], palette: str | None = None, entry: int = 0) -> None:
     """A ColorType field to an RGB colour, with a palette entry when ``palette`` is given."""
     phoenixedit.set_color(node, field, rgb)
     if palette:
-        (ctype,) = phoenixedit.objects(node, field)
-        phoenixedit.set_raw(ctype, "ColorPaletteAsset", phoenix.ref_bytes("6af47f78", palette))
-        phoenixedit.set_field(ctype, "ReferencedColor", entry)
+        (color_object,) = phoenixedit.objects(node, field)
+        phoenixedit.set_raw(color_object, "ColorPaletteAsset", phoenix.ref_bytes("6af47f78", palette))
+        phoenixedit.set_field(color_object, "ReferencedColor", entry)
 
 
 # The History Editions' widget placement in 117's terms (phoenix-scene-format.md, "The History Editions' files")
@@ -210,11 +210,11 @@ _HISTORY_SIDE = {0: 0, 1: 2, 2: 1}  # left / top, right / bottom, centre -> 117'
 def anchor_fields(node: dict) -> dict[str, int]:
     """A widget's anchor point (0..8, row by row from the top left), repositioning, resizing and aspect ratio modes:
     its own (117, 1800), or what the History Editions' anchor constraints, metrics and KeepAspectRatio say."""
-    h = get(node, "HorizontalAnchorConstraint")
-    if h is None:
+    horizontal = get(node, "HorizontalAnchorConstraint")
+    if horizontal is None:
         return {name: int(get(node, name, 0) or 0) for name in ANCHOR_FIELDS}
-    v = int(get(node, "VerticalAnchorConstraint", 0) or 0)
-    out = {"AnchorPoint": _HISTORY_SIDE.get(int(h), 0) + 3 * _HISTORY_SIDE.get(v, 0)}
+    vertical = int(get(node, "VerticalAnchorConstraint", 0) or 0)
+    out = {"AnchorPoint": _HISTORY_SIDE.get(int(horizontal), 0) + 3 * _HISTORY_SIDE.get(vertical, 0)}
     out.update({name: int(get(node, old, 0) or 0) for name, old in _HISTORY_MODES.items()})
     out["AspectRatio"] = 1 if get(node, "KeepAspectRatio") else 0  # keep it: fit the smaller axis (inferred)
     return out
@@ -222,8 +222,8 @@ def anchor_fields(node: dict) -> dict[str, int]:
 
 def alignment_index(value) -> int:
     """A label's ``AlignmentX`` as 0 left, 1 centre, 2 right, 3 justify (117 and the History Editions store these)."""
-    v = int(value or 0)
-    return v if v in (1, 2, 3) else 0
+    number = int(value or 0)
+    return number if number in (1, 2, 3) else 0
 
 
 # Enum value names the editor shows (docs/ui/117/layout.md, widget-types.md; the Widget Library's enums)
@@ -270,9 +270,9 @@ FIELD_LABELS = {  # names for the hash fields the schema leaves unnamed (widget-
 }  # fmt: skip
 
 
-def label(f: Field) -> str:
+def label(field: SField) -> str:
     """The name the property editor shows for a field: the schema's, ours for a known hash, else the hash."""
-    return f.schema["name"] or FIELD_LABELS.get(f.schema["hash"], f.schema["hash"])
+    return field.schema["name"] or FIELD_LABELS.get(field.schema["hash"], field.schema["hash"])
 
 
 def enum_names(field_name: str) -> dict[int, str]:
@@ -284,7 +284,7 @@ def enum_names(field_name: str) -> dict[int, str]:
 
 
 @dataclass(frozen=True)
-class Builtin:
+class SBuiltin:
     uid: int
     name: str
     owner: str  # Widget, CompositeWidget, LabelWidget, ImageWidget, VectorShapeWidget, VideoWidget, Animation
@@ -327,14 +327,14 @@ _TABLE = (
 )  # fmt: skip
 
 
-def _builtins() -> tuple[Builtin, ...]:
+def _builtins() -> tuple[SBuiltin, ...]:
     out = []
-    for owner, props, events, actions in _TABLE:
-        for kind, text in (("property", props), ("event", events), ("action", actions)):
-            w = text.split()
-            for i in range(0, len(w), 2):
-                vtype = kind if kind != "property" else _TYPES.get(w[i], "value")
-                out.append(Builtin(0x80000000 + int(w[i + 1], 16), w[i], owner, kind, vtype))
+    for owner, properties, events, actions in _TABLE:
+        for kind, text in (("property", properties), ("event", events), ("action", actions)):
+            words = text.split()
+            for i in range(0, len(words), 2):
+                value_type = kind if kind != "property" else _TYPES.get(words[i], "value")
+                out.append(SBuiltin(0x80000000 + int(words[i + 1], 16), words[i], owner, kind, value_type))
     return tuple(out)
 
 
@@ -352,19 +352,19 @@ CLASSES = {
 }
 
 
-def builtins_of(kind: str) -> list[Builtin]:
+def builtins_of(kind: str) -> list[SBuiltin]:
     """The built-in properties, events and actions of an element kind (``elements.KINDS``)."""
     owners = CLASSES.get(kind, ("Widget",))
-    return [b for b in BUILTINS if b.owner in owners]
+    return [builtin for builtin in BUILTINS if builtin.owner in owners]
 
 
 def property_values(node: dict) -> dict[tuple[int, ...], object]:
     """An instance's own values of its template's and components' properties, by id path (placing reads them
     through ``layout.Context.values``, which keeps them until an edit)."""
     out = {}
-    for pv in phoenixedit.objects(node, "PropertyValues"):
-        path = tuple(get(pv, "PropertyIdPath", []) or [])
-        boxed = get(pv, "Value")
+    for property_value in phoenixedit.objects(node, "PropertyValues"):
+        path = tuple(get(property_value, "PropertyIdPath", []) or [])
+        boxed = get(property_value, "Value")
         out[path] = boxed[1] if isinstance(boxed, tuple) else None
     return out
 
@@ -372,6 +372,6 @@ def property_values(node: dict) -> dict[tuple[int, ...], object]:
 def dynamic_properties(node: dict) -> list[tuple[int, object]]:
     """The History Editions' ``DynamicProperties`` of a container instance: (AtomPropertyId, value) of what it gives
     the properties of the file it places (an inline object, a colour, as None, as a boxed object reads in 117's)."""
-    e = phoenixedit.get_entry(node, "DynamicProperties")
-    values = phoenix.typed_values(e) if e is not None else []
+    entry = phoenixedit.get_entry(node, "DynamicProperties")
+    values = phoenix.typed_values(entry) if entry is not None else []
     return [(atom, None if isinstance(raw, dict) else decode(code, raw)) for atom, code, raw in values]

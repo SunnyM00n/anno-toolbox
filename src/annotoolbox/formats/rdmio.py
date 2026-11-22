@@ -17,12 +17,12 @@ VERTEX_POINTER_INDEX = 3  # the meta block's fourth pointer: the vertex buffer
 INDEX_POINTER_INDEX = 4  # ... its fifth: the index buffer
 
 
-def u32(b: bytes | bytearray, off: int) -> int:
-    return struct.unpack_from("<I", b, off)[0]
+def u32(data: bytes | bytearray, offset_bytes: int) -> int:
+    return struct.unpack_from("<I", data, offset_bytes)[0]
 
 
 @dataclass(frozen=True)
-class MeshBlocks:
+class SMeshBlocks:
     """Where the first mesh's vertex and index buffers lie, and how they are laid out."""
 
     vertex_ptr: int
@@ -37,7 +37,7 @@ class MeshBlocks:
         return "<%d%s" % (self.n_idx, "H" if self.index_size == 2 else "I")
 
 
-def mesh_blocks(data: bytes | bytearray) -> MeshBlocks | None:
+def mesh_blocks(data: bytes | bytearray) -> SMeshBlocks | None:
     """The buffers of the first mesh, or None when the file holds no readable mesh."""
     try:
         return _blocks_at(data, u32(data, META_PTR_OFFSET))
@@ -45,7 +45,7 @@ def mesh_blocks(data: bytes | bytearray) -> MeshBlocks | None:
         return None
 
 
-def all_mesh_blocks(data: bytes | bytearray) -> list[MeshBlocks]:
+def all_mesh_blocks(data: bytes | bytearray) -> list[SMeshBlocks]:
     """The buffers of every mesh record of the file that has them (a file holds up to 40 meshes)."""
     try:
         meta = u32(data, META_PTR_OFFSET)
@@ -53,10 +53,10 @@ def all_mesh_blocks(data: bytes | bytearray) -> list[MeshBlocks]:
         found = [_blocks_at(data, meta + k * size) for k in range(count)]
     except struct.error:
         return []
-    return [b for b in found if b is not None]
+    return [block for block in found if block is not None]
 
 
-def _blocks_at(data: bytes | bytearray, meta: int) -> MeshBlocks | None:
+def _blocks_at(data: bytes | bytearray, meta: int) -> SMeshBlocks | None:
     try:
         vptr = u32(data, meta + 4 * VERTEX_POINTER_INDEX)
         iptr = u32(data, meta + 4 * INDEX_POINTER_INDEX)
@@ -68,4 +68,4 @@ def _blocks_at(data: bytes | bytearray, meta: int) -> MeshBlocks | None:
         return None
     if vptr + count * stride > len(data) or iptr + n_idx * isize > len(data):
         return None
-    return MeshBlocks(vptr, count, stride, iptr, n_idx, isize)
+    return SMeshBlocks(vptr, count, stride, iptr, n_idx, isize)

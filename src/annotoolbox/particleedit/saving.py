@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 
 from ..infra.i18n import N_, tr
 from ..models import cfgpatch
-from ..models.cfgdoc import Doc
+from ..models.cfgdoc import SDoc
 from ..sources.overlay import normalize
-from .effectdoc import EffectDoc, naming_leaves
+from .effectdoc import CEffectDoc, naming_leaves
 
 REPLACE, COPY, NEW = "replace", "copy", "new"
 TITLES = {
@@ -27,7 +27,7 @@ TITLES = {
 
 
 @dataclass(frozen=True)
-class Way:
+class SWay:
     way: str
     path: str
     allowed: bool
@@ -35,7 +35,7 @@ class Way:
 
 
 @dataclass
-class Plan:
+class SPlan:
     """What a save writes (game path -> bytes), what to tell the person, what stops it, what it takes out."""
 
     way: str
@@ -45,43 +45,45 @@ class Plan:
     stale: list[str] = field(default_factory=list)
 
 
-def copy_path(effect: EffectDoc) -> str:
+def copy_path(effect: CEffectDoc) -> str:
     """``<config folder>/<config name>_<effect name>.<ext>``: the copy one model plays ("" without a model)."""
-    if effect.model is None:
+    if effect.m_model is None:
         return ""
-    folder, _s, name = effect.model.asked.rpartition("/")
-    stem, ext = effect.title.rsplit(".", 1)
-    return f"{folder}/{name.rsplit('.', 1)[0]}_{stem}.{ext}"
+    folder, _separator, name = effect.m_model.asked.rpartition("/")
+    stem, extension = effect.title.rsplit(".", 1)
+    return f"{folder}/{name.rsplit('.', 1)[0]}_{stem}.{extension}"
 
 
-def ways(effect: EffectDoc) -> list[Way]:
+def ways(effect: CEffectDoc) -> list[SWay]:
     """The ways the effect can be saved, with their reasons."""
-    out = [Way(REPLACE, effect.path, True, tr("particles.games_file_replaced_every_model"))]
-    if effect.model is None:
-        out.append(Way(COPY, "", False, tr("particles.open_effect_model_file_gt")))
-    elif not effect.model.blocks:
-        out.append(Way(COPY, "", False, tr("particles.models_config_not_name_effect")))
+    out = [SWay(REPLACE, effect.m_path, True, tr("particles.games_file_replaced_every_model"))]
+    if effect.m_model is None:
+        out.append(SWay(COPY, "", False, tr("particles.open_effect_model_file_gt")))
+    elif not effect.m_model.blocks:
+        out.append(SWay(COPY, "", False, tr("particles.models_config_not_name_effect")))
     else:
-        out.append(Way(COPY, copy_path(effect), True, tr(
-            "particles.copy_only_plays_config_pointed", config=effect.model.asked,
+        out.append(SWay(COPY, copy_path(effect), True, tr(
+            "particles.copy_only_plays_config_pointed", config=effect.m_model.asked,
             how=_config_way(effect)[1]
         )))  # fmt: skip
-    out.append(Way(NEW, "", True, tr("particles.file_path_your_own_plays")))
+    out.append(SWay(NEW, "", True, tr("particles.file_path_your_own_plays")))
     return out
 
 
-def _config_way(effect: EffectDoc) -> tuple[str, str]:
+def _config_way(effect: CEffectDoc) -> tuple[str, str]:
     """``cfgpatch.PATCH`` or ``REPLACE`` for the model's config, and its words."""
-    model = effect.model
-    found = {w.way: w for w in cfgpatch.ways(effect.game, model.asked, model.read, effect.files.base.exists)}
+    model = effect.m_model
+    found = {
+        way.way: way for way in cfgpatch.ways(effect.m_game, model.asked, model.read, effect.m_files.m_base.exists)
+    }
     if found[cfgpatch.PATCH].allowed:
         return cfgpatch.PATCH, tr("particles.modops_patch_path", path=found[cfgpatch.PATCH].path)
     return cfgpatch.REPLACE, tr("particles.whole_config_path", path=model.read)
 
 
-def plan(effect: EffectDoc, way: str, new_path: str = "") -> Plan:
+def plan(effect: CEffectDoc, way: str, new_path: str = "") -> SPlan:
     """The files a save in ``way`` writes."""
-    out = Plan(way)
+    out = SPlan(way)
     if not effect.editable:
         out.problems.append(tr("particles.file_not_read_back_byte"))
         return out
@@ -89,36 +91,36 @@ def plan(effect: EffectDoc, way: str, new_path: str = "") -> Plan:
         if not effect.differs_from_game and not effect.model_changed:
             out.problems.append(tr("particles.nothing_differs_games_own_file"))
             return out
-        out.files[effect.path] = effect.to_bytes()
+        out.files[effect.m_path] = effect.to_bytes()
         if effect.model_changed:
-            _config(effect, effect.model.doc, out)
+            _config(effect, effect.m_model.doc, out)
     elif way == COPY:
         target = copy_path(effect)
-        if not target or not effect.model.blocks:
+        if not target or not effect.m_model.blocks:
             out.problems.append(tr("particles.no_model_config_point_copy"))
             return out
         out.files[target] = effect.to_bytes()
-        _config(effect, _pointed(effect.model.doc, effect.path, target), out)
+        _config(effect, _pointed(effect.m_model.doc, effect.m_path, target), out)
         out.notes.append(tr("particles.the_copy_path", path=target))
     else:
         _new(effect, new_path, out)
     return out
 
 
-def _new(effect: EffectDoc, new_path: str, out: Plan) -> None:
+def _new(effect: CEffectDoc, new_path: str, out: SPlan) -> None:
     path = normalize(new_path)
-    ext = effect.path.rsplit(".", 1)[-1]
-    if not path.endswith("." + ext):
-        out.problems.append(tr("particles.new_file_keeps_extension", ext=ext))
-    elif not path.startswith("data/") or any(p in ("", ".", "..") or ":" in p for p in path.split("/")):
+    extension = effect.m_path.rsplit(".", 1)[-1]
+    if not path.endswith("." + extension):
+        out.problems.append(tr("particles.new_file_keeps_extension", ext=extension))
+    elif not path.startswith("data/") or any(part in ("", ".", "..") or ":" in part for part in path.split("/")):
         out.problems.append(tr("particles.not_path_under_games_data", path=new_path))
-    elif effect.files.base.exists(path) and path != effect.path:
+    elif effect.m_files.m_base.exists(path) and path != effect.m_path:
         out.problems.append(tr("particles.game_file_choose_another_name", path=path))
     else:
         out.files[path] = effect.to_bytes()
 
 
-def _pointed(doc: Doc, effect: str, target: str) -> Doc:
+def _pointed(doc: SDoc, effect: str, target: str) -> SDoc:
     """A copy of the config with every value naming ``effect`` naming ``target`` instead, in its own slashes."""
     out = copy.deepcopy(doc)
     for leaf in naming_leaves(out, effect):
@@ -126,9 +128,9 @@ def _pointed(doc: Doc, effect: str, target: str) -> Doc:
     return out
 
 
-def _config(effect: EffectDoc, doc: Doc, out: Plan) -> None:
+def _config(effect: CEffectDoc, doc: SDoc, out: SPlan) -> None:
     """The model's config into the plan: as a patch where the game patches configs, else whole."""
-    model = effect.model
+    model = effect.m_model
     how, _words = _config_way(effect)
     if how == cfgpatch.PATCH:
         patch = cfgpatch.render_patch(model.base, doc)

@@ -8,6 +8,7 @@ plain tags, or curves: ``<XValueMin/Max/Def>``, ``<XVarianz>``, ``<XSize>`` and 
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -24,13 +25,13 @@ KNOT = re.compile(r"^(\w+?)Knot(Pos|X|Y|Z|W)_([0-9a-f]+)$")
 
 
 @dataclass
-class Knot:
-    pos: float  # 0..1 along the curve's domain
+class SKnot:
+    position: float  # 0..1 along the curve's domain
     value: tuple[float, float, float, float]  # normalised: value = min + knot * (max - min)
 
 
 @dataclass
-class Curve:
+class SCurve:
     """A keyframed number: normalised knots between ``minimum`` and ``maximum``, varied per particle by
     +-``variance``. Without knots the curve is the constant ``default``."""
 
@@ -38,36 +39,36 @@ class Curve:
     maximum: float = 1.0
     default: float = 0.0
     variance: float = 0.0
-    knots: list[Knot] = field(default_factory=list)
+    knots: list[SKnot] = field(default_factory=list)
 
-    def normalised(self, t: float) -> tuple[float, float, float, float]:
+    def normalised(self, position: float) -> tuple[float, float, float, float]:
         """The knots' value at ``t``: linear between knots, held before the first and after the last."""
         knots = self.knots
         if not knots:
-            n = self.default
+            value = self.default
             if self.maximum != self.minimum:
-                n = (self.default - self.minimum) / (self.maximum - self.minimum)
-            return (n, n, n, n)
-        if t <= knots[0].pos:
+                value = (self.default - self.minimum) / (self.maximum - self.minimum)
+            return (value, value, value, value)
+        if position <= knots[0].position:
             return knots[0].value
-        for a, b in zip(knots, knots[1:], strict=False):
-            if t <= b.pos:
-                span = b.pos - a.pos
-                k = 0.0 if span <= 0 else (t - a.pos) / span
-                return tuple(x + (y - x) * k for x, y in zip(a.value, b.value, strict=True))  # type: ignore[return-value]
+        for start, end in zip(knots, knots[1:], strict=False):
+            if position <= end.position:
+                span = end.position - start.position
+                blend = 0.0 if span <= 0 else (position - start.position) / span
+                return tuple(x + (y - x) * blend for x, y in zip(start.value, end.value, strict=True))  # type: ignore[return-value]
         return knots[-1].value
 
-    def at(self, t: float, channel: int = 0) -> float:
+    def at(self, position: float, channel: int = 0) -> float:
         """The value at ``t`` (channel 0..3 of the knots) in the curve's own range; a curve without knots is
         its default as it stands."""
         if not self.knots:
             return self.default
-        n = self.normalised(t)[channel]
-        return self.minimum + n * (self.maximum - self.minimum)
+        normalised_value = self.normalised(position)[channel]
+        return self.minimum + normalised_value * (self.maximum - self.minimum)
 
 
 @dataclass
-class Effect:
+class SEffect:
     """One emitter of an ``.efc``: its header, its curves by name (``Scale``, ``VelocityY``, ``Alpha`` ...)
     and its other plain values (``AtlasTilingU``, ``Alignment``, ``WindDependency`` ...)."""
 
@@ -83,24 +84,26 @@ class Effect:
     loop: bool
     bound: bool
     offset: tuple[float, float, float]
-    curves: dict[str, Curve] = field(default_factory=dict)
+    curves: dict[str, SCurve] = field(default_factory=dict)
     values: dict[str, str] = field(default_factory=dict)
 
     def number(self, name: str, default: float = 0.0) -> float:
         try:
-            return float(self.values[name])
+            value = float(self.values[name])
         except (KeyError, ValueError):
             return default
+        return value if math.isfinite(value) else default  # ``int(nan)`` and ``int(inf)`` would raise
 
-    def curve(self, name: str) -> Curve | None:
+    def curve(self, name: str) -> SCurve | None:
         return self.curves.get(name)
 
 
 def _float(text: str, default: float = 0.0) -> float:
     try:
-        return float(text)
+        value = float(text)
     except ValueError:
         return default
+    return value if math.isfinite(value) else default
 
 
 def _technique(values: dict[str, str]) -> int:
@@ -110,50 +113,54 @@ def _technique(values: dict[str, str]) -> int:
     return BLENDING_1404.get(int(_float(values.get("Blending", "0"))), 0)
 
 
-def _curves_of(tags: dict[str, str]) -> tuple[dict[str, Curve], set[str]]:
+def _curves_of(tags: dict[str, str]) -> tuple[dict[str, SCurve], set[str]]:
     """The curves among an effect's tags and the tag names they used."""
     parts: dict[str, dict[str, str]] = {}
     knots: dict[str, dict[int, dict[str, float]]] = {}
     used: set[str] = set()
     for tag, text in tags.items():
-        m = CURVE_PART.match(tag)
-        if m:
-            parts.setdefault(m.group(1), {})[m.group(2)] = text
+        part_match = CURVE_PART.match(tag)
+        if part_match:
+            parts.setdefault(part_match.group(1), {})[part_match.group(2)] = text
             used.add(tag)
             continue
-        k = KNOT.match(tag)
-        if k:
-            knots.setdefault(k.group(1), {}).setdefault(int(k.group(3), 16), {})[k.group(2)] = _float(text)
+        knot_match = KNOT.match(tag)
+        if knot_match:
+            knots.setdefault(knot_match.group(1), {}).setdefault(int(knot_match.group(3), 16), {})[
+                knot_match.group(2)
+            ] = _float(text)
             used.add(tag)
     curves = {}
-    for name, p in parts.items():
-        if "Size" not in p:
-            used.difference_update(f"{name}{s}" for s in p)  # a plain tag that only looks like a curve part
+    for name, part in parts.items():
+        if "Size" not in part:
+            used.difference_update(
+                f"{name}{suffix}" for suffix in part
+            )  # a plain tag that only looks like a curve part
             continue
-        curve = Curve(
-            _float(p.get("ValueMin", "0")),
-            _float(p.get("ValueMax", "1")),
-            _float(p.get("ValueDef", "0")),
-            _float(p.get("Varianz", "0")),
+        curve = SCurve(
+            _float(part.get("ValueMin", "0")),
+            _float(part.get("ValueMax", "1")),
+            _float(part.get("ValueDef", "0")),
+            _float(part.get("Varianz", "0")),
         )
-        for _, k in sorted(knots.get(name, {}).items()):
-            v = tuple(k.get(c, 0.0) for c in "XYZW")
-            curve.knots.append(Knot(k.get("Pos", 0.0), v))  # type: ignore[arg-type]
-        curve.knots.sort(key=lambda kn: kn.pos)
+        for _, knot_fields in sorted(knots.get(name, {}).items()):
+            knot_value = tuple(knot_fields.get(axis, 0.0) for axis in "XYZW")
+            curve.knots.append(SKnot(knot_fields.get("Pos", 0.0), knot_value))  # type: ignore[arg-type]
+        curve.knots.sort(key=lambda knot: knot.position)
         curves[name] = curve
     return curves, used
 
 
-def parse_efc(text: str) -> list[Effect]:
+def parse_efc(text: str) -> list[SEffect]:
     """The effects of an ``.efc`` file, in file order."""
     out = []
-    for m in _BLOCK.finditer(text):
-        tags = {t.group(1): t.group(2).strip() for t in _TAG.finditer(m.group(2))}
+    for block in _BLOCK.finditer(text):
+        tags = {tag_match.group(1): tag_match.group(2).strip() for tag_match in _TAG.finditer(block.group(2))}
         curves, used = _curves_of(tags)
-        values = {k: v for k, v in tags.items() if k not in used}
+        values = {tag_name: tag_value for tag_name, tag_value in tags.items() if tag_name not in used}
         out.append(
-            Effect(
-                index=int(m.group(1)),
+            SEffect(
+                index=int(block.group(1)),
                 name=values.pop("Name", ""),
                 kind=int(_float(values.pop("EffectType", "0"))),
                 texture=values.pop("Texture0", ""),
@@ -164,7 +171,7 @@ def parse_efc(text: str) -> list[Effect]:
                 duration_ms=_float(values.pop("Duration", "0")),
                 loop=values.pop("Loop", "0") == "1",
                 bound=values.pop("Bound", "0") == "1",
-                offset=tuple(_float(values.pop(f"Offset{c}", "0")) for c in "XYZ"),  # type: ignore[arg-type]
+                offset=tuple(_float(values.pop(f"Offset{axis}", "0")) for axis in "XYZ"),  # type: ignore[arg-type]
                 curves=curves,
                 values=values,
             )

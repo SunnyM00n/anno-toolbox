@@ -4,7 +4,7 @@ This page describes what Anno 1701 keeps where 117 and 1800 have an asset file. 
 `src/annotoolbox/sources/props1701.py` (`parse_props`/`render_props`, `parse_table`/`render_table`,
 `game_values`/`set_game_values`). The asset editor shows them as assets (`assetedit/game1701.py`,
 [the guide](../asset-editor.md#anno-1701)). Each reader writes its file back byte for byte
-(`tests/test_game1701.py`, on the install).
+(`tests/assetedit/test_game1701.py`, on the install).
 
 There is no schema file: the names of the values are not in the data. The editor names a value by its number
 (`V100`) and a property by its number (`P7`). What a number means is open work, kept in the table at the end.

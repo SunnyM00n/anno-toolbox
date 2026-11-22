@@ -25,10 +25,10 @@ _EPS = 1e-12
 # Quaternions as (x, y, z, w) tuples
 
 
-def qmul(a: Vec4, b: Vec4) -> Vec4:
-    """The Hamilton product of two quaternions: ``a`` applied after ``b``."""
-    ax, ay, az, aw = a
-    bx, by, bz, bw = b
+def qmul(first: Vec4, second: Vec4) -> Vec4:
+    """The Hamilton product of two quaternions: ``first`` applied after ``second``."""
+    ax, ay, az, aw = first
+    bx, by, bz, bw = second
     return (
         aw * bx + ax * bw + ay * bz - az * by,
         aw * by - ax * bz + ay * bw + az * bx,
@@ -37,37 +37,49 @@ def qmul(a: Vec4, b: Vec4) -> Vec4:
     )
 
 
-def qrotate(q: Vec4, v: Vec3) -> Vec3:
-    """The vector ``v`` turned by the unit quaternion ``q``."""
-    x, y, z, w = q
-    tx, ty, tz = 2 * (y * v[2] - z * v[1]), 2 * (z * v[0] - x * v[2]), 2 * (x * v[1] - y * v[0])
-    return (v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx))
+def qrotate(quaternion: Vec4, vector: Vec3) -> Vec3:
+    """The vector ``vector`` turned by the unit quaternion ``quaternion``."""
+    x, y, z, w = quaternion
+    cross_x, cross_y, cross_z = (
+        2 * (y * vector[2] - z * vector[1]),
+        2 * (z * vector[0] - x * vector[2]),
+        2 * (x * vector[1] - y * vector[0]),
+    )
+    return (
+        vector[0] + w * cross_x + (y * cross_z - z * cross_y),
+        vector[1] + w * cross_y + (z * cross_x - x * cross_z),
+        vector[2] + w * cross_z + (x * cross_y - y * cross_x),
+    )
 
 
-def qconj(q: Vec4) -> Vec4:
+def qconj(quaternion: Vec4) -> Vec4:
     """The conjugate: the turn the other way round (the inverse of a unit quaternion)."""
-    return (-q[0], -q[1], -q[2], q[3])
+    return (-quaternion[0], -quaternion[1], -quaternion[2], quaternion[3])
 
 
-def qnormalize(q: Vec4) -> Vec4:
-    """The unit quaternion along ``q``; the identity for a zero one."""
-    length = math.sqrt(sum(c * c for c in q))
+def qnormalize(quaternion: Vec4) -> Vec4:
+    """The unit quaternion along ``quaternion``; the identity for a zero one."""
+    length = math.sqrt(sum(value * value for value in quaternion))
     if length == 0.0:
         return (0.0, 0.0, 0.0, 1.0)
-    return (q[0] / length, q[1] / length, q[2] / length, q[3] / length)
+    return (quaternion[0] / length, quaternion[1] / length, quaternion[2] / length, quaternion[3] / length)
 
 
-def qaxis(axis: Vec3, angle: float) -> Vec4:
-    """The quaternion that turns by ``angle`` radians about ``axis`` (any length; none: no turn)."""
-    length = math.sqrt(sum(a * a for a in axis)) or 1.0
-    s = math.sin(angle / 2) / length
-    return (axis[0] * s, axis[1] * s, axis[2] * s, math.cos(angle / 2))
+def qaxis(axis: Vec3, angle_rad: float) -> Vec4:
+    """The quaternion that turns by ``angle_rad`` radians about ``axis`` (any length; none: no turn)."""
+    length = math.sqrt(sum(first * first for first in axis)) or 1.0
+    scale = math.sin(angle_rad / 2) / length
+    return (axis[0] * scale, axis[1] * scale, axis[2] * scale, math.cos(angle_rad / 2))
 
 
-def euler_quat(rx: float, ry: float, rz: float) -> Vec4:
+def euler_quat(rotation_x_rad: float, rotation_y_rad: float, rotation_z_rad: float) -> Vec4:
     """Euler radians as a quaternion, x applied first."""
     out: Vec4 = (0.0, 0.0, 0.0, 1.0)
-    for axis, angle in (((1.0, 0.0, 0.0), rx), ((0.0, 1.0, 0.0), ry), ((0.0, 0.0, 1.0), rz)):
+    for axis, angle in (
+        ((1.0, 0.0, 0.0), rotation_x_rad),
+        ((0.0, 1.0, 0.0), rotation_y_rad),
+        ((0.0, 0.0, 1.0), rotation_z_rad),
+    ):
         out = qmul(qaxis(axis, angle), out)
     return out
 
@@ -75,78 +87,82 @@ def euler_quat(rx: float, ry: float, rz: float) -> Vec4:
 # Matrices
 
 
-def determinant(m: Matrix) -> float:
+def determinant(matrix: Matrix) -> float:
     return (
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
-        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
     )
 
 
-def cofactor(m: Matrix) -> Matrix:
+def cofactor(matrix: Matrix) -> Matrix:
     """The cofactor matrix: ``det(M)`` times the inverse transpose, and still a direction for a flat ``M``."""
 
-    def minor(r: int, c: int) -> float:
-        a, b = [i for i in range(3) if i != r], [i for i in range(3) if i != c]
-        return m[a[0]][b[0]] * m[a[1]][b[1]] - m[a[0]][b[1]] * m[a[1]][b[0]]
+    def minor(skipped_row: int, skipped_column: int) -> float:
+        rows, columns = [i for i in range(3) if i != skipped_row], [i for i in range(3) if i != skipped_column]
+        return (
+            matrix[rows[0]][columns[0]] * matrix[rows[1]][columns[1]]
+            - matrix[rows[0]][columns[1]] * matrix[rows[1]][columns[0]]
+        )
 
     return tuple(  # type: ignore[return-value]
-        tuple((-1) ** (r + c) * minor(r, c) for c in range(3)) for r in range(3)
+        tuple((-1) ** (row_index + column_index) * minor(row_index, column_index) for column_index in range(3))
+        for row_index in range(3)
     )
 
 
-def apply(m: Matrix, v: Vec3) -> Vec3:
+def apply(matrix: Matrix, vector: Vec3) -> Vec3:
     return (
-        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+        matrix[0][0] * vector[0] + matrix[0][1] * vector[1] + matrix[0][2] * vector[2],
+        matrix[1][0] * vector[0] + matrix[1][1] * vector[1] + matrix[1][2] * vector[2],
+        matrix[2][0] * vector[0] + matrix[2][1] * vector[1] + matrix[2][2] * vector[2],
     )
 
 
-def normal_matrix(m: Matrix) -> Matrix:
+def normal_matrix(matrix: Matrix) -> Matrix:
     """The matrix that carries normals: the inverse transpose up to a positive factor (the cofactor matrix, its
-    sign made positive for a mirroring ``m``; a normal is renormalised afterwards)."""
-    c = cofactor(m)
-    if determinant(m) >= 0:
-        return c
-    return tuple(tuple(-x for x in row) for row in c)  # type: ignore[return-value]
+    sign made positive for a mirroring ``matrix``; a normal is renormalised afterwards)."""
+    cofactors = cofactor(matrix)
+    if determinant(matrix) >= 0:
+        return cofactors
+    return tuple(tuple(-x for x in row) for row in cofactors)  # type: ignore[return-value]
 
 
-def transformed_direction(m: Matrix, b: bytes) -> bytes:
-    """A packed direction moved by ``m`` and made a unit vector again; a direction ``m`` collapses stays as it was."""
-    v = apply(m, direction(b))
-    n = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-    if n < _EPS:
-        return b
-    return pack_direction(v[0] / n, v[1] / n, v[2] / n)
+def transformed_direction(matrix: Matrix, data: bytes) -> bytes:
+    """A packed direction moved by ``matrix`` and made a unit vector again; a direction ``matrix`` collapses stays as it was."""
+    vector = apply(matrix, direction(data))
+    length = math.sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2])
+    if length < _EPS:
+        return data
+    return pack_direction(vector[0] / length, vector[1] / length, vector[2] / length)
 
 
-def transformed_position(m: Matrix, b: bytes) -> bytes:
-    """A packed ``4h`` position moved by ``m``."""
-    return struct.pack("<4e", *apply(m, struct.unpack("<3e", b[:6])), 0.0)
+def transformed_position(matrix: Matrix, data: bytes) -> bytes:
+    """A packed ``4h`` position moved by ``matrix``."""
+    return struct.pack("<4e", *apply(matrix, struct.unpack("<3e", data[:6])), 0.0)
 
 
-def column(usage: int, make: Callable[[bytes, int], bytes], m: Matrix) -> Callable[[bytes, int], bytes]:
-    """``make`` (a vertex element's bytes from a source row) with ``m`` applied to what it makes: positions (usage 0),
+def column(usage: int, make: Callable[[bytes, int], bytes], matrix: Matrix) -> Callable[[bytes, int], bytes]:
+    """``make`` (a vertex element's bytes from a source row) with ``matrix`` applied to what it makes: positions (usage 0),
     normals (1) or tangents and bitangents (2, 3); any other element is returned as it is."""
     if usage == 0:
-        return lambda x, v: transformed_position(m, make(x, v))
+        return lambda x, vector: transformed_position(matrix, make(x, vector))
     if usage == 1:
-        nm = normal_matrix(m)
-        return lambda x, v: transformed_direction(nm, make(x, v))
+        normals = normal_matrix(matrix)
+        return lambda x, vector: transformed_direction(normals, make(x, vector))
     if usage in (2, 3):
-        return lambda x, v: transformed_direction(m, make(x, v))
+        return lambda x, vector: transformed_direction(matrix, make(x, vector))
     return make
 
 
-def mirrored(m: Matrix) -> bool:
-    """Whether ``m`` turns the surface inside out, so a triangle's winding (front face) must be reversed."""
-    return determinant(m) < 0
+def mirrored(matrix: Matrix) -> bool:
+    """Whether ``matrix`` turns the surface inside out, so a triangle's winding (front face) must be reversed."""
+    return determinant(matrix) < 0
 
 
 def reversed_winding(indices: list[int]) -> list[int]:
     """Every triangle's second and third corner swapped."""
     out = list(indices)
-    for t in range(0, len(out) - 2, 3):
-        out[t + 1], out[t + 2] = out[t + 2], out[t + 1]
+    for triangle in range(0, len(out) - 2, 3):
+        out[triangle + 1], out[triangle + 2] = out[triangle + 2], out[triangle + 1]
     return out

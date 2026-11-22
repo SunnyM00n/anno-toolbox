@@ -1,8 +1,8 @@
 """The sound editor's page for the older games (Qt): the sounds of a ``sounddatabase.xml`` in a table, the values of the
 picked one in a form, the lists that draw it with their weights, Play, Replace the clip and Add a sound.
 
-``OldSoundPanel(say, cache)`` is the widget; ``open_database(tree, path)`` fills it, ``doc`` is the open
-``olddoc.OldSoundDoc`` (the window saves its ``files()``). docs/sound-editor.md, "The older games".
+``COldSoundPanel(say, cache)`` is the widget; ``open_database(tree, path)`` fills it, ``doc`` is the open
+``olddoc.COldSoundDoc`` (the window saves its ``files()``). docs/sound-editor.md, "The older games".
 """
 
 from __future__ import annotations
@@ -32,11 +32,11 @@ from PySide6.QtWidgets import (
 from ..exporting import sounds as export
 from ..formats import sounddb
 from ..infra.i18n import N_, tr
-from ..suite.background import Background
-from ..suite.clipplayer import ClipPlayer
+from ..suite.background import CBackground
+from ..suite.clipplayer import CClipPlayer
 from ..suite.widgets import ROLE, add_row, read_only_table
 from . import olddoc
-from .timelinepanel import TimelinePanel
+from .timelinepanel import CTimelinePanel
 
 COLUMNS = (
     N_("ui.id"),
@@ -59,45 +59,49 @@ def new_sound_path(beside: str, suffix: str, taken: set[str]) -> str:
     """A free ``new_sound`` path next to the file ``beside`` (the folder of the sound that was picked)."""
     folder = beside.rsplit("/", 1)[0] + "/" if "/" in beside else ""
     stem = f"{folder}new_sound"
-    return next(n for n in (f"{stem}{suffix}", *(f"{stem}{k}{suffix}" for k in range(2, 10_000))) if n not in taken)
+    return next(
+        candidate
+        for candidate in (f"{stem}{suffix}", *(f"{stem}{k}{suffix}" for k in range(2, 10_000)))
+        if candidate not in taken
+    )
 
 
-class OldSoundPanel(QWidget):
+class COldSoundPanel(QWidget):
     def __init__(
         self, say: Callable[[str], None], cache: Path | None = None, changed: Callable[[], None] | None = None
     ):
         super().__init__()
-        self.say, self.cache, self.changed = say, cache, changed or (lambda: None)
-        self.may_leave: Callable[[], bool] = lambda: True  # asked before another database replaces unkept edits
-        self.tree = None
-        self.doc: olddoc.OldSoundDoc | None = None
-        self.player = ClipPlayer(self)
-        self.background = Background(self)
-        self.busy = False  # a clip is being prepared off the window's thread
-        self.databases = QComboBox()
-        self.filter = QLineEdit(placeholderText=tr("sound.filter_id_file_type"))
-        self.table = read_only_table(COLUMNS)
-        self.file = QLineEdit()
-        self.type = QComboBox()
+        self.m_say, self.m_cache, self.m_changed = say, cache, changed or (lambda: None)
+        self.m_may_leave: Callable[[], bool] = lambda: True  # asked before another database replaces unkept edits
+        self.m_tree = None
+        self.m_doc: olddoc.COldSoundDoc | None = None
+        self.m_player = CClipPlayer(self)
+        self.m_background = CBackground(self)
+        self.m_busy = False  # a clip is being prepared off the window's thread
+        self.m_databases = QComboBox()
+        self.m_filter = QLineEdit(placeholderText=tr("sound.filter_id_file_type"))
+        self.m_table = read_only_table(COLUMNS)
+        self.m_file = QLineEdit()
+        self.m_type = QComboBox()
         for number, name in sounddb.TYPES.items():
-            self.type.addItem(f"{number}: {tr(name)}", number)
-        self.boxes = {field: QSpinBox() for field, *_rest in NUMBERS}
+            self.m_type.addItem(f"{number}: {tr(name)}", number)
+        self.m_boxes = {field: QSpinBox() for field, *_rest in NUMBERS}
         for field, _label, lo, hi in NUMBERS:
-            self.boxes[field].setRange(lo, hi)
-        self.lists = QLabel(wordWrap=True)
-        self.members = QTableWidget(0, 3)
-        self.members.setHorizontalHeaderLabels([tr("viewer.list"), tr("viewer.event"), tr("common.weight")])
-        self.facts = QLabel(wordWrap=True)
-        self.timelines = TimelinePanel(say, self.changed)
+            self.m_boxes[field].setRange(lo, hi)
+        self.m_lists = QLabel(wordWrap=True)
+        self.m_members = QTableWidget(0, 3)
+        self.m_members.setHorizontalHeaderLabels([tr("viewer.list"), tr("viewer.event"), tr("common.weight")])
+        self.m_facts = QLabel(wordWrap=True)
+        self.m_timelines = CTimelinePanel(say, self.m_changed)
         self._build()
 
     def _build(self) -> None:
         form_box = QWidget()
         form = QFormLayout(form_box)
-        form.addRow(tr("common.file_lower"), self.file)
-        form.addRow(tr("viewer.kind"), self.type)
+        form.addRow(tr("common.file_lower"), self.m_file)
+        form.addRow(tr("viewer.kind"), self.m_type)
         for field, label, _lo, _hi in NUMBERS:
-            form.addRow(tr(label), self.boxes[field])
+            form.addRow(tr(label), self.m_boxes[field])
         buttons = QHBoxLayout()
         for text, call in (
             (N_("common.apply"), self.apply), (N_("common.play"), self.play), (N_("sound.replace_clip"), self.replace_clip),
@@ -109,181 +113,200 @@ class OldSoundPanel(QWidget):
             buttons.addWidget(button)
         right = QWidget()
         lay = QVBoxLayout(right)
-        lay.addWidget(self.facts)
+        lay.addWidget(self.m_facts)
         lay.addWidget(form_box)
         lay.addLayout(buttons)
-        lay.addWidget(self.lists)
-        lay.addWidget(self.members, 1)
+        lay.addWidget(self.m_lists)
+        lay.addWidget(self.m_members, 1)
         top = QHBoxLayout()
-        top.addWidget(self.databases, 1)
-        top.addWidget(self.filter, 1)
+        top.addWidget(self.m_databases, 1)
+        top.addWidget(self.m_filter, 1)
         left = QWidget()
         llay = QVBoxLayout(left)
         llay.addLayout(top)
-        llay.addWidget(self.table, 1)
+        llay.addWidget(self.m_table, 1)
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
         split.setSizes([700, 500])
         tabs = QTabWidget()
         tabs.addTab(split, tr("viewer.sounds"))
-        tabs.addTab(self.timelines, tr("sound.timelines"))
+        tabs.addTab(self.m_timelines, tr("sound.timelines"))
         QVBoxLayout(self).addWidget(tabs)
-        self.filter.textChanged.connect(lambda _t: self.fill())
-        self.table.currentCellChanged.connect(lambda row, *_r: self.show_sound(self._id_at(row)))
-        self.table.cellDoubleClicked.connect(lambda _r, _c: self.play())
-        self.databases.activated.connect(lambda _i: self._pick_database())
+        self.m_filter.textChanged.connect(lambda _t: self.fill())
+        self.m_table.currentCellChanged.connect(lambda row, *_r: self.show_sound(self._id_at(row)))
+        self.m_table.cellDoubleClicked.connect(lambda _r, _c: self.play())
+        self.m_databases.activated.connect(lambda _i: self._pick_database())
 
     # opening
     def open_game(self, tree) -> None:
         """List the game's databases (the last one listed is opened: 1404's add-on one is the larger)."""
-        self.tree = tree
-        paths = olddoc.database_paths(tree.paths)
-        self.databases.clear()
+        self.m_tree = tree
+        paths = olddoc.database_paths(tree.m_paths)
+        self.m_databases.clear()
         for path in paths:
-            self.databases.addItem(path, path)
+            self.m_databases.addItem(path, path)
         if paths:
-            self.databases.setCurrentIndex(len(paths) - 1)
+            self.m_databases.setCurrentIndex(len(paths) - 1)
             self.open_database(tree, paths[-1])
         else:
             self._close_database()
-            self.say(tr("sound.game_no_sound_database"))
+            self.m_say(tr("sound.game_no_sound_database"))
 
     def _close_database(self) -> None:
         """No database is open: the table and the timelines of the one before go."""
-        self.doc = None
-        self.timelines.open_document(None)
+        self.m_doc = None
+        self.m_timelines.open_document(None)
         self.fill()
 
     def _pick_database(self) -> None:
         """The database picked in the list, once ``may_leave`` let the open one go (else the list shows it again)."""
-        path = self.databases.currentData()
-        if self.doc is not None and path != self.doc.path and not self.may_leave():
-            self.databases.setCurrentIndex(self.databases.findData(self.doc.path))
+        path = self.m_databases.currentData()
+        if self.m_doc is not None and path != self.m_doc.m_path and not self.m_may_leave():
+            self.m_databases.setCurrentIndex(self.m_databases.findData(self.m_doc.m_path))
             return
-        if self.doc is None or path != self.doc.path:
-            self.open_database(self.tree, path)
+        if self.m_doc is None or path != self.m_doc.m_path:
+            self.open_database(self.m_tree, path)
 
     def open_database(self, tree, path: str) -> None:
         try:
-            self.doc = olddoc.OldSoundDoc(tree, path)
-            self.doc.db  # noqa: B018  (read now, so a file that does not read is said here)
+            self.m_doc = olddoc.COldSoundDoc(tree, path)
+            self.m_doc.db  # noqa: B018  (read now, so a file that does not read is said here)
         except (ValueError, OSError) as exc:
             self._close_database()
-            self.say(tr("common.path_not_read_error", path=path, error=exc))
+            self.m_say(tr("common.path_not_read_error", path=path, error=exc))
             return
-        self.timelines.open_document(self.doc)
+        self.m_timelines.open_document(self.m_doc)
         self.fill()
-        self.say(tr("sound.path_count_sounds_lists", path=path, count=len(self.doc.db.sounds),
-                    lists=len(self.doc.db.lists)))  # fmt: skip
+        self.m_say(tr("sound.path_count_sounds_lists", path=path, count=len(self.m_doc.db.sounds),
+                    lists=len(self.m_doc.db.lists)))  # fmt: skip
 
     def fill(self, keep: int | None = None) -> None:
-        self.timelines.refresh()
-        self.table.setRowCount(0)
-        if self.doc is None:
+        self.m_timelines.refresh()
+        self.m_table.setRowCount(0)
+        if self.m_doc is None:
             return
-        words = self.filter.text().lower().split()
+        words = self.m_filter.text().lower().split()
         row_of = None
-        for sid, sound in self.doc.db.sounds.items():
+        for sid, sound in self.m_doc.db.sounds.items():
             kind = sounddb.TYPES.get(sound.number("SoundType"), "")
             cells = [str(sid), sound.filename, kind, str(sound.number("MasterVolume")),
                      f"{sound.number('MinDistance')}-{sound.number('MaxDistance')}", str(sound.number("SoundGroupID"))]  # fmt: skip
-            if words and not all(w in " ".join(cells).lower() for w in words):
+            if words and not all(word in " ".join(cells).lower() for word in words):
                 continue
-            row = add_row(self.table, cells, sid)
+            row = add_row(self.m_table, cells, sid)
             row_of = row if sid == keep else row_of
-        self.table.resizeColumnsToContents()
+        self.m_table.resizeColumnsToContents()
         if row_of is not None:
-            self.table.selectRow(row_of)
+            self.m_table.selectRow(row_of)
 
     def _id_at(self, row: int) -> int | None:
-        item = self.table.item(row, 0) if row >= 0 else None
+        item = self.m_table.item(row, 0) if row >= 0 else None
         return item.data(ROLE) if item is not None else None
 
     @property
     def selected(self) -> int | None:
-        return self._id_at(self.table.currentRow())
+        return self._id_at(self.m_table.currentRow())
 
     def show_sound(self, sid: int | None) -> None:
-        sound = self.doc.db.sounds.get(sid) if self.doc and sid is not None else None
-        if sound is None:
+        sound = self.m_doc.db.sounds.get(sid) if self.m_doc and sid is not None else None
+        if sound is None:  # no row (a filter, another database): the facts of the sound before go
+            self.m_facts.clear()
+            self.m_lists.clear()
+            self.m_members.setRowCount(0)
             return
-        self.file.setText(sound.filename)
-        self.type.setCurrentIndex(max(0, self.type.findData(sound.number("SoundType"))))
-        for field, box in self.boxes.items():
+        self.m_file.setText(sound.filename)
+        self.m_type.setCurrentIndex(max(0, self.m_type.findData(sound.number("SoundType"))))
+        for field, box in self.m_boxes.items():
             box.setValue(sound.number(field))
-        self.facts.setText(tr("sound.sound_id_path", id=sid, path=sound.filename)
-                           + ("" if self.doc.has_clip(sid) else " · " + tr("sound.no_such_file")))  # fmt: skip
-        rows = [(lid, ev, w) for lid, entry in self.doc.db.lists.items() for ev, ms in entry.events.items()
-                for s, w in ms if s == sid]  # fmt: skip
-        self.lists.setText(tr("sound.lists_draw_sound", n=len(rows)))
-        self.members.setRowCount(len(rows))
-        for r, (lid, ev, weight) in enumerate(rows):
-            for c, text in enumerate((str(lid), "" if ev == sounddb.NO_EVENT else str(ev), str(weight))):
+        self.m_facts.setText(tr("sound.sound_id_path", id=sid, path=sound.filename)
+                           + ("" if self.m_doc.has_clip(sid) else " · " + tr("sound.no_such_file")))  # fmt: skip
+        rows = [(lid, event, entry_weight) for lid, entry in self.m_doc.db.lists.items() for event, ms in entry.events.items()
+                for sound_id, entry_weight in ms if sound_id == sid]  # fmt: skip
+        self.m_lists.setText(tr("sound.lists_draw_sound", n=len(rows)))
+        self.m_members.setRowCount(len(rows))
+        for row_index, (lid, event, weight) in enumerate(rows):
+            for column, text in enumerate((str(lid), "" if event == sounddb.NO_EVENT else str(event), str(weight))):
                 item = QTableWidgetItem(text)
                 item.setFlags(
-                    item.flags() | Qt.ItemFlag.ItemIsEditable if c == 2 else item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                    item.flags() | Qt.ItemFlag.ItemIsEditable
+                    if column == 2
+                    else item.flags() & ~Qt.ItemFlag.ItemIsEditable
                 )
-                self.members.setItem(r, c, item)
+                self.m_members.setItem(row_index, column, item)
 
     # edits
     def _do(self, call: Callable[[], object], done: str) -> bool:
         keep = self.selected
         try:
             call()
-        except olddoc.OldEditError as exc:
-            self.say(tr("sound.cannot_error", error=exc))
+        except olddoc.COldEditError as exc:
+            self.m_say(tr("sound.cannot_error", error=exc))
             return False
         self.fill(keep)
-        self.say(done + " " + tr("sound.ctrl_plus_z_undoes"))
-        self.changed()
+        self.m_say(done + " " + tr("sound.ctrl_plus_z_undoes"))
+        self.m_changed()
         return True
 
     def apply(self) -> None:
         sid = self.selected
-        if self.doc is None or sid is None:
+        if self.m_doc is None or sid is None:
             return
-        sound = self.doc.db.sounds[sid]
-        shown = {f: max(lo, min(hi, sound.number(f))) for f, _label, lo, hi in NUMBERS}  # what the box could hold
-        values: dict[str, object] = {f: b.value() for f, b in self.boxes.items() if b.value() != shown[f]}
-        if self.type.currentData() != sound.number("SoundType"):
-            values["SoundType"] = self.type.currentData()
-        if self.file.text().strip().replace("\\", "/") != sound.filename:
-            values["Filename"] = self.file.text().strip()
+        sound = self.m_doc.db.sounds[sid]
+        shown = {
+            field: max(lo, min(hi, sound.number(field))) for field, _label, lo, hi in NUMBERS
+        }  # what the box could hold
+        values: dict[str, object] = {
+            field: box.value() for field, box in self.m_boxes.items() if box.value() != shown[field]
+        }
+        if self.m_type.currentData() != sound.number("SoundType"):
+            values["SoundType"] = self.m_type.currentData()
+        if self.m_file.text().strip().replace("\\", "/") != sound.filename:
+            values["Filename"] = self.m_file.text().strip()
         if not values:
-            self.say(tr("sound.no_value_changed"))
+            self.m_say(tr("sound.no_value_changed"))
             return
-        self._do(lambda: self.doc.set_fields(sid, **values), tr("sound.changed_values_sound", id=sid))
+        self._do(lambda: self.m_doc.set_fields(sid, **values), tr("sound.changed_values_sound", id=sid))
 
     def apply_weights(self) -> None:
         sid = self.selected
-        if self.doc is None or sid is None:
+        if self.m_doc is None or sid is None:
             return
 
         try:  # every weight read first: a cell that is no number leaves the lists as they are
-            cells = [[self.members.item(r, c).text() for c in range(3)] for r in range(self.members.rowCount())]
-            rows = [(int(lid), int(ev) if ev else sounddb.NO_EVENT, int(weight)) for lid, ev, weight in cells]
+            cells = [
+                [self.m_members.item(row_index, column).text() for column in range(3)]
+                for row_index in range(self.m_members.rowCount())
+            ]
+            rows = [(int(lid), int(event) if event else sounddb.NO_EVENT, int(weight)) for lid, event, weight in cells]
         except ValueError:
-            self.say(tr("sound.weight_whole_number"))
+            self.m_say(tr("sound.weight_whole_number"))
             return
 
         def make() -> None:
-            for lid, ev, new in rows:
-                old = next((w for s, w in self.doc.db.lists[lid].events[ev] if s == sid), None)
+            for lid, event, new in rows:
+                old = next(
+                    (
+                        entry_weight
+                        for sound_id, entry_weight in self.m_doc.db.lists[lid].events[event]
+                        if sound_id == sid
+                    ),
+                    None,
+                )
                 if old is not None and new != old:
-                    self.doc.set_weight(lid, sid, new, ev)
+                    self.m_doc.set_weight(lid, sid, new, event)
 
         self._do(make, tr("sound.changed_weights_sound", id=sid))
 
     def add_to_list(self) -> None:
         """The picked sound joins a list the game draws from (an added sound plays only once a list draws it)."""
         sid = self.selected
-        if self.doc is None or sid is None:
+        if self.m_doc is None or sid is None:
             return
         choices = {
-            (f"{lid}" if ev == sounddb.NO_EVENT else f"{lid} / {ev}"): (lid, ev)
-            for lid, entry in self.doc.db.lists.items()
-            for ev in entry.events
+            (f"{lid}" if event == sounddb.NO_EVENT else f"{lid} / {event}"): (lid, event)
+            for lid, entry in self.m_doc.db.lists.items()
+            for event in entry.events
         }
         text, ok = QInputDialog.getItem(self, tr("sound.add_to_list"), tr("sound.list_event_draws_sound"),
                                         list(choices), 0, False)  # fmt: skip
@@ -291,19 +314,23 @@ class OldSoundPanel(QWidget):
             return
         weight, ok = QInputDialog.getInt(self, tr("sound.add_to_list"), tr("sound.weight_list"), 50, 0, 1000)
         if ok:
-            lid, ev = choices[text]
+            lid, event = choices[text]
             self._do(
-                lambda: self.doc.add_member(lid, sid, weight, ev),
+                lambda: self.m_doc.add_member(lid, sid, weight, event),
                 tr("sound.sound_joined_list", id=sid, list=text),
             )
             self.show_sound(sid)
 
     def play(self) -> None:
-        if self.doc is None or self.selected is None:
+        if self.m_doc is None or self.selected is None:
             return
-        path, data = self.doc.clip(self.selected)
-        why = self.player.play(path, data, self.cache) if data else tr("sound.nothing_play_file_not_game")
-        self.say(why or tr("viewer.playing_name", name=path))
+        try:
+            path, data = self.m_doc.clip(self.selected)
+        except (OSError, ValueError) as exc:  # the archive does not give the file up
+            self.m_say(str(exc))
+            return
+        why = self.m_player.play(path, data, self.m_cache) if data else tr("sound.nothing_play_file_not_game")
+        self.m_say(why or tr("viewer.playing_name", name=path))
 
     def _pick(self) -> tuple[bytes, str] | None:
         path, _ = QFileDialog.getOpenFileName(
@@ -317,41 +344,41 @@ class OldSoundPanel(QWidget):
         try:
             return Path(path).read_bytes(), Path(path).suffix.lower()
         except OSError as exc:
-            self.say(str(exc))
+            self.m_say(str(exc))
             return None
 
     def _convert(self, work: Callable[[], object], done: Callable[[object], None]) -> None:
         """``work`` (preparing a clip: ffmpeg may run) off the window's thread, then ``done(result)`` on it."""
-        if self.busy:
-            self.say(tr("sound.clip_still_converted"))
+        if self.m_busy:
+            self.m_say(tr("sound.clip_still_converted"))
             return
 
         def finish(result: object) -> None:
-            self.busy = False
-            if isinstance(result, olddoc.OldEditError):
-                self.say(tr("sound.cannot_error", error=result))
+            self.m_busy = False
+            if isinstance(result, olddoc.COldEditError):
+                self.m_say(tr("sound.cannot_error", error=result))
             elif isinstance(result, Exception):
-                self.say(str(result))
+                self.m_say(str(result))
             else:
                 done(result)
 
-        self.busy = True
-        self.say(tr("sound.converting_clip"))
-        self.background.run(work, finish)
+        self.m_busy = True
+        self.m_say(tr("sound.converting_clip"))
+        self.m_background.run(work, finish)
 
     def replace_clip(self) -> None:
-        sid, picked = self.selected, self._pick() if self.doc is not None and self.selected is not None else None
+        sid, picked = self.selected, self._pick() if self.m_doc is not None and self.selected is not None else None
         if picked is None or sid is None:
             return
         clip, suffix = picked
-        doc = self.doc
+        doc = self.m_doc
         try:
             target = doc.target_of(sid, suffix)  # the one read of the document, here: the thread only converts bytes
-        except olddoc.OldEditError as exc:
-            return self.say(tr("sound.cannot_error", error=exc))
+        except olddoc.COldEditError as exc:
+            return self.m_say(tr("sound.cannot_error", error=exc))
 
         def done(data) -> None:
-            if doc is self.doc:
+            if doc is self.m_doc:
                 self._do(lambda: doc.put_clip(sid, target, data), tr("sound.sound_plays_new_clip", id=sid))
                 self.show_sound(sid)
 
@@ -359,33 +386,33 @@ class OldSoundPanel(QWidget):
 
     def replace_speech(self) -> None:
         """Pick a spoken line of the game, then the clip that says it now."""
-        if self.doc is None:
+        if self.m_doc is None:
             return
-        known = set(self.tree.paths)
-        lines = sorted(p for p in known if p.endswith(".sp") and f"{p[:-3]}.mp3" in known)
+        known = set(self.m_tree.m_paths)
+        lines = sorted(path for path in known if path.endswith(".sp") and f"{path[:-3]}.mp3" in known)
         line, ok = QInputDialog.getItem(self, tr("sound.spoken_line"), tr("sound.line_replace_mp3"),
-                                        [f"{p[:-3]}.mp3" for p in lines], 0, False)  # fmt: skip
+                                        [f"{path[:-3]}.mp3" for path in lines], 0, False)  # fmt: skip
         picked = self._pick() if ok and line else None
         if picked is None:
             return
         clip, suffix = picked
-        doc = self.doc
+        doc = self.m_doc
 
         def done(files) -> None:
-            if doc is self.doc:
+            if doc is self.m_doc:
                 self._do(lambda: doc.put_files("replace_speech", files), tr("sound.says_new_clip", path=line))
 
         self._convert(lambda: doc.prepare_speech(line, clip, suffix), done)
 
     def add_sound(self) -> None:
-        picked = self._pick() if self.doc is not None else None
+        picked = self._pick() if self.m_doc is not None else None
         sid = self.selected
-        if picked is None or self.doc is None:
+        if picked is None or self.m_doc is None:
             return
         clip, suffix = picked
-        doc = self.doc
-        beside = doc.db.sounds[sid].filename if sid is not None else self.file.text()
-        taken = {s.filename for s in doc.db.sounds.values()} | set(doc.clips)
+        doc = self.m_doc
+        beside = doc.db.sounds[sid].filename if sid is not None else self.m_file.text()
+        taken = {sound.filename for sound in doc.db.sounds.values()} | set(doc.clips)
         name = new_sound_path(beside, ".mp3" if suffix == ".mp3" else ".wav", taken)
 
         def convert() -> bytes:
@@ -393,14 +420,14 @@ class OldSoundPanel(QWidget):
                 return clip
             try:
                 return export.to_wav(clip, suffix)
-            except (export.ToolMissing, ValueError) as exc:
-                raise olddoc.OldEditError(str(exc)) from exc
+            except (export.CToolMissing, ValueError) as exc:
+                raise olddoc.COldEditError(str(exc)) from exc
 
         def done(data) -> None:
-            if doc is self.doc:
+            if doc is self.m_doc:
                 self._do(lambda: doc.add_sound(name, data, sid), tr("sound.added_sound_plays", path=name))
 
         self._convert(convert, done)
 
     def stop(self) -> None:
-        self.player.stop()
+        self.m_player.stop()

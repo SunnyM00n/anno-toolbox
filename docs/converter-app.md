@@ -1,16 +1,18 @@
 # The Converter app
 
 The Converter app turns single files, assets and islands of the Anno games into other formats, and back where a way back
-exists. Every entry is a command of the command line. The app shows that command's own options as a form, runs it on a
-list of files or folders and writes into a folder of yours or into the project. The command line stays the reference:
-the app shows the exact line it runs, and a line copied from there does the same in a console.
+exists. Every entry is a command of the command line.
+
+The app shows that command's own options as a form. It runs the command on a list of files or folders and writes into a
+folder of yours or into the project. The command line stays the reference. The app shows the exact line it runs, and a
+line copied from there does the same in a console.
 
 The code is `src/annotoolbox/converterapp/`. The suite opens it as `--app converter`.
 
 ## The entries
 
-22 entries, by category. "Games" are the games whose files the entry takes, and "From the game" lists that game's
-files to pick from.
+22 entries, by category. "Games" are the games whose files the entry takes. "From the game" lists that game's files
+to pick from.
 
 | Category | Entry | Command | Games | Notes |
 |---|---|---|---|---|
@@ -54,63 +56,77 @@ On the left the entries by category, with a filter. On the right the chosen entr
 - its title, what it does and the command line it runs (the sources and the target as `<source>` and `<target>`);
 - **Sources**: the list, with *Add files...* (Ctrl+O), *Add folder...*, *From the game...* (Ctrl+G) and *Type...*. The
   game box above it picks the game that *From the game...* reads. A source is listed once;
-- **Target**: the output folder; *Project folder* sets the open project's `converter` folder (the workspace's when no
+- **Target**: the output folder. *Project folder* sets the open project's `converter` folder (the workspace's when no
   project is open);
 - **Options**: the command's options, each with the command line's own help under it. A starred one is required;
 - *Convert* (F5) and *Stop* (Shift+F5), the progress over the sources and the log.
 
-Every menu entry and every named button has an access key, none given twice (`tests/test_keyboard_access.py`).
+Every menu entry and every named button has an access key, none given twice (`tests/editor/desktop/test_keyboard_access.py`).
 
 ## Sources and targets
 
-*From the game...* opens the game's archives once (the suite's index, off the window's thread) and lists its files of
-the entry's kinds. The chosen file is copied, as stored, into a new folder of the workspace under its game path
-(`<workspace>/converter/game-files/<game>/<time>/data/...`), and that folder becomes the source. The game path is kept,
-so the export still knows a language text by its `loca/` folder. An entry whose sources are game paths (the island
-port) takes the path itself. An entry with a list of its own (2205's UI movies) offers that list.
+*From the game...* opens the game's archives once (the suite's index, off the window's thread). It lists the game's
+files of the entry's kinds.
 
-The app never writes into a game: a target inside an install or a game's Documents folder (mods, saves, logs) is
+The chosen file is copied, as stored, into a new folder of the workspace under its game path
+(`<workspace>/converter/game-files/<game>/<time>/data/...`). That folder becomes the source. The game path is kept, so
+the export still knows a language text by its `loca/` folder.
+
+An entry whose sources are game paths (the island port) takes the path itself. An entry with a list of its own (2205's
+UI movies) offers that list.
+
+The app never writes into a game. A target inside an install or a game's Documents folder (mods, saves, logs) is
 refused before anything runs (`gamefiles.refused_target`).
 
 ## The form
 
-`commandform` reads the command's argparse parser: a switch is a check box, a choice a list, a number or a text a line,
-a path a line with a picker, and an option that takes several values a line with the values separated by `;`. The
-sources and the target have boxes of their own, and options the entry fixes (`--kind`) are not shown. A value equal to
-the command's default is left out of the line, as a person would leave it out. An entry may narrow a free option to a
-list (`--format` of an export), and may fill options from the settings (a game's folder) or from the source game.
+`commandform` reads the command's argparse parser:
+
+- a switch is a check box;
+- a choice is a list;
+- a number or a text is a line;
+- a path is a line with a picker;
+- an option that takes several values is a line with the values separated by `;`.
+
+The sources and the target have boxes of their own. Options the entry fixes (`--kind`) are not shown. A value equal to
+the command's default is left out of the line, as a person would leave it out.
+
+An entry may narrow a free option to a list (`--format` of an export). It may fill options from the settings (a game's
+folder) or from the source game.
 
 **Reskin to match the target game** (`--reskin`, on the island port, `rdm relayout`, `rdm from-granny` and, in the full
 source, `convert` and `buildings`): wherever a model or an object goes from one game to another, the form shows this
-check box under that name with a tooltip (it keeps models only the source game has and draws them with the target's
-ground textures; off: they are left out), off at first and remembered between runs in the settings. One rule
-stands behind every entry (`editor/portreskin`, the island port's document, "Reskinning").
+check box under that name with a tooltip. On, it keeps models only the source game has and draws them with the
+target's ground textures. Off, they are left out. It is off at first and remembered between runs in the settings. One
+rule stands behind every entry (`editor/portreskin`, the island port's document, "Reskinning").
 
 ## Running
 
 `runner.run` runs the command lines in this process, on a background thread. An entry that takes one source at a
-time runs once per source; the others (the island port) run once for the whole list. While a job runs, what the
-command prints goes to the log line by line; the other threads' output is left alone. **Stop** ends the job at the
-next line the command prints, or before the next source. A command that fails ends its own line with `error:` and the
-next source goes on. The status line says how many runs ended with an error.
+time runs once per source. The others (the island port) run once for the whole list.
+
+While a job runs, what the command prints goes to the log line by line. The other threads' output is left alone.
+**Stop** ends the job at the next line the command prints, or before the next source.
+
+A command that fails ends its own line with `error:`, and the next source goes on. The status line says how many runs
+ended with an error.
 
 ## The commands
 
-Two commands were added for the way back into the games' formats (`converterapp/commands.py`, in the Toolbox's command
-line):
+Two commands cover the way back into the games' formats (`converterapp/commands.py`, in the Toolbox's command line):
 
 ```bash
 anno-toolbox texture bc7 wall.png icons/ -o out --srgb      # pictures or DDS files as BC7 DDS with every mip
 anno-toolbox sound wem voice.wav -o out --codec adpcm      # audio files as Wwise .wem (PCM, ADPCM, Vorbis)
 ```
 
-Each takes files and folders (searched recursively), writes into `-o` with the folders' layout kept, and leaves a file
-that exists unless `--force`.
+Each takes files and folders (searched recursively). It writes into `-o` with the folders' layout kept. It leaves a
+file that exists unless `--force` is given.
 
 ## An entry
 
-An entry is an `extspecs.Conversion`, registered at the extension point `features.CONVERSIONS` (an extension's
-entry of an existing key takes its place). Its fields:
+An entry is an `extspecs.SConversion`, registered at the extension point `features.CONVERSIONS`. An extension's entry of
+an existing key takes its place. Its fields:
 
 | Field | What |
 |---|---|
@@ -124,8 +140,8 @@ entry of an existing key takes its place). Its fields:
 | `per_input` | one run per source |
 | `candidates`, `prepare` | the entry's own list of sources, and what the command line does before the command |
 
-`features.CONVERTER_PAGES` takes a page beside the entries (an `extspecs.ConverterPage`: a title and `make(shell)`). The app
-then shows its entries and the pages as tabs.
+`features.CONVERTER_PAGES` takes a page beside the entries (an `extspecs.SConverterPage`: a title and `make(shell)`).
+The app then shows its entries and the pages as tabs.
 
 ## What to check
 

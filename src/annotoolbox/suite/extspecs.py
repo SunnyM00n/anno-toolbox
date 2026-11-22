@@ -13,10 +13,10 @@ from typing import Any, Protocol
 
 
 @dataclass
-class BuildRequest:
+class SBuildRequest:
     """One build of an island into a mod; ``extra`` holds the options a builder reads that others do not."""
 
-    src: Path
+    source_folder: Path
     anno117: Path
     out: Path
     island: str
@@ -28,18 +28,18 @@ class BuildRequest:
 
 
 @dataclass(frozen=True)
-class Builder:
+class SBuilder:
     """An island build into a mod (``features.BUILDERS``): the (source game, target game) pairs it takes, the
     folders it looks an island up in, the edit files' default folder, and the build itself."""
 
     routes: frozenset[tuple[str, str]]
     island_dirs: tuple[str, ...]
     default_edits_dir: Callable[[], Path]
-    run: Callable[[BuildRequest], None]
+    run: Callable[[SBuildRequest], None]
 
 
 @dataclass(frozen=True)
-class IslandTab:
+class SIslandTab:
     """A tab of the Islands panel (``features.ISLAND_TABS``): ``make(main, catalogue, routes)`` returns its widget."""
 
     title: str
@@ -47,7 +47,7 @@ class IslandTab:
 
 
 @dataclass(frozen=True)
-class Check:
+class SCheck:
     """A check over the open island (``features.CHECKS``), named by its key in the Checks tab and the 3D view.
 
     ``run(session, editor)`` returns the result (kept as ``view.checks[key]`` for the overlay), on a background
@@ -63,13 +63,13 @@ class Check:
 
 
 @dataclass(frozen=True)
-class Tool:
+class STool:
     """A window of its own (``features.TOOLS``): ``open(main)`` returns it, the main window shows and keeps it."""
 
     open: Callable[[Any], Any]
 
 
-class Guids(Protocol):
+class IGuids(Protocol):
     """Ids for islands saved as new ones (``features.GUIDS``): stable between runs and machines."""
 
     def get(self, source: str) -> int: ...
@@ -80,7 +80,7 @@ class Guids(Protocol):
 
 
 @dataclass(frozen=True)
-class ModelImport:
+class SModelImport:
     """Models of another game made placeable (``features.MODEL_IMPORTS``): ``make(tree, mod_root)`` returns an
     importer whose ``convert(source)`` returns the model's path in the mod, FileNotFoundError when it is not whole."""
 
@@ -88,11 +88,11 @@ class ModelImport:
 
 
 @dataclass(frozen=True)
-class AppSpec:
+class SAppSpec:
     """An app of the suite's window (``features.APPS`` for one an extension adds): ``make(shell)`` returns its page,
     made when it is first shown; ``prepare`` runs before the program's first window (the OpenGL format); ``links``:
     per ``suite.links`` name what the app answers, ``handler(page, *args)`` on its page (made when asked); ``game``:
-    how it follows the suite's game selection (a ``suite.gamesync.AppGame``), None for an app that has no game."""
+    how it follows the suite's game selection (a ``suite.gamesync.SAppGame``), None for an app that has no game."""
 
     key: str
     title: str
@@ -103,10 +103,11 @@ class AppSpec:
     links: dict[str, Callable[..., Any]] = field(default_factory=dict)
     quiet_links: frozenset[str] = frozenset()  # queries: answered without the page, which they get only if it is made
     game: Any = None
+    window: bool = False  # ``make`` returns a window of its own the switcher opens, not a page of the stack
 
 
 @dataclass(frozen=True)
-class UiCompare:
+class SUiCompare:
     """A panel of the UI editor that holds a second set of values against the preview (``features.UI_COMPARE``):
     ``title`` is its dock's, ``make_panel()`` its widget (the window keeps it as ``compare_panel``),
     ``add_file_actions(window, menu)`` and ``add_view_action(window, menu, app)`` fill the File and View menus (the
@@ -122,7 +123,7 @@ class UiCompare:
 
 
 @dataclass(frozen=True)
-class ForestTable:
+class SForestTable:
     """The numbered trees beside an island a build wrote (``features.FOREST_TABLES``): ``read(files, stem)`` returns
     a table with ``tiles()`` and ``planting``, or None when the island has none."""
 
@@ -130,13 +131,13 @@ class ForestTable:
 
 
 @dataclass(frozen=True)
-class IslandConversion:
+class SIslandConversion:
     """More targets of the Islands app's "Port to region / game" (``features.ISLAND_CONVERSIONS``): ``targets(game,
-    path)`` returns (target id, label) pairs for an island, ``run(request, src, dst, log)`` converts it
-    (``editor.islandconvert``'s ``Request``; ``src`` and ``dst`` its ``GameSide`` objects, with their folders) and
-    returns its ``Ported``. An island of another engine generation is offered here only: the first extension that
+    path)`` returns (target id, label) pairs for an island, ``run(request, source_side, target_side, log)`` converts
+    it (``editor.islandconvert``'s ``Request``; ``source_side`` and ``target_side`` its ``CGameSide`` objects, with
+    their folders) and returns its ``Ported``. An island of another engine generation is offered here only: the first extension that
     lists the target takes it. ``sources``: the games whose islands it takes (the command line's choices);
-    ``run_many(requests, src, dst, log)``: several islands into one mod at once, a ``Ported`` each."""
+    ``run_many(requests, source_side, target_side, log)``: several islands into one mod at once, a ``Ported`` each."""
 
     targets: Callable[[str, str], list[tuple[str, str]]]
     run: Callable[[Any, Any, Any, Callable[[str], None]], Any]
@@ -145,9 +146,9 @@ class IslandConversion:
 
 
 @dataclass(frozen=True)
-class SaveEdit:
+class SSaveEdit:
     """More values the Saves app's Edit tab offers (``features.SAVE_EDITS``) for a save of one of ``games``:
-    ``fields(save)`` returns the rows for the opened save (``saveedit.edits.Field``, keys of its own; none when it
+    ``fields(save)`` returns the rows for the opened save (``saveedit.edits.SField``, keys of its own; none when it
     offers nothing), ``apply(save, parsed, changes, settings)`` returns the parsed save (the format module's) with
     the changes of those keys, raising ``ValueError`` for one it refuses; ``settings`` are the suite's."""
 
@@ -157,7 +158,7 @@ class SaveEdit:
 
 
 @dataclass(frozen=True)
-class ModelOptions:
+class SModelOptions:
     """An option of the model commands (``rdm relayout``, ``rdm from-granny``) an extension adds (``features.MODEL_OPTIONS``):
     ``add_options(parser)`` adds the flags, ``start(args)`` opens what the models are measured against and
     returns it (None: the option is off), ``configs(handle, name, data, target)`` gives the extra files of one model
@@ -170,7 +171,7 @@ class ModelOptions:
 
 
 @dataclass(frozen=True)
-class Conversion:
+class SConversion:
     """An entry of the Converter app (``features.CONVERSIONS`` for one an extension adds): a command of the command
     line (``command``) run on single files, assets or islands, its form made from the command's own options.
     ``register(sub)`` adds the command's group to argparse sub-parsers, ``words`` walks from there to the command;
@@ -202,9 +203,19 @@ class Conversion:
 
 
 @dataclass(frozen=True)
-class ConverterPage:
+class SConverterPage:
     """A page of the Converter app beside its entries (``features.CONVERTER_PAGES``): ``make(shell)`` returns its
     widget, made when the app's page is; ``title`` is its tab's."""
 
     title: str
     make: Callable[[Any], Any]
+
+
+@dataclass(frozen=True)
+class SDebugCommands:
+    """More commands of the debug palette (``features.DEBUG_COMMANDS``): for ``game``, its categories in order as
+    (key, title id) and its ``debugcommands.SCommand`` rows; an id or a category the game's own catalogue has wins."""
+
+    game: str
+    categories: tuple[tuple[str, str], ...]
+    commands: tuple[Any, ...]

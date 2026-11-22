@@ -10,21 +10,21 @@ area, ``footprint`` reads the ``BuildBlocker`` polygons of a file's text (1701's
 from __future__ import annotations
 
 from ..formats import isd2070
-from ..formats.isd2070 import Node
+from ..formats.isd2070 import SNode
 from . import cfgdoc, info1701
-from .cfgdoc import Doc
+from .cfgdoc import SDoc
 
 FIXED = isd2070.FIXED  # the older games' fixed point: units to a tile
 FOOTPRINT = "BuildBlocker"
 Polygons = list[list[tuple[float, float]]]
 
 
-def coordinate(position: Node, axis: str) -> Node | None:
+def coordinate(position: SNode, axis: str) -> SNode | None:
     """The leaf of ``axis`` (``x`` or ``z``) of a ``Position`` node, as ``x`` or ``xf``."""
-    return next((c for c in position.children if c.name.rstrip("f") == axis), None)
+    return next((child for child in position.children if child.name.rstrip("f") == axis), None)
 
 
-def value(leaf: Node | None, fixed: bool, default: float = 0.0) -> float:
+def value(leaf: SNode | None, fixed: bool, default: float = 0.0) -> float:
     """A coordinate leaf in tiles: a float leaf (``xf``) as it is, any other one by the fixed point when ``fixed``;
     ``default`` for a missing or unreadable one."""
     if leaf is None or leaf.text is None:
@@ -41,11 +41,11 @@ def text(number: float, fixed: bool) -> str:
     return str(round(number * FIXED)) if fixed else cfgdoc.number_text(number)
 
 
-def fixed_style(doc: Doc, older_game: bool) -> bool:
+def fixed_style(doc: SDoc, older_game: bool) -> bool:
     """Whether the file writes its numbers in fixed point: by the points it has, else by the game (2070, 1404)."""
     for node in doc.root.iter():
-        for position in (c for c in node.children if c.name == "Position"):
-            names = {c.name for c in position.children}
+        for position in (child for child in node.children if child.name == "Position"):
+            names = {child.name for child in position.children}
             if names & {"xf", "zf"}:
                 return False
             if names & {"x", "z"}:
@@ -53,12 +53,12 @@ def fixed_style(doc: Doc, older_game: bool) -> bool:
     return older_game
 
 
-def points(area: Node, fixed: bool) -> list[tuple[float, float]]:
+def points(area: SNode, fixed: bool) -> list[tuple[float, float]]:
     """The (x, z) of an area's ``Position`` nodes, in tiles and in order."""
     return [
-        (value(coordinate(p, "x"), fixed), value(coordinate(p, "z"), fixed))
-        for p in area.children
-        if p.name == "Position"
+        (value(coordinate(position, "x"), fixed), value(coordinate(position, "z"), fixed))
+        for position in area.children
+        if position.name == "Position"
     ]
 
 

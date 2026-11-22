@@ -64,18 +64,18 @@ def to_rgb(value) -> tuple[float, float, float] | None:
 def read(node: dict, overrides: dict, load: Callable[[str], dict | None]) -> dict[str, dict[str, object]]:
     """The instance's effects by kind, each with its values by property name."""
     out: dict[str, dict[str, object]] = {}
-    for fx in phoenixedit.objects(node, "Effects"):
-        tpl = fields.get(fx, "EffectTemplate")
+    for effect in phoenixedit.objects(node, "Effects"):
+        tpl = fields.get(effect, "EffectTemplate")
         root = load(tpl) if tpl else None
         if root is None:
             continue
-        uid = int(fields.get(fx, "UniqueId", 0) or 0)
+        uid = int(fields.get(effect, "UniqueId", 0) or 0)
         values = {}
-        for p in bindings.custom_properties(root):
-            info = bindings.property_info(p)
-            default = info["default"][1] if isinstance(info["default"], tuple) else None
-            given = overrides.get((uid, info["uid"]))
-            values[info["name"]] = default if given is None else given
+        for property in bindings.custom_properties(root):
+            property_data = bindings.property_info(property)
+            default = property_data["default"][1] if isinstance(property_data["default"], tuple) else None
+            given = overrides.get((uid, property_data["uid"]))
+            values[property_data["name"]] = default if given is None else given
         kind = kind_of(set(values))
         if kind is not None:
             out[kind] = values
@@ -84,38 +84,45 @@ def read(node: dict, overrides: dict, load: Callable[[str], dict | None]) -> dic
 
 def drawn(effects: dict[str, dict]) -> dict[str, dict]:
     """The effects that change a picture (a soft mask acts on the widgets it covers instead)."""
-    return {k: v for k, v in effects.items() if k in DRAWN and _active(k, v)}
+    return {kind: values for kind, values in effects.items() if kind in DRAWN and _active(kind, values)}
 
 
 def moving(effects: dict[str, dict]) -> bool:
     """Whether an effect among ``effects`` (``drawn``'s result) changes with time."""
-    return any(k in effects for k in MOVING)
+    return any(kind in effects for kind in MOVING)
 
 
-def _active(kind: str, v: dict) -> bool:
-    if kind in ("alpha_test",):
-        return bool(v.get("Enabled", True))
+def _value(values: dict, name: str, default: float) -> float:
+    """A value as a number; ``default`` when the template gave none (``read`` leaves a missing default as None)."""
+    return default if values.get(name) is None else float(values[name])
+
+
+def _active(kind: str, values: dict) -> bool:
+    if kind == "alpha_test":
+        return bool(values.get("Enabled", True))
     if kind == "whiten":
-        return bool(v.get("Enable"))
+        return bool(values.get("Enable"))
     if kind == "blur":
-        return float(v.get("Strength") or 0.0) > 0.0
+        return float(values.get("Strength") or 0.0) > 0.0
     if kind == "scroll":
-        return float(v.get("Speed") or 0.0) > 0.0
+        return float(values.get("Speed") or 0.0) > 0.0
     if kind == "world_darken":
-        return float(v.get("Intensity", 1.0) if v.get("Intensity") is not None else 1.0) > 0.0
+        return _value(values, "Intensity", 1.0) > 0.0
     return True
 
 
 def _neighbourhood(alpha: np.ndarray, shift: tuple[int, int] = (0, 0)) -> list[np.ndarray]:
     """The alpha of the 5 x 5 texels round each texel (clamped at the edges), each moved by ``shift``."""
+    height_px, width_px = alpha.shape
+    reach = (width_px + SAMPLE_RADIUS, height_px + SAMPLE_RADIUS)  # a shift past this reads only the edge
+    shift = (max(-reach[0], min(reach[0], shift[0])), max(-reach[1], min(reach[1], shift[1])))
     pad = SAMPLE_RADIUS + max(abs(shift[0]), abs(shift[1]))
     padded = np.pad(alpha, pad, mode="edge")
-    h, w = alpha.shape
     out = []
     for dy in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1):
         for dx in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1):
             y0, x0 = pad + dy + shift[1], pad + dx + shift[0]
-            out.append(padded[y0 : y0 + h, x0 : x0 + w])
+            out.append(padded[y0 : y0 + height_px, x0 : x0 + width_px])
     return out
 
 
@@ -127,96 +134,108 @@ def _over(bottom: np.ndarray, top: np.ndarray) -> np.ndarray:
     return out
 
 
-def _unpremultiply(c: np.ndarray) -> np.ndarray:
-    c[..., 3] = np.clip(c[..., 3], 0.0, 1.0)
-    a = c[..., 3:4]
-    c[..., :3] = np.where(a > 0, c[..., :3] / np.maximum(a, 1e-6), c[..., :3])
-    return c
+def _unpremultiply(pixels: np.ndarray) -> np.ndarray:
+    pixels[..., 3] = np.clip(pixels[..., 3], 0.0, 1.0)
+    alpha = pixels[..., 3:4]
+    pixels[..., :3] = np.where(alpha > 0, pixels[..., :3] / np.maximum(alpha, 1e-6), pixels[..., :3])
+    return pixels
 
 
-def glow(c: np.ndarray, v: dict) -> np.ndarray:
+def glow(pixels: np.ndarray, values: dict) -> np.ndarray:
     """Inner and outer glow from the alpha round each texel, blended as the effect's mode says (0, 1 or 2)."""
-    a = c[..., 3]
-    outer = sum(s * (1 - a) for s in _neighbourhood(a)) * float(v.get("OuterGlowStrength") or 0) / 25
-    inner = sum(a * (1 - s) for s in _neighbourhood(a)) * float(v.get("InnerGlowStrength") or 0) / 25
-    oc = np.array(to_rgb(v.get("OuterGlowColor")) or (0, 0, 0), np.float32)
-    ic = np.array(to_rgb(v.get("InnerGlowColor")) or (0, 0, 0), np.float32)
-    mode = int(v.get("BlendMode") or 0)
+    alpha = pixels[..., 3]
+    outer = (
+        sum(neighbour * (1 - alpha) for neighbour in _neighbourhood(alpha))
+        * float(values.get("OuterGlowStrength") or 0)
+        / 25
+    )
+    inner = (
+        sum(alpha * (1 - neighbour) for neighbour in _neighbourhood(alpha))
+        * float(values.get("InnerGlowStrength") or 0)
+        / 25
+    )
+    oc = np.array(to_rgb(values.get("OuterGlowColor")) or (0, 0, 0), np.float32)
+    ic = np.array(to_rgb(values.get("InnerGlowColor")) or (0, 0, 0), np.float32)
+    mode = int(values.get("BlendMode") or 0)
     if mode == 1:
-        c[..., :3] += oc * outer[..., None] + ic * inner[..., None]
-        c[..., 3] = c[..., 3] + (3.0 - c[..., 3]) * outer
-        c[..., 3] = c[..., 3] + (3.0 - c[..., 3]) * inner
-        return c
+        pixels[..., :3] += oc * outer[..., None] + ic * inner[..., None]
+        pixels[..., 3] = pixels[..., 3] + (3.0 - pixels[..., 3]) * outer
+        pixels[..., 3] = pixels[..., 3] + (3.0 - pixels[..., 3]) * inner
+        return pixels
     if mode == 0:
-        for col, f in ((oc, outer), (ic, inner)):
-            target = np.concatenate([np.broadcast_to(col, c[..., :3].shape), np.full(a.shape + (1,), 3.0)], -1)
-            c = c + (target - c) * f[..., None]
-        return c
-    c[..., :3] *= c[..., 3:4]
+        for col, weight in ((oc, outer), (ic, inner)):
+            target = np.concatenate([np.broadcast_to(col, pixels[..., :3].shape), np.full(alpha.shape + (1,), 3.0)], -1)
+            pixels = pixels + (target - pixels) * weight[..., None]
+        return pixels
+    pixels[..., :3] *= pixels[..., 3:4]
     og = np.concatenate([oc * outer[..., None], outer[..., None]], -1)
     ig = np.concatenate([ic * inner[..., None], inner[..., None]], -1)
-    return _unpremultiply(_over(_over(og, c), ig))
+    return _unpremultiply(_over(_over(og, pixels), ig))
 
 
-def drop_shadow(c: np.ndarray, v: dict) -> np.ndarray:
+def drop_shadow(pixels: np.ndarray, values: dict) -> np.ndarray:
     """The picture's alpha, moved by the shadow's offset and spread, in black under the picture."""
-    if v.get("IsOmnidirectional"):
+    if values.get("IsOmnidirectional"):
         shift = (0, 0)
     else:  # Strength texels in Direction degrees (inferred: the effect's GPU data takes an offset and a strength)
-        r = np.radians(float(v.get("Direction") or 0.0))
-        dist = float(v.get("Strength") or 0.0)
-        shift = (round(-np.cos(r) * dist), round(-np.sin(r) * dist))
-    a = c[..., 3]
-    shadow = sum(s * (1 - a) for s in _neighbourhood(a, shift)) / 25
-    c[..., :3] *= c[..., 3:4]
-    below = np.zeros_like(c)
+        angle_rad = np.radians(float(values.get("Direction") or 0.0))
+        dist = float(values.get("Strength") or 0.0)
+        shift = (round(-np.cos(angle_rad) * dist), round(-np.sin(angle_rad) * dist))
+    alpha = pixels[..., 3]
+    shadow = sum(neighbour * (1 - alpha) for neighbour in _neighbourhood(alpha, shift)) / 25
+    pixels[..., :3] *= pixels[..., 3:4]
+    below = np.zeros_like(pixels)
     below[..., 3] = shadow
-    return _unpremultiply(_over(below, c))
+    return _unpremultiply(_over(below, pixels))
 
 
-def colorize(c: np.ndarray, v: dict) -> np.ndarray:
+def colorize(pixels: np.ndarray, values: dict) -> np.ndarray:
     """Contrast, brightness, grey scale, then a multiply by a mix of two colours, as the shader's colorize."""
-    rgb = np.clip(0.5 + (c[..., :3] - 0.5) * (1.0 + float(v.get("Contrast") or 0.0)), 0, 1)
-    rgb = np.clip(rgb * float(v.get("Brightness", 1.0) if v.get("Brightness") is not None else 1.0), 0, 1)
-    grey = float(v.get("GrayScale") or 0.0)
+    rgb = np.clip(0.5 + (pixels[..., :3] - 0.5) * (1.0 + float(values.get("Contrast") or 0.0)), 0, 1)
+    rgb = np.clip(rgb * _value(values, "Brightness", 1.0), 0, 1)
+    grey = float(values.get("GrayScale") or 0.0)
     if grey > 0:
         rgb = rgb + ((rgb @ LUMA)[..., None] - rgb) * min(grey, 1.0)
-    c1 = np.array(to_rgb(v.get("RGB1")) or (1, 1, 1), np.float32)
-    c2 = np.array(to_rgb(v.get("RGB2")) or (1, 1, 1), np.float32)
-    blend = c1 + (c2 - c1) * float(v.get("MixFactor") or 0.0)
-    c[..., :3] = rgb + (rgb * blend - rgb) * float(v.get("Opacity") or 0.0)
-    gamma = float(v.get("AlphaGamma") or 1.0)
-    c[..., 3] = np.power(np.clip(c[..., 3], 0, 1), gamma)
-    return c
+    c1 = np.array(to_rgb(values.get("RGB1")) or (1, 1, 1), np.float32)
+    c2 = np.array(to_rgb(values.get("RGB2")) or (1, 1, 1), np.float32)
+    blend = c1 + (c2 - c1) * float(values.get("MixFactor") or 0.0)
+    pixels[..., :3] = rgb + (rgb * blend - rgb) * float(values.get("Opacity") or 0.0)
+    gamma = float(values.get("AlphaGamma") or 1.0)
+    pixels[..., 3] = np.power(np.clip(pixels[..., 3], 0, 1), gamma)
+    return pixels
 
 
-def simple(c: np.ndarray, kind: str, v: dict) -> np.ndarray:
+def simple(pixels: np.ndarray, kind: str, values: dict) -> np.ndarray:
     """The described templates mapped onto the colorize step (inferred from their names, ui-117.md section 4)."""
     if kind == "brightness":
-        return colorize(c, {"Brightness": 1.0 + float(v.get("BrightnessLevel") or 0.0)})
+        return colorize(pixels, {"Brightness": 1.0 + float(values.get("BrightnessLevel") or 0.0)})
     if kind == "saturation":  # a negative level takes colour away (inferred from the name)
-        return colorize(c, {"GrayScale": max(0.0, -float(v.get("SaturationLevel") or 0.0))})
-    colour = to_rgb(v.get("Color")) or (1, 1, 1)
-    return colorize(c, {"RGB1": colour, "RGB2": colour, "Opacity": float(v.get("Intensity") or 0.0)})
+        return colorize(pixels, {"GrayScale": max(0.0, -float(values.get("SaturationLevel") or 0.0))})
+    colour = to_rgb(values.get("Color")) or (1, 1, 1)
+    return colorize(pixels, {"RGB1": colour, "RGB2": colour, "Opacity": float(values.get("Intensity") or 0.0)})
 
 
-def _sample(a: np.ndarray, dx: int, dy: int) -> np.ndarray:
-    """``a`` read at the texel (x + dx, y + dy), clamped at the edges."""
-    h, w = a.shape[:2]
+def _sample(texels: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    """``texels`` read at the texel (x + dx, y + dy), clamped at the edges."""
+    height_px, width_px = texels.shape[:2]
+    dx, dy = (
+        max(-width_px, min(width_px, dx)),
+        max(-height_px, min(height_px, dy)),
+    )  # a shift past the picture reads only its edge
     pad = max(abs(dx), abs(dy))
-    padded = np.pad(a, [(pad, pad), (pad, pad)] + [(0, 0)] * (a.ndim - 2), mode="edge")
-    return padded[pad + dy : pad + dy + h, pad + dx : pad + dx + w]
+    padded = np.pad(texels, [(pad, pad), (pad, pad)] + [(0, 0)] * (texels.ndim - 2), mode="edge")
+    return padded[pad + dy : pad + dy + height_px, pad + dx : pad + dx + width_px]
 
 
 GAUSS = ((0, 0, 0.195346), (1, 0, 0.123317), (-1, 0, 0.123317), (0, 1, 0.123317), (0, -1, 0.123317),
          (1, 1, 0.077847), (1, -1, 0.077847), (-1, 1, 0.077847), (-1, -1, 0.077847))  # fmt: skip
 
 
-def blur(c: np.ndarray, v: dict) -> np.ndarray:
+def blur(pixels: np.ndarray, values: dict) -> np.ndarray:
     """The shader's nine taps with its weights, ``step`` texels apart: the picture's mip count x Strength x 1/4."""
-    h, w = c.shape[:2]
-    step = max(1, round((int(np.log2(max(h, w, 1))) + 1) * float(v.get("Strength") or 0.0) * 0.25))
-    premultiplied = c.copy()
+    height_px, width_px = pixels.shape[:2]
+    step = max(1, round((int(np.log2(max(height_px, width_px, 1))) + 1) * float(values.get("Strength") or 0.0) * 0.25))
+    premultiplied = pixels.copy()
     premultiplied[..., :3] *= premultiplied[..., 3:4]
     out = sum(wt * _sample(premultiplied, dx * step, dy * step) for dx, dy, wt in GAUSS)
     return _unpremultiply(out)
@@ -228,36 +247,36 @@ def _smoothstep(lo, hi, x: np.ndarray) -> np.ndarray:
     return t * t * (3 - 2 * t)
 
 
-def distance_field(c: np.ndarray, v: dict) -> np.ndarray:
+def distance_field(pixels: np.ndarray, values: dict) -> np.ndarray:
     """A picture whose alpha is a distance (1 - alpha), drawn as the shader does: soft edge round ``Thickness``, the
     inner colour toward the inside, the outer one as a glow, each read at its own offset (a fraction of the picture)."""
     eps = 1e-5
-    thickness, gradient = float(v.get("Thickness", 0.5) or 0.0), float(v.get("Gradient", 0.1) or 0.0)
-    h, w = c.shape[:2]
-    dist = 1.0 - c[..., 3]
-    at = lambda off: 1.0 - _sample(c[..., 3], round(float(off[0]) * w), round(float(off[1]) * h))  # noqa: E731
+    thickness, gradient = _value(values, "Thickness", 0.5), _value(values, "Gradient", 0.1)
+    height_px, width_px = pixels.shape[:2]
+    dist = 1.0 - pixels[..., 3]
+    at = lambda off: 1.0 - _sample(pixels[..., 3], round(float(off[0]) * width_px), round(float(off[1]) * height_px))  # noqa: E731
     lo, hi = max(thickness - gradient / 2 - eps, 0.0), min(thickness + gradient / 2 + eps, 1.0)
-    rgb, alpha = c[..., :3].copy(), np.ones_like(dist)
-    inner = float(v.get("InnerSize") or 0.0)
+    rgb, alpha = pixels[..., :3].copy(), np.ones_like(dist)
+    inner = float(values.get("InnerSize") or 0.0)
     if inner > 0:
         imin = max(thickness - thickness * inner - eps, 0.0)
-        imax = min(imin + (hi - imin) * float(v.get("InnerGradient") or 0.0) + eps, 1.0)
-        where = at(_pair(v.get("InnerOffset")))
-        f = np.where(where >= imin, _smoothstep(imin, imax, where), 0.0)[..., None]
-        rgb = rgb + (np.array(to_rgb(v.get("InnerColor")) or (1, 1, 1), np.float32) - rgb) * f
+        imax = min(imin + (hi - imin) * float(values.get("InnerGradient") or 0.0) + eps, 1.0)
+        where = at(_pair(values.get("InnerOffset")))
+        weight = np.where(where >= imin, _smoothstep(imin, imax, where), 0.0)[..., None]
+        rgb = rgb + (np.array(to_rgb(values.get("InnerColor")) or (1, 1, 1), np.float32) - rgb) * weight
     alpha = alpha * _smoothstep(hi, lo, dist)
-    outer = float(v.get("OuterSize") or 0.0)
+    outer = float(values.get("OuterSize") or 0.0)
     if outer > 0:
         omax = max(thickness + (1.0 - thickness) * outer - eps, 0.0)
-        omin = min(omax - float(v.get("OuterGradient") or 0.0) + eps, 1.0)
-        where = at(_pair(v.get("OuterOffset")))
+        omin = min(omax - float(values.get("OuterGradient") or 0.0) + eps, 1.0)
+        where = at(_pair(values.get("OuterOffset")))
         glow_a = np.where(where <= omax, np.where(where > omin, _smoothstep(omax, omin, where), 1.0), 0.0)
-        colour = np.array(to_rgb(v.get("OuterColor")) or (1, 1, 1), np.float32)
+        colour = np.array(to_rgb(values.get("OuterColor")) or (1, 1, 1), np.float32)
         total = alpha + glow_a * (1 - alpha)
         rgb = np.where(total[..., None] > 0, (rgb * alpha[..., None] + colour * (glow_a * (1 - alpha))[..., None])
                        / np.maximum(total[..., None], 1e-6), rgb)  # fmt: skip
         alpha = total
-    out = np.empty_like(c)
+    out = np.empty_like(pixels)
     out[..., :3], out[..., 3] = rgb, alpha
     return out
 
@@ -266,55 +285,57 @@ def _pair(value) -> tuple[float, float]:
     return (float(value[0]), float(value[1])) if isinstance(value, (tuple, list)) and len(value) >= 2 else (0.0, 0.0)
 
 
-def blink(c: np.ndarray, v: dict, seconds: float = 0.0) -> np.ndarray:
+def blink(pixels: np.ndarray, values: dict, seconds: float = 0.0) -> np.ndarray:
     """The warm white the shader fades to, 0.5 Hz between 20 and 100 percent, times ``FadeIntensity``."""
     wave = np.sin(seconds * 0.5 * 2 * np.pi) * 0.5 + 0.5
-    amount = (0.2 + 0.8 * wave) * float(v.get("FadeIntensity", 1.0) if v.get("FadeIntensity") is not None else 1.0)
-    full = np.array((1.2, 1.08, 0.96), np.float32) * np.power(np.abs(c[..., :3]), 0.25)
-    c[..., :3] = c[..., :3] + (full - c[..., :3]) * amount
-    return c
+    amount = (0.2 + 0.8 * wave) * _value(values, "FadeIntensity", 1.0)
+    full = np.array((1.2, 1.08, 0.96), np.float32) * np.power(np.abs(pixels[..., :3]), 0.25)
+    pixels[..., :3] = pixels[..., :3] + (full - pixels[..., :3]) * amount
+    return pixels
 
 
-def scroll(c: np.ndarray, v: dict, seconds: float = 0.0) -> np.ndarray:
+def scroll(pixels: np.ndarray, values: dict, seconds: float = 0.0) -> np.ndarray:
     """The picture's x moved by time x ``Speed`` (an endless strip: it wraps)."""
-    shift = (float(v.get("Speed") or 0.0) * seconds) % 1.0
-    return np.roll(c, round(shift * c.shape[1]), axis=1)
+    shift = (float(values.get("Speed") or 0.0) * seconds) % 1.0
+    return np.roll(pixels, round(shift * pixels.shape[1]), axis=1)
 
 
 def apply(rgba: np.ndarray, effects: dict[str, dict], seconds: float = 0.0) -> np.ndarray:
     """A picture (uint8 rgba) with its effects in the shader's order: scroll, the colour source (distance field, blur,
     whiten), glow, drop shadow, alpha test, colorize, blink; ``seconds`` is the time scroll and blink read."""
-    c = rgba.astype(np.float32) / 255.0
+    pixels = rgba.astype(np.float32) / 255.0
     if "scroll" in effects:
-        c = scroll(c, effects["scroll"], seconds)
+        pixels = scroll(pixels, effects["scroll"], seconds)
     if "distance_field" in effects:
-        c = distance_field(c, effects["distance_field"])
+        pixels = distance_field(pixels, effects["distance_field"])
     elif "blur" in effects:
-        c = blur(c, effects["blur"])
+        pixels = blur(pixels, effects["blur"])
     if "whiten" in effects:
-        c[..., :3] = 1.0
+        pixels[..., :3] = 1.0
     if "glow" in effects:
-        c = glow(c, effects["glow"])
+        pixels = glow(pixels, effects["glow"])
     if "drop_shadow" in effects:
-        c = drop_shadow(c, effects["drop_shadow"])
+        pixels = drop_shadow(pixels, effects["drop_shadow"])
     if "alpha_test" in effects:
-        c[..., 3] = np.where(c[..., 3] < float(effects["alpha_test"].get("Threshold") or 0.0), 0.0, c[..., 3])
+        pixels[..., 3] = np.where(
+            pixels[..., 3] < float(effects["alpha_test"].get("Threshold") or 0.0), 0.0, pixels[..., 3]
+        )
     if "colorize" in effects:
-        c = colorize(c, effects["colorize"])
+        pixels = colorize(pixels, effects["colorize"])
     for kind in ("tint", "brightness", "saturation"):
         if kind in effects:
-            c = simple(c, kind, effects[kind])
+            pixels = simple(pixels, kind, effects[kind])
     if "blink" in effects:
-        c = blink(c, effects["blink"], seconds)
-    return (np.clip(c, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+        pixels = blink(pixels, effects["blink"], seconds)
+    return (np.clip(pixels, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
 
 
-def soft_step(alpha: np.ndarray, v: dict) -> np.ndarray:
+def soft_step(alpha: np.ndarray, values: dict) -> np.ndarray:
     """A soft mask's coverage from its picture's alpha: a smooth step from its threshold over its gradient (the
     shader's two thresholds; the pairing of the effect's values with them is inferred)."""
-    lo = float(v.get("AlphaThreshold") or 0.0)
-    hi = lo + max(float(v.get("AlphaGradient") or 0.0), 1e-4)
-    if v.get("InverseThreshold"):
+    lo = float(values.get("AlphaThreshold") or 0.0)
+    hi = lo + max(float(values.get("AlphaGradient") or 0.0), 1e-4)
+    if values.get("InverseThreshold"):
         lo, hi = hi, lo
     t = np.clip((alpha - lo) / (hi - lo), 0.0, 1.0)
     return t * t * (3 - 2 * t)

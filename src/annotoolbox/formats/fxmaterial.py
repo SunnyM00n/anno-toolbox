@@ -14,14 +14,14 @@ import re
 from dataclasses import dataclass, field
 
 
-class MaterialError(ValueError):
+class CMaterialError(ValueError):
     pass
 
 
 # a parameter's type in the structure (a texture is its index into the bindless texture table)
 FIELD_TYPES = {"color": "float3", "bool": "float", "Texture2D": "uint", "Texture2DArray": "uint"}
 FIELD_TYPES |= {"TextureCube": "uint", "Texture3D": "uint"}
-SIZES = {f"{t}{n}": 4 * int(n or 1) for t in ("float", "int", "uint") for n in ("", "2", "3", "4")}
+SIZES = {f"{base}{suffix}": 4 * int(suffix or 1) for base in ("float", "int", "uint") for suffix in ("", "2", "3", "4")}
 ROW = 16  # a vector does not cross a row
 WORD = 4
 _ITEM_RE = re.compile(
@@ -31,7 +31,7 @@ _ITEM_RE = re.compile(
 
 
 @dataclass
-class MaterialFields:
+class SMaterialFields:
     """The parameters of one material description (``.fxm``), as the structure the shaders read."""
 
     name: str
@@ -40,20 +40,20 @@ class MaterialFields:
     layout: list[tuple[str, str]] = field(default_factory=list)  # the fields with the gap and end words
 
 
-def read_material_fields(text: str) -> MaterialFields:
+def read_material_fields(text: str) -> SMaterialFields:
     """A material description's name, parameters and switches, in file order."""
     text = re.sub(r"/\*.*?\*/", "", re.sub(r"//[^\n]*", "", text), flags=re.S)
     head = re.match(r"\s*material\s+(\w+)", text)
     if not head:
-        raise MaterialError("no material header")
+        raise CMaterialError("no material header")
     seen, fields, flags = set(), [], 0
-    for m in _ITEM_RE.finditer(text):
-        kind, name = m.groups()
+    for item in _ITEM_RE.finditer(text):
+        kind, name = item.groups()
         if name in seen:
             continue
         seen.add(name)
         if kind == "define":
-            block = text[m.end() : text.find("}", m.end())]
+            block = text[item.end() : text.find("}", item.end())]
             typed = re.search(r"\btype\s*=\s*(\w+)", block)
             value = typed.group(1) if typed else "bool"
             if value == "bool":
@@ -62,7 +62,7 @@ def read_material_fields(text: str) -> MaterialFields:
                 fields.append((value, f"Define_{name}"))
             continue
         fields.append((FIELD_TYPES.get(kind, kind), name))
-    material = MaterialFields(head.group(1), fields, flags)
+    material = SMaterialFields(head.group(1), fields, flags)
     material.layout = lay_out(fields, (flags + 31) // 32)
     return material
 
@@ -71,38 +71,42 @@ def lay_out(fields: list[tuple[str, str]], flag_words: int, pad: str = "float") 
     """The fields as the engine places them: a vector that would cross a row starts the next, the gap before it
     taken by the switch words still to place, then by padding; the rest of the switch words after the last field;
     the size rounded to a power of two up to 128 bytes, beyond that to a multiple of 128."""
-    out, at, flags, pads = [], 0, iter(range(flag_words)), iter(range(1 << 20))
+    out, offset_bytes, flags, pads = [], 0, iter(range(flag_words)), iter(range(1 << 20))
 
     def gap_word() -> tuple[str, str]:
-        n = next(flags, None)
-        return ("uint", f"DefineFlags{n}") if n is not None else (pad, f"_padding{next(pads)}")
+        flag_index = next(flags, None)
+        return ("uint", f"DefineFlags{flag_index}") if flag_index is not None else (pad, f"_padding{next(pads)}")
 
     for kind, name in fields:
         size = SIZES.get(kind, WORD)
-        if size > WORD and at % ROW + size > ROW:
-            while at % ROW:
+        if size > WORD and offset_bytes % ROW + size > ROW:
+            while offset_bytes % ROW:
                 out.append(gap_word())
-                at += WORD
+                offset_bytes += WORD
         out.append((kind, name))
-        at += size
-    for n in flags:
-        out.append(("uint", f"DefineFlags{n}"))
-        at += WORD
-    target = 1 << max(at - 1, 1).bit_length() if at <= 128 else -(-at // 128) * 128
-    while at < max(target, ROW):
+        offset_bytes += size
+    for flag_index in flags:
+        out.append(("uint", f"DefineFlags{flag_index}"))
+        offset_bytes += WORD
+    target = 1 << max(offset_bytes - 1, 1).bit_length() if offset_bytes <= 128 else -(-offset_bytes // 128) * 128
+    while offset_bytes < max(target, ROW):
         out.append((pad, f"_padding{next(pads)}"))
-        at += WORD
+        offset_bytes += WORD
     return out
 
 
-def material_header(materials: list[MaterialFields]) -> str:
+def material_header(materials: list[SMaterialFields]) -> str:
     """The structures the engine makes from the material descriptions, and the table of each component's index
     (``MaterialComponentIndexTable``, by material name) the bindless macros read."""
     out = []
-    for m in materials:
-        body = "".join(f"\t{t} {n};\n" for t, n in m.layout or lay_out(m.fields, (m.flag_count + 31) // 32))
-        out.append(f"struct {m.name}Struct\n{{\n{body}}};\n")
-    names = sorted(m.name for m in materials)
-    table = lay_out([("uint", f"{n}Index") for n in names], 0, pad="uint")
-    out.append("struct MaterialComponentIndexTable\n{\n" + "".join(f"\t{t} {n};\n" for t, n in table) + "};\n")
+    for material in materials:
+        body = "".join(
+            f"\t{field_type} {field_name};\n"
+            for field_type, field_name in material.layout or lay_out(material.fields, (material.flag_count + 31) // 32)
+        )
+        out.append(f"struct {material.name}Struct\n{{\n{body}}};\n")
+    names = sorted(material.name for material in materials)
+    table = lay_out([("uint", f"{name}Index") for name in names], 0, pad="uint")
+    table_body = "".join(f"\t{field_type} {field_name};\n" for field_type, field_name in table)
+    out.append("struct MaterialComponentIndexTable\n{\n" + table_body + "};\n")
     return "".join(out)

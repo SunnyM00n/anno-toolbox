@@ -1,7 +1,7 @@
 """The selected curve as an editable graph (x along the life or the duration, y in the curve's own range) or, for a
 colour curve or a colour list, a band of colour stops.
 
-``CurveView.set_curve(model, read_only)`` shows a ``curves`` model; on the graph a point is dragged, a double-click
+``CCurveView.set_curve(model, read_only)`` shows a ``curves`` model; on the graph a point is dragged, a double-click
 adds one, a right-click removes one, and ``points_edited(points)`` gives the new set when the mouse is let go; on the
 band a stop is dragged the same way and a double-click on it opens the colour picker (``stops_edited(stops)``).
 docs/particle-editor.md, "The app".
@@ -22,29 +22,29 @@ HIT = 8  # pixels: how near a press must be to a point
 SAMPLES = 160
 
 
-def _mix(a: tuple, b: tuple, f: float) -> tuple:
-    return tuple(x + (y - x) * f for x, y in zip(a, b, strict=True))
+def _mix(first: tuple, second: tuple, fraction: float) -> tuple:
+    return tuple(x + (y - x) * fraction for x, y in zip(first, second, strict=True))
 
 
-class CurveView(QWidget):
+class CCurveView(QWidget):
     points_edited = Signal(list)
     stops_edited = Signal(list)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.model = None
-        self.read_only = False
-        self.points: list[tuple[float, float]] = []
-        self.stops: list[tuple[float, tuple]] = []
-        self._drag: int | None = None
-        self._moved = False  # the dragged point left where it was pressed: a plain click edits nothing
+        self.m_model = None
+        self.m_read_only = False
+        self.m_points: list[tuple[float, float]] = []
+        self.m_stops: list[tuple[float, tuple]] = []
+        self._m_drag: int | None = None
+        self._m_moved = False  # the dragged point left where it was pressed: a plain click edits nothing
         self.setMinimumHeight(160)
         self.setMouseTracking(False)
 
     def set_curve(self, model, read_only: bool = False) -> None:
-        self.model, self.read_only, self._drag = model, read_only, None
-        self.points = list(model.points()) if model is not None and model.kind != COLORS else []
-        self.stops = list(model.stops()) if model is not None and model.kind == COLORS else []
+        self.m_model, self.m_read_only, self._m_drag = model, read_only, None
+        self.m_points = list(model.points()) if model is not None and model.kind != COLORS else []
+        self.m_stops = list(model.stops()) if model is not None and model.kind == COLORS else []
         self.update()
 
     # geometry
@@ -53,65 +53,71 @@ class CurveView(QWidget):
 
     def _range(self) -> tuple[float, float]:
         """The values the plot spans: the curve's range and its points, never empty."""
-        lo, hi = sorted(self.model.range()) if self.model is not None else (0.0, 1.0)
-        values = [y for _x, y in self.points]
-        lo, hi = min([lo, *values]), max([hi, *values])
-        return (lo, hi) if hi > lo else (lo - 0.5, lo + 0.5)
+        low, high = sorted(self.m_model.range()) if self.m_model is not None else (0.0, 1.0)
+        values = [y for _x, y in self.m_points]
+        low, high = min([low, *values]), max([high, *values])
+        return (low, high) if high > low else (low - 0.5, low + 0.5)
 
     def _to_screen(self, x: float, y: float) -> QPointF:
-        r, (lo, hi) = self._plot(), self._range()
-        return QPointF(r.left() + x * r.width(), r.bottom() - (y - lo) / ((hi - lo) or 1.0) * r.height())
+        rect, (low, high) = self._plot(), self._range()
+        return QPointF(
+            rect.left() + x * rect.width(), rect.bottom() - (y - low) / ((high - low) or 1.0) * rect.height()
+        )
 
-    def _from_screen(self, p: QPointF) -> tuple[float, float]:
+    def _from_screen(self, point: QPointF) -> tuple[float, float]:
         r, (lo, hi) = self._plot(), self._range()
-        x = min(max((p.x() - r.left()) / r.width(), 0.0), 1.0)
-        y = lo + (r.bottom() - p.y()) / r.height() * (hi - lo)
-        low, high = sorted(self.model.range())
+        x = min(max((point.x() - r.left()) / r.width(), 0.0), 1.0)
+        y = lo + (r.bottom() - point.y()) / r.height() * (hi - lo)
+        low, high = sorted(self.m_model.range())
         return x, min(max(y, low), high)
 
-    def _hit(self, p: QPointF) -> int | None:
-        if self.model is not None and self.model.kind == COLORS:
-            r = self._plot()
-            found = [k for k, (t, _c) in enumerate(self.stops) if abs(r.left() + t * r.width() - p.x()) <= HIT]
+    def _hit(self, point: QPointF) -> int | None:
+        if self.m_model is not None and self.m_model.kind == COLORS:
+            rect = self._plot()
+            found = [
+                k
+                for k, (position, _colour) in enumerate(self.m_stops)
+                if abs(rect.left() + position * rect.width() - point.x()) <= HIT
+            ]
         else:
-            found = [k for k, (x, y) in enumerate(self.points)
-                     if (self._to_screen(x, y) - p).manhattanLength() <= 2 * HIT]  # fmt: skip
+            found = [k for k, (x, y) in enumerate(self.m_points)
+                     if (self._to_screen(x, y) - point).manhattanLength() <= 2 * HIT]  # fmt: skip
         return found[0] if found else None
 
     # drawing
-    def paintEvent(self, _e) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self._plot()
-        p.fillRect(self.rect(), self.palette().base())
-        p.setPen(QPen(self.palette().mid().color(), 1))
-        p.drawRect(r)
-        if self.model is None:
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, tr("particles.pick_curve_graph_colour_list"))
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self._plot()
+        painter.fillRect(self.rect(), self.palette().base())
+        painter.setPen(QPen(self.palette().mid().color(), 1))
+        painter.drawRect(rect)
+        if self.m_model is None:
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, tr("particles.pick_curve_graph_colour_list"))
             return
-        if self.model.kind == COLORS:
-            self._paint_band(p, r)
+        if self.m_model.kind == COLORS:
+            self._paint_band(painter, rect)
         else:
-            self._paint_graph(p, r)
+            self._paint_graph(painter, rect)
 
-    def _paint_graph(self, p: QPainter, r: QRectF) -> None:
-        lo, hi = self._range()
-        p.setPen(self.palette().text().color())
-        p.drawText(QRectF(0, r.top() - 4, MARGIN - 2, 14), Qt.AlignmentFlag.AlignRight, f"{hi:g}")
-        p.drawText(QRectF(0, r.bottom() - 10, MARGIN - 2, 14), Qt.AlignmentFlag.AlignRight, f"{lo:g}")
+    def _paint_graph(self, painter: QPainter, rect: QRectF) -> None:
+        low, high = self._range()
+        painter.setPen(self.palette().text().color())
+        painter.drawText(QRectF(0, rect.top() - 4, MARGIN - 2, 14), Qt.AlignmentFlag.AlignRight, f"{high:g}")
+        painter.drawText(QRectF(0, rect.bottom() - 10, MARGIN - 2, 14), Qt.AlignmentFlag.AlignRight, f"{low:g}")
         line = QPolygonF([self._to_screen(k / SAMPLES, self._value(k / SAMPLES)) for k in range(SAMPLES + 1)])
-        p.setPen(QPen(QColor("#f28c28"), 2))
-        p.drawPolyline(line)
-        p.setPen(QPen(self.palette().text().color(), 1))
-        p.setBrush(QColor("#5aa9e6"))
-        for x, y in self.points:
-            p.drawEllipse(self._to_screen(x, y), 4, 4)
+        painter.setPen(QPen(QColor("#f28c28"), 2))
+        painter.drawPolyline(line)
+        painter.setPen(QPen(self.palette().text().color(), 1))
+        painter.setBrush(QColor("#5aa9e6"))
+        for x, y in self.m_points:
+            painter.drawEllipse(self._to_screen(x, y), 4, 4)
 
     def _value(self, x: float) -> float:
         """The curve at ``x`` as it is drawn: the model's own reading while nothing is dragged, else straight lines."""
-        if self._drag is None:
-            return self.model.at(x)
-        pts = sorted(self.points)
+        if self._m_drag is None:
+            return self.m_model.at(x)
+        pts = sorted(self.m_points)
         if x <= pts[0][0]:
             return pts[0][1]
         for (xa, ya), (xb, yb) in zip(pts, pts[1:], strict=False):
@@ -119,89 +125,94 @@ class CurveView(QWidget):
                 return ya if xb - xa < 1e-9 else ya + (yb - ya) * (x - xa) / (xb - xa)
         return pts[-1][1]
 
-    def _paint_band(self, p: QPainter, r: QRectF) -> None:
-        band = QRectF(r.left(), r.top() + r.height() * 0.25, r.width(), r.height() * 0.5)
+    def _paint_band(self, painter: QPainter, rect: QRectF) -> None:
+        band = QRectF(rect.left(), rect.top() + rect.height() * 0.25, rect.width(), rect.height() * 0.5)
         gradient = QLinearGradient(band.topLeft(), band.topRight())
-        for t, c in self.stops:
-            gradient.setColorAt(min(max(t, 0.0), 1.0), QColor.fromRgbF(*(min(max(v, 0.0), 1.0) for v in c[:3])))
-        p.fillRect(band, gradient if self.stops else QColor("white"))
-        p.setPen(QPen(self.palette().text().color(), 1))
-        for t, c in self.stops:
-            x = r.left() + t * r.width()
-            p.setBrush(QColor.fromRgbF(*(min(max(v, 0.0), 1.0) for v in c[:3])))
-            p.drawPolygon(QPolygonF([QPointF(x, band.bottom()), QPointF(x - 6, band.bottom() + 10),
+        for position, colour in self.m_stops:
+            gradient.setColorAt(
+                min(max(position, 0.0), 1.0), QColor.fromRgbF(*(min(max(channel, 0.0), 1.0) for channel in colour[:3]))
+            )
+        painter.fillRect(band, gradient if self.m_stops else QColor("white"))
+        painter.setPen(QPen(self.palette().text().color(), 1))
+        for position, colour in self.m_stops:
+            x = rect.left() + position * rect.width()
+            painter.setBrush(QColor.fromRgbF(*(min(max(channel, 0.0), 1.0) for channel in colour[:3])))
+            painter.drawPolygon(QPolygonF([QPointF(x, band.bottom()), QPointF(x - 6, band.bottom() + 10),
                                      QPointF(x + 6, band.bottom() + 10)]))  # fmt: skip
 
     # the mouse
-    def mousePressEvent(self, e) -> None:
-        if self.model is None or self.read_only:
+    def mousePressEvent(self, event) -> None:
+        if self.m_model is None or self.m_read_only:
             return
-        k = self._hit(e.position())
-        if e.button() == Qt.MouseButton.RightButton and k is not None:
+        k = self._hit(event.position())
+        if event.button() == Qt.MouseButton.RightButton and k is not None:
             self._remove(k)
-        elif e.button() == Qt.MouseButton.LeftButton:
-            self._drag, self._moved = k, False
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._m_drag, self._m_moved = k, False
 
-    def mouseMoveEvent(self, e) -> None:
-        if self._drag is None:
+    def mouseMoveEvent(self, event) -> None:
+        if self._m_drag is None:
             return
-        x, y = self._from_screen(e.position())
-        if self.model.kind == COLORS:
-            self._moved |= self.stops[self._drag][0] != x
-            self.stops[self._drag] = (x, self.stops[self._drag][1])
+        x, y = self._from_screen(event.position())
+        if self.m_model.kind == COLORS:
+            self._m_moved |= self.m_stops[self._m_drag][0] != x
+            self.m_stops[self._m_drag] = (x, self.m_stops[self._m_drag][1])
         else:
-            self._moved |= self.points[self._drag] != (x, y)
-            self.points[self._drag] = (x, y)
+            self._m_moved |= self.m_points[self._m_drag] != (x, y)
+            self.m_points[self._m_drag] = (x, y)
         self.update()
 
-    def mouseReleaseEvent(self, _e) -> None:
-        if self._drag is not None:
-            self._drag = None
-            if self._moved:
+    def mouseReleaseEvent(self, _event) -> None:
+        if self._m_drag is not None:
+            self._m_drag = None
+            if self._m_moved:
                 self._emit()
 
-    def mouseDoubleClickEvent(self, e) -> None:
-        if self.model is None or self.read_only:
+    def mouseDoubleClickEvent(self, event) -> None:
+        if self.m_model is None or self.m_read_only:
             return
-        k = self._hit(e.position())
-        x, y = self._from_screen(e.position())
-        if self.model.kind != COLORS:
+        k = self._hit(event.position())
+        x, y = self._from_screen(event.position())
+        if self.m_model.kind != COLORS:
             if k is None:
-                self.points.append((x, y))
+                self.m_points.append((x, y))
                 self._emit()
             return
         if k is not None:
             self._pick(k)
         else:
-            self.stops.append((x, self._colour_at(x)))
+            self.m_stops.append((x, self._colour_at(x)))
             self._emit()
 
     def _remove(self, k: int) -> None:
-        held = self.stops if self.model.kind == COLORS else self.points
+        held = self.m_stops if self.m_model.kind == COLORS else self.m_points
         if len(held) > 1:
             del held[k]
-            self._drag = None  # a drag under way holds a place in the list that is another point's now
+            self._m_drag = None  # a drag under way holds a place in the list that is another point's now
             self._emit()
 
-    def _colour_at(self, t: float) -> tuple:
-        stops = sorted(self.stops, key=lambda s: s[0])
+    def _colour_at(self, position: float) -> tuple:
+        stops = sorted(self.m_stops, key=lambda stop: stop[0])
         if not stops:
             return (1.0, 1.0, 1.0, 1.0)
         for (ta, ca), (tb, cb) in zip(stops, stops[1:], strict=False):
-            if ta <= t <= tb:
-                return _mix(ca, cb, (t - ta) / (tb - ta) if tb > ta else 0.0)
-        return stops[0][1] if t < stops[0][0] else stops[-1][1]
+            if ta <= position <= tb:
+                return _mix(ca, cb, (position - ta) / (tb - ta) if tb > ta else 0.0)
+        return stops[0][1] if position < stops[0][0] else stops[-1][1]
 
     def _pick(self, k: int) -> None:
-        t, c = self.stops[k]
-        picked = widgets.pick_qcolor(self, QColor.fromRgbF(*(min(max(v, 0.0), 1.0) for v in c[:3])))
+        position, colour = self.m_stops[k]
+        picked = widgets.pick_qcolor(self, QColor.fromRgbF(*(min(max(channel, 0.0), 1.0) for channel in colour[:3])))
         if picked is not None:
-            self.stops[k] = (t, (picked.redF(), picked.greenF(), picked.blueF(), c[3] if len(c) > 3 else 1.0))
+            self.m_stops[k] = (
+                position,
+                (picked.redF(), picked.greenF(), picked.blueF(), colour[3] if len(colour) > 3 else 1.0),
+            )
             self._emit()
 
     def _emit(self) -> None:
-        if self.model.kind == COLORS:
-            self.stops_edited.emit(sorted(self.stops, key=lambda s: s[0]))
+        if self.m_model.kind == COLORS:
+            self.stops_edited.emit(sorted(self.m_stops, key=lambda stop: stop[0]))
         else:
-            self.points_edited.emit(sorted(self.points))
+            self.points_edited.emit(sorted(self.m_points))
         self.update()

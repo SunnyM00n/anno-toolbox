@@ -20,168 +20,181 @@ ASSIGN = "c346a1bd"
 
 
 @dataclass(frozen=True)
-class Operator:
-    hash: str
+class SOperator:
+    hash_hex: str
     name: str
     family: str
     inputs: tuple[int, int]  # the fewest and the most inputs
     outputs: int
-    doc: str
+    description: str
     run: Callable[[list], list | None] | None = None
     tested: bool = True  # False: described from the stored fields, not run in the game
 
 
-def _num(v):
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, (int, float)):
-        return v
-    if isinstance(v, (tuple, list)):
-        return tuple(_num(x) for x in v)
+def _num(value):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, (tuple, list)):
+        return tuple(_num(item) for item in value)
     try:
-        return float(v)
+        return float(value)
     except (TypeError, ValueError):
         return 0
 
 
-def _equal(xs: list) -> bool:
+def _equal(inputs: list) -> bool:
     """Whether two inputs are equal: two texts as texts (``Equal(icon, "")``: an icon's name is not the empty text,
     though neither is a number), anything else as numbers."""
-    if isinstance(xs[0], str) and isinstance(xs[1], str):
-        return xs[0] == xs[1]
-    return _num(xs[0]) == _num(xs[1])
+    if isinstance(inputs[0], str) and isinstance(inputs[1], str):
+        return inputs[0] == inputs[1]
+    return _num(inputs[0]) == _num(inputs[1])
 
 
-def _pair(a, b, f):
-    a, b = _num(a), _num(b)
-    if isinstance(a, tuple) or isinstance(b, tuple):
-        n = max(len(a) if isinstance(a, tuple) else 1, len(b) if isinstance(b, tuple) else 1)
-        aa = a if isinstance(a, tuple) else (a,) * n
-        bb = b if isinstance(b, tuple) else (b,) * n
-        return tuple(f(x, y) for x, y in zip(aa, bb, strict=False))
-    return f(a, b)
+def _pair(left, right, combine):
+    left, right = _num(left), _num(right)
+    if isinstance(left, tuple) or isinstance(right, tuple):
+        width = max(len(left) if isinstance(left, tuple) else 1, len(right) if isinstance(right, tuple) else 1)
+        left_values = left if isinstance(left, tuple) else (left,) * width
+        right_values = right if isinstance(right, tuple) else (right,) * width
+        return tuple(
+            combine(left_item, right_item) for left_item, right_item in zip(left_values, right_values, strict=False)
+        )
+    return combine(left, right)
 
 
-def _fold(f):
-    def run(xs):
-        out = xs[0]
-        for x in xs[1:]:
-            out = _pair(out, x, f)
+def _fold(combine):
+    def run(inputs):
+        out = inputs[0]
+        for item in inputs[1:]:
+            out = _pair(out, item, combine)
         return [out]
 
     return run
 
 
-def _one(f):
-    def run(xs):
-        v = _num(xs[0])
-        return [tuple(f(x) for x in v) if isinstance(v, tuple) else f(v)]
+def _one(apply):
+    def run(inputs):
+        operand = _num(inputs[0])
+        return [tuple(apply(element) for element in operand) if isinstance(operand, tuple) else apply(operand)]
 
     return run
 
 
-def _color(f):
-    def run(xs):
-        out = tuple(_num(xs[0]))
-        for x in xs[1:]:
-            out = tuple(max(0, min(255, int(f(a, b)))) for a, b in zip(out, _num(x), strict=False))
+def _color(combine):
+    def run(inputs):
+        out = tuple(_num(inputs[0]))
+        for other in inputs[1:]:
+            out = tuple(
+                max(0, min(255, int(combine(channel, other_channel))))
+                for channel, other_channel in zip(out, _num(other), strict=False)
+            )
         return [out]
 
     return run
 
 
-def _div(a, b):
-    return a / b if b else 0
+def _div(dividend, divisor):
+    return dividend / divisor if divisor else 0
 
 
-def _mod(a, b):
-    a, b = int(a), int(b)
-    return int(math.fmod(a, b)) if b else 0
+def _mod(dividend, divisor):
+    dividend, divisor = int(dividend), int(divisor)
+    return int(math.fmod(dividend, divisor)) if divisor else 0
 
 
-def _round(x):
-    return math.floor(x + 0.5) if x >= 0 else -math.floor(-x + 0.5)
+def _round(value):
+    return math.floor(value + 0.5) if value >= 0 else -math.floor(-value + 0.5)
 
 
-def _text(v) -> str:
-    if isinstance(v, bool):
-        return "1" if v else "0"
-    if isinstance(v, float):
-        return f"{v:.6f}".rstrip("0").rstrip(".") if v != int(v) else f"{v:.1f}"
-    return str(v)
+def _text(value) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, float):
+        return f"{value:.6f}".rstrip("0").rstrip(".") if value != int(value) else f"{value:.1f}"
+    return str(value)
 
 
-def _value(s):
+def _value(text):
     try:
-        return int(s)
+        return int(text)
     except (TypeError, ValueError):
         try:
-            return float(s)
+            return float(text)
         except (TypeError, ValueError):
             return 0
 
 
-def _cmp(f):
-    return lambda xs: [bool(f(_num(xs[0]), _num(xs[1])))]
+def _cmp(compare):
+    return lambda inputs: [bool(compare(_num(inputs[0]), _num(inputs[1])))]
 
 
 def _range(strict: bool):
-    def run(xs):
-        v, lo, hi = (_num(x) for x in xs[:3])
-        return [lo < v < hi if strict else lo <= v <= hi]
+    def run(inputs):
+        value, min_value, max_value = (_num(item) for item in inputs[:3])
+        return [min_value < value < max_value if strict else min_value <= value <= max_value]
 
     return run
 
 
-def _logic(f):
-    def run(xs):
-        out = xs[0]
-        for x in xs[1:]:
-            out = f(out, x)
+def _logic(combine):
+    def run(inputs):
+        out = inputs[0]
+        for item in inputs[1:]:
+            out = combine(out, item)
         return [out]
 
     return run
 
 
-def _and(a, b):
-    return a & b if isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool) else bool(a and b)
+def _and(left, right):
+    return (
+        left & right
+        if isinstance(left, int) and isinstance(right, int) and not isinstance(left, bool)
+        else bool(left and right)
+    )
 
 
-def _or(a, b):
-    return a | b if isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool) else bool(a or b)
+def _or(left, right):
+    return (
+        left | right
+        if isinstance(left, int) and isinstance(right, int) and not isinstance(left, bool)
+        else bool(left or right)
+    )
 
 
-def _xor(a, b):
-    return bool(a) != bool(b)
+def _xor(left, right):
+    return bool(left) != bool(right)
 
 
 def _if(want: bool):
-    return lambda xs: [xs[0]] if bool(xs[1]) == want else None
+    return lambda inputs: [inputs[0]] if bool(inputs[1]) == want else None
 
 
 def _event_to(value: bool):
-    return lambda xs: [value] if xs[0] else None
+    return lambda inputs: [value] if inputs[0] else None
 
 
-def _count(xs):
-    return [len(xs[0]) if isinstance(xs[0], (list, tuple)) else 0]
+def _count(inputs):
+    return [len(inputs[0]) if isinstance(inputs[0], (list, tuple)) else 0]
 
 
-def _empty(xs):
-    return [not xs[0]]
+def _empty(inputs):
+    return [not inputs[0]]
 
 
-def _element(xs):
-    seq, i = xs[0], int(_num(xs[1]) if len(xs) > 1 else 0)
+def _element(inputs):
+    seq, i = inputs[0], int(_num(inputs[1]) if len(inputs) > 1 else 0)
     return [seq[i] if isinstance(seq, (list, tuple)) and 0 <= i < len(seq) else None]
 
 
-def _random(xs):
-    return [random.uniform(float(_num(xs[0])), float(_num(xs[1])))]
+def _random(inputs):
+    return [random.uniform(float(_num(inputs[0])), float(_num(inputs[1])))]
 
 
-def _concat(xs):
-    return ["".join(_text(x) for x in xs)]
+def _concat(inputs):
+    return ["".join(_text(item) for item in inputs)]
 
 
 # fmt: off
@@ -263,39 +276,39 @@ FAMILY_LABELS = {  # an operator's family -> how it is shown
     "Enum": N_("ui.enum"),
     "Arrays": N_("ui.arrays"),
 }
-OPERATORS: dict[str, Operator] = {
-    row[0]: Operator(row[0], row[1], row[2], row[3], row[4], row[5], row[6], *(row[7:] or (True,))) for row in _TABLE
+OPERATORS: dict[str, SOperator] = {
+    row[0]: SOperator(row[0], row[1], row[2], row[3], row[4], row[5], row[6], *(row[7:] or (True,))) for row in _TABLE
 }
 
 
-def by_name(name: str) -> Operator | None:
-    return next((o for o in OPERATORS.values() if o.name == name), None)
+def by_name(name: str) -> SOperator | None:
+    return next((operator for operator in OPERATORS.values() if operator.name == name), None)
 
 
 def name_of(type_hash: str, schema: dict | None = None) -> str:
     """The display name of an operator class: ours, else the schema's without its suffix, else the hash."""
     if type_hash in OPERATORS:
         return OPERATORS[type_hash].name
-    rec = (schema or {}).get(type_hash) or {}
-    name = rec.get("name") or ""
+    record = (schema or {}).get(type_hash) or {}
+    name = record.get("name") or ""
     return name.removesuffix("ConverterInstance") or type_hash
 
 
 def evaluate(type_hash: str, inputs: list) -> list | None:
     """The outputs of an operator for ``inputs``; None when it writes nothing (unknown, an event-only rule, a
     condition that does not hold, an input it cannot use)."""
-    op = OPERATORS.get(type_hash)
-    if op is None or op.run is None or not inputs:
+    operator = OPERATORS.get(type_hash)
+    if operator is None or operator.run is None or not inputs:
         return None
     try:
-        return op.run(list(inputs))
+        return operator.run(list(inputs))
     except (TypeError, ValueError, ZeroDivisionError, OverflowError, IndexError):
         return None
 
 
-def families() -> dict[str, list[Operator]]:
+def families() -> dict[str, list[SOperator]]:
     """The operators by family, in the table's order (the palette of the binding graph)."""
-    out: dict[str, list[Operator]] = {}
-    for op in OPERATORS.values():
-        out.setdefault(op.family, []).append(op)
+    out: dict[str, list[SOperator]] = {}
+    for operator in OPERATORS.values():
+        out.setdefault(operator.family, []).append(operator)
     return out

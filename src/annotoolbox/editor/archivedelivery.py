@@ -1,6 +1,6 @@
 """The edited islands of the games that load archives (2070, 1404, 1701, 2205): build, install, restore and "is ours
-installed", once per game as an ``IslandDelivery`` in ``ISLAND_DELIVERIES``; ``DELIVERIES`` is the suite's view of the
-same records and ``island_files`` the islands' share of a project. The editor's build (``editorapp.App.build_archives``)
+installed", once per game as an ``SIslandDelivery`` in ``ISLAND_DELIVERIES``; ``DELIVERIES`` is the suite's view of the
+same records and ``island_files`` the islands' share of a project. The editor's build (``editorapp.CApp.build_archives``)
 runs ``edited``, ``package`` and, when asked, ``install``. The game's own files are kept outside the workspace
 (``gamebackups``), so the restore buttons undo a project's install whatever the workspace is now
 (docs/island-editor-tools.md "Build, install, restore"; docs/tool-suite.md, section 18)."""
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..infra.i18n import N_, tr
 from ..othergames import delivery2205, gamebackups, installs
-from ..suite.project import ARCHIVE_GAMES, Delivery, Project
+from ..suite.project import ARCHIVE_GAMES, CProject, SDelivery
 from . import oldenginebuild
 from .formats.a7m import edit2205 as a7m_edit2205
 from .formats.isd import build as isd_build
@@ -58,13 +58,13 @@ def index_backup(settings) -> Path:
 
 def tree2070(root: Path):
     """2070's files; the patch9.rda the editor wrote is left out, so a build starts from the game's own."""
-    from ..sources.overlay import SourceTree
+    from ..sources.overlay import CSourceTree
 
-    return SourceTree(root, skip=("patch9",) if isd_build.is_ours(root / isd_build.PATCH) else ())
+    return CSourceTree(root, skip=("patch9",) if isd_build.is_ours(root / isd_build.PATCH) else ())
 
 
 def _islands(files: dict[str, bytes]) -> list[str]:
-    return [p for p in files if p.endswith(".isd")]
+    return [path for path in files if path.endswith(".isd")]
 
 
 # 2070
@@ -122,7 +122,7 @@ def _package_old(key: str):
 
 def _install_old(key: str):
     def install(built: Path, settings, log: Log) -> str:
-        archives = {p.relative_to(built).as_posix(): p.read_bytes() for p in built.rglob("*.rda")}
+        archives = {path.relative_to(built).as_posix(): path.read_bytes() for path in built.rglob("*.rda")}
         if not archives:
             raise RuntimeError(tr("common.nothing_built_yet_build_project"))
         folder = Path(getattr(settings, key))
@@ -142,7 +142,7 @@ def _is_ours_old(key: str):
     def is_ours(settings) -> bool:
         folder = Path(getattr(settings, key))
         return installs.GAMES[key].is_install(folder) and any(
-            oldenginebuild.is_ours(f) for f in oldenginebuild.last_archives(key, folder)
+            oldenginebuild.is_ours(archive) for archive in oldenginebuild.last_archives(key, folder)
         )
 
     return is_ours
@@ -154,9 +154,9 @@ def target_2205(settings) -> Path:
 
 
 def _tree_2205(settings):
-    from .formats.a7m.reader import GameFiles
+    from .formats.a7m.reader import CGameFiles
 
-    return GameFiles(installs.GAMES["anno2205"].tree(Path(settings.anno2205)))
+    return CGameFiles(installs.GAMES["anno2205"].tree(Path(settings.anno2205)))
 
 
 def _package_2205(files, _written, settings, _log, _tree=None) -> dict[str, bytes]:
@@ -194,8 +194,8 @@ def _is_ours_2205(settings) -> bool:
 
 
 @dataclass(frozen=True)
-class IslandDelivery:
-    """What differs per game in building, installing and restoring its edited islands; ``Game`` (``installs``) holds the
+class SIslandDelivery:
+    """What differs per game in building, installing and restoring its edited islands; ``SGame`` (``installs``) holds the
     rest. ``edited(tree, edits_dir, log)`` -> (files by game path, the islands'/sessions' paths), ``package(files,
     written, settings, log, tree=None)`` -> the archives (path in the install -> bytes; none when there is nothing to
     write), ``install(built_folder, settings, log)`` -> a line to show, ``restore(settings, log)``,
@@ -214,7 +214,7 @@ class IslandDelivery:
     install_ready: Callable = lambda settings: None  # raises RuntimeError with what to set before an install
 
     @property
-    def game(self) -> installs.Game:
+    def game(self) -> installs.SGame:
         return installs.GAMES[self.key]
 
     @property
@@ -227,13 +227,13 @@ class IslandDelivery:
         if not self.game.is_install(Path(getattr(settings, self.key))):
             raise RuntimeError(tr("islands.not_found_set_folder_games", game=self.game.name))
 
-    def project_delivery(self) -> Delivery:
+    def project_delivery(self) -> SDelivery:
         """The suite's view of the record: the parts' merged files packed, the built folder installed."""
 
         def package(files, _project, settings, log) -> dict[str, bytes]:
             return self.package(files, _islands(files), settings, log)
 
-        return Delivery(package, lambda project, settings, log: self.install(project.build_dir, settings, log))
+        return SDelivery(package, lambda project, settings, log: self.install(project.build_dir, settings, log))
 
 
 WHAT_ONE = {"islands": N_("islands.island_lower"), "sessions": N_("islands.session_lower")}
@@ -241,21 +241,21 @@ WHAT_ONE = {"islands": N_("islands.island_lower"), "sessions": N_("islands.sessi
 ISLAND_DELIVERIES = {
     d.key: d
     for d in (
-        IslandDelivery(
+        SIslandDelivery(
             "anno2070", N_("common.islands_lower"), "anno2070-patch", _tree_2070, _edited_2070, _package_2070, _install_2070,
             _restore_2070, _is_ours_2070, N_("islands.restore_games_own_patch9_rda"),
         ),
-        IslandDelivery(
+        SIslandDelivery(
             "anno1404", N_("common.islands_lower"), "anno1404-archives", _tree_old("anno1404"), oldenginebuild.edited_1404,
             _package_old("anno1404"), _install_old("anno1404"), _restore_old("anno1404"), _is_ours_old("anno1404"),
             N_("islands.restore_games_own_archives"),
         ),
-        IslandDelivery(
+        SIslandDelivery(
             "anno1701", N_("common.islands_lower"), "anno1701-archives", _tree_old("anno1701"), oldenginebuild.edited_1701,
             _package_old("anno1701"), _install_old("anno1701"), _restore_old("anno1701"), _is_ours_old("anno1701"),
             N_("islands.restore_games_own_archives"),
         ),
-        IslandDelivery(
+        SIslandDelivery(
             "anno2205", N_("islands.sessions"), a7m_edit2205.OUT_NAME, _tree_2205, a7m_edit2205.edited_members, _package_2205,
             _install_2205, _restore_2205, _is_ours_2205, N_("islands.restore_games_own_file_db"), _install_ready_2205,
         ),
@@ -266,7 +266,7 @@ DELIVERIES = {key: d.project_delivery() for key, d in ISLAND_DELIVERIES.items() 
 assert set(DELIVERIES) == set(ARCHIVE_GAMES)
 
 
-def island_files(project: Project, settings, log: Log) -> dict[str, bytes]:
+def island_files(project: CProject, settings, log: Log) -> dict[str, bytes]:
     """The project's edited islands as files by game path (2205: the changed members of the session maps)."""
-    d = ISLAND_DELIVERIES[project.game]
-    return d.edited(d.tree(settings), project.island_edits, log)[0]
+    delivery = ISLAND_DELIVERIES[project.game]
+    return delivery.edited(delivery.tree(settings), project.island_edits, log)[0]

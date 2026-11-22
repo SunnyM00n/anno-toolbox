@@ -3,7 +3,7 @@ Phoenix UI files, baked particles, and island files (the object list, the 2070 h
 
 JSON keeps the structure and the small values; a big binary attribute is its size and its first bytes, so a JSON of
 a FileDB document is for reading and searching, not a byte-exact dump (the stored file is exported as well).
-``export_data`` and the others take a ``Job`` (``run``). docs/exporting.md.
+``export_data`` and the others take a ``SJob`` (``run``). docs/exporting.md.
 """
 
 from __future__ import annotations
@@ -13,10 +13,11 @@ import io
 import json
 import struct
 import xml.etree.ElementTree as ET
+from collections import deque
 from pathlib import Path
 
 from ..formats import filedb
-from .run import Job, Made
+from .run import SJob, SMade
 
 HEX_BYTES = 48  # a binary value is shown by its first bytes and its size
 ROW_LIMIT = 200_000  # CSV rows at most
@@ -28,20 +29,20 @@ def _dump(value, indent: int | None = 1) -> bytes:
 
 
 def _csv(header: list[str], rows) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(header)
     writer.writerows(rows)
-    return buf.getvalue().encode("utf-8")
+    return buffer.getvalue().encode("utf-8")
 
 
 # FileDB
 
 
-def _attribute(a: filedb.Attrib) -> dict:
-    data = a.data
-    out: dict = {"name": a.name, "size": len(data)}
-    if data and all(32 <= b < 127 for b in data):
+def _attribute(attribute: filedb.SAttrib) -> dict:
+    data = attribute.data
+    out: dict = {"name": attribute.name, "size": len(data)}
+    if data and all(32 <= byte_value < 127 for byte_value in data):
         out["text"] = data.decode("ascii")
     elif len(data) == 4:
         out["u32"] = struct.unpack("<I", data)[0]
@@ -52,11 +53,13 @@ def _attribute(a: filedb.Attrib) -> dict:
     return out
 
 
-def filedb_tree(tag: filedb.Tag) -> dict:
+def filedb_tree(tag: filedb.STag) -> dict:
     """A FileDB tag as plain data: its name and children (tags recursively, attributes by ``_attribute``)."""
     return {
         "name": tag.name,
-        "children": [filedb_tree(c) if isinstance(c, filedb.Tag) else _attribute(c) for c in tag.children],
+        "children": [
+            filedb_tree(child) if isinstance(child, filedb.STag) else _attribute(child) for child in tag.children
+        ],
     }
 
 
@@ -72,14 +75,14 @@ def is_filedb(data: bytes) -> bool:
 # XML
 
 
-def _xml_node(el: ET.Element) -> dict:
-    out: dict = {"tag": el.tag}
-    if el.attrib:
-        out["attributes"] = dict(el.attrib)
-    if (el.text or "").strip():
-        out["text"] = el.text.strip()
-    if len(el):
-        out["children"] = [_xml_node(c) for c in el]
+def _xml_node(element: ET.Element) -> dict:
+    out: dict = {"tag": element.tag}
+    if element.attrib:
+        out["attributes"] = dict(element.attrib)
+    if (element.text or "").strip():
+        out["text"] = element.text.strip()
+    if len(element):
+        out["children"] = [_xml_node(child) for child in element]
     return out
 
 
@@ -88,33 +91,38 @@ def xml_root(data: bytes) -> ET.Element:
     return ET.fromstring(data.lstrip(b"\xef\xbb\xbf"))
 
 
-def _flatten(el: ET.Element, prefix: str, row: dict[str, str], depth: int) -> None:
-    for k, v in el.attrib.items():
-        row.setdefault(f"{prefix}@{k}" if prefix else f"@{k}", v)
-    if not len(el):
-        if (el.text or "").strip():
-            key, n = prefix, 1
+def _is_xml_text(data: bytes) -> bool:
+    """Whether a file whose suffix says FileDB is XML text (a FileDB document starts with a magic number, not a tag)."""
+    return data.lstrip(b"\xef\xbb\xbf \t\r\n")[:1] == b"<"
+
+
+def _flatten(element: ET.Element, prefix: str, row: dict[str, str], depth: int) -> None:
+    for k, value in element.attrib.items():
+        row.setdefault(f"{prefix}@{k}" if prefix else f"@{k}", value)
+    if not len(element):
+        if (element.text or "").strip():
+            key, count = prefix, 1
             while key in row:
-                n += 1
-                key = f"{prefix}[{n}]"
-            row[key] = el.text.strip()
+                count += 1
+                key = f"{prefix}[{count}]"
+            row[key] = element.text.strip()
         return
     if depth >= 6:
         return
-    for child in el:
+    for child in element:
         _flatten(child, f"{prefix}.{child.tag}" if prefix else child.tag, row, depth + 1)
 
 
 def _table_group(root: ET.Element) -> tuple[list[ET.Element], str]:
     """The largest run of same-named sibling elements (two or more), shallowest first, and where it is."""
     best: tuple[int, int, list[ET.Element], str] | None = None
-    stack = [(root, root.tag, 0)]
-    while stack:
-        el, where, depth = stack.pop(0)
+    queue = deque([(root, root.tag, 0)])
+    while queue:
+        element, where, depth = queue.popleft()
         counts: dict[str, list[ET.Element]] = {}
-        for c in el:
-            counts.setdefault(c.tag, []).append(c)
-            stack.append((c, f"{where}/{c.tag}", depth + 1))
+        for child in element:
+            counts.setdefault(child.tag, []).append(child)
+            queue.append((child, f"{where}/{child.tag}", depth + 1))
         for tag, group in counts.items():
             if len(group) >= 2 and (best is None or (len(group), -depth) > (best[0], -best[1])):
                 best = (len(group), depth, group, f"{where}/{tag}")
@@ -126,31 +134,31 @@ def xml_rows(root: ET.Element) -> tuple[list[str], list[list[str]], str]:
     template and name (``Values/Standard``)."""
     group, where = _table_group(root)
     rows: list[dict[str, str]] = []
-    for el in group[:ROW_LIMIT]:
+    for element in group[:ROW_LIMIT]:
         row: dict[str, str] = {}
-        if el.tag == "Asset":
-            std = el.find("Values/Standard")
+        if element.tag == "Asset":
+            std = element.find("Values/Standard")
             for key, value in (
                 ("GUID", std.findtext("GUID") if std is not None else None),
-                ("Template", el.findtext("Template")),
+                ("Template", element.findtext("Template")),
                 ("Name", std.findtext("Name") if std is not None else None),
             ):
                 if value is not None:
                     row[key] = value.strip()
-        _flatten(el, "", row, 0)
+        _flatten(element, "", row, 0)
         rows.append(row)
-    columns = list(dict.fromkeys(k for r in rows for k in r))
-    return columns, [[r.get(c, "") for c in columns] for r in rows], where
+    columns = list(dict.fromkeys(k for record in rows for k in record))
+    return columns, [[record.get(column, "") for column in columns] for record in rows], where
 
 
-def export_data(job: Job) -> Made:
+def export_data(job: SJob) -> SMade:
     """JSON (and CSV for XML tables) of a data file; plain text files have no other form than as stored."""
-    made, suffix = Made(), Path(job.path).suffix.lower()
-    if suffix == ".xml":
+    made, suffix = SMade(), Path(job.path).suffix.lower()
+    if suffix == ".xml" or (suffix in FILEDB_SUFFIXES and _is_xml_text(job.data)):  # 117's .ifo and .fc are text
         try:
             root = xml_root(job.data)
         except ET.ParseError as exc:
-            return Made(notes=[f"not read as XML: {exc}"], status="failed")
+            return SMade(notes=[f"not read as XML: {exc}"], status="failed")
         if "json" in job.formats:
             made.files[job.name(".json")] = _dump(_xml_node(root))
         if "csv" in job.formats:
@@ -184,18 +192,18 @@ def _language_of(path: str) -> str:
     return parts[parts.index("loca") + 1] if "loca" in parts and parts.index("loca") + 1 < len(parts) - 1 else ""
 
 
-def export_text(job: Job) -> Made:
+def export_text(job: SJob) -> SMade:
     """A language text file (``GUID=text`` lines) as CSV; with ``options.language`` only that language's files."""
     from ..sources import loca2070
 
     language = _language_of(job.path)
     if job.options.language and language and language != job.options.language.lower():
-        return Made(notes=[f"skipped: language {language}, asked for {job.options.language}"])
+        return SMade(notes=[f"skipped: language {language}, asked for {job.options.language}"])
     texts = loca2070.parse_guid_text(loca2070.decode_text_file(job.data))
     if not texts:
-        return Made(notes=["no GUID=text lines found"], status="failed")
+        return SMade(notes=["no GUID=text lines found"], status="failed")
     rows = [[guid, text] for guid, text in sorted(texts.items())]
-    return Made(
+    return SMade(
         {job.name(".csv"): _csv(["guid", "text"], rows)},
         [f"{len(rows)} texts" + (f" ({language})" if language else "")],
     )
@@ -211,20 +219,20 @@ def _plain(value, depth: int = 0):
     if isinstance(value, bytes | bytearray):
         return {"size": len(value), "hex": bytes(value[:HEX_BYTES]).hex()}
     if isinstance(value, dict):
-        return {str(k): _plain(v, depth + 1) for k, v in value.items() if k not in ("layout", "mask")}
+        return {str(k): _plain(item, depth + 1) for k, item in value.items() if k not in ("layout", "mask")}
     if isinstance(value, list | tuple):
-        return [_plain(v, depth + 1) for v in value]
+        return [_plain(item, depth + 1) for item in value]
     if isinstance(value, str | int | float | bool) or value is None:
         return value
     return str(value)
 
 
-def export_ui(job: Job) -> Made:
+def export_ui(job: SJob) -> SMade:
     """The decoded object tree of a Phoenix UI file as JSON (types by name, GUIDs, fields)."""
     from ..formats import phoenix, phoenixread
 
     if "json" not in job.formats:
-        return Made()
+        return SMade()
     errors = []
     for path in (None, *phoenix.VERSION_SCHEMA_PATHS):
         try:
@@ -233,57 +241,57 @@ def export_ui(job: Job) -> Made:
         except (OSError, ValueError, EOFError, KeyError, IndexError, struct.error) as exc:
             errors.append(f"{type(exc).__name__}: {exc}")
             continue
-        names = {h: r.get("name", "") for h, r in decoder.s.items()}
-        doc = {"file": job.path, "types": names, "root": _plain(decoder.root)}
-        return Made({job.name(".json"): _dump(doc, None)}, ["json: the decoded tree; values as the codec reads them"])
-    return Made(notes=[f"not decoded: {errors[0] if errors else 'no schema'}"], status="failed")
+        names = {type_id: type_record.get("name", "") for type_id, type_record in decoder.m_schema.items()}
+        doc = {"file": job.path, "types": names, "root": _plain(decoder.m_root)}
+        return SMade({job.name(".json"): _dump(doc, None)}, ["json: the decoded tree; values as the codec reads them"])
+    return SMade(notes=[f"not decoded: {errors[0] if errors else 'no schema'}"], status="failed")
 
 
 # Baked particles
 
 
-def export_effect(job: Job) -> Made:
+def export_effect(job: SJob) -> SMade:
     """A 117 ``.rdp`` as JSON (header, materials, per particle its frames and first and last keys)."""
     from ..formats import rdp117
 
     if "json" not in job.formats:
-        return Made()
+        return SMade()
     if Path(job.path).suffix.lower() != ".rdp":
-        return Made(notes=["only 117's .rdp has a JSON form; exported as stored"])
+        return SMade(notes=["only 117's .rdp has a JSON form; exported as stored"])
     try:
-        r = rdp117.parse_rdp(job.data)
+        effect = rdp117.parse_rdp(job.data)
     except (KeyError, ValueError, struct.error) as exc:
-        return Made(notes=[f"not read as a baked particle file: {exc}"], status="failed")
+        return SMade(notes=[f"not read as a baked particle file: {exc}"], status="failed")
     particles = []
-    at = 0
-    for i in range(len(r.starts)):
-        ticks = r.ticks_of(i)
-        keys = slice(at, at + ticks)
+    first_key = 0
+    for i in range(len(effect.starts)):
+        ticks = effect.ticks_of(i)
+        keys = slice(first_key, first_key + ticks)
         particles.append(
             {
-                "start": r.starts[i],
-                "end": r.ends[i],
-                "material": r.particle_materials[i],
+                "start": effect.starts[i],
+                "end": effect.ends[i],
+                "material": effect.particle_materials[i],
                 "ticks": ticks,
-                "position": [r.positions[keys][0], r.positions[keys][-1]] if ticks else [],
-                "color": [r.colors[keys][0], r.colors[keys][-1]] if ticks else [],
+                "position": [effect.positions[keys][0], effect.positions[keys][-1]] if ticks else [],
+                "color": [effect.colors[keys][0], effect.colors[keys][-1]] if ticks else [],
             }
         )
-        at += ticks
+        first_key += ticks
     doc = {
-        "frame_count": r.frame_count,
-        "frame_time": r.frame_time,
-        "looped": r.looped,
-        "max_scale": r.max_scale,
-        "center": r.center,
-        "extents": r.extents,
-        "texture": r.texture,
-        "materials": [vars(m) for m in r.materials],
-        "flags": {"self_occlusion": r.self_occlusion, "lighting": r.lighting, "do_sort": r.do_sort},
-        "extra": r.extra,
+        "frame_count": effect.frame_count,
+        "frame_time": effect.frame_time,
+        "looped": effect.looped,
+        "max_scale": effect.max_scale,
+        "center": effect.center,
+        "extents": effect.extents,
+        "texture": effect.texture,
+        "materials": [vars(material) for material in effect.materials],
+        "flags": {"self_occlusion": effect.self_occlusion, "lighting": effect.lighting, "do_sort": effect.do_sort},
+        "extra": effect.extra,
         "particles": particles,
     }
-    return Made(
+    return SMade(
         {job.name(".json"): _dump(doc, None)},
         ["json: quantised values as stored (positions 16-bit, colours bytes: blue, green, red, alpha)"],
     )
@@ -292,7 +300,7 @@ def export_effect(job: Job) -> Made:
 # Islands
 
 
-def export_island(job: Job) -> Made:
+def export_island(job: SJob) -> SMade:
     """2070's ``.isd`` and 117's (or 1800's) ``.a7m``: the object list (json, csv) and the height map (png16, exr); an
     ``.a7m`` also its members and each FileDB member as JSON."""
     suffix = Path(job.path).suffix.lower()
@@ -302,30 +310,43 @@ def export_island(job: Job) -> Made:
         return _a7m(job)
     if suffix in (".a7t", ".a7te") and "json" in job.formats and is_filedb(job.data):
         return export_data(job)
-    return Made(notes=["no converted form for this island file; exported as stored"])
+    return SMade(notes=["no converted form for this island file; exported as stored"])
 
 
-def _isd(job: Job) -> Made:
+def _isd(job: SJob) -> SMade:
     from ..formats import isd2070
 
-    made = Made()
+    made = SMade()
     try:
-        island = isd2070.Island(job.data)
+        island = isd2070.CIsland(job.data)
         objects = island.objects()
     except (AttributeError, ValueError, KeyError, struct.error) as exc:
-        return Made(notes=[f"not read as a 2070 island: {exc}"], status="failed")
+        return SMade(notes=[f"not read as a 2070 island: {exc}"], status="failed")
     header = ["group", "guid", "x", "height", "z", "direction", "variation", "scale", "id"]
-    rows = [[o.kind, o.guid, o.x, o.y, o.z, o.direction, o.variation, o.scale, o.id] for o in objects]
+    rows = [
+        [
+            placed_object.kind,
+            placed_object.guid,
+            placed_object.x,
+            placed_object.y,
+            placed_object.z,
+            placed_object.direction,
+            placed_object.variation,
+            placed_object.scale,
+            placed_object.id,
+        ]
+        for placed_object in objects
+    ]
     if "csv" in job.formats:
         made.files[job.name("_objects.csv")] = _csv(header, rows)
     if "json" in job.formats:
         doc = {
-            "width": island.width,
-            "height": island.height,
-            "sea_level": island.sea_level,
-            "clime": island.clime,
-            "difficulty": island.difficulty,
-            "objects": [dict(zip(header, r, strict=True)) for r in rows],
+            "width": island.m_width,
+            "height": island.m_height,
+            "sea_level": island.m_sea_level,
+            "clime": island.m_clime,
+            "difficulty": island.m_difficulty,
+            "objects": [dict(zip(header, record, strict=True)) for record in rows],
         }
         made.files[job.name(".json")] = _dump(doc, None)
     if job.formats & {"png16", "exr"}:
@@ -334,41 +355,43 @@ def _isd(job: Job) -> Made:
         except (AttributeError, ValueError, struct.error, ZeroDivisionError) as exc:
             made.notes.append(f"no height map: {exc}")
             return made
-        _height_files(job, made, len(grid[0]), len(grid), [v for row in grid for v in row])
+        _height_files(job, made, len(grid[0]), len(grid), [value for row in grid for value in row])
     return made
 
 
-def _height_files(job: Job, made: Made, w: int, h: int, flat: list[float]) -> None:
+def _height_files(job: SJob, made: SMade, width_cells: int, height_cells: int, flat: list[float]) -> None:
     """The height map of an island as the files of the forms asked for (``flat``: rows by z, world units)."""
     from ..formats import imagewrite
 
     low, high = min(flat), max(flat)
     if "exr" in job.formats:
-        made.files[job.name("_height.exr")] = imagewrite.exr_bytes(w, h, {"Y": struct.pack(f"<{len(flat)}f", *flat)})
+        made.files[job.name("_height.exr")] = imagewrite.exr_bytes(
+            width_cells, height_cells, {"Y": struct.pack(f"<{len(flat)}f", *flat)}
+        )
     if "png16" in job.formats:
         span = (high - low) or 1.0
-        wide = struct.pack(f"<{len(flat)}H", *(int((v - low) / span * 65535 + 0.5) for v in flat))
-        made.files[job.name("_height.png")] = imagewrite.png_bytes(w, h, wide, 1, 16)
+        wide = struct.pack(f"<{len(flat)}H", *(int((value - low) / span * 65535 + 0.5) for value in flat))
+        made.files[job.name("_height.png")] = imagewrite.png_bytes(width_cells, height_cells, wide, 1, 16)
         made.notes.append(f"height png: 0 is {low:g}, 65535 is {high:g} (world units); the exr holds the values")
-    made.notes.append(f"height map {w} x {h} corners, rows by z")
+    made.notes.append(f"height map {width_cells} x {height_cells} corners, rows by z")
 
 
-def _a7m(job: Job) -> Made:
+def _a7m(job: SJob) -> SMade:
     from ..formats import rda
 
-    made = Made()
+    made = SMade()
     try:
-        archive = rda.RdaArchive.from_bytes(job.data)
+        archive = rda.CRdaArchive.from_bytes(job.data)
         members = sorted(archive.entries)
-    except (rda.RdaError, ValueError, struct.error, OSError) as exc:
-        return Made(notes=[f"not read as an island archive: {exc}"], status="failed")
+    except (rda.CRdaError, ValueError, struct.error, OSError) as exc:
+        return SMade(notes=[f"not read as an island archive: {exc}"], status="failed")
     if "json" in job.formats:
         listing = []
         for name in members:
             listing.append({"name": name, "size": archive.entries[name].size})
             try:
                 body = archive.read(name)
-            except (rda.RdaError, ValueError, OSError):
+            except (rda.CRdaError, ValueError, OSError):
                 continue
             if is_filedb(body):
                 try:
@@ -384,7 +407,7 @@ def _a7m(job: Job) -> Made:
 OBJECT_HEADER = ["group", "guid", "variation", "x", "y", "z", "rotation", "scale", "config"]
 
 
-def _a7m_maps(job: Job, made: Made, archive) -> None:
+def _a7m_maps(job: SJob, made: SMade, archive) -> None:
     """The height map (png16, exr) and the object list (csv, json) of a 117 or 1800 island, from its members."""
     from ..formats import a7mread, rda
 
@@ -392,21 +415,32 @@ def _a7m_maps(job: Job, made: Made, archive) -> None:
         try:
             width, flat = a7mread.heights(archive)
             _height_files(job, made, width, width, flat)
-        except (a7mread.IslandError, rda.RdaError, ValueError, struct.error, OSError) as exc:
+        except (a7mread.CIslandError, rda.CRdaError, ValueError, struct.error, OSError) as exc:
             made.notes.append(f"no height map: {exc}")
     if job.formats & {"csv", "json"}:
         try:
             placed = a7mread.objects(archive)
-        except (a7mread.IslandError, rda.RdaError, ValueError, EOFError, struct.error, IndexError, OSError) as exc:
+        except (a7mread.CIslandError, rda.CRdaError, ValueError, EOFError, struct.error, IndexError, OSError) as exc:
             made.notes.append(f"no object list: {exc}")
             return
-        rows = [[o.group, o.guid, o.variation, *o.position, list(o.rotation), o.scale, o.config] for o in placed]
+        rows = [
+            [
+                placed_object.group,
+                placed_object.guid,
+                placed_object.variation,
+                *placed_object.position,
+                list(placed_object.rotation),
+                placed_object.scale,
+                placed_object.config,
+            ]
+            for placed_object in placed
+        ]
         if "csv" in job.formats:
             made.files[job.name("_objects.csv")] = _csv(
-                OBJECT_HEADER, [[*r[:6], " ".join(f"{v:g}" for v in r[6]), r[7], r[8]] for r in rows]
+                OBJECT_HEADER, [[*row[:6], " ".join(f"{value:g}" for value in row[6]), row[7], row[8]] for row in rows]
             )
         if "json" in job.formats:
             made.files[job.name("_objects.json")] = _dump(
-                {"objects": [dict(zip(OBJECT_HEADER, r, strict=True)) for r in rows]}, None
+                {"objects": [dict(zip(OBJECT_HEADER, row, strict=True)) for row in rows]}, None
             )
         made.notes.append(f"{len(rows)} objects: positions in world units, rotation as a quaternion x y z w")

@@ -9,7 +9,7 @@ read over all 1,381 files of the install (docs/tool-suite.md section 23, "The ty
 from __future__ import annotations
 
 from ..infra.i18n import N_, tr
-from .cfgdoc import Node, Part, shown, strip
+from .cfgdoc import SNode, SPart, shown, strip
 
 # m_MCClassType of an m_MeshConfig, and of an m_MeshTransform (101 and up); 50 and 51 are the animation and material nodes
 NODE_CLASSES = {
@@ -32,12 +32,12 @@ FILE_ENDINGS = {  # what a file field of a node names (the files check of 1701's
 }  # fmt: skip
 
 
-def _text(node: Node, name: str) -> str:
-    found = next((c for c in node.children if strip(c.name) == name and not c.children), None)
+def _text(node: SNode, name: str) -> str:
+    found = next((child for child in node.children if strip(child.name) == name and not child.children), None)
     return shown(found.text or "").strip() if found is not None else ""
 
 
-def class_of(node: Node) -> int | None:
+def class_of(node: SNode) -> int | None:
     """The ``m_MCClassType`` of a node, None when it has none."""
     text = _text(node, "MCClassType")
     return int(text) if text.lstrip("-").isdigit() else None
@@ -47,7 +47,7 @@ def _stem(path: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def _what(node: Node) -> str:
+def _what(node: SNode) -> str:
     """What a node points at: the file name (without its folders) or the name its class gives."""
     for name in POINTS_AT.get(class_of(node), ()):
         text = _text(node, name)
@@ -56,7 +56,7 @@ def _what(node: Node) -> str:
     return ""
 
 
-def _title(node: Node) -> str:
+def _title(node: SNode) -> str:
     code = class_of(node)
     table = TRANSFORM_CLASSES if strip(node.name) == "MeshTransform" else NODE_CLASSES
     return tr(table[code]) if code in table else strip(node.name) if code is None else f"{strip(node.name)} {code}"
@@ -66,19 +66,19 @@ def _join(title: str, what: str) -> str:
     return f"{title}  {what}" if what else title
 
 
-def _lod(node: Node) -> str:
+def _lod(node: SNode) -> str:
     low, high = _text(node, "LODMin"), _text(node, "LODMax")
     return f"{low}-{high}" if low or high else ""
 
 
-def label(part: Part) -> str | None:
+def label(part: SPart) -> str | None:
     """The row of a part of a 1701 mesh config: ``Mesh  house.gr2``, ``Offset``, ``Children (3)``; None for a part
     that is none of its nodes."""
     node, tag = part.node, strip(part.node.name)
     if tag == "MCChilds":
         return tr("common.children_count", count=len(part.children))
     if tag == "MCConfig":
-        inner = next((c for c in node.children if strip(c.name) == "MeshConfig"), None)
+        inner = next((child for child in node.children if strip(child.name) == "MeshConfig"), None)
         return _join(_title(inner), _what(inner)) if inner is not None else tr("objects.config")
     if tag == "MeshConfig":
         inside = part.parent is not None and strip(part.parent.name) == "MCConfig"

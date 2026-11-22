@@ -3,7 +3,7 @@ Linux, where texconv does not run). Every texconv call of the package asks ``tex
 (docs/texture-pipeline.md "Choosing the path", docs/linux.md phase 4).
 
 ``ANNO_TEXTURE_BACKEND``: ``auto`` (the default: texconv when it is found), ``texconv`` (it must be there, else
-``ToolError``), ``builtin`` (never texconv). The in-process decoders and encoders come first in every case where they
+``CToolError``), ``builtin`` (never texconv). The in-process decoders and encoders come first in every case where they
 read or write the format (``textures``); texconv is the first choice only for what has two equivalent routes (BC4 maps,
 the cube mean, the BC7 file when etcpak is missing), and for what the built-in path cannot read.
 """

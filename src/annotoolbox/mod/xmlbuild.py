@@ -7,10 +7,10 @@ import xml.etree.ElementTree as ET
 
 def sub(parent: ET.Element, tag: str, text: object = None) -> ET.Element:
     """A child ``tag`` of ``parent`` holding ``text`` (nothing when None)."""
-    el = ET.SubElement(parent, tag)
+    element = ET.SubElement(parent, tag)
     if text is not None:
-        el.text = str(text)
-    return el
+        element.text = str(text)
+    return element
 
 
 def el(tag: str, text: object = None, *children: ET.Element) -> ET.Element:
@@ -36,16 +36,16 @@ def asset(template: str, guid: int, name: str) -> tuple[ET.Element, ET.Element]:
 def items(tag: str, children: list[ET.Element]) -> ET.Element:
     """``<tag>`` holding ``children``."""
     out = ET.Element(tag)
-    for c in children:
-        out.append(c)
+    for child in children:
+        out.append(child)
     return out
 
 
 def item(**fields: object) -> ET.Element:
     """``<Item>`` with one child per field."""
     out = ET.Element("Item")
-    for k, v in fields.items():
-        ET.SubElement(out, k).text = str(v)
+    for k, value in fields.items():
+        ET.SubElement(out, k).text = str(value)
     return out
 
 

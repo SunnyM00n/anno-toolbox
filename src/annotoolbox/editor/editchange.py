@@ -1,4 +1,4 @@
-"""What one editing operation changed, as the views redraw it (``Change``), and the small helpers of the edit
+"""What one editing operation changed, as the views redraw it (``SChange``), and the small helpers of the edit
 document: the box that covers two boxes, a number as the edit file writes it, a copy of JSON data and a turn about
 the vertical axis. Shared by ``editsession``, its ground edits (``sessionterrain``) and the views."""
 
@@ -12,7 +12,7 @@ from ..infra.i18n import N_, tr
 
 
 @dataclass
-class Change:
+class SChange:
     """What one operation changed, for the view to redraw."""
 
     entries: set = field(default_factory=set)
@@ -43,27 +43,29 @@ def count_line(report: dict) -> str:
     """The counts of a build's report as one line ("heights 3, paint 1"): what is zero, and the unmatched names (listed
     apart), left out."""
     return ", ".join(
-        f"{tr(REPORT_LABELS[k]) if k in REPORT_LABELS else k} {v}" for k, v in report.items() if v and k != "unmatched"
+        f"{tr(REPORT_LABELS[name]) if name in REPORT_LABELS else name} {count}"
+        for name, count in report.items()
+        if count and name != "unmatched"
     )
 
 
-def num(v):
+def num(value):
     """A number as the edit file writes it: whole numbers without a fraction."""
-    v = float(v)
-    return int(v) if v.is_integer() and abs(v) < 2**53 else v
+    value = float(value)
+    return int(value) if value.is_integer() and abs(value) < 2**53 else value
 
 
-def union_box(a, b):
-    """The box (x0, z0, x1, z1) round both; ``a`` may be None (nothing yet)."""
-    if a is None:
-        return b
-    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+def union_box(covered, added):
+    """The box (x0, z0, x1, z1) round both; ``covered`` may be None (nothing yet)."""
+    if covered is None:
+        return added
+    return (min(covered[0], added[0]), min(covered[1], added[1]), max(covered[2], added[2]), max(covered[3], added[3]))
 
 
-def copy_json(v):
-    return None if v is None else json.loads(json.dumps(v))
+def copy_json(data):
+    return None if data is None else json.loads(json.dumps(data))
 
 
-def yaw_quat(yaw: float) -> list[float]:
+def yaw_quat(yaw_rad: float) -> list[float]:
     """A turn about the vertical axis as the view's turn makes it, in Anno's axes."""
-    return [0.0, -math.sin(yaw / 2), 0.0, math.cos(yaw / 2)]
+    return [0.0, -math.sin(yaw_rad / 2), 0.0, math.cos(yaw_rad / 2)]

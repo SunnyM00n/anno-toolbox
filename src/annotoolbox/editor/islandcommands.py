@@ -22,38 +22,48 @@ def env_var(key: str) -> str:
 
 
 def register(sub: argparse._SubParsersAction) -> None:
-    c = sub.add_parser("port", help="port islands to another region of their game, or to another game")
-    c.add_argument("game", help="the game the islands are of: anno117, anno1800, or an older game this edition ports")
-    c.add_argument("islands", nargs="+", help="island files (game paths: .a7m, an older game's .isd)")
-    c.add_argument("--to", required=True, help="the target region, <game>:<region> (island regions lists them)")
-    c.add_argument("--out", type=Path, required=True, help="the mods folder; the mod goes into <out>/<mod id>")
-    c.add_argument("--mod-id", default="island-port", help="the mod's id and folder name")
-    c.add_argument("--name", default="", help="the new island's name (one island only)")
-    c.add_argument("--pool-region", default="", help="the pool region it is registered in (default the target's)")
-    c.add_argument(
+    port_parser = sub.add_parser("port", help="port islands to another region of their game, or to another game")
+    port_parser.add_argument(
+        "game", help="the game the islands are of: anno117, anno1800, or an older game this edition ports"
+    )
+    port_parser.add_argument("islands", nargs="+", help="island files (game paths: .a7m, an older game's .isd)")
+    port_parser.add_argument(
+        "--to", required=True, help="the target region, <game>:<region> (island regions lists them)"
+    )
+    port_parser.add_argument(
+        "--out", type=Path, required=True, help="the mods folder; the mod goes into <out>/<mod id>"
+    )
+    port_parser.add_argument("--mod-id", default="island-port", help="the mod's id and folder name")
+    port_parser.add_argument("--name", default="", help="the new island's name (one island only)")
+    port_parser.add_argument(
+        "--pool-region", default="", help="the pool region it is registered in (default the target's)"
+    )
+    port_parser.add_argument(
         "--fit",
         choices=["map"],
         default="",
         help="map: no pool asset, the island takes its donor's fixed places on the game's maps (a size the pool lacks)",
     )
-    c.add_argument(
+    port_parser.add_argument(
         "--reskin",
         action="store_true",
         help="keep rocks and other ground models only the source has, drawn with the target region's ground textures",
     )
-    c.add_argument("--src", type=Path, help="the source game's install (default ANNO117_DIR, ANNO1800_DIR, ...)")
-    c.add_argument("--dst", type=Path, help="the target game's install, for a port to the other game")
-    c.add_argument("--cache", type=Path, help="where the install index and the regions' inventories are kept")
-    c.set_defaults(func=cmd_convert)
-    r = sub.add_parser("regions", help="the regions of a game and what their islands name")
-    r.add_argument("game", choices=list(regions.GENERATION))
-    r.set_defaults(func=cmd_regions)
+    port_parser.add_argument(
+        "--src", type=Path, help="the source game's install (default ANNO117_DIR, ANNO1800_DIR, ...)"
+    )
+    port_parser.add_argument("--dst", type=Path, help="the target game's install, for a port to the other game")
+    port_parser.add_argument("--cache", type=Path, help="where the install index and the regions' inventories are kept")
+    port_parser.set_defaults(func=cmd_convert)
+    regions_parser = sub.add_parser("regions", help="the regions of a game and what their islands name")
+    regions_parser.add_argument("game", choices=list(regions.GENERATION))
+    regions_parser.set_defaults(func=cmd_regions)
 
 
 def open_game(key: str, folder: Path | None, cache: Path | None):
-    """An install as an ``islandconvert.GameSide`` (the folder, else its environment variable)."""
+    """An install as an ``islandconvert.CGameSide`` (the folder, else its environment variable)."""
     from ..othergames.installs import GAMES
-    from .islandconvert import GameSide
+    from .islandconvert import CGameSide
 
     var = env_var(key)
     root = folder or (Path(os.environ[var]) if os.environ.get(var) else None)
@@ -61,10 +71,10 @@ def open_game(key: str, folder: Path | None, cache: Path | None):
         raise ValueError(tr("islands.no_install_pass_set", game=key, var=var))
     tree = GAMES[key].index(root, cache / "index" if cache else None)
     if key == "anno117":
-        from ..islands.islandview import Files
+        from ..islands.islandview import CFiles
 
-        tree = Files(tree)
-    return GameSide(key, tree, cache, root)
+        tree = CFiles(tree)
+    return CGameSide(key, tree, cache, root)
 
 
 def cmd_convert(args) -> int:
@@ -76,15 +86,15 @@ def cmd_convert(args) -> int:
     games = islandconvert.source_games()
     if args.game not in games:
         raise ValueError(tr("islands.no_port_edition_ports", game=args.game, games=", ".join(games)))
-    if not any(r.id == args.to for r in regions.REGIONS):
+    if not any(region.id == args.to for region in regions.REGIONS):
         raise ValueError(tr("islands.unknown_region_island_regions_lists", region=args.to))
     if args.name and len(args.islands) > 1:
         raise ValueError(tr("islands.name_names_one_island_given", count=len(args.islands)))
     target = regions.region(args.to)
-    src = open_game(args.game, args.src, args.cache)
-    dst = src if target.game == args.game else open_game(target.game, args.dst, args.cache)
+    source_game = open_game(args.game, args.src, args.cache)
+    target_game = source_game if target.game == args.game else open_game(target.game, args.dst, args.cache)
     requests = [
-        islandconvert.Request(
+        islandconvert.SRequest(
             args.game,
             path.replace("\\", "/").lower(),
             args.to,
@@ -95,7 +105,7 @@ def cmd_convert(args) -> int:
         )
         for path in dict.fromkeys(args.islands)
     ]
-    done = islandconvert.convert_all(src, dst, requests, log=print)
+    done = islandconvert.convert_all(source_game, target_game, requests, log=print)
     for item in done:
         print(islandconvert.summary(item))
     out = args.out.resolve() / mod_id
@@ -105,7 +115,9 @@ def cmd_convert(args) -> int:
 
 
 def cmd_regions(args) -> int:
-    for r in regions.regions(args.game):
-        pool = r.island_region + (f"/{r.sub_region}" if r.sub_region else "")
-        print(f"{r.id}\t{tr(r.label)}\t{pool}\t{r.material_set or '(default set)'}\t{r.ambient}\t{r.vegetation}")
+    for region in regions.regions(args.game):
+        pool = region.island_region + (f"/{region.sub_region}" if region.sub_region else "")
+        print(
+            f"{region.id}\t{tr(region.label)}\t{pool}\t{region.material_set or '(default set)'}\t{region.ambient}\t{region.vegetation}"
+        )
     return 0

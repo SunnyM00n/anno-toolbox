@@ -71,9 +71,9 @@ def family_of(path: str) -> str:
 def owner_of(path: str) -> str:
     """The folder a baked page belongs to: everything below ``<island>/_gamedata/`` is part of ``<island>``'s files."""
     for marker in _DATA_FOLDERS:
-        at = path.find(marker)
-        if at >= 0:
-            return path[:at]
+        marker_index = path.find(marker)
+        if marker_index >= 0:
+            return path[:marker_index]
     return ""
 
 
@@ -90,19 +90,23 @@ def is_entry(path: str) -> bool:
 def implied_by(paths: Iterable[str], named: Collection[str]) -> set[str]:
     """The files that belong to a named one: its texture or mesh family, its same-stem partners, the pages below the
     folder of a named island. A ``shared/`` file and its ``data/`` file are one file here, whichever is named."""
-    kept = {data_form(p) for p in named}
+    kept = {data_form(path) for path in named}
     # a Granny mesh brings the textures that carry its name (``x.gr2`` and ``x_0.dds`` to ``x_2.dds``)
-    families = {family_of(p) for p in kept} | {stem_of(p) + ".texture" for p in kept if p.endswith(GRANNY)}
+    families = {family_of(path) for path in kept} | {
+        stem_of(path) + ".texture" for path in kept if path.endswith(GRANNY)
+    }
     # a named texture also names its picture's other files (the 2070 ``x.abm`` beside ``x_0.dds``)
-    stems = {stem_of(p) for p in kept} | {f[: -len(".texture")] for f in families if f.endswith(".texture")}
-    bank_stems = {stem_of(p) for p in kept if p.endswith(".bnk")}
-    owners = {p.rsplit("/", 1)[0] for p in kept if p.endswith(OWNER_SUFFIXES)}
+    stems = {stem_of(path) for path in kept} | {
+        family[: -len(".texture")] for family in families if family.endswith(".texture")
+    }
+    bank_stems = {stem_of(path) for path in kept if path.endswith(".bnk")}
+    owners = {path.rsplit("/", 1)[0] for path in kept if path.endswith(OWNER_SUFFIXES)}
     out = set()
-    for p in paths:
-        if p in named:
+    for path in paths:
+        if path in named:
             continue
-        suffix = p.rsplit(".", 1)[-1]
-        key = data_form(p)
+        suffix = path.rsplit(".", 1)[-1]
+        key = data_form(path)
         if (
             key in kept
             or (family_of(key) != key and family_of(key) in families)
@@ -111,7 +115,7 @@ def implied_by(paths: Iterable[str], named: Collection[str]) -> set[str]:
             or (suffix == "png" and stem_of(key) in kept)  # ``x.bkg.png``: the picture of ``x.bkg``
             or ((owner := owner_of(key)) and owner in owners)
         ):
-            out.add(p)
+            out.add(path)
     return out
 
 
@@ -119,11 +123,11 @@ def reachable(paths: Iterable[str], names_of: Callable[[str], Iterable[str]]) ->
     """The files named by a live file. Live: an entry, or named by a live file, or implied by a live file; each round
     takes what the files that became live name, and what belongs to those, until nothing new is live."""
     paths = list(paths)
-    live = {p for p in paths if is_entry(p)}
+    live = {path for path in paths if is_entry(path)}
     named: set[str] = set()
     frontier = set(live)
     while frontier:
-        new = {t for f in frontier for t in names_of(f)} - named
+        new = {target for source in frontier for target in names_of(source)} - named
         named |= new
         frontier = (new | implied_by(paths, new)) - live if new else set()
         live |= frontier
@@ -131,24 +135,24 @@ def reachable(paths: Iterable[str], names_of: Callable[[str], Iterable[str]]) ->
 
 
 def classify(paths: Iterable[str], named: Collection[str], named_live: Collection[str] | None = None) -> dict[str, str]:
-    """Every path's class. ``named`` are the files some other file names (``RefGraph.named``), ``named_live`` those a
+    """Every path's class. ``named`` are the files some other file names (``CRefGraph.named``), ``named_live`` those a
     live file names (``reachable``; the same as ``named`` when it is not given: the verdict looks one step)."""
     paths = list(paths)
     named_live = named if named_live is None else named_live
     implied = implied_by(paths, named_live)
     dead = implied_by(paths, named) if named_live is not named else set()  # the partners of an unused file
     out = {}
-    for p in paths:
-        if p in named_live:
-            out[p] = REFERENCED
-        elif p in implied:
-            out[p] = IMPLIED
-        elif is_entry(p):
-            out[p] = ENTRY
-        elif p.endswith(tuple("." + s for s in GENERATED_SUFFIXES)):
-            out[p] = GENERATED
-        elif p in named or p in dead:
-            out[p] = ORPHANED
+    for path in paths:
+        if path in named_live:
+            out[path] = REFERENCED
+        elif path in implied:
+            out[path] = IMPLIED
+        elif is_entry(path):
+            out[path] = ENTRY
+        elif path.endswith(tuple("." + suffix for suffix in GENERATED_SUFFIXES)):
+            out[path] = GENERATED
+        elif path in named or path in dead:
+            out[path] = ORPHANED
         else:
-            out[p] = UNREFERENCED
+            out[path] = UNREFERENCED
     return out

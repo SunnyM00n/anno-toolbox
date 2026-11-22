@@ -1,7 +1,7 @@
 """The suite's game link panel: what the status bar says in full, and the few things to do by hand about it.
 
 ``rows(link)`` is the text (connection, game and build, the reloads the game takes, the mods it has enabled, the
-session file); ``LinkDialog(parent)`` shows it with the game's latest log lines, the game side's modules
+session file); ``CLinkDialog(parent)`` shows it with the game's latest log lines, the game side's modules
 (``module_items``; one switched by its tick) and the buttons "Connect now" and "Reload assets and texts". The shell opens
 it from the status bar. docs/live-link.md, "The panel".
 """
@@ -27,12 +27,12 @@ from PySide6.QtWidgets import (
 from ..infra.i18n import tr
 from ..sources import gametree
 from . import linkannounce, linkclient, linkcompanion, linkhandover, linkprotocol, livelink
-from .background import Background
+from .background import CBackground
 
 LOG_LINES = 200
 
 
-def rows(link: livelink.LiveLink | None = None) -> list[tuple[str, str]]:
+def rows(link: livelink.CLiveLink | None = None) -> list[tuple[str, str]]:
     """The panel's facts as (label, text); every text is a sentence a person can read without the protocol."""
     link = link or livelink.current()
     status = link.status()
@@ -40,7 +40,7 @@ def rows(link: livelink.LiveLink | None = None) -> list[tuple[str, str]]:
         linkprotocol.session_folder(game=livelink.target_game() or linkprotocol.DEFAULT_GAME)
         / linkprotocol.SESSION_FILE
     )
-    mods = [str(m.get("id", "")) for m in getattr(link, "mods", []) if isinstance(m, dict)]
+    mods = [str(linked_mod.get("id", "")) for linked_mod in getattr(link, "m_mods", []) if isinstance(linked_mod, dict)]
     return [
         (
             tr("common.connection"),
@@ -61,15 +61,15 @@ def rows(link: livelink.LiveLink | None = None) -> list[tuple[str, str]]:
 def module_items(data: dict) -> list[tuple[str, str, bool, bool, str]]:
     """The answer of the module list as (name, text, on, switchable, why), in the game's order."""
     out = []
-    for m in data.get("modules", []) if isinstance(data, dict) else []:
-        if isinstance(m, dict) and m.get("name"):
-            name = str(m["name"])
-            text = f"{name} ({m.get('class', '?')})"
-            out.append((name, text, bool(m.get("on")), bool(m.get("switchable")), str(m.get("why", ""))))
+    for module in data.get("modules", []) if isinstance(data, dict) else []:
+        if isinstance(module, dict) and module.get("name"):
+            name = str(module["name"])
+            text = f"{name} ({module.get('class', '?')})"
+            out.append((name, text, bool(module.get("on")), bool(module.get("switchable")), str(module.get("why", ""))))
     return out
 
 
-class LinkDialog(QDialog):
+class CLinkDialog(QDialog):
     """The panel; its rows are made again when the link's status changes, the game's log lines are appended."""
 
     status_changed = Signal()
@@ -78,11 +78,11 @@ class LinkDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("common.title.game_link"))
-        self.background = Background(self)
-        self.form = QFormLayout()
-        self.log = QPlainTextEdit(readOnly=True)
-        self.log.setMaximumBlockCount(LOG_LINES)
-        self.note = QLabel(wordWrap=True)
+        self.m_background = CBackground(self)
+        self.m_form = QFormLayout()
+        self.m_log = QPlainTextEdit(readOnly=True)
+        self.m_log.setMaximumBlockCount(LOG_LINES)
+        self.m_note = QLabel(wordWrap=True)
         connect = QPushButton(tr("common.connect_now"))
         connect.setToolTip(tr("common.tip.look_running_game_suite_also"))
         connect.clicked.connect(lambda _c=False: self.connect_now())
@@ -98,9 +98,9 @@ class LinkDialog(QDialog):
         modules = QPushButton(tr("common.list_modules"))
         modules.setToolTip(tr("common.tip.game_sides_modules_ticked_one"))
         modules.clicked.connect(lambda _c=False: self.list_modules())
-        self.modules = QListWidget()
-        self.modules.setMaximumHeight(140)
-        self.modules.itemChanged.connect(self._module_ticked)
+        self.m_modules = QListWidget()
+        self.m_modules.setMaximumHeight(140)
+        self.m_modules.itemChanged.connect(self._module_ticked)
         close = QPushButton(tr("common.close"))
         close.clicked.connect(self.accept)
         buttons = QHBoxLayout()
@@ -109,16 +109,16 @@ class LinkDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout = QVBoxLayout(self)
-        layout.addLayout(self.form)
-        layout.addWidget(self.note)
-        layout.addWidget(self.modules)
+        layout.addLayout(self.m_form)
+        layout.addWidget(self.m_note)
+        layout.addWidget(self.m_modules)
         layout.addWidget(QLabel(tr("common.games_log")))
-        layout.addWidget(self.log, 1)
+        layout.addWidget(self.m_log, 1)
         layout.addLayout(buttons)
         self.resize(720, 480)
         self.status_changed.connect(self.refresh)
         self.line.connect(self.add_line)
-        self._removers = [
+        self._m_removers = [
             livelink.on("status", lambda _status: self.status_changed.emit()),
             livelink.on(livelink.LOG, self._on_log),
             livelink.on(livelink.STALLED, self._on_stalled),
@@ -132,23 +132,23 @@ class LinkDialog(QDialog):
         link = livelink.current()
         if link.connected:
             call = link.subscribe if on else link.unsubscribe
-            self.background.run(lambda: call([livelink.LOG]), lambda _r: None)
+            self.m_background.run(lambda: call([livelink.LOG]), lambda _r: None)
 
     def _closed(self, _result: int) -> None:
-        for remove in self._removers:
+        for remove in self._m_removers:
             remove()
         self._follow_log(False)
 
     def refresh(self) -> None:
-        while self.form.rowCount():
-            self.form.removeRow(0)
+        while self.m_form.rowCount():
+            self.m_form.removeRow(0)
         for label, text in rows():
             value = QLabel(text, wordWrap=True)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.form.addRow(label, value)
+            self.m_form.addRow(label, value)
 
     def add_line(self, text: str) -> None:
-        self.log.appendPlainText(text)
+        self.m_log.appendPlainText(text)
 
     def _on_log(self, payload: dict) -> None:
         """The transport's thread: the lines go to the window's through a signal."""
@@ -161,8 +161,8 @@ class LinkDialog(QDialog):
             self.line.emit(str(payload["message"]))
 
     def connect_now(self) -> None:
-        self.note.setText(tr("common.looking_game"))
-        self.background.run(livelink.connect, lambda link: self.note.setText(self._found(link)))
+        self.m_note.setText(tr("common.looking_game"))
+        self.m_background.run(livelink.connect, lambda link: self.m_note.setText(self._found(link)))
 
     @staticmethod
     def _found(result) -> str:
@@ -180,12 +180,12 @@ class LinkDialog(QDialog):
             return
         try:
             if linkhandover.uninstall(Path(folder)):
-                self.note.setText(tr("common.suites_start_file_removed", folder=folder))
+                self.m_note.setText(tr("common.suites_start_file_removed", folder=folder))
             else:
                 path = linkhandover.install(Path(folder))
-                self.note.setText(tr("common.written_games_open_editor_command", path=path))
+                self.m_note.setText(tr("common.written_games_open_editor_command", path=path))
         except (OSError, ValueError) as exc:  # ValueError: a name the file cannot hold
-            self.note.setText(str(exc))
+            self.m_note.setText(str(exc))
 
     def install_companion(self) -> None:
         """Ask for the mods folder (the game's own to start with) and write the companion mod into it."""
@@ -196,20 +196,20 @@ class LinkDialog(QDialog):
         try:
             path = linkcompanion.write_companion(Path(folder))
         except OSError as exc:
-            self.note.setText(str(exc))
+            self.m_note.setText(str(exc))
             return
-        self.note.setText(tr("common.written_enable_games_mod_list", path=path))
+        self.m_note.setText(tr("common.written_enable_games_mod_list", path=path))
 
     def list_modules(self) -> None:
         """The game side's modules into the list (behind the game's debug commands switch)."""
-        self.background.run(lambda: livelink.current().modules_list(), self._fill_modules)
+        self.m_background.run(lambda: livelink.current().modules_list(), self._fill_modules)
 
     def _fill_modules(self, reply) -> None:
-        if isinstance(reply, Exception) or not reply.ok:
-            self.note.setText(str(reply if isinstance(reply, Exception) else reply.message))
+        if isinstance(reply, Exception) or not reply.is_ok:
+            self.m_note.setText(str(reply if isinstance(reply, Exception) else reply.message))
             return
-        self.modules.blockSignals(True)
-        self.modules.clear()
+        self.m_modules.blockSignals(True)
+        self.m_modules.clear()
         for name, text, on, switchable, why in module_items(reply.data):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, name)
@@ -217,20 +217,22 @@ class LinkDialog(QDialog):
             item.setFlags(flags if switchable else flags & ~Qt.ItemFlag.ItemIsEnabled)
             item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
             item.setToolTip(why)
-            self.modules.addItem(item)
-        self.modules.blockSignals(False)
+            self.m_modules.addItem(item)
+        self.m_modules.blockSignals(False)
 
     def _module_ticked(self, item: QListWidgetItem) -> None:
         name, on = item.data(Qt.ItemDataRole.UserRole), item.checkState() == Qt.CheckState.Checked
-        self.background.run(lambda: livelink.current().modules_set(name, on), lambda r: self._module_switched(r))
+        self.m_background.run(
+            lambda: livelink.current().modules_set(name, on), lambda result: self._module_switched(result)
+        )
 
     def _module_switched(self, reply) -> None:
-        self.note.setText(str(reply) if isinstance(reply, Exception) else reply.message or tr("common.switched"))
+        self.m_note.setText(str(reply) if isinstance(reply, Exception) else reply.message or tr("common.switched"))
         self.list_modules()
 
     def reload_now(self) -> None:
         linkannounce.announce_in_background(
-            self.background,
-            self.note.setText,
+            self.m_background,
+            self.m_note.setText,
             lambda: linkannounce.announce((livelink.ASSETS, livelink.TEXTS)),
         )

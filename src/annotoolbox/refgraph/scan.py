@@ -2,7 +2,7 @@
 sound bank's media by id.
 
 ``carriers(paths)`` says which files are read, ``name_patterns(paths)`` are the regexes that find names (built from the
-game's own suffixes), ``file_refs`` returns a ``Ref`` (file named, the asset it stands in, the field) for each name and ``bank_refs`` the media a
+game's own suffixes), ``file_refs`` returns a ``SRef`` (file named, the asset it stands in, the field) for each name and ``bank_refs`` the media a
 bank plays. ``file_refs`` runs one finder per way a file names another (``_written_names``, ``_by_value``, ``_wwise_ids``,
 ``_joined_names``): a new way is a new finder in its tuple. The rules and their limits: docs/references.md.
 """
@@ -21,7 +21,7 @@ from ..exporting import banks
 from ..models.fileresolve import loaded_file
 from ..models.fileusers import ASSET_START, asset_at
 from ..sources.overlay import normalize
-from .wwise import BANK, WwiseIndex
+from .wwise import BANK, CWwiseIndex
 
 # Suffixes of files that hold media or baked data and no names: never read (a game's textures, meshes, sounds, ...).
 PAYLOAD = frozenset(
@@ -34,7 +34,7 @@ SKIP_BYTES = 1 << 30  # a file over this is no carrier (none is: 1800's largest 
 
 def carriers(paths: Iterable[str]) -> list[str]:
     """The files that may name other files: everything but the payload suffixes (and the banks, read apart)."""
-    return [p for p in paths if suffix_of(p) not in PAYLOAD and not p.endswith(BANK)]
+    return [path for path in paths if suffix_of(path) not in PAYLOAD and not path.endswith(BANK)]
 
 
 def suffix_of(path: str) -> str:
@@ -43,7 +43,7 @@ def suffix_of(path: str) -> str:
 
 
 @dataclass(frozen=True)
-class NamePatterns:
+class SNamePatterns:
     """The regexes that find a name a file writes: ``plain`` (one byte a character, UTF-8 or a code page) and ``wide``
     (UTF-16LE, the way the credits' texts, the 2070 interface scripts and 1404's templates write them)."""
 
@@ -54,16 +54,16 @@ class NamePatterns:
 NAME_CHARS = rb"[\w$./\\\x80-\xff-]"  # a letter, digit or path sign; a byte over 0x7f is part of a UTF-8 letter
 
 
-def name_patterns(paths: Iterable[str]) -> NamePatterns:
+def name_patterns(paths: Iterable[str]) -> SNamePatterns:
     """The patterns of a game: a path-like word ending in one of the game's own suffixes (and the studio's source
     suffixes)."""
-    own = {s for p in paths if (s := suffix_of(p)) and len(s) <= 12 and s.isalnum()}
+    own = {suffix for path in paths if (suffix := suffix_of(path)) and len(suffix) <= 12 and suffix.isalnum()}
     suffixes = sorted(own | SOURCE_SUFFIXES, key=len, reverse=True)
     ending = "|".join(map(re.escape, suffixes)).encode()
     plain = re.compile(NAME_CHARS + rb"{3,300}\.(?:" + ending + rb")(?![\w])", re.I)
-    wide_ending = b"|".join(b"\x00".join(bytes([c]) for c in s.encode()) + b"\x00" for s in suffixes)
+    wide_ending = b"|".join(b"\x00".join(bytes([byte]) for byte in suffix.encode()) + b"\x00" for suffix in suffixes)
     wide = re.compile(rb"(?:" + NAME_CHARS + rb"\x00){3,300}\.\x00(?:" + wide_ending + rb")(?!\w\x00)", re.I)
-    return NamePatterns(plain, wide)
+    return SNamePatterns(plain, wide)
 
 
 # Fields whose value is a file's name without its folder or suffix, and the suffix of the files they name: 117 and
@@ -91,7 +91,7 @@ def fire_names(name: str) -> list[str]:
     return [bare, FIRE_FOLDER + bare] if flat.startswith("./") else [bare]
 
 
-class Resolver:
+class CResolver:
     """A name -> the file the game loads, kept per name; a name that is no path from the top is tried from the folder of
     the file that writes it (a script's or a config's neighbour). ``paths`` (the game's files) let a name alone find
     the files of ``VALUE_FIELDS``."""
@@ -101,23 +101,23 @@ class Resolver:
         exists: Callable[[str], bool],
         game: str,
         paths: Iterable[str] = (),
-        wwise: WwiseIndex | None = None,
+        wwise: CWwiseIndex | None = None,
     ) -> None:
-        self.exists, self.game, self.wwise = exists, game, wwise
-        self._found: dict[str, str] = {}
-        self._near: dict[tuple[str, str], str] = {}
-        self._stems: dict[tuple[str, str], list[str]] = {}  # (suffix, lower-case stem) -> the files
-        self._basenames: dict[str, list[str]] = {}  # a file name -> the files of that name
-        self._sorted = sorted(paths := list(paths))  # for the files that start with a head
-        for p in paths:
-            suffix = "." + suffix_of(p)
-            self._basenames.setdefault(posixpath.basename(p), []).append(p)
+        self.m_exists, self.m_game, self.m_wwise = exists, game, wwise
+        self._m_found: dict[str, str] = {}
+        self._m_near: dict[tuple[str, str], str] = {}
+        self._m_stems: dict[tuple[str, str], list[str]] = {}  # (suffix, lower-case stem) -> the files
+        self._m_basenames: dict[str, list[str]] = {}  # a file name -> the files of that name
+        self._m_sorted = sorted(paths := list(paths))  # for the files that start with a head
+        for path in paths:
+            suffix = "." + suffix_of(path)
+            self._m_basenames.setdefault(posixpath.basename(path), []).append(path)
             if suffix in VALUE_FIELDS.values():
-                self._stems.setdefault((suffix, posixpath.basename(p)[: -len(suffix)].lower()), []).append(p)
+                self._m_stems.setdefault((suffix, posixpath.basename(path)[: -len(suffix)].lower()), []).append(path)
 
     def by_name(self, field: str, value: str) -> list[str]:
         """The files a field names by its value alone (every file of that suffix with that name)."""
-        return self._stems.get((VALUE_FIELDS[field], value.lower()), [])
+        return self._m_stems.get((VALUE_FIELDS[field], value.lower()), [])
 
     def joined(self, head: str, tail: str) -> list[str]:
         """The files that start with ``head`` and end with ``tail`` (both as a script writes them); none when the head
@@ -125,33 +125,35 @@ class Resolver:
         head, tail = normalize(head), normalize(tail)
         if head.count("/") < MIN_FOLDERS:
             return []
-        at = bisect.bisect_left(self._sorted, head)
+        index = bisect.bisect_left(self._m_sorted, head)
         found = []
-        while at < len(self._sorted) and self._sorted[at].startswith(head):
-            if self._sorted[at].endswith(tail) and len(self._sorted[at]) >= len(head) + len(tail):
-                found.append(self._sorted[at])
-            at += 1
+        while index < len(self._m_sorted) and self._m_sorted[index].startswith(head):
+            if self._m_sorted[index].endswith(tail) and len(self._m_sorted[index]) >= len(head) + len(tail):
+                found.append(self._m_sorted[index])
+            index += 1
         return found if len(found) <= MAX_JOINED else []
 
     def of(self, name: str, folder: str) -> str:
-        found = self._found.get(name)
+        found = self._m_found.get(name)
         if found is None:
-            found = loaded_file(name, self.exists, self.game)
-            self._found[name] = found
+            found = loaded_file(name, self.m_exists, self.m_game)
+            self._m_found[name] = found
         if found or not folder:
             return found
         near = (folder, name)
-        if near not in self._near:
+        if near not in self._m_near:
             path = posixpath.join(folder, name.replace("\\", "/"))
-            self._near[near] = loaded_file(path, self.exists, self.game) or self.alone(name) or self.fire(name, folder)
-        return self._near[near]
+            self._m_near[near] = (
+                loaded_file(path, self.m_exists, self.m_game) or self.alone(name) or self.fire(name, folder)
+            )
+        return self._m_near[near]
 
     def fire(self, name: str, folder: str) -> str:
         """A picture name of a 2205 Flash movie (``fire_names``), from the movie's folder."""
-        if self.game != "anno2205" or "\\" not in name:
+        if self.m_game != "anno2205" or "\\" not in name:
             return ""
         for form in fire_names(name):
-            if found := loaded_file(posixpath.join(folder, form), self.exists, self.game):
+            if found := loaded_file(posixpath.join(folder, form), self.m_exists, self.m_game):
                 return found
         return ""
 
@@ -160,7 +162,7 @@ class Resolver:
         one file of the game bears."""
         if "/" in name or "\\" in name:
             return ""
-        files = self._basenames.get(name.lower(), [])
+        files = self._m_basenames.get(name.lower(), [])
         return files[0] if len(files) == 1 else ""
 
 
@@ -177,11 +179,11 @@ def _text_of(raw: bytes) -> str:
         return raw.decode("latin-1")
 
 
-def _with_spaces(m: re.Match[bytes], data: bytes, resolver: Resolver, folder: str) -> str:
+def _with_spaces(match: re.Match[bytes], data: bytes, resolver: CResolver, folder: str) -> str:
     """The file a match names. The pattern stops at a space, so a name with spaces matches only its last word: when
     that finds no file, the words before it (up to ``MAX_SPACES``) are put back one at a time."""
-    found = resolver.of(_text_of(m.group()), folder)
-    start = m.start()
+    found = resolver.of(_text_of(match.group()), folder)
+    start = match.start()
     for _ in range(MAX_SPACES):
         if found or start < 2 or data[start - 1 : start] != b" ":
             break
@@ -189,46 +191,46 @@ def _with_spaces(m: re.Match[bytes], data: bytes, resolver: Resolver, folder: st
         if word is None:
             break
         start = word.start()
-        found = resolver.of(_text_of(data[start : m.end()]), folder)
+        found = resolver.of(_text_of(data[start : match.end()]), folder)
     return found
 
 
-def _written_names(data: bytes, patterns: NamePatterns, resolver: Resolver, folder: str) -> Found:
+def _written_names(data: bytes, patterns: SNamePatterns, resolver: CResolver, folder: str) -> Found:
     """The names a file writes out as paths, one byte a character and (where the file holds any ``.`` + NUL) UTF-16."""
-    for m in patterns.plain.finditer(data):
-        yield m.start(), [_with_spaces(m, data, resolver, folder)]
+    for match in patterns.plain.finditer(data):
+        yield match.start(), [_with_spaces(match, data, resolver, folder)]
     if b".\x00" in data:  # the cheap test first: a text file has no NUL
-        for m in patterns.wide.finditer(data):
-            yield m.start(), [resolver.of(m.group().decode("utf-16-le", "replace"), folder)]
+        for match in patterns.wide.finditer(data):
+            yield match.start(), [resolver.of(match.group().decode("utf-16-le", "replace"), folder)]
 
 
-def _by_value(data: bytes, resolver: Resolver) -> Found:
+def _by_value(data: bytes, resolver: CResolver) -> Found:
     """The files named by the value of a field that gives a file's name alone (``VALUE_FIELDS``)."""
     if not any(f"<{tag}>".encode() in data for tag in VALUE_FIELDS):  # the cheap test first: most files have none
         return
-    for m in VALUE_FIELD.finditer(data):
-        yield m.start(), resolver.by_name(m.group(1).decode("latin-1"), m.group(2).decode("latin-1"))
+    for match in VALUE_FIELD.finditer(data):
+        yield match.start(), resolver.by_name(match.group(1).decode("latin-1"), match.group(2).decode("latin-1"))
 
 
-def _joined_names(data: bytes, resolver: Resolver) -> Found:
+def _joined_names(data: bytes, resolver: CResolver) -> Found:
     """The files a script names by joining pieces: ``"data/x/pic_" .. n .. ".bkg"`` names every file of that folder that
     starts with the literal head and ends with the literal tail (``JOIN``). A name with no literal folder in its head
     (``base .. ".bkg"``) is out of reach."""
     if b".." not in data and b"+" not in data:
         return
-    for m in JOIN.finditer(data):
-        yield m.start(), resolver.joined(_text_of(m.group(1)), _text_of(m.group(2)))
+    for match in JOIN.finditer(data):
+        yield match.start(), resolver.joined(_text_of(match.group(1)), _text_of(match.group(2)))
 
 
-def _wwise_ids(data: bytes, resolver: Resolver) -> Found:
-    """The files of the sound events and banks an asset gives by their Wwise id (``wwise.WwiseIndex``)."""
-    if resolver.wwise is None or b"<WwiseID>" not in data:
+def _wwise_ids(data: bytes, resolver: CResolver) -> Found:
+    """The files of the sound events and banks an asset gives by their Wwise id (``wwise.CWwiseIndex``)."""
+    if resolver.m_wwise is None or b"<WwiseID>" not in data:
         return
-    for m in WWISE_ID.finditer(data):
-        yield m.start(), resolver.wwise.files_of(int(m.group(1)))
+    for match in WWISE_ID.finditer(data):
+        yield match.start(), resolver.m_wwise.files_of(int(match.group(1)))
 
 
-class Ref(NamedTuple):
+class SRef(NamedTuple):
     """One name that found a file: the file, and where it stands in an asset file (the asset's GUID and name, and the
     element the name is the value of; all empty outside an asset)."""
 
@@ -244,13 +246,13 @@ def _field_at(text: str, position: int) -> str:
     return tag.group(1) if tag else ""
 
 
-def file_refs(data: bytes, source: str, patterns: NamePatterns, resolver: Resolver) -> list[Ref]:
-    """A ``Ref`` for every name in ``data`` that finds a file; each (file, asset) once, a file never naming itself."""
+def file_refs(data: bytes, source: str, patterns: SNamePatterns, resolver: CResolver) -> list[SRef]:
+    """A ``SRef`` for every name in ``data`` that finds a file; each (file, asset) once, a file never naming itself."""
     text = data.decode("latin-1")
     folder = posixpath.dirname(source)
-    starts = [m.start() for m in ASSET_START.finditer(text)] if "<Asset>" in text else []
+    starts = [match.start() for match in ASSET_START.finditer(text)] if "<Asset>" in text else []
     seen: set[tuple[str, str]] = set()
-    out: list[Ref] = []
+    out: list[SRef] = []
     found_in = (
         _written_names(data, patterns, resolver, folder),
         _by_value(data, resolver),
@@ -263,7 +265,7 @@ def file_refs(data: bytes, source: str, patterns: NamePatterns, resolver: Resolv
             guid = str(owner[0]) if owner else ""
             if found and found != source and (found, guid) not in seen:
                 seen.add((found, guid))
-                out.append(Ref(found, guid, owner[1], _field_at(text, position)) if owner else Ref(found))
+                out.append(SRef(found, guid, owner[1], _field_at(text, position)) if owner else SRef(found))
     return out
 
 
@@ -272,17 +274,17 @@ def bank_refs(bank: str, data: bytes, exists: Callable[[str], bool], read: Calla
     info file; a bank that does not read names nothing."""
     try:
         listing = banks.bank_listing(data)
-        info = banks.read_info(bank, exists, lambda p: read(p).decode("utf-8", "replace"))
+        bank_info = banks.read_info(bank, exists, lambda info_path: read(info_path).decode("utf-8", "replace"))
     except (ValueError, KeyError, IndexError, OSError):
         return []
-    ids = {s.media for s in listing.sounds} | set(info.media)
-    found = {banks.media_file(bank, i, info, exists) for i in ids}
+    ids = {sound.media for sound in listing.sounds} | set(bank_info.media)
+    found = {banks.media_file(bank, i, bank_info, exists) for i in ids}
     own = bank[: -len(BANK)] + ".json"
-    return sorted(p for p in found | {own if exists(own) else ""} if p)
+    return sorted(path for path in found | {own if exists(own) else ""} if path)
 
 
 def banks_of(paths: Iterable[str]) -> list[str]:
-    return [p for p in paths if p.endswith(BANK)]
+    return [path for path in paths if path.endswith(BANK)]
 
 
 def asset_label(path: str, guid: str) -> str:

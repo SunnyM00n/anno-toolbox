@@ -41,12 +41,12 @@ def validate(mod_id: str, dependencies: dict, bundle: list) -> None:
             )
         )
     for kind, ids in clean(dependencies).items():
-        for i in ids:
-            if not (ID_FORMAT.match(i) or (kind == "LoadAfter" and i == LATE)):
-                raise ValueError(tr("common.no_modid_lower_case_letters", kind=kind, id=repr(i)))
-            if i == mod_id:
-                raise ValueError(tr("common.mod_cannot_name_itself", kind=kind, id=i))
-    if not all(isinstance(b, str) and b.strip() for b in bundle or []):
+        for dependency_id in ids:
+            if not (ID_FORMAT.match(dependency_id) or (kind == "LoadAfter" and dependency_id == LATE)):
+                raise ValueError(tr("common.no_modid_lower_case_letters", kind=kind, id=repr(dependency_id)))
+            if dependency_id == mod_id:
+                raise ValueError(tr("common.mod_cannot_name_itself", kind=kind, id=dependency_id))
+    if not all(isinstance(entry, str) and entry.strip() for entry in bundle or []):
         raise ValueError(tr("common.bundle_lists_mod_folders"))
 
 
@@ -59,7 +59,7 @@ def modinfo_fields(dependencies: dict) -> tuple[dict[str, list[str]], tuple[str,
 
 def bundle_folders(project_folder: Path, bundle: list[str]) -> list[Path]:
     """The folders of the bundle; a relative one is relative to the project's folder."""
-    return [(Path(project_folder) / b) if not Path(b).is_absolute() else Path(b) for b in bundle]
+    return [(Path(project_folder) / folder) if not Path(folder).is_absolute() else Path(folder) for folder in bundle]
 
 
 def copy_bundle(project_folder: Path, bundle: list[str], out: Path) -> list[str]:
@@ -67,8 +67,8 @@ def copy_bundle(project_folder: Path, bundle: list[str], out: Path) -> list[str]
     loader finds a mod folder at any depth). Returns the sentences for a folder that is no mod or cannot go in."""
     problems: list[str] = []
     for folder in bundle_folders(project_folder, bundle):
-        mod, why = read_mod(folder)
-        if mod is None:
+        bundled_mod, why = read_mod(folder)
+        if bundled_mod is None:
             problems.append(tr("common.bundle_loader_not_take_mod", folder=folder.name, why=why))
             continue
         target = Path(out) / folder.name
@@ -87,30 +87,34 @@ def bundle_problems(mod_id: str, out: Path, mods_dir: Path | None, game: str = "
         return []
     out_problems: list[str] = []
     seen: dict[str, str] = {mod_id: tr("common.the_project")}
-    installed = {m.mod_id: m for m in find_mods([mods_dir], GAME_NUMBER.get(game))[0]} if mods_dir else {}
+    installed = (
+        {nested_mod.m_mod_id: nested_mod for nested_mod in find_mods([mods_dir], GAME_NUMBER.get(game))[0]}
+        if mods_dir
+        else {}
+    )
     stack = list(built.nested)
     while stack:
-        m = stack.pop(0)
-        stack = [*stack, *m.nested]
-        if m.mod_id in seen:
+        nested_mod = stack.pop(0)
+        stack = [*stack, *nested_mod.nested]
+        if nested_mod.m_mod_id in seen:
             out_problems.append(
                 tr(
                     "common.bundle_modid_also_loader_keeps",
-                    folder=m.folder.name,
-                    id=m.mod_id,
-                    other=seen[m.mod_id],
+                    folder=nested_mod.m_folder.name,
+                    id=nested_mod.m_mod_id,
+                    other=seen[nested_mod.m_mod_id],
                 )
             )
-        seen[m.mod_id] = tr("common.bundle_folder", folder=m.folder.name)
-        old = installed.get(m.mod_id)
-        if old is not None and old.version != m.version:
+        seen[nested_mod.m_mod_id] = tr("common.bundle_folder", folder=nested_mod.m_folder.name)
+        old = installed.get(nested_mod.m_mod_id)
+        if old is not None and old.m_version != nested_mod.m_version:
             out_problems.append(
                 tr(
                     "common.bundle_also_installed_loader_keeps",
-                    folder=m.folder.name,
-                    id=m.mod_id,
-                    version=m.version,
-                    installed=old.version,
+                    folder=nested_mod.m_folder.name,
+                    id=nested_mod.m_mod_id,
+                    version=nested_mod.m_version,
+                    installed=old.m_version,
                 )
             )
     return out_problems

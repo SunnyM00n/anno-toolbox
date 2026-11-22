@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from .overlay import SourceTree
+from .overlay import CSourceTree
 
 
 def decode_text_file(data: bytes) -> str:
@@ -52,7 +52,8 @@ def resolve_references(texts: dict[int, str], depth: int = 5) -> dict[int, str]:
             if "[GUIDNAME" not in text:
                 continue
             new = GUIDNAME_RE.sub(
-                lambda m, g=guid: texts.get(int(m.group(1)), "") if int(m.group(1)) != g else "", text
+                lambda match, group=guid: texts.get(int(match.group(1)), "") if int(match.group(1)) != group else "",
+                text,
             )
             if new != text:
                 texts[guid] = re.sub(r"\s{2,}", " ", new).strip()
@@ -65,11 +66,11 @@ def resolve_references(texts: dict[int, str], depth: int = 5) -> dict[int, str]:
 DEVELOPER_TEXT_FILES = ("test.txt",)  # 2070's developer strings: they fill gaps, they never replace a shipped text
 
 
-def load_texts(tree: SourceTree, language: str | None = None) -> dict[int, str]:
+def load_texts(tree: CSourceTree, language: str | None = None) -> dict[int, str]:
     """Merge every text file of a language (later files override earlier ones, developer files give way to
     all of them) and expand text references."""
-    lang = (language or tree.language).lower()
-    paths = list(tree.iter_paths(f"data/loca/{lang}/txt/", suffix=".txt"))
+    language_key = (language or tree.m_language).lower()
+    paths = list(tree.iter_paths(f"data/loca/{language_key}/txt/", suffix=".txt"))
     paths.sort(key=lambda rel: rel.rsplit("/", 1)[-1] not in DEVELOPER_TEXT_FILES)  # stable: developer files first
     merged: dict[int, str] = {}
     for rel in paths:

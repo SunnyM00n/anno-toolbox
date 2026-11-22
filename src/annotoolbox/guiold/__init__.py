@@ -1,6 +1,6 @@
 """The old interface of Anno 2070, 1404 and 1701: dialogs, templates and backgrounds read, placed, drawn and inspected.
 
-Start at ``view.OldGuiPage`` (a page of the UI editor's window); the parts, each one job:
+Start at ``view.COldGuiPage`` (a page of the UI editor's window); the parts, each one job:
 
 - ``gui2070``: the readers of the old interface's files (dialogs, templates, backgrounds, sequences, support files)
 - ``files``: the game's old interface files (dialogs, templates, backgrounds, texts, icon atlases) parsed on demand

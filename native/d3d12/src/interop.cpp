@@ -65,12 +65,19 @@ bool qrhi_create_from(uintptr_t texture, uintptr_t resource, int state) {
 }
 
 uintptr_t Texture::native() const {
+    if (!handle) throw Error("the texture was released");
+    return uintptr_t(get()->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource).pointer);
+}
+
+uintptr_t Buffer::native() const {
+    if (!handle) throw Error("the buffer was released");
     return uintptr_t(get()->getNativeObject(nvrhi::ObjectTypes::D3D12_Resource).pointer);
 }
 
 uintptr_t qrhi_buffer(uintptr_t buffer, int slot) {
     auto* b = reinterpret_cast<QRhiBufferLike*>(buffer);
     if (!b || b->resource_type() != QRHI_BUFFER) throw Error("not a QRhiBuffer");
+    if (slot < 0) throw Error("a frame slot is not negative");
     NativeBuffer n = b->native_buffer();
     if (n.slot_count <= 0) throw Error("the QRhiBuffer has no native buffer");
     const void* at = n.objects[slot % n.slot_count];
@@ -83,6 +90,7 @@ uintptr_t qrhi_buffer(uintptr_t buffer, int slot) {
 Texture* Device::wrap_texture(uintptr_t resource, const std::string& format, const std::string& kind,
                               const std::string& name) {
     auto* r = reinterpret_cast<ID3D12Resource*>(resource);
+    if (!r) throw Error("no resource to wrap as a texture");
     D3D12_RESOURCE_DESC rd = r->GetDesc();
     nvrhi::TextureDesc desc;
     desc.width = uint32_t(rd.Width);
@@ -115,6 +123,7 @@ Texture* Device::wrap_texture(uintptr_t resource, const std::string& format, con
 
 Buffer* Device::wrap_buffer(uintptr_t resource, uint32_t stride, const std::string& usage, const std::string& name) {
     auto* r = reinterpret_cast<ID3D12Resource*>(resource);
+    if (!r) throw Error("no resource to wrap as a buffer");
     D3D12_RESOURCE_DESC rd = r->GetDesc();
     nvrhi::BufferDesc desc;
     desc.byteSize = rd.Width;
@@ -136,6 +145,7 @@ Buffer* Device::wrap_buffer(uintptr_t resource, uint32_t stride, const std::stri
 
 void transitions(uintptr_t list_ptr, const std::vector<std::tuple<uintptr_t, int, int>>& items) {
     auto* list = reinterpret_cast<ID3D12GraphicsCommandList*>(list_ptr);
+    if (!list) throw Error("no command list to record into");
     std::vector<D3D12_RESOURCE_BARRIER> out;
     for (const auto& [resource, before, after] : items) {
         if (before == after) continue;

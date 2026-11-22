@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .mods import Mod, read_jsonc
+from .mods import CMod, read_jsonc
 
 ACTIVATIONS = "activations.json"
 
@@ -23,7 +23,7 @@ def read_disabled(folder: Path) -> set[str]:
     return {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
 
 
-def switched_on(found: list[Mod], roots: list[Path]) -> list[Mod]:
+def switched_on(found: list[CMod], roots: list[Path]) -> list[CMod]:
     """The mods of ``found`` that are on: those whose own mods folder does not list their ModID."""
-    disabled = {Path(r).resolve(): read_disabled(r) for r in roots}
-    return [m for m in found if m.mod_id not in disabled.get(m.home.resolve(), set())]
+    disabled = {Path(root).resolve(): read_disabled(root) for root in roots}
+    return [mod for mod in found if mod.m_mod_id not in disabled.get(mod.home.resolve(), set())]

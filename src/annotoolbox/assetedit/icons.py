@@ -1,7 +1,7 @@
 """The icons of assets, from the game's own icon files: the PNG or DDS a ``Standard/IconFilename`` names, or the tile
 of an atlas that ``icons.xml`` gives a GUID (2070, 1404, 1701), decoded once.
 
-``IconSource(read)`` takes ``read(path)`` (the game file's bytes, FileNotFoundError or KeyError without it); ``key_of``
+``CIconSource(read)`` takes ``read(path)`` (the game file's bytes, FileNotFoundError or KeyError without it); ``key_of``
 names where an asset's icon is, ``image`` decodes a key (off the window's thread: a ``QImage``), ``icon`` and ``picture``
 make the tree's small icon and the Icons tab's picture. ``use_atlases`` switches the atlas route on (docs/asset-editor.md).
 """
@@ -16,7 +16,7 @@ from PySide6.QtGui import QIcon, QImage, QPixmap
 from ..infra.i18n import tr
 from ..models import ddsdecode
 from ..sources import icons2070
-from .assetdoc import AssetDocument
+from .assetdoc import CAssetDocument
 
 SIZE = 28  # pixels: the tree row's icon
 
@@ -43,13 +43,15 @@ def decode(data: bytes, longest: int = 256) -> QImage | None:
         return image
     if data[:4] == b"DDS ":
         try:
-            dds = ddsdecode.DdsFile(data)
-            mip = next((m for m in range(dds.info.mips) if max(dds.size_of(m)) <= longest), dds.info.mips - 1)
+            dds = ddsdecode.CDdsFile(data)
+            mip = next(
+                (level for level in range(dds.m_info.mips) if max(dds.size_of(level)) <= longest), dds.m_info.mips - 1
+            )
             rgba = dds.level(mip)
-        except (ddsdecode.UnsupportedDds, ValueError, IndexError):
+        except (ddsdecode.CUnsupportedDds, ValueError, IndexError):
             return None
-        height, width = rgba.shape[:2]
-        return QImage(rgba.tobytes(), width, height, width * 4, QImage.Format.Format_RGBA8888).copy()
+        height_px, width_px = rgba.shape[:2]
+        return QImage(rgba.tobytes(), width_px, height_px, width_px * 4, QImage.Format.Format_RGBA8888).copy()
     return None
 
 
@@ -65,28 +67,28 @@ def _split_key(key: str) -> tuple[int, int]:
     return int(guid), int(position or 0)
 
 
-class IconSource:
+class CIconSource:
     def __init__(self, read: Callable[[str], bytes]) -> None:
-        self.read = read
-        self._images: dict[str, QImage | None] = {}
-        self._atlases: dict[int, icons2070.IconAtlas] = {}
-        self._refs: dict[int, list[icons2070.IconRef]] = {}
-        self.edits: dict[int, list[list[int]]] = {}  # the open change set's icons (``ChangeSet.icons``), live
+        self.m_read = read
+        self._m_images: dict[str, QImage | None] = {}
+        self._m_atlases: dict[int, icons2070.SIconAtlas] = {}
+        self._m_refs: dict[int, list[icons2070.SIconRef]] = {}
+        self.m_edits: dict[int, list[list[int]]] = {}  # the open change set's icons (``CChangeSet.m_icons``), live
 
     def use_atlases(self, atlases: dict, refs: dict) -> None:
         """The game's atlases and GUID -> icons table (``icons2070.load_icon_data``); the tree's keys follow them."""
-        self._atlases, self._refs = atlases, refs
-        self._images.clear()  # another game's pictures are not this one's
+        self._m_atlases, self._m_refs = atlases, refs
+        self._m_images.clear()  # another game's pictures are not this one's
 
     def image(self, key: str) -> QImage | None:
-        if key not in self._images:
-            self._images[key] = self._tile(*_split_key(key)) if key.startswith(ATLAS) else self._load(key)
-        return self._images[key]
+        if key not in self._m_images:
+            self._m_images[key] = self._tile(*_split_key(key)) if key.startswith(ATLAS) else self._load(key)
+        return self._m_images[key]
 
     def _load(self, path: str) -> QImage | None:
         for candidate in candidates(path):
             try:
-                found = decode(self.read(candidate))
+                found = decode(self.m_read(candidate))
             except (FileNotFoundError, KeyError, OSError):
                 continue
             if found is not None:
@@ -96,39 +98,39 @@ class IconSource:
     @property
     def editable(self) -> bool:
         """Whether the game keeps its icons in ``icons.xml`` (the atlases are known): an icon can be set."""
-        return bool(self._atlases)
+        return bool(self._m_atlases)
 
     def count_of(self, guid: int) -> int:
         """How many icons the asset's entry has (the game's, or the change set's when it adds one)."""
-        return max(len(self._refs.get(guid, ())), len(self.edits.get(guid, ())))
+        return max(len(self._m_refs.get(guid, ())), len(self.m_edits.get(guid, ())))
 
-    def ref_of(self, guid: int, position: int = 0) -> icons2070.IconRef | None:
+    def ref_of(self, guid: int, position: int = 0) -> icons2070.SIconRef | None:
         """The asset's icon number ``position``: the change set's, else the game's."""
-        edited = self.edits.get(guid, [])
+        edited = self.m_edits.get(guid, [])
         if position < len(edited) and edited[position]:
-            return icons2070.IconRef(*edited[position])
-        game = self._refs.get(guid, [])
+            return icons2070.SIconRef(*edited[position])
+        game = self._m_refs.get(guid, [])
         return game[position] if position < len(game) else None
 
     def forget(self, guid: int) -> None:
         """The asset's tiles changed: decode them again next time."""
-        for key in list(self._images):  # a copy: the tree's icon job adds pictures from its own thread
+        for key in list(self._m_images):  # a copy: the tree's icon job adds pictures from its own thread
             if key.startswith(ATLAS) and _split_key(key)[0] == guid:
-                self._images.pop(key, None)
+                self._m_images.pop(key, None)
 
     def _tile(self, guid: int, position: int) -> QImage | None:
         ref = self.ref_of(guid, position)
-        atlas = self._atlases.get(ref.file_id) if ref else None
+        atlas = self._m_atlases.get(ref.file_id) if ref else None
         sheet = self.image(atlas.path) if atlas else None
         box = icons2070.tile_box(atlas, sheet.width(), sheet.height(), ref.index) if sheet is not None else None
         return sheet.copy(*box) if box else None
 
     @staticmethod
-    def path_of(doc: AssetDocument, guid: int) -> str:
+    def path_of(doc: CAssetDocument, guid: int) -> str:
         found = doc.layers(guid).lookup(("Standard", "IconFilename")) if doc.exists(guid) else None
         return (found.text if found else "").strip()
 
-    def key_of(self, doc: AssetDocument, guid: int) -> str:
+    def key_of(self, doc: CAssetDocument, guid: int) -> str:
         """Where the asset's icon is: the file its ``Standard/IconFilename`` names, else its atlas tile; "" for none."""
         return self.key_for(guid, self.path_of(doc, guid))
 
@@ -137,7 +139,7 @@ class IconSource:
         if path:
             return path
         ref = self.ref_of(guid)
-        return atlas_key(guid) if ref is not None and ref.file_id in self._atlases else ""
+        return atlas_key(guid) if ref is not None and ref.file_id in self._m_atlases else ""
 
     @staticmethod
     def icon(image: QImage | None) -> QIcon | None:
@@ -151,7 +153,7 @@ class IconSource:
         if not key.startswith(ATLAS):
             return key
         ref = self.ref_of(*_split_key(key))
-        atlas = self._atlases.get(ref.file_id) if ref else None
+        atlas = self._m_atlases.get(ref.file_id) if ref else None
         return tr("assets.tile_index_of_path", index=ref.index, path=atlas.path) if ref and atlas else key
 
     def picture(self, key: str) -> QPixmap:

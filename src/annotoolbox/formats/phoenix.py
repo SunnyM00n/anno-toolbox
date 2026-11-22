@@ -128,69 +128,71 @@ def load_schema(path=None) -> dict:
 def full_schema(schema: dict) -> dict:
     """The schema with the types the dump lacks (``EXTRA_TYPES``, the History Editions' new types) added."""
     extra = {**EXTRA_TYPES, **_history()[1]}
-    return {**schema, **{h: r for h, r in extra.items() if h not in schema}}
+    return {**schema, **{type_hash: record for type_hash, record in extra.items() if type_hash not in schema}}
 
 
-def chain_records(schema: dict, h: str, versions: dict[str, str] | None = None) -> list[dict]:
+def chain_records(schema: dict, type_hash: str, versions: dict[str, str] | None = None) -> list[dict]:
     """The records of a type's parent chain, Object first. With layout versions (``versions``): the chain of those
     versions (``phoenixhistory.PARENTS``), and when they cover the type as a type table does (Object and the type
     itself) without the records they lack, which did not exist when the file was saved."""
     out = []
-    cur = schema.get(h)
-    while cur:
-        out.append(cur)
-        parent = phoenixhistory.PARENTS.get((cur["hash"], versions.get(cur["hash"]))) if versions else None
-        cur = schema.get(parent or cur.get("parent") or "")
+    current = schema.get(type_hash)
+    while current:
+        out.append(current)
+        parent = phoenixhistory.PARENTS.get((current["hash"], versions.get(current["hash"]))) if versions else None
+        current = schema.get(parent or current.get("parent") or "")
     out.reverse()
-    whole = versions and OBJECT in versions and h in versions
-    return [r for r in out if r["hash"] in versions] if whole else out
+    whole = versions and OBJECT in versions and type_hash in versions
+    return [record for record in out if record["hash"] in versions] if whole else out
 
 
-def type_chain(schema: dict, h: str, versions: dict[str, str] | None = None) -> list[str]:
+def type_chain(schema: dict, type_hash: str, versions: dict[str, str] | None = None) -> list[str]:
     """Record hashes of a type's parent chain, Object first (``versions``: as ``chain_records``)."""
-    return [r["hash"] for r in chain_records(schema, h, versions)]
+    return [record["hash"] for record in chain_records(schema, type_hash, versions)]
 
 
-def is_stored(f: dict) -> bool:
+def is_stored(field: dict) -> bool:
     """False for computed (offset 0), editor-only (flags 0x2000) and run-time (flag ``RUNTIME``) fields; the Object
     base bit is kept."""
-    flags = int(f["flags"], 16)
-    return int(f["code"], 16) == 0 or (f["offset"] != 0 and flags != 0x2000 and not flags & RUNTIME)
+    flags = int(field["flags"], 16)
+    return int(field["code"], 16) == 0 or (field["offset"] != 0 and flags != 0x2000 and not flags & RUNTIME)
 
 
-def stored_fields(schema: dict, h: str) -> list[tuple[dict, dict]]:
+def stored_fields(schema: dict, type_hash: str) -> list[tuple[dict, dict]]:
     """(record, field) pairs in serialization order: parent chain first, raw table order, transient fields skipped."""
-    return [(rec, f) for rec in chain_records(schema, h) for f in rec["fields"] if is_stored(f)]
+    return [
+        (record, field) for record in chain_records(schema, type_hash) for field in record["fields"] if is_stored(field)
+    ]
 
 
-_version_layouts: dict[tuple[str, str], list[dict]] | None = None
-_history_built: tuple[dict, dict] | None = None
+_g_version_layouts: dict[tuple[str, str], list[dict]] | None = None
+_g_history_built: tuple[dict, dict] | None = None
 
 
 def _history() -> tuple[dict[tuple[str, str], list[dict]], dict[str, dict]]:
     """The History Editions' layouts and new types (``phoenixhistory.build``) over this schema and 1800's."""
-    global _history_built
-    if _history_built is None:
-        schemas = [load_schema(p) for p in (SCHEMA_PATH, *VERSION_SCHEMA_PATHS) if p.is_file()]
-        _history_built = phoenixhistory.build([{**s, **EXTRA_TYPES} for s in schemas], is_stored)
-    return _history_built
+    global _g_history_built
+    if _g_history_built is None:
+        schemas = [load_schema(path) for path in (SCHEMA_PATH, *VERSION_SCHEMA_PATHS) if path.is_file()]
+        _g_history_built = phoenixhistory.build([{**schema, **EXTRA_TYPES} for schema in schemas], is_stored)
+    return _g_history_built
 
 
 def version_layouts() -> dict[tuple[str, str], list[dict]]:
     """(record hash, schema guid) -> its stored fields, from the other executables' schemas (VERSION_SCHEMA_PATHS)
     and the History Editions' layouts (``phoenixhistory``): the exact field list of a layout version the current
     schema has replaced."""
-    global _version_layouts
-    if _version_layouts is None:  # built whole before it is shared: another thread may decode meanwhile
+    global _g_version_layouts
+    if _g_version_layouts is None:  # built whole before it is shared: another thread may decode meanwhile
         built = {}
         for path in VERSION_SCHEMA_PATHS:
             if path.is_file():
-                for h, rec in load_schema(path).items():
-                    if rec.get("guid"):
-                        built[(h, rec["guid"])] = [f for f in rec["fields"] if is_stored(f)]
+                for type_hash, record in load_schema(path).items():
+                    if record.get("guid"):
+                        built[(type_hash, record["guid"])] = [field for field in record["fields"] if is_stored(field)]
         built.update(_history()[0])
-        _version_layouts = built
-    return _version_layouts
+        _g_version_layouts = built
+    return _g_version_layouts
 
 
 def with_versions(
@@ -201,48 +203,55 @@ def with_versions(
     has no fields today; records in the current or an unknown version stay."""
     known = version_layouts()
     out = []
-    for rec in chain:
-        g = guid_of.get(rec["hash"])
-        key = (rec["hash"], g)
-        alt = known.get(key) if g and g != rec.get("guid") and key not in OLD_LAYOUTS else None
-        out += [(rec, f) for f in alt] if alt is not None else [(r, f) for r, f in fields if r is rec]
+    for record in chain:
+        guid = guid_of.get(record["hash"])
+        key = (record["hash"], guid)
+        alt = known.get(key) if guid and guid != record.get("guid") and key not in OLD_LAYOUTS else None
+        out += (
+            [(record, field) for field in alt]
+            if alt is not None
+            else [(owner, field) for owner, field in fields if owner is record]
+        )
     return out
 
 
-def file_layout(schema: dict, h: str, versions: dict[str, str]) -> list[tuple[dict, dict]]:
+def file_layout(schema: dict, type_hash: str, versions: dict[str, str]) -> list[tuple[dict, dict]]:
     """The stored fields of type ``h`` in the layout versions ``versions`` names (a file's type table): the chain of
     that version, each record in its version's fields (``with_versions``) less what the version lacks
     (``versioned``). Without ``versions`` the current layout."""
-    chain = chain_records(schema, h, versions)
-    fields = [(rec, f) for rec in chain for f in rec["fields"] if is_stored(f)]
+    chain = chain_records(schema, type_hash, versions)
+    fields = [(record, field) for record in chain for field in record["fields"] if is_stored(field)]
     return versioned(with_versions(fields, versions, chain), versions) if versions else fields
 
 
-def counted(fields: list[tuple[dict, dict]], guid_of: dict[str, str], n: int) -> list[tuple[dict, dict]] | None:
+def counted(fields: list[tuple[dict, dict]], guid_of: dict[str, str], count: int) -> list[tuple[dict, dict]] | None:
     """``fields`` with the record whose version some files store with fewer fields (``phoenixhistory.COUNTED``) in
     its list for the count ``n`` the object stores, None when no record has one."""
     known = version_layouts()
-    for rec in {id(r): r for r, _ in fields}.values():
-        own = [x for x in fields if x[0] is rec]
-        alt = known.get((rec["hash"], guid_of.get(rec["hash"]), n - len(fields) + len(own)))
+    for record in {id(owner): owner for owner, _ in fields}.values():
+        own = [x for x in fields if x[0] is record]
+        alt = known.get((record["hash"], guid_of.get(record["hash"]), count - len(fields) + len(own)))
         if alt is not None and own:
             at = fields.index(own[0])
-            rest = [x for x in fields if x[0] is not rec]
-            return rest[:at] + [(rec, f) for f in alt] + rest[at:]
+            rest = [x for x in fields if x[0] is not record]
+            return rest[:at] + [(record, field) for field in alt] + rest[at:]
     return None
 
 
 def versioned(fields: list[tuple[dict, dict]], guid_of: dict[str, str]) -> list[tuple[dict, dict]]:
     """``fields`` without those the layout versions in ``guid_of`` lack (OLD_LAYOUTS)."""
     gone = set()
-    for rec in {id(r): r for r, _ in fields}.values():
-        gone |= {(rec["hash"], h) for h in OLD_LAYOUTS.get((rec["hash"], guid_of.get(rec["hash"])), ())}
-    return [(r, f) for r, f in fields if (r["hash"], f["hash"]) not in gone]
+    for record in {id(owner): owner for owner, _ in fields}.values():
+        gone |= {
+            (record["hash"], field_hash)
+            for field_hash in OLD_LAYOUTS.get((record["hash"], guid_of.get(record["hash"])), ())
+        }
+    return [(owner, field) for owner, field in fields if (owner["hash"], field["hash"]) not in gone]
 
 
 def alt_layout(fields: list[tuple[dict, dict]], spec: tuple) -> list[tuple[dict, dict]]:
     """An ALT_LAYOUTS entry as (record, field) pairs: schema field hashes, or (name, code) for gone fields."""
-    by_hash = {f["hash"]: (r, f) for r, f in fields}
+    by_hash = {field["hash"]: (owner, field) for owner, field in fields}
     leaf = fields[-1][0]
     out = [fields[0]]  # the Object base bit
     for x in spec:
@@ -259,12 +268,21 @@ def layout_versions(tables: list[list[tuple[str, str, int]]]) -> dict[str, str]:
     of the files to follow."""
     seen: dict[str, dict[str, int]] = {}
     for table in tables:
-        for h, g, count in table:
-            if (h, g) in ALT_LAYOUTS:
+        for type_hash, guid, count in table:
+            if (type_hash, guid) in ALT_LAYOUTS:
                 continue
-            seen.setdefault(h, {})
-            seen[h][g] = seen[h].get(g, 0) + max(count, 1)
-    return {h: min(c, key=lambda g, h=h, c=c: (len(OLD_LAYOUTS.get((h, g), ())), -c[g])) for h, c in seen.items()}
+            seen.setdefault(type_hash, {})
+            seen[type_hash][guid] = seen[type_hash].get(guid, 0) + max(count, 1)
+    return {
+        type_hash: min(
+            counts,
+            key=lambda guid, type_hash=type_hash, counts=counts: (
+                len(OLD_LAYOUTS.get((type_hash, guid), ())),
+                -counts[guid],
+            ),
+        )
+        for type_hash, counts in seen.items()
+    }
 
 
 # Single values
@@ -272,8 +290,8 @@ def layout_versions(tables: list[list[tuple[str, str, int]]]) -> dict[str, str]:
 
 def decode_string(raw: bytes) -> str:
     """A stored string (varint length, kind byte, UTF-8)."""
-    n, used = leb128.decode(raw)
-    return raw[used + 1 :].decode("utf-8") if n else ""
+    length, used = leb128.decode(raw)
+    return raw[used + 1 :].decode("utf-8") if length else ""
 
 
 def encode_value(code: int, value) -> bytes:
@@ -300,7 +318,7 @@ def encode_value(code: int, value) -> bytes:
     if code == 0x1900:
         return uuid.UUID(str(value)).bytes_le
     if code == 0x801:
-        return leb128.encode(len(value)) + b"".join(struct.pack("<I", v) for v in value)
+        return leb128.encode(len(value)) + b"".join(struct.pack("<I", item) for item in value)
     raise ValueError(f"no encoder for type code {code:#x}")
 
 
@@ -311,8 +329,8 @@ def value_size(code: int, raw: bytes, at: int) -> int:
     if code == 0x1000:
         return 4
     if code == 0x1700:
-        n, used = leb128.decode(raw[at:])
-        return used + (n + 1 if n else 0)
+        length, used = leb128.decode(raw[at:])
+        return used + (length + 1 if length else 0)
     if code in (0x4300, 0x4400):
         return 21 if raw[at] else 1
     raise ValueError(f"no size rule for type code {code:#x}")
@@ -324,17 +342,17 @@ def typed_values(entry: dict) -> list[tuple[int, int, bytes | dict]]:
     and the inline object, else the u32 and the plain value; the inline objects are the entry's ``objs``, so its
     bytes without them (head and gaps) are read here."""
     raw = entry["raw"] if "raw" in entry else entry["head"] + b"".join(entry.get("gaps", []))
-    n, at = leb128.decode(raw)
+    count, at = leb128.decode(raw)
     out, objs = [], iter(entry.get("objs", ()))
-    for _ in range(n):
+    for _ in range(count):
         uid, code = struct.unpack_from("<IH", raw, at)
         if code in TYPED_OBJECTS:
             out.append((uid, code, next(objs)))
             at += 14
         else:
-            size = value_size(code, raw, at + 10)
-            out.append((uid, code, raw[at + 10 : at + 10 + size]))
-            at += 10 + size
+            size_bytes = value_size(code, raw, at + 10)
+            out.append((uid, code, raw[at + 10 : at + 10 + size_bytes]))
+            at += 10 + size_bytes
     return out
 
 
@@ -345,5 +363,5 @@ def boxed(code: int, value) -> bytes:
 
 def ref_bytes(type_hash: str, guid: str | bytes) -> bytes:
     """A set asset reference (0x4300/0x4400): flag 1, the type hash, the GUID."""
-    g = guid if isinstance(guid, bytes) else uuid.UUID(guid).bytes_le
-    return b"\x01" + struct.pack("<I", int(type_hash, 16)) + g
+    guid_bytes = guid if isinstance(guid, bytes) else uuid.UUID(guid).bytes_le
+    return b"\x01" + struct.pack("<I", int(type_hash, 16)) + guid_bytes

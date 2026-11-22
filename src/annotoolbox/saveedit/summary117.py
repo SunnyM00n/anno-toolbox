@@ -1,4 +1,4 @@
-"""The summary of an Anno 117 save: version, mods, DLCs, setup, players and money, population, quests, sessions; and
+"""The summary of an Anno 117 save: version, mods, DLCs, setup, participants and money, population, quests, sessions; and
 the islands of each session read from its own document (``islands``). What each value is and where it lives:
 ``docs/save-editor.md``, "Anno 117 in detail".
 """
@@ -9,12 +9,12 @@ import struct
 
 from ..formats import filedb, storage117
 from ..infra.i18n import N_
-from .container import SaveFile
+from .container import SSaveFile
 from .records import (
-    ModEntry,
-    Section,
-    Summary,
-    Table,
+    CSummary,
+    SModEntry,
+    SSection,
+    STable,
     duration,
     goods_ref,
     guid_ref,
@@ -34,7 +34,7 @@ SESSION_STOP = "SessionEffectManager"  # the first node of a session after AreaI
 
 def _data(node, path: str) -> bytes | None:
     found = node.path(path) if node is not None else None
-    return found.data if isinstance(found, filedb.Attrib) else None
+    return found.data if isinstance(found, filedb.SAttrib) else None
 
 
 def _value(node, path: str, read=u32) -> str:
@@ -54,9 +54,9 @@ def _enum(tag) -> str:
     return str(u16(data)) if data and len(data) >= 2 else ""
 
 
-def version_rows(s: Summary, meta, top) -> None:
-    sec = s.section(N_("common.save"))
-    sec.rows += [
+def version_rows(summary: CSummary, meta, top) -> None:
+    section_node = summary.section(N_("common.save"))
+    section_node.rows += [
         (N_("common.game"), _value(meta, "CorporationVersionName", utf16)),
         (N_("saves.file_version"), _value(meta, "CorporationFileVersion")),
         (N_("saves.save_name"), _value(meta, "CorporationSaveGameName", utf16)),
@@ -67,47 +67,50 @@ def version_rows(s: Summary, meta, top) -> None:
         (N_("saves.play_time"), duration(u64(_data(top, "SavedActivePlaytime") or b""))),
         (N_("saves.money_load_list"), _value(top, "TotalMoney", i32)),
         (N_("saves.population_load_list"), _value(top, "TotalPopulation", i32)),
-        (N_("saves.modded"), _value(top, "WasModded", lambda d: d[0] if d else 0) or "0"),
+        (N_("saves.modded"), _value(top, "WasModded", lambda data: data[0] if data else 0) or "0"),
     ]
     history = top.find("SavegameHistory") if top is not None else None
     builds = [
-        (u64(_data(h, "Timestamp") or b""), _value(h, "Changelist")) for h in (history.children if history else [])
+        (u64(_data(entry, "Timestamp") or b""), _value(entry, "Changelist"))
+        for entry in (history.children if history else [])
     ]
     if builds:
-        sec.rows.append(
+        section_node.rows.append(
             (N_("saves.game_builds_saved"), f"{len(builds)}, last {builds[-1][1]} ({stamp(builds[-1][0])})")
         )
 
 
-def mods_rows(s: Summary, top) -> None:
-    info = top.find("ModActivationInfo") if top is not None else None
-    mods = info.find("Mods") if info is not None else None
+def mods_rows(summary: CSummary, top) -> None:
+    activation_info = top.find("ModActivationInfo") if top is not None else None
+    mods = activation_info.find("Mods") if activation_info is not None else None
     for entry in mods.children if mods is not None else []:
-        if isinstance(entry, filedb.Tag):
-            s.mods.append(ModEntry(_value(entry, "ModID", utf8), _value(entry, "ModVersion", utf8)))
-    table = Table([N_("mods.mod"), N_("common.version")], [[m.mod_id, m.version] for m in s.mods])
-    sec = Section(N_("common.mods"), table=table)
-    options = info.find("Options") if info is not None else None
+        if isinstance(entry, filedb.STag):
+            summary.m_mods.append(SModEntry(_value(entry, "ModID", utf8), _value(entry, "ModVersion", utf8)))
+    table = STable([N_("mods.mod"), N_("common.version")], [[mod.mod_id, mod.version] for mod in summary.m_mods])
+    section_node = SSection(N_("common.mods"), table=table)
+    options = activation_info.find("Options") if activation_info is not None else None
     for entry in options.children if options is not None else []:
-        if isinstance(entry, filedb.Tag):
-            sec.rows.append((N_("saves.option"), f"{_value(entry, 'Option', utf8)} = {_value(entry, 'Value', utf8)}"))
-    s.sections.append(sec)
+        if isinstance(entry, filedb.STag):
+            section_node.rows.append(
+                (N_("saves.option"), f"{_value(entry, 'Option', utf8)} = {_value(entry, 'Value', utf8)}")
+            )
+    summary.m_sections.append(section_node)
     dlcs = top.find("ActiveDLCs") if top is not None else None
     found = dlcs.findall("DLC") if dlcs is not None else []
-    guids = [u32(a.data) for a in found if isinstance(a, filedb.Attrib)]
-    s.section(N_("common.save")).rows.append((N_("saves.dlcs"), guid_ref(*guids) if guids else "-"))
+    guids = [u32(attrib.data) for attrib in found if isinstance(attrib, filedb.SAttrib)]
+    summary.section(N_("common.save")).rows.append((N_("saves.dlcs"), guid_ref(*guids) if guids else "-"))
 
 
-def setup_rows(s: Summary, top) -> None:
-    sec = s.section(N_("mods.game_setup"))
-    sec.rows += [
+def setup_rows(summary: CSummary, top) -> None:
+    section_node = summary.section(N_("mods.game_setup"))
+    section_node.rows += [
         (N_("saves.difficulty_preset"), _guid(top, "DifficultyPreset")),
         (N_("saves.seed"), _value(top, "GameSeed")),
         (N_("saves.start_province"), _guid(top, "DefaultStartProvince")),
     ]
     for child in top.children if top is not None else []:
-        if isinstance(child, filedb.Tag) and child.name.startswith("Setup") and child.find("value") is not None:
-            sec.named.append((child.name, option_ref(child.name, _enum(child))))
+        if isinstance(child, filedb.STag) and child.name.startswith("Setup") and child.find("value") is not None:
+            section_node.named.append((child.name, option_ref(child.name, _enum(child))))
 
 
 def money_by_participant(data_root) -> dict[int, int]:
@@ -126,7 +129,7 @@ def _per_participant(node) -> dict[int, object]:
     """A ``Data`` map of the meta managers: a participant GUID, then its ``#1`` record."""
     out, key = {}, None
     for child in node.children if node is not None else []:
-        if isinstance(child, filedb.Attrib):
+        if isinstance(child, filedb.SAttrib):
             key = u32(child.data)
         elif key is not None:
             out[key] = child
@@ -134,8 +137,8 @@ def _per_participant(node) -> dict[int, object]:
     return out
 
 
-def _players(s: Summary, top, data_root) -> None:
-    table = Table(
+def _participants(summary: CSummary, top, data_root) -> None:
+    table = STable(
         [
             N_("saves.slot"),
             N_("saves.company"),
@@ -152,10 +155,10 @@ def _players(s: Summary, top, data_root) -> None:
             _value(slot, "CompanyName", utf8), _guid(slot, "ColorGuid"), _guid(slot, "LogoGuid"),
             _guid(slot, "PortraitGuid"), _guid(slot, "SecondPartyProfile"),
         ])  # fmt: skip
-    s.sections.append(Section(N_("saves.players"), table=table))
+    summary.m_sections.append(SSection(N_("saves.players"), table=table))
     money = money_by_participant(data_root)
     population = _per_participant(data_root.path("MetaGameManager/PopulationManager/MaxReachedPopulationCount/Data"))
-    people = Table(
+    people = STable(
         [
             N_("saves.participant"),
             N_("saves.money"),
@@ -174,7 +177,7 @@ def _players(s: Summary, top, data_root) -> None:
                 goods_ref(held.get(guid, [])),
             ]  # fmt: skip
         )
-    s.sections.append(Section(N_("saves.participants"), table=people))
+    summary.m_sections.append(SSection(N_("saves.participants"), table=people))
 
 
 def meta_goods(data_root) -> dict[int, list[tuple[int, int]]]:
@@ -184,12 +187,12 @@ def meta_goods(data_root) -> dict[int, list[tuple[int, int]]]:
     for pair in economy.findall("Pair") if economy is not None else []:
         storage = pair.path("MetaEconomy/StrgLrg")
         guid = _data(pair, "ParticipantGUID")
-        if isinstance(storage, filedb.Attrib) and guid and len(guid) >= 4:
+        if isinstance(storage, filedb.SAttrib) and guid and len(guid) >= 4:
             try:
                 goods = storage117.decode(storage.name, storage.data)
-            except storage117.StorageError:
+            except storage117.CStorageError:
                 continue
-            out[u32(guid)] = [(g, n) for g, n in goods if g != storage117.MONEY_GOOD]
+            out[u32(guid)] = [(good, amount) for good, amount in goods if good != storage117.MONEY_GOOD]
     return out
 
 
@@ -197,15 +200,15 @@ def _reached(record) -> int | None:
     """``MaxReachedPopulationCount``: pairs of a population level's GUID and a float count, summed."""
     if record is None:
         return None
-    values = [a.data for a in record.children if isinstance(a, filedb.Attrib)]
-    return round(sum(struct.unpack("<f", v)[0] for v in values[1::2] if len(v) == 4))
+    values = [attrib.data for attrib in record.children if isinstance(attrib, filedb.SAttrib)]
+    return round(sum(struct.unpack("<f", value)[0] for value in values[1::2] if len(value) == 4))
 
 
-def _quests(s: Summary, data_root) -> None:
+def _quests(summary: CSummary, data_root) -> None:
     quests = data_root.path("MetaGameManager/QuestManager")
     if quests is None:
         return
-    table = Table(
+    table = STable(
         [N_("saves.participant"), N_("saves.quest_log_entries"), N_("saves.quests_started"), N_("saves.quests_ended")]
     )
     entries = _per_participant(quests.path("QuestEntryHandler/QuestEntries/Data"))
@@ -219,12 +222,12 @@ def _quests(s: Summary, data_root) -> None:
             guid_ref(guid), str(len(log.children)) if log is not None else "",
             str(len(created.children)) if created is not None else "", str(len(ended.children)) if ended is not None else "",
         ])  # fmt: skip
-    sec = Section(N_("saves.quests"), table=table)
+    section_node = SSection(N_("saves.quests"), table=table)
     campaign = quests.find("CampaignHandler")
     if campaign is not None:
         progress = _data(campaign, "CampaignProgress")
         solved = campaign.find("SolvedComponentGUIDs")
-        sec.rows += [
+        section_node.rows += [
             (N_("saves.campaign_chapter"), _value(campaign, "ActiveChapter/id", u16)),
             (
                 N_("saves.campaign_progress"),
@@ -232,7 +235,7 @@ def _quests(s: Summary, data_root) -> None:
             ),
             (N_("saves.campaign_steps_solved"), str(len(solved.children)) if solved is not None else ""),
         ]
-    s.sections.append(sec)
+    summary.m_sections.append(section_node)
 
 
 def session_entries(data_root) -> list[tuple[int, object]]:
@@ -240,8 +243,8 @@ def session_entries(data_root) -> list[tuple[int, object]]:
     return list(_per_participant(data_root.path("MetaGameManager/GameSessions")).items())
 
 
-def _sessions(s: Summary, data_root) -> None:
-    table = Table(
+def _sessions(summary: CSummary, data_root) -> None:
+    table = STable(
         [N_("islands.session"), N_("saves.map_template_type"), N_("saves.seed"), N_("saves.session_document_bytes")]
     )
     for guid, entry in session_entries(data_root):
@@ -249,82 +252,82 @@ def _sessions(s: Summary, data_root) -> None:
         desc = entry.find("SessionDesc")
         table.rows.append([guid_ref(guid), _guid(desc, "MapGeneratorSettings/MapTemplateType"),
                            _value(desc, "MapGeneratorSettings/RandomSeed"), f"{len(blob):,}"])  # fmt: skip
-    s.sections.append(Section(N_("saves.sessions"), table=table))
+    summary.m_sections.append(SSection(N_("saves.sessions"), table=table))
 
 
-def summarize(save: SaveFile) -> Summary:
+def summarize(save: SSaveFile) -> CSummary:
     """The summary without the sessions' own documents (fast; ``islands`` reads those)."""
-    s = Summary(save.game)
+    summary = CSummary(save.game)
     meta = save.part("meta.a7s").tree() if save.part("meta.a7s") else None
     header = save.part("header.a7s").tree() if save.part("header.a7s") else None
     top = header.find("CorporationProfile") if header is not None else None
     data_root = save.part("data.a7s").tree()
-    if not isinstance(data_root, filedb.Tag):  # a damaged part: the header's rows are still the save's
-        s.note(N_("saves.world_state_not_read"))
-        data_root = filedb.Tag("")
-    version_rows(s, meta, top)
-    mods_rows(s, top)
-    setup_rows(s, top)
-    _players(s, top, data_root)
-    _quests(s, data_root)
-    _sessions(s, data_root)
+    if not isinstance(data_root, filedb.STag):  # a damaged part: the header's rows are still the save's
+        summary.note(N_("saves.world_state_not_read"))
+        data_root = filedb.STag("")
+    version_rows(summary, meta, top)
+    mods_rows(summary, top)
+    setup_rows(summary, top)
+    _participants(summary, top, data_root)
+    _quests(summary, data_root)
+    _sessions(summary, data_root)
     if top is None:
-        s.note(N_("saves.save_no_readable_header_only"))
-    return s
+        summary.note(N_("saves.save_no_readable_header_only"))
+    return summary
 
 
 # The islands of a session (its own document, scanned only as far as the islands)
 
 
-def _island_spans(doc: bytes) -> filedb.Span | None:
-    def done(attr: filedb.Span) -> bool:
-        node = attr
-        while node.parent is not None and node.parent.name != "GameSessionManager":
-            node = node.parent
-        return node.name == SESSION_STOP
+def _island_spans(document: bytes) -> filedb.CSpan | None:
+    def done(span: filedb.CSpan) -> bool:
+        node = span
+        while node.m_parent is not None and node.m_parent.m_name != "GameSessionManager":
+            node = node.m_parent
+        return node.m_name == SESSION_STOP
 
-    return filedb.scan(doc, stop=done).find("GameSessionManager")
+    return filedb.scan(document, stop=done).find("GameSessionManager")
 
 
-def _city(doc: bytes, node: filedb.Span | None) -> object:
+def _city(document: bytes, node: filedb.CSpan | None) -> object:
     """``CityNameGuid``: an 8-byte text id (the name's line in the game's texts)."""
-    data = node.value(doc) if node is not None else b""
+    data = node.value(document) if node is not None else b""
     return text_ref(str(struct.unpack("<q", data)[0])) if len(data) == 8 else ""
 
 
-def _stock(doc: bytes, node: filedb.Span | None) -> object:
+def _stock(document: bytes, node: filedb.CSpan | None) -> object:
     """The goods of the ``StrgLrg`` or ``StrgSmll`` below ``node`` (its stock), "" when it has none or none reads."""
     for name in (storage117.LARGE, storage117.SMALL):
         found = node.find(name) if node is not None else None
         if found is not None:
             try:
-                return goods_ref(storage117.decode(name, found.value(doc)))
-            except storage117.StorageError:
+                return goods_ref(storage117.decode(name, found.value(document)))
+            except storage117.CStorageError:
                 return ""
     return ""
 
 
-def _area_rows(doc: bytes, manager: filedb.Span, session: int) -> list[list]:
+def _area_rows(document: bytes, manager: filedb.CSpan, session: int) -> list[list]:
     rows, key = [], ""
-    info = manager.find("AreaInfo")
-    for child in info.children if info is not None else []:
-        if not child.is_tag:
-            key = child.value(doc).hex()
+    area_info = manager.find("AreaInfo")
+    for child in area_info.m_children if area_info is not None else []:
+        if not child.m_is_tag:
+            key = child.value(document).hex()
             continue
         owner = child.find("OwnerProfile")
         trends = child.path("AreaEconomy/StorageTrends")
-        goods = [c for c in trends.children if not c.is_tag] if trends is not None else []
+        goods = [good for good in trends.m_children if not good.m_is_tag] if trends is not None else []
         rows.append([
-            guid_ref(session), key, guid_ref(u32(owner.value(doc))) if owner is not None else "",
-            _city(doc, child.find("CityNameGuid")), str(len(goods)),
-            _stock(doc, child.find("AreaEconomy")), _stock(doc, child.path("AreaEconomy/TradeStorage")),
+            guid_ref(session), key, guid_ref(u32(owner.value(document))) if owner is not None else "",
+            _city(document, child.find("CityNameGuid")), str(len(goods)),
+            _stock(document, child.find("AreaEconomy")), _stock(document, child.path("AreaEconomy/TradeStorage")),
         ])  # fmt: skip
     return rows
 
 
-def islands(save: SaveFile, say=lambda _t, **_p: None) -> Section:
+def islands(save: SSaveFile, say=lambda _text, **_values: None) -> SSection:
     """Per session: its map template and every island area with its owner and the goods its storage tracks."""
-    table = Table(
+    table = STable(
         [
             N_("islands.session"),
             N_("saves.area"),
@@ -335,18 +338,18 @@ def islands(save: SaveFile, say=lambda _t, **_p: None) -> Section:
             N_("saves.trade_storage"),
         ]
     )
-    sec = Section(N_("common.islands"), table=table)
+    section_node = SSection(N_("common.islands"), table=table)
     data_root = save.part("data.a7s").tree()
-    for guid, entry in session_entries(data_root) if isinstance(data_root, filedb.Tag) else []:
+    for guid, entry in session_entries(data_root) if isinstance(data_root, filedb.STag) else []:
         say(N_("saves.reading_session_guid"), guid=guid)
-        doc = _data(entry, "SessionData/BinaryData") or b""
-        if filedb.version(doc) != 3:
+        document = _data(entry, "SessionData/BinaryData") or b""
+        if filedb.version(document) != 3:
             continue
-        manager = _island_spans(doc)
+        manager = _island_spans(document)
         if manager is None:
             continue
         template = manager.path("MapTemplate/Filename")
         if template is not None:
-            sec.rows.append((N_("saves.map_template"), f"{guid}: {utf16(template.value(doc))}"))
-        table.rows += _area_rows(doc, manager, guid)
-    return sec
+            section_node.rows.append((N_("saves.map_template"), f"{guid}: {utf16(template.value(document))}"))
+        table.rows += _area_rows(document, manager, guid)
+    return section_node

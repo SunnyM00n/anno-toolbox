@@ -31,7 +31,7 @@ LODS = 5
 
 
 @dataclass(frozen=True)
-class Look:
+class SLook:
     """The target's ground material a model is drawn with: its file and its three maps (as the material names them)."""
 
     material: str
@@ -41,7 +41,7 @@ class Look:
 
 
 @dataclass
-class Reskinned:
+class SReskinned:
     files: dict[str, bytes] = field(default_factory=dict)  # game path -> bytes, for the target game's mod
     table: dict[str, str] = field(default_factory=dict)  # source prop file (normalised) -> the target game's new one
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (prop file, why it was left to the prop table)
@@ -60,32 +60,34 @@ def family_of(path: str) -> str | None:
         return None
     if layer == "mud_decal":
         return "soil"
-    if layer == "rocks" or shape in ROCK_SHAPES or any(w in low for w in ROCK_WORDS):
+    if layer == "rocks" or shape in ROCK_SHAPES or any(word in low for word in ROCK_WORDS):
         return "rock"
     return None
 
 
-def look_of(material_text: str, file: str) -> Look | None:
+def look_of(material_text: str, file: str) -> SLook | None:
     """A ground material file's maps; None when it names no diffuse map."""
     found = {}
     for key, tag in MAPS.items():
-        m = re.search(rf"<{tag}>([^<]*)</(?:{tag})?>", material_text)
-        found[key] = m[1].replace("\\", "/") if m else ""
-    return Look(file, **found) if found["diffuse"] else None
+        match = re.search(rf"<{tag}>([^<]*)</(?:{tag})?>", material_text)
+        found[key] = match[1].replace("\\", "/") if match else ""
+    return SLook(file, **found) if found["diffuse"] else None
 
 
-def candidates(dst_text: str, family: str) -> list[regiontables.Material]:
+def candidates(target_text: str, family: str) -> list[regiontables.SMaterial]:
     """The target set's materials of a family (its fallback families when it has none), in the set's list order."""
-    return regiontables.family_candidates(family, [m for m in regiontables.set_materials(dst_text) if m.file])
+    return regiontables.family_candidates(
+        family, [material for material in regiontables.set_materials(target_text) if material.file]
+    )
 
 
-def pick(options: list, k: int):
+def pick(options: list, rank: int):
     """The ``k``-th prop of a kind takes the ``k``-th option round (the rule of the prop table): the most used prop
     gets the first material, the next the second, and so on [I: our own rule, there is no 2070 or studio rule]."""
-    return options[k % len(options)] if options else None
+    return options[rank % len(options)] if options else None
 
 
-def retexture(text: str, look: Look) -> str:
+def retexture(text: str, look: SLook) -> str:
     """A prop or model file with its diffuse, normal and height maps the material's; the maps that name an engine
     default, and every other map (metal, ambient occlusion, splat, wind), stay."""
 
@@ -126,7 +128,7 @@ def _copy_meshes(read: Callable[[str], bytes], exists: Callable[[str], bool], me
     return new
 
 
-def cfg_from_prop(text: str, mesh: str, raw_mesh: bytes, look: Look, levels: int) -> str | None:
+def cfg_from_prop(text: str, mesh: str, raw_mesh: bytes, look: SLook, levels: int) -> str | None:
     """117's model config for an 1800 ``.prp`` (its layout is in the file), by the extension that writes them
     (``modelreskin.model_cfg``); None where there is none or the layout is not drawn."""
     layout = re.search(r"<VertexFormat>([^<]*)</", text)
@@ -134,18 +136,18 @@ def cfg_from_prop(text: str, mesh: str, raw_mesh: bytes, look: Look, levels: int
     return hook.model_cfg(raw_mesh, layout[1] if layout else "", mesh, look, levels) if hook else None
 
 
-def model_look(read: Callable[[str], bytes], set_text: str, name: str) -> tuple[Look | None, str]:
+def model_look(read: Callable[[str], bytes], set_text: str, name: str) -> tuple[SLook | None, str]:
     """The look a single model ``name`` (a file name) gets from a game's material set (``set_text``): the first material
     of its ground family, ``read`` giving the material's file; and why there is none ("": there is one)."""
-    fam = family_of(name)
-    if fam is None:
+    family = family_of(name)
+    if family is None:
         return None, "it is not a ground model (a rock, cliff or decal)"
-    options = candidates(set_text, fam)
+    options = candidates(set_text, family)
     found = look_of(read(options[0].file).decode("utf-8", "ignore"), options[0].file) if options else None
     return found, "" if found else "the material set has no such material"
 
 
-def prop_from_cfg(template: str, mesh: str, look: Look) -> str:
+def prop_from_cfg(template: str, mesh: str, look: SLook) -> str:
     """1800's ``.prp`` for a 117 model: a vanilla prop of the target region (``template``) with the model's mesh and the
     look's maps."""
     swapped = re.sub(r"<MeshFileName>[^<]*</>", f"<MeshFileName>{mesh}</>", template, count=1)
@@ -161,7 +163,7 @@ def _first_model(text: str) -> tuple[str, str]:
 
 
 @dataclass(frozen=True)
-class Side:
+class SSide:
     """One game of a port as the reskin reads it: its key, ``read`` and ``exists`` of its files, its prop template."""
 
     key: str
@@ -170,59 +172,65 @@ class Side:
 
 
 def plan(
-    src: Side,
-    dst: Side,
+    source_side: SSide,
+    target_side: SSide,
     wanted: Counter,
-    dst_set: str,
+    target_set: str,
     template: Callable[[], str] = lambda: "",
-) -> Reskinned:
+) -> SReskinned:
     """Reskin every prop file in ``wanted`` (normalised file -> instances; the ones a port would remove or keep as they
     are) that is part of the ground: its model written for the target game with the target set's materials, the
     material by ``pick``. ``template``: a vanilla ``.prp`` of the target region (1800 as target). What cannot be done
     is in ``skipped`` with its reason, and stays with the prop table."""
-    out = Reskinned()
+    out = SReskinned()
     groups: dict[str, list[str]] = {}
     for key, _n in sorted(wanted.items(), key=lambda kn: (-kn[1], kn[0])):
-        if (fam := family_of(key)) is None:
+        if (family := family_of(key)) is None:
             continue
-        groups.setdefault(fam, []).append(key)
-    for fam, keys in groups.items():
-        options = candidates(dst_set, fam)
-        for k, key in enumerate(keys):
-            mat = pick(options, k)
-            look = look_of(dst.read(mat.file).decode("utf-8", "ignore"), mat.file) if mat is not None else None
+        groups.setdefault(family, []).append(key)
+    for family, keys in groups.items():
+        options = candidates(target_set, family)
+        for rank, key in enumerate(keys):
+            material = pick(options, rank)
+            look = (
+                look_of(target_side.read(material.file).decode("utf-8", "ignore"), material.file)
+                if material is not None
+                else None
+            )
             why = (
-                _one(src, dst, key, look, out, template) if look is not None else "the target set has no such material"
+                _one(source_side, target_side, key, look, out, template)
+                if look is not None
+                else "the target set has no such material"
             )
             if why:
                 out.skipped.append((key, why))
     return out
 
 
-def _one(src: Side, dst: Side, key: str, look: Look, out: Reskinned, template) -> str:
+def _one(source_side: SSide, target_side: SSide, key: str, look: SLook, out: SReskinned, template) -> str:
     """Reskin one prop file into ``out``; returns why it could not be (""): the reason names the layout or file."""
     try:
-        text = src.read(key).decode("utf-8", "ignore")
+        text = source_side.read(key).decode("utf-8", "ignore")
     except (KeyError, OSError):
         return "the source game has no such file"
-    if src.key == dst.key:
-        path = moved(key, src.key)
+    if source_side.key == target_side.key:
+        path = moved(key, source_side.key)
         out.files[path] = retexture(text, look).encode("utf-8")
         out.table[key] = path
         return ""
-    if src.key == "anno1800":  # a .prp into 117's config
+    if source_side.key == "anno1800":  # a .prp into 117's config
         mesh = re.search(r"<MeshFileName>([^<]*)</", text)
         copies: dict[str, bytes] = {}
-        new = _copy_meshes(src.read, src.exists, mesh[1], src.key, copies) if mesh else ""
+        new = _copy_meshes(source_side.read, source_side.exists, mesh[1], source_side.key, copies) if mesh else ""
         if not new:
             return "its mesh is not in the source game"
         layout = re.search(r"<VertexFormat>([^<]*)</", text)
         if not features.extensions(features.MODEL_OPTIONS):
             return "this edition does not write 117's model configs"
-        cfg = cfg_from_prop(text, new, copies[new], look, 1 + sum(1 for p in copies if p != new))
+        cfg = cfg_from_prop(text, new, copies[new], look, 1 + sum(1 for mesh_path in copies if mesh_path != new))
         if cfg is None:
             return f"its mesh layout is {layout[1] if layout else 'not given'}, not {STATIC_FORMAT}, which 117 draws"
-        path = moved(key, src.key).rsplit(".", 1)[0] + ".cfg"
+        path = moved(key, source_side.key).rsplit(".", 1)[0] + ".cfg"
         out.files.update(copies)
         out.files[path] = cfg.encode("utf-8")
         out.table[key] = path
@@ -230,16 +238,16 @@ def _one(src: Side, dst: Side, key: str, look: Look, out: Reskinned, template) -
     name, layout = _first_model(text)  # a 117 config into 1800's .prp
     if layout != STATIC_FORMAT:
         return f"its mesh layout is {layout or 'not given'}, not {STATIC_FORMAT}"
-    proto = template()
-    if not proto:
+    prototype = template()
+    if not prototype:
         return "the target region has no vanilla rock prop to copy the file from"
     copies = {}
-    new = _copy_meshes(src.read, src.exists, name, src.key, copies)
+    new = _copy_meshes(source_side.read, source_side.exists, name, source_side.key, copies)
     if not new:
         return "its mesh is not in the source game"
-    path = moved(key, src.key).rsplit(".", 1)[0] + ".prp"
+    path = moved(key, source_side.key).rsplit(".", 1)[0] + ".prp"
     out.files.update(copies)
-    out.files[path] = prop_from_cfg(proto, new, look).encode("utf-8")
+    out.files[path] = prop_from_cfg(prototype, new, look).encode("utf-8")
     out.table[key] = path
     return ""
 
@@ -252,42 +260,48 @@ def wanted_props(
     the ones only the source region's islands place that no table entry takes."""
     names = regiontables.prop_files(rd)
     used: Counter = Counter()
-    inst = rd.path("PropGrid/Instances")
-    for p in inst.children if inst is not None else []:
-        index = p.find("Index") if hasattr(p, "find") else None
+    instances = rd.path("PropGrid/Instances")
+    for prop in instances.children if instances is not None else []:
+        index = prop.find("Index") if hasattr(prop, "find") else None
         if index is not None and (i := struct.unpack_from("<I", index.data)[0]) < len(names):
             used[regiontables.norm(names[i])] += 1
     found: Counter = Counter()
-    for key, n in used.items():
+    for key, instance_count in used.items():
         if key in table:
             if table[key] is None:
-                found[key] = n
+                found[key] = instance_count
         elif other_game and exists is not None and not exists(key):
-            found[key] = n
+            found[key] = instance_count
         elif not other_game and key in own_only:
-            found[key] = n
+            found[key] = instance_count
     return found
 
 
 NOT_RESKINNED = "not reskinned"
 
 
-def for_port(src, dst, rd, tables, own, target, dst_set: str, ledger=None) -> Reskinned:
-    """The reskin of one port (``src`` / ``dst``: ``islandconvert.GameSide``; ``rd``: the source island's render data;
+def for_port(source_side, target_side, rd, tables, own, target, target_set: str, ledger=None) -> SReskinned:
+    """The reskin of one port (``source_side`` / ``target_side``: ``islandconvert.CGameSide``; ``rd``: the source island's render data;
     ``own`` / ``target``: the two regions): ``tables.props`` takes the new files, the result carries them for the mod.
     What cannot be reskinned is named in ``ledger`` with the reason."""
-    other = src.key != dst.key
-    own_only = set(src.inventory(own).props) - set(dst.inventory(target).props)
-    wanted = wanted_props(rd, tables.props, own_only, dst.files.exists if other else None, other)
+    other = source_side.m_key != target_side.m_key
+    own_only = set(source_side.inventory(own).props) - set(target_side.inventory(target).props)
+    wanted = wanted_props(rd, tables.props, own_only, target_side.m_files.exists if other else None, other)
 
     def template() -> str:
         rocks = (
-            p for p in dst.inventory(target).props if p.endswith(".prp") and regiontables.prop_kind(p)[0] == "rocks"
+            prop
+            for prop in target_side.inventory(target).props
+            if prop.endswith(".prp") and regiontables.prop_kind(prop)[0] == "rocks"
         )
-        return dst.text(next(iter(sorted(rocks)), ""))
+        return target_side.text(next(iter(sorted(rocks)), ""))
 
     found = plan(
-        Side(src.key, src.read, src.files.exists), Side(dst.key, dst.read, dst.files.exists), wanted, dst_set, template
+        SSide(source_side.m_key, source_side.read, source_side.m_files.exists),
+        SSide(target_side.m_key, target_side.read, target_side.m_files.exists),
+        wanted,
+        target_set,
+        template,
     )
     tables.props.update(found.table)
     for key, why in found.skipped if ledger is not None else []:

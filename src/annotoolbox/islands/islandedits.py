@@ -25,6 +25,7 @@ from .islandgrid import (
     AREA_NONE,
     HEIGHT_UNITS,
     cell_key,
+    parse_pair,
     read_bits,
     read_sparse,
     warn_unmatched,
@@ -86,81 +87,84 @@ def _yaw(rotation) -> float:
     return -2.0 * math.atan2(y, w)
 
 
-def _scale(s):
-    return tuple(map(float, s)) if isinstance(s, list) else float(s)
+def _scale(value):
+    return tuple(map(float, value)) if isinstance(value, list) else float(value)
 
 
-def _set_mesh_attr(obj: filedb.Tag, name: str, data: bytes, default: bytes) -> None:
+def _set_mesh_attribute(object_tag: filedb.STag, name: str, data: bytes, default: bytes) -> None:
     """Set ``Mesh/<name>``; an object that stores none (1800's, at the default) gets one only for another value."""
-    attr = obj.path(f"Mesh/{name}")
-    if attr is not None:
-        attr.data = data
+    attribute = object_tag.path(f"Mesh/{name}")
+    if attribute is not None:
+        attribute.data = data
     elif data != default:
-        mesh = obj.find("Mesh")
+        mesh = object_tag.find("Mesh")
         if mesh is None:
-            mesh = filedb.Tag("Mesh", [])
-            obj.children.append(mesh)
-        mesh.children.append(filedb.Attrib(name, data))
+            mesh = filedb.STag("Mesh", [])
+            object_tag.children.append(mesh)
+        mesh.children.append(filedb.SAttrib(name, data))
 
 
-def _heading(obj: filedb.Tag) -> float:
+def _heading(object_tag: filedb.STag) -> float:
     """The turn an object stands at: its ``Direction``, else its orientation's turn."""
-    if obj.find("Direction") is not None:
-        return struct.unpack("<f", obj.find("Direction").data)[0]
-    orient = obj.path("Mesh/Orientation")
+    if object_tag.find("Direction") is not None:
+        return struct.unpack("<f", object_tag.find("Direction").data)[0]
+    orient = object_tag.path("Mesh/Orientation")
     return _yaw(struct.unpack("<4f", orient.data)) if orient is not None else 0.0
 
 
-def set_object(obj: filedb.Tag, change: dict) -> None:
+def set_object(object_tag: filedb.STag, change: dict) -> None:
     """Apply an object edit (``position`` / ``rotation`` / ``scale``) to a placed object; a path it has (a work area
     slot's outline) moves and turns with it."""
-    place = obj.find("Position")
-    had = (struct.unpack("<3f", place.data), _heading(obj)) if place is not None else None
-    _write_pose(obj, change)
+    place = object_tag.find("Position")
+    had = (struct.unpack("<3f", place.data), _heading(object_tag)) if place is not None else None
+    _write_pose(object_tag, change)
     if had is not None:
-        now = (struct.unpack("<3f", place.data), _heading(obj))
+        now = (struct.unpack("<3f", place.data), _heading(object_tag))
         if had != now:
-            objectpath.follow(obj, had[0], now[0], now[1] - had[1])
+            objectpath.follow(object_tag, had[0], now[0], now[1] - had[1])
 
 
-def _write_pose(obj: filedb.Tag, change: dict) -> None:
+def _write_pose(object_tag: filedb.STag, change: dict) -> None:
     if "position" in change:
-        obj.find("Position").data = struct.pack("<3f", *map(float, change["position"]))
-    if obj.path("Prop/Rotation") is not None:  # an object of the Prop group keeps its transform there as well
-        _set_prop_object(obj, change)
+        object_tag.find("Position").data = struct.pack("<3f", *map(float, change["position"]))
+    if object_tag.path("Prop/Rotation") is not None:  # an object of the Prop group keeps its transform there as well
+        _set_prop_object(object_tag, change)
         return
     if "rotation" in change:
-        _set_mesh_attr(
-            obj, "Orientation", struct.pack("<4f", *map(float, change["rotation"])), struct.pack("<4f", 0, 0, 0, 1)
+        _set_mesh_attribute(
+            object_tag,
+            "Orientation",
+            struct.pack("<4f", *map(float, change["rotation"])),
+            struct.pack("<4f", 0, 0, 0, 1),
         )
-        if obj.find("Direction") is not None:
-            obj.find("Direction").data = struct.pack("<f", _yaw(change["rotation"]) % (2 * math.pi))
+        if object_tag.find("Direction") is not None:
+            object_tag.find("Direction").data = struct.pack("<f", _yaw(change["rotation"]) % (2 * math.pi))
     if "scale" in change:
-        _set_mesh_attr(obj, "Scale", struct.pack("<f", float(change["scale"])), struct.pack("<f", 1.0))
+        _set_mesh_attribute(object_tag, "Scale", struct.pack("<f", float(change["scale"])), struct.pack("<f", 1.0))
 
 
-def _set_prop_object(obj: filedb.Tag, change: dict) -> None:
+def _set_prop_object(object_tag: filedb.STag, change: dict) -> None:
     """An object of the Prop group (1800): its ``Prop`` block holds the place, the turn and a scale per axis."""
-    prop = obj.find("Prop")
+    prop = object_tag.find("Prop")
     if "position" in change and prop.find("Position") is not None:
-        prop.find("Position").data = obj.find("Position").data
+        prop.find("Position").data = object_tag.find("Position").data
     if "rotation" in change:
         prop.find("Rotation").data = struct.pack("<4f", *map(float, change["rotation"]))
-        if obj.find("Direction") is not None:
-            obj.find("Direction").data = struct.pack("<f", _yaw(change["rotation"]) % (2 * math.pi))
+        if object_tag.find("Direction") is not None:
+            object_tag.find("Direction").data = struct.pack("<f", _yaw(change["rotation"]) % (2 * math.pi))
     if "scale" in change and prop.find("Scale") is not None:
-        s = _scale(change["scale"])
-        prop.find("Scale").data = struct.pack("<3f", *(s if isinstance(s, tuple) else (s,) * 3))
+        scale = _scale(change["scale"])
+        prop.find("Scale").data = struct.pack("<3f", *(scale if isinstance(scale, tuple) else (scale,) * 3))
 
 
-def object_name(o: filedb.Tag) -> str | None:
+def object_name(object_tag: filedb.STag) -> str | None:
     """What names a placed object in the edit file: its model config, or ``guid:<asset>`` for one
     that draws its asset's model or none (slots, markers, herds)."""
-    cfg = o.path("DynamicVariation/ConfigFilename")
+    cfg = object_tag.path("DynamicVariation/ConfigFilename")
     if cfg is not None:
         return cfg.data.decode("utf-16-le")
-    g = o.find("guid")
-    return f"guid:{struct.unpack_from('<I', g.data)[0]}" if g is not None else None
+    guid_tag = object_tag.find("guid")
+    return f"guid:{struct.unpack_from('<I', guid_tag.data)[0]}" if guid_tag is not None else None
 
 
 def _objects(builder):
@@ -168,11 +172,15 @@ def _objects(builder):
     more groups names them (``object_groups``: 1800's natural presets and props)."""
     for _, doc, _ in builder._areas_data():
         for group in getattr(builder, "object_groups", ("GameObject", "EditorObject")):
-            objs = area_objects(doc, group)
-            for o in list(objs.children) if objs is not None else []:
-                name = object_name(o) if isinstance(o, filedb.Tag) and o.find("Position") is not None else None
+            object_list = area_objects(doc, group)
+            for object_tag in list(object_list.children) if object_list is not None else []:
+                name = (
+                    object_name(object_tag)
+                    if isinstance(object_tag, filedb.STag) and object_tag.find("Position") is not None
+                    else None
+                )
                 if name:
-                    yield group, objs, o, name
+                    yield group, object_list, object_tag, name
 
 
 def height_grid(heights: dict, rows: int, cols: int):
@@ -180,10 +188,10 @@ def height_grid(heights: dict, rows: int, cols: int):
     import numpy as np
 
     grid = np.zeros((rows, cols), np.float64)
-    for k, v in heights.items():
-        z, x = map(int, k.split(","))
-        if 0 <= z < rows and 0 <= x < cols:
-            grid[z, x] = float(v)
+    for corner_key, height in heights.items():
+        corner = parse_pair(corner_key)
+        if corner is not None and 0 <= corner[0] < rows and 0 <= corner[1] < cols:
+            grid[corner] = float(height)
     return grid
 
 
@@ -191,18 +199,18 @@ def apply_heights(builder, edits: dict) -> int:
     """Raise or lower the island's tile corners by ``edits["heights"]`` (``"z,x"`` -> world units),
     before the builder turns its corner heights into heightmaps and render data. Returns the corners
     changed; an edit off the island, and a river or lake edit that matches nothing, is a warning."""
-    n = 0
+    changed_count = 0
     heights = edits.get("heights", {})
-    for k, delta in heights.items():
-        z, x = map(int, k.split(","))
+    for corner_key, delta in heights.items():
+        z, x = parse_pair(corner_key) or (-1, -1)
         if 0 <= z < len(builder.heights) and 0 <= x < len(builder.heights[z]):
             builder.heights[z][x] += float(delta) * HEIGHT_UNITS
-            n += 1
-    if n < len(heights):
-        message = f"{len(heights) - n} of {len(heights)} height edits lie off the island: dropped"
+            changed_count += 1
+    if changed_count < len(heights):
+        message = f"{len(heights) - changed_count} of {len(heights)} height edits lie off the island: dropped"
         warnings.warn(message, RuntimeWarning, stacklevel=2)
     warn_unmatched_water(builder, edits)
-    return n
+    return changed_count
 
 
 def warn_unmatched_water(builder, edits: dict) -> None:
@@ -218,10 +226,12 @@ def warn_unmatched_water(builder, edits: dict) -> None:
 def water(edits: dict | None) -> dict | None:
     """The water and blocker shapes of an edit file (rivers and lake levels; outlines, coast lines and shapes when it
     has some), as the island builder takes them."""
-    if not edits or not any(edits.get(k) for k in (*WATER_EDITS, SHAPE_EDITS)):
+    if not edits or not any(edits.get(edit_key) for edit_key in (*WATER_EDITS, SHAPE_EDITS)):
         return None
     rest = (*WATER_EDITS[2:], SHAPE_EDITS)
-    return {k: edits.get(k, {}) for k in ("rivers", "lakes")} | {k: edits[k] for k in rest if edits.get(k)}
+    return {edit_key: edits.get(edit_key, {}) for edit_key in ("rivers", "lakes")} | {
+        edit_key: edits[edit_key] for edit_key in rest if edits.get(edit_key)
+    }
 
 
 def area_id(value) -> int:
@@ -230,11 +240,11 @@ def area_id(value) -> int:
     return AREA_NONE if kind == 0 else AREA_ISLAND if kind == 1 else kind
 
 
-def apply_area(gm: filedb.Tag, cells: dict) -> dict:
+def apply_area(game_manager: filedb.STag, cells: dict) -> dict:
     """Set area tiles (``"x,z"`` -> 1 the construction area, 0 none, or the id of another area the island has, such as
     a continental island's 0x4001) in ``AreaIDs``. A tile of another area is left alone by 0 and 1; an id the island
     does not have is not made up. Returns the tiles changed and what matched nothing (``unmatched``)."""
-    tag = gm.path("AreaIDs")
+    tag = game_manager.path("AreaIDs")
     report: dict = {"cells": 0, "unmatched": []}
     if not cells:
         return report
@@ -242,7 +252,7 @@ def apply_area(gm: filedb.Tag, cells: dict) -> dict:
         report["unmatched"].append(tr("islands.no_area_grid_island"))
         return report
     grid = read_sparse(tag)
-    kinds = {v for row in grid for v in row} - {0, AREA_NONE, AREA_ISLAND}  # the island's other areas
+    kinds = {tile_id for row in grid for tile_id in row} - {0, AREA_NONE, AREA_ISLAND}  # the island's other areas
     for name, value in sorted(cells.items()):
         cell = cell_key(name, len(grid))
         try:
@@ -271,33 +281,33 @@ def apply_forest(builder, edits: dict) -> dict:
     same edits plant and clear those."""
     import numpy as np
 
-    rg = builder.gm.path("RegrowManager")
+    regrow_manager = builder.game_session_manager.path("RegrowManager")
     changes = edits.get("forest", {})
-    if rg is None or not changes:
+    if regrow_manager is None or not changes:
         return {"planted": 0, "cleared": 0}
-    trees = np.asarray(read_bits(rg.find("TreeMap")), np.int64)
-    fc = rg.find("ForestChunkMap")
-    chunks = np.asarray(read_sparse(fc, "B"), np.int64) if fc is not None else None
+    trees = np.asarray(read_bits(regrow_manager.find("TreeMap")), np.int64)
+    forest_chunk_map = regrow_manager.find("ForestChunkMap")
+    chunks = np.asarray(read_sparse(forest_chunk_map, "B"), np.int64) if forest_chunk_map is not None else None
     labelled = np.argwhere(chunks > 0) if chunks is not None else np.zeros((0, 2), int)
     land = np.asarray(builder.land_mask(), bool)
     report = {"planted": 0, "cleared": 0}
-    for k, v in changes.items():
-        x, z = map(int, k.split(","))
-        if not (0 <= z < trees.shape[0] and 0 <= x < trees.shape[1]) or (v and not land[z, x]):
+    for tile_key, planted in changes.items():
+        x, z = parse_pair(tile_key) or (-1, -1)
+        if not (0 <= z < trees.shape[0] and 0 <= x < trees.shape[1]) or (planted and not land[z, x]):
             continue
-        trees[z, x] = 1 if v else 0
-        report["planted" if v else "cleared"] += 1
+        trees[z, x] = 1 if planted else 0
+        report["planted" if planted else "cleared"] += 1
         if chunks is not None:
-            if not v:
+            if not planted:
                 chunks[z, x] = 0
             elif len(labelled):
                 near = labelled[np.argmin(((labelled - (z, x)) ** 2).sum(axis=1))]
                 chunks[z, x] = chunks[near[0], near[1]]
             else:
                 chunks[z, x] = 1
-    write_bits(rg.find("TreeMap"), trees.tolist())
+    write_bits(regrow_manager.find("TreeMap"), trees.tolist())
     if chunks is not None:
-        write_sparse(fc, chunks.tolist(), "B")
+        write_sparse(forest_chunk_map, chunks.tolist(), "B")
     return report
 
 
@@ -309,14 +319,14 @@ def apply_paint(builder, edits: dict) -> int:
     """Hand the painted strokes (``edits["paint"]``) to the builder; its material weights lay them
     over the 2070 layers (``islandground.paint_strokes``). Call before ``apply_materials``."""
     builder.paint = list(edits.get("paint", []))
-    lost = sum(1 for st in builder.paint if not _paint_material_ok(st))
+    lost = sum(1 for stroke in builder.paint if not _paint_material_ok(stroke))
     if lost:
         message = f"{lost} of {len(builder.paint)} painted strokes name a material outside 0-31: they paint nothing"
         warnings.warn(message, RuntimeWarning, stacklevel=2)
     return len(builder.paint)
 
 
-def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_samples: dict | None = None) -> dict:
+def apply(builder, edits: dict, template: filedb.STag | None = None, editor_samples: dict | None = None) -> dict:
     """Apply ``edits`` to an island being built and say what matched.
 
     ``template``: the decoration object new objects are copied from (``donor117.load_template``);
@@ -328,16 +338,16 @@ def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_sampl
 
     def keyed():
         nonlocal last
-        for group, objs, o, name in _objects(builder):
+        for group, object_list, placed, name in _objects(builder):
             if group == "GameObject":
-                last = objs  # where a new object goes: the last game objects list
-            yield key(name, struct.unpack("<3f", o.find("Position").data)), (objs, o)
+                last = object_list  # where a new object goes: the last game objects list
+            yield key(name, struct.unpack("<3f", placed.find("Position").data)), (object_list, placed)
 
     def remove(gone: list) -> None:
-        for objs, o in gone:
-            objs.children.remove(o)
+        for object_list, placed in gone:
+            object_list.children.remove(placed)
 
-    ops = objectedits.ObjectOps(lambda handle, change: set_object(handle[1], change), remove)
+    ops = objectedits.SObjectOps(lambda handle, change: set_object(handle[1], change), remove)
     objectedits.apply_changes(keyed(), edits.get("objects", {}), ops, report)
     if edits.get("added_objects") and template is not None and last is not None:
         high = template.find("ID").data[4:]
@@ -346,10 +356,12 @@ def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_sampl
             if "guid" in add:
                 continue
             serial += 1
-            obj = clone_object(template, serial)
-            obj.path("DynamicVariation/ConfigFilename").data = add["cfg"].replace("/", "\\").encode("utf-16-le")
-            set_object(obj, {"position": add["position"], "rotation": add["rotation"], "scale": add.get("scale", 1)})
-            last.children.append(obj)
+            new_object = clone_object(template, serial)
+            new_object.path("DynamicVariation/ConfigFilename").data = add["cfg"].replace("/", "\\").encode("utf-16-le")
+            set_object(
+                new_object, {"position": add["position"], "rotation": add["rotation"], "scale": add.get("scale", 1)}
+            )
+            last.children.append(new_object)
             report["objects added"] += 1
     for add in edits.get("added_objects", []):
         if "guid" in add:
@@ -361,15 +373,15 @@ def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_sampl
                 report["unmatched"].append(f"guid:{add['guid']} ({add.get('template')})")
     _apply_props(builder, edits, report)
     if edits.get("area"):
-        area = apply_area(builder.gm, edits["area"])
+        area = apply_area(builder.game_session_manager, edits["area"])
         report["area tiles"] = area["cells"]
         report["unmatched"] += area["unmatched"]
     if edits.get("session"):
-        session = sessionsettings.apply(builder.gm, edits["session"], builder.size)
+        session = sessionsettings.apply(builder.game_session_manager, edits["session"], builder.size)
         report["session settings"] = len(session["set"])
         report["unmatched"] += session["unmatched"]
     if edits.get("herd"):
-        herd = herdareas.apply(builder.gm, edits["herd"], getattr(builder, "herd_template", None))
+        herd = herdareas.apply(builder.game_session_manager, edits["herd"], getattr(builder, "herd_template", None))
         report["herd tiles"] = herd["tiles"]
         report["unmatched"] += herd["unmatched"]
         if herd.get("dropped"):  # painted, but a patch under the minimum is no herd area (island-editor "Herd areas")
@@ -387,59 +399,61 @@ def apply(builder, edits: dict, template: filedb.Tag | None = None, editor_sampl
 
 def refresh_slot_list(builder) -> dict[str, int]:
     """List the slot objects where the edits left them (``slotlist.refresh``): what moved, was dropped or added."""
-    info = getattr(builder, "info", None)
-    if info is None:
+    island_info = getattr(builder, "a7minfo", None)
+    if island_info is None:
         return {}
     placed = (
         (
-            o.find("ID").data,
-            struct.unpack_from("<I", o.find("guid").data)[0],
-            struct.unpack("<3f", o.find("Position").data),
+            object_tag.find("ID").data,
+            struct.unpack_from("<I", object_tag.find("guid").data)[0],
+            struct.unpack("<3f", object_tag.find("Position").data),
         )
-        for _group, _objs, o, _name in _objects(builder)
-        if o.find("guid") is not None and o.find("ID") is not None
+        for _group, _object_list, object_tag, _name in _objects(builder)
+        if object_tag.find("guid") is not None and object_tag.find("ID") is not None
     )
-    return slotlist.refresh(info, placed)
+    return slotlist.refresh(island_info, placed)
 
 
 def _apply_props(builder, edits: dict, report: dict) -> None:
-    pg = builder.rd.path("PropGrid")
-    names = pg.find("FileNames") if pg is not None else None
-    inst = pg.find("Instances") if pg is not None else None
-    if names is None or inst is None:
+    prop_grid = builder.rd3d.path("PropGrid")
+    names = prop_grid.find("FileNames") if prop_grid is not None else None
+    instances = prop_grid.find("Instances") if prop_grid is not None else None
+    if names is None or instances is None:
         return
-    files = [c.data.decode("utf-16-le") for c in names.children]
+    files = [child.data.decode("utf-16-le") for child in names.children]
     wanted = dict(edits.get("props", {}))
-    for p in list(inst.children):
-        index = struct.unpack("<I", p.find("Index").data)[0]
-        k = key(files[index] if index < len(files) else "", struct.unpack("<3f", p.find("Position").data))
-        change = wanted.pop(k, None)
+    for prop in list(instances.children):
+        index = struct.unpack("<I", prop.find("Index").data)[0]
+        prop_key = key(files[index] if index < len(files) else "", struct.unpack("<3f", prop.find("Position").data))
+        change = wanted.pop(prop_key, None)
         if change is None:
             continue
         if change.get("deleted"):
-            inst.children.remove(p)
+            instances.children.remove(prop)
             report["props deleted"] += 1
             continue
         if "position" in change:
-            p.find("Position").data = struct.pack("<3f", *map(float, change["position"]))
+            prop.find("Position").data = struct.pack("<3f", *map(float, change["position"]))
         if "rotation" in change:
-            p.find("Rotation").data = struct.pack("<4f", *map(float, change["rotation"]))
+            prop.find("Rotation").data = struct.pack("<4f", *map(float, change["rotation"]))
         if "scale" in change:
-            s = change["scale"]
-            p.find("Scale").data = struct.pack("<3f", *(map(float, s) if isinstance(s, list) else (float(s),) * 3))
-        if change.get("color") and p.find("Color") is not None:
-            p.find("Color").data = struct.pack("<4f", *map(float, change["color"]))
+            scale = change["scale"]
+            prop.find("Scale").data = struct.pack(
+                "<3f", *(map(float, scale) if isinstance(scale, list) else (float(scale),) * 3)
+            )
+        if change.get("color") and prop.find("Color") is not None:
+            prop.find("Color").data = struct.pack("<4f", *map(float, change["color"]))
         report["props changed"] += 1
     report["unmatched"] += sorted(wanted)
     if edits.get("added_props"):
         items = [  # the whole quaternion: the editor can tilt a prop, not only turn it
             (
-                a["cfg"],
-                tuple(a["position"]),
-                tuple(map(float, a.get("rotation", (0, 0, 0, 1)))),
-                _scale(a.get("scale", 1.0)),
-                tuple(map(float, a["color"])) if a.get("color") else None,
+                added["cfg"],
+                tuple(added["position"]),
+                tuple(map(float, added.get("rotation", (0, 0, 0, 1)))),
+                _scale(added.get("scale", 1.0)),
+                tuple(map(float, added["color"])) if added.get("color") else None,
             )
-            for a in edits["added_props"]
+            for added in edits["added_props"]
         ]
         report["props added"] += append_props(builder, items)
