@@ -347,3 +347,11 @@ def test_closing_during_a_project_import_or_build_asks_and_a_yes_stops_the_impor
     answer["yes"] = False
     assert not dialog.can_close() and "build" in asked[-1]
     dialog._m_is_building = False
+
+
+def test_an_app_with_a_window_of_its_own_opens_over_the_page_used_last():
+    """``studio --app translate`` refused the translation app: ``--app`` knew the page apps alone."""
+    pages, windows = ["islands", "assets", "ui"], ["translate"]
+    assert shell.first_apps("translate", pages, windows, "ui") == ("ui", "translate")
+    assert shell.first_apps("assets", pages, windows, "ui") == ("assets", None)
+    assert shell.first_apps(None, pages, windows, "gone") == ("islands", None)

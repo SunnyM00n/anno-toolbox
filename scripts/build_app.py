@@ -38,7 +38,7 @@ The Toolbox: PyInstaller's folder mode over suite/toolbox.py (the `gui` extra: P
 out/installer/<edition>/AnnoToolbox/: AnnoToolbox.exe (the window) and AnnoToolbox.com (the same program built as a
 console program: the command line rdm, export, or any window with --app; a terminal's PATHEXT picks it before the .exe)
 on Windows, one AnnoToolbox program on Linux (--pack there writes an AppImage, its feed and a tarball; docs/installer.md
-"Linux"), texconv (MIT) in tools/ (Windows), the schemas read beside the program, the licences, and
+"Linux"), texconv (MIT) in tools/ (Windows), the Vorbis codebooks (BSD-3-Clause) in tools/, the schemas read beside the program, the licences, and
 the game look's Direct3D 12 module (render/_nativegpu.pyd, built first by scripts/build_native.py when it is missing
 or older than native/d3d12/; --no-native leaves it out). The games are not part of it: the program finds them on the
 machine it runs on (suite.settings.detect).
@@ -111,15 +111,18 @@ def pyinstaller_env(source: Path) -> dict[str, str]:
 # The Toolbox
 
 
-def add_beside_program(app: Path, tree: Path, edition: bundle.Edition, texconv: Path | None) -> None:
-    """What the program reads next to its exes: the schemas (``paths.REPO_ROOT`` is this folder), texconv, notices."""
+def add_beside_program(app: Path, tree: Path, texconv: Path | None, codebooks: Path) -> None:
+    """What the program reads next to its exes: the schemas (``paths.REPO_ROOT`` is this folder), texconv, the Vorbis
+    codebooks with their notice, the licences."""
     for source, rel in bundle.runtime_files(tree):
         (app / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, app / rel)
     if texconv is not None:
-        (app / "tools").mkdir(exist_ok=True)
         shutil.copy2(texconv, app / "tools" / texconv.name)
         shutil.copy2(ROOT / "tools" / "README.md", app / "tools" / "README.md")
+    (app / "tools").mkdir(exist_ok=True)
+    shutil.copy2(codebooks, app / "tools" / bundle.CODEBOOKS)
+    (app / "tools" / bundle.CODEBOOKS_NOTICE).write_text(bundle.CODEBOOKS_LICENCE, encoding="utf-8", newline="\n")
     for name in bundle.LICENSE_FILES:
         if (tree / name).is_file():
             shutil.copy2(tree / name, app / name)
@@ -153,6 +156,9 @@ def check_program(app: Path, tree: Path, edition: bundle.Edition, work: Path, na
     for rel in bundle.RUNTIME_FILES[:1]:
         if not (app / rel).is_file():
             problems.append(f"missing beside the program: {rel}")
+    for name in (bundle.CODEBOOKS, bundle.CODEBOOKS_NOTICE):
+        if not (app / "tools" / name).is_file():
+            problems.append(f"missing beside the program: tools/{name}")
     if native and not (bundled / NATIVE_MODULE).is_file():
         problems.append(
             f"the game look's module missing: {edition.package}/{NATIVE_MODULE} (--no-native leaves it out)"
@@ -323,6 +329,9 @@ def build_toolbox(arguments) -> int:
         raise SystemExit("the source tree is not the public edition:\n  " + "\n  ".join(bad))
     out = arguments.out or ROOT / "out" / "installer" / edition.key
     texconv = bundle.find_texconv(tree, dict(os.environ))
+    codebooks = bundle.find_codebooks(tree, dict(os.environ))
+    if codebooks is None:
+        raise SystemExit(f"missing {bundle.CODEBOOKS} (tools/README.md): Wwise Vorbis sounds need it in the program")
     native = WINDOWS and not arguments.no_native  # the Direct3D 12 module and texconv are Windows only
     if texconv is None and not arguments.no_texconv and WINDOWS:
         raise SystemExit("missing texconv (tools/README.md); --no-texconv leaves it out")
@@ -331,7 +340,7 @@ def build_toolbox(arguments) -> int:
     started = time.time()
     if not arguments.skip_bundle:
         app = run_pyinstaller(tree, edition, out / "build", out)
-        add_beside_program(app, tree, edition, texconv)
+        add_beside_program(app, tree, texconv, codebooks)
         if LINUX:
             linux.add_files(out / bundle.PROGRAM)
     app = out / bundle.PROGRAM

@@ -104,7 +104,7 @@ class CModelPoses:
 
     def _bind_joints(self, prog, item: dict) -> None:
         """A skin posed on the GPU: its joints' texture for the program drawing it."""
-        if item.get("gpu") and "jointTex" in prog:
+        if item.get("gpu") and "jointTex" in self._uniform_names(prog):
             (item["joints"] or self._m_rest_joints).use(6)
             prog["jointTex"].value = 6
 

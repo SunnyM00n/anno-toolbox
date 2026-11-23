@@ -57,18 +57,29 @@ def heights_with_edits(game: np.ndarray, session) -> np.ndarray:
 class CFramePasses:
     """The layer passes of ``Renderer.render``."""
 
+    def _game_heights_of(self, got: bytes) -> np.ndarray:
+        """The game's heights (``got``: its file's bytes) with the session's edits: worked out again only when the
+        file or an edit of the heights is new (``_sync_scene`` forgets them; a continental island's are millions of
+        samples a frame)."""
+        held = self._m_game_heights
+        if held is not None and held[0] is got:
+            return held[1]
+        width = self.m_session.m_width_samples
+        heights = heights_with_edits(np.frombuffer(got, "<f4").reshape(width, width), self.m_session)
+        self._m_game_heights = (got, heights)
+        return heights
+
     def _sync_scene(self, opts: SViewOptions) -> np.ndarray | None:
         """Bring the terrain, the batches and the ground up to the edits since the last frame; the game's heights
         (with the height edits) when the game terrain is on and loaded."""
         change = self._take_pending()
-        session = self.m_session
         game_heights = None
+        if change.heights is not None:
+            self._m_game_heights = None  # also while the game terrain is off: the edit is taken now
         if opts.game_terrain and self.m_editor is not None:
             got = self.m_loader.get("game_heights", self.m_editor.game_heights)
             if isinstance(got, bytes):
-                game_heights = heights_with_edits(
-                    np.frombuffer(got, "<f4").reshape(session.m_width_samples, session.m_width_samples), session
-                )
+                game_heights = self._game_heights_of(got)
             elif isinstance(got, Exception):
                 self._message(tr("islands.no_game_terrain", reason=got))
         if change.heights is not None or (game_heights is not None) != self._m_shown_game_terrain:
@@ -95,6 +106,7 @@ class CFramePasses:
         let go used are released (their batches take their boxes, ``_sync_batches``)."""
         if self.m_library is None or not self.m_library.set_full(self._full_models(opts)):
             return
+        self._m_scene_serial += 1  # meshes and maps go: the shadow map is drawn again
         for batch in self._all_batches():
             if (
                 batch.m_parts is not None

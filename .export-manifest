@@ -164,6 +164,7 @@ src/annotoolbox/editor/desktop/desktopslotlinks.py
 src/annotoolbox/editor/desktop/desktopslots.py
 src/annotoolbox/editor/desktop/desktopslotstab.py
 src/annotoolbox/editor/desktop/desktopstreets.py
+src/annotoolbox/editor/desktop/desktopuniforms.py
 src/annotoolbox/editor/desktop/desktopview.py
 src/annotoolbox/editor/desktop/flycamera.py
 src/annotoolbox/editor/desktop/minimappanel.py
@@ -948,6 +949,7 @@ tests/assetedit/test_assetviews.py
 tests/assetedit/test_assetvisibility.py
 tests/assetedit/test_game1701.py
 tests/assetedit/test_mod_layered.py
+tests/childguard.py
 tests/conftest.py
 tests/converterapp/test_converterapp.py
 tests/ddsfiles.py
@@ -956,14 +958,16 @@ tests/editor/desktop/test_desktopbrush.py
 tests/editor/desktop/test_desktopcull.py
 tests/editor/desktop/test_desktopfinish1800.py
 tests/editor/desktop/test_desktopforms.py
-tests/editor/desktop/test_desktopgame_reads.py
+tests/editor/desktop/test_desktopframe.py
 tests/editor/desktop/test_desktopgamebake.py
 tests/editor/desktop/test_desktopgameground.py
 tests/editor/desktop/test_desktopgizmo.py
 tests/editor/desktop/test_desktopgrids.py
 tests/editor/desktop/test_desktopgroup.py
+tests/editor/desktop/test_desktopperformance.py
 tests/editor/desktop/test_desktopsea.py
 tests/editor/desktop/test_desktopstreets.py
+tests/editor/desktop/test_desktopuniforms.py
 tests/editor/desktop/test_editor_look.py
 tests/editor/desktop/test_flycamera.py
 tests/editor/desktop/test_linux_drawing.py
@@ -1154,6 +1158,7 @@ tests/render/test_gameatmosphere.py
 tests/render/test_gamebind.py
 tests/render/test_gameclouds.py
 tests/render/test_gamedecals.py
+tests/render/test_gameextras.py
 tests/render/test_gameframe.py
 tests/render/test_gameinland.py
 tests/render/test_gamelook.py
@@ -1257,6 +1262,7 @@ tests/suite/test_toolbox.py
 tests/suite/test_widgets.py
 tests/systems/quest/conftest.py
 tests/systems/quest/questfakes.py
+tests/test_childguard.py
 tests/test_hangguard.py
 tests/test_memorygate.py
 tests/test_no_console_windows.py

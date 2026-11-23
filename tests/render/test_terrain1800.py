@@ -196,12 +196,14 @@ def test_1800s_look_keeps_the_view_drawing_while_its_water_and_clouds_move_or_it
 
     pytest.importorskip("PySide6")
     from annotoolbox.editor.desktop.desktopgame1800 import CGameIsland1800
+    from annotoolbox.editor.desktop.desktoprender import SViewOptions
 
     look = object.__new__(CGameIsland1800)
     look.m_renderer = SimpleNamespace(game_sea=False, game_inland=False)
     look.m_ending, look.m_pages, look._m_unbaked = SimpleNamespace(m_again=False), None, 0
-    assert look._moving(SimpleNamespace(particle_time=None))  # the clouds drift by the clock
-    still = SimpleNamespace(particle_time=1.0)
+    assert look._moving(SViewOptions())  # the clouds drift by the clock
+    assert not look._moving(SViewOptions(waves=False))  # the water motion switched off holds the clock
+    still = SViewOptions(particle_time=1.0)
     assert not look._moving(still)
     look._m_unbaked = 3  # nodes left to bake: the next frames bake them
     assert look._moving(still)

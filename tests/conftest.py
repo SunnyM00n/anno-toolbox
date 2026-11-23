@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from tests import hangguard, memorygate, qtcleanup
+from tests import childguard, hangguard, memorygate, qtcleanup
 from tests.ddsfiles import make_bc7_dds
 from tests.models.modelfakes import BAKERY_CFG, TREE_CFG
 
@@ -42,6 +42,24 @@ for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_var, "1")
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _children_die_with_the_run():
+    """Every subprocess a test starts dies with the test process (Windows job object, tests/childguard.py); each
+    xdist worker runs this too."""
+    childguard.kill_children_with_me()
+
+
+def pytest_configure(config):
+    """A parallel run keeps the tests of one ``xdist_group`` on one worker: the views that open a whole island and
+    the shader runs on the software rasteriser (``island_view``) slowed each other past their limit (docs/maintainers.md
+    "Test children")."""
+    config.addinivalue_line(
+        "markers", "time_limit(seconds): the hang guard's limit for a slow test (tests/hangguard.py)"
+    )
+    if getattr(config.option, "dist", "no") == "load":
+        config.option.dist = "loadgroup"
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """The windows the tests left open are deleted before the interpreter's shutdown, which aborts on them."""
@@ -56,11 +74,12 @@ def _memory_gate():
 
 @pytest.fixture(autouse=True)
 def _hang_guard(request):
-    """A test that hangs ends the run with the stacks of every thread (tests/hangguard.py) instead of blocking it."""
+    """A test that hangs ends the run with the stacks of every thread (tests/hangguard.py) instead of blocking it;
+    ``@pytest.mark.time_limit(seconds)`` gives a slow one longer."""
     capture = request.config.pluginmanager.getplugin("capturemanager")
-    disarm = hangguard.arm(
-        request.node.nodeid, hangguard.seconds(), capture.suspend_global_capture if capture else None
-    )
+    marker = request.node.get_closest_marker("time_limit")
+    limit = max(hangguard.seconds(), float(marker.args[0])) if marker else hangguard.seconds()
+    disarm = hangguard.arm(request.node.nodeid, limit, capture.suspend_global_capture if capture else None)
     yield
     disarm()
 

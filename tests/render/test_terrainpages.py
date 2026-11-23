@@ -86,6 +86,7 @@ def test_the_pages_a_frame_reads_are_not_let_go_however_many_it_reads():
     assert len(pages.m_ready) == terrainpages.KEEP and (4, 0, 0) in pages.m_ready and gone[:2] == ["h1", "n1"]
 
 
+@pytest.mark.xdist_group("island_view")
 def test_each_node_draws_tessellated_stored_or_from_the_views_heights():
     terrain = terraindraw.CTerrain(None, None, 64.0, 0.5, 129, detailed=object())
     pages = {(0, 0, 0): "parts", (2, 0, 0): "parts"}

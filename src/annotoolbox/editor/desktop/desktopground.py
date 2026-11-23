@@ -12,6 +12,7 @@ import numpy as np
 
 from ...infra.i18n import tr
 from ...render.camera import gl
+from ...render.gameinland import LAVA_FLAG
 from ...render.light import srgb_hex
 from ..editchange import SChange
 from ..editsession import game_of
@@ -25,7 +26,14 @@ GROUND_TEXTURE_MAX = 512  # 2070's own size (117's are 1024; archived 1024 in is
 # island-editor-view "Looks")
 PLAIN_GROUND = ("anno117", "anno1800", "anno2205")
 PLAIN_SIZE = 4  # a plain layer's side: one colour
+LAVA_CRUST = (0.05, 0.02, 0.012)  # a lava river's plain colour, linear [I]
+LAVA_GLOW = (0.5, 0.09, 0.0)  # and what it emits, linear: a stand-in for the game's lava shader (water.md 1.9a) [I]
 DEEP = (0.004, 0.018, 0.03)  # the sea bed beyond the island's grid, linear
+
+
+def is_lava(spline: dict) -> bool:
+    """Whether a river line of the island is lava: its ``flags`` (the River block's ``RenderFlags``) has ``LAVA_FLAG``."""
+    return spline["kind"] == "River" and bool(spline.get("flags", 0) & LAVA_FLAG)
 
 
 class CGroundDraw:
@@ -218,7 +226,7 @@ class CGroundDraw:
             low, high = -6 * size, 7 * size  # out to where the fog has the horizon
             sea = np.array([[low, 0, low], [high, 0, low], [low, 0, high], [high, 0, high]], "f4")
             sea_vbo = ctx.buffer(sea.tobytes())
-            rivers, lakes = [], []
+            rivers, lakes, lava = [], [], []
             for spline in self.m_session.m_island.get("splines", []):
                 if spline["kind"] not in ("River", "Lake") or len(spline["points"]) < 2:
                     continue
@@ -229,10 +237,12 @@ class CGroundDraw:
                         y = points[0][1]
                         vertices = np.array([[point[0], y, point[2]] for point in points], "f4")
                         lakes.append((vertices, np.asarray(triangles, "u4").ravel()))
+                elif is_lava(spline):
+                    lava.append(ribbon(points, spline.get("widths", [])))
                 else:
                     rivers.append(ribbon(points, spline.get("widths", [])))
             meshes = []
-            for kind, items in (("river", rivers), ("lake", lakes)):
+            for kind, items in (("river", rivers), ("lake", lakes), ("lava", lava)):
                 for vertices, indices in items:
                     if len(indices):
                         meshes.append((kind, ctx.buffer(vertices.tobytes()), ctx.buffer(indices.tobytes())))
@@ -327,15 +337,17 @@ class CGroundDraw:
         prog["waterColor"].value, prog["opacity"].value = srgb_hex(0x1F5F80), 0.78
         if sea:
             self._water_vao(wm["sea"]).render(ctx.TRIANGLE_STRIP)
-        prog["waterColor"].value, prog["opacity"].value = srgb_hex(0x357FA3), 0.82
+        look = srgb_hex(0x357FA3), 0.82
+        prog["waterColor"].value, prog["opacity"].value = look
         if inland:
-            self._inner_once()
+            self._inner_once(look)
         ctx.disable(ctx.BLEND)
         fbo.depth_mask = True
 
-    def _inner_once(self) -> None:
+    def _inner_once(self, look: tuple) -> None:
         """Rivers and lakes each pixel once (the nearest surface): a depth pass, then colour where the depth
-        is equal; two see-through surfaces doubled into a light band (2026-10-16)."""
+        is equal; two see-through surfaces doubled into a light band (2026-10-16). ``look``: the water's colour and
+        opacity; a lava river glows instead (``LAVA_GLOW``)."""
         ctx, wm, fbo = self.m_ctx, self._m_water_meshes, self.m_targets["msaa"]
         items = wm["inner"]
         if not items:
@@ -347,6 +359,11 @@ class CGroundDraw:
         fbo.color_mask = (True, True, True, True)
         fbo.depth_mask = False
         ctx.depth_func = "=="
-        for _, vbo, ibo in items:
+        prog = self.m_prog["water"]
+        for kind, vbo, ibo in items:
+            glows = kind == "lava"
+            prog["glow"].value = LAVA_GLOW if glows else (0.0, 0.0, 0.0)
+            prog["waterColor"].value, prog["opacity"].value = (LAVA_CRUST, 1.0) if glows else look
             self._water_vao(vbo, ibo).render()
+        prog["glow"].value = (0.0, 0.0, 0.0)
         ctx.depth_func = "<"

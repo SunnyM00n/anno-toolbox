@@ -302,16 +302,26 @@ class CIslandView(CIslandChecks):
                 draw.line(xy, fill=(230, 40, 40), width=max(2, int(pixels_per_tile)))
         image[...] = np.asarray(pil, np.float32) / 255
 
-    def splines(self):
-        """The island's splines (kind, points, widths), read once: a continental island's walk over its objects
-        took seconds, and its JSON asks twice."""
+    def _spline_lines(self) -> list[tuple]:
+        """Each spline of the island with its ``RenderFlags`` ((kind, points, widths), flags), read once: a
+        continental island's walk over its objects took seconds, and its JSON asks more than once."""
         if getattr(self, "_splines", None) is None:
-            splines = (
-                bezier_spline(object_tag)
-                for _group, object_tag in a7mread.object_tags(self.game_session_manager, ("EditorObject",))
-            )
-            self._splines = [spline for spline in splines if spline]
-        return list(self._splines)
+            lines = []
+            for _group, object_tag in a7mread.object_tags(self.game_session_manager, ("EditorObject",)):
+                spline = bezier_spline(object_tag)
+                if spline:
+                    lines.append((spline, river_flags(object_tag)))
+            self._splines = lines
+        return self._splines
+
+    def splines(self):
+        """The island's splines (kind, points, widths)."""
+        return [spline for spline, _flags in self._spline_lines()]
+
+    def spline_flags(self) -> list[int]:
+        """The ``RenderFlags`` of each of ``splines``' lines in the same order: a river's block value (3 when it has none),
+        0 for a lake or a coast line."""
+        return [flags for _spline, flags in self._spline_lines()]
 
     def inland_waters(self) -> list[dict]:
         """The rivers and lakes of the island file in the order ``splines`` gives them (``inland_water``)."""
@@ -448,10 +458,26 @@ def bezier_spline(object_tag: filedb.STag) -> tuple[str, list, list] | None:
     return kind, points, widths
 
 
+RIVER_FLAGS = 3  # the River component's default ``RenderFlags``: both ends blend
+
+
+def river_flags(object_tag: filedb.STag) -> int:
+    """A river object's ``RenderFlags`` (``RIVER_FLAGS`` when its block has none); 0 for any other object."""
+    block = object_tag.find("River")
+    if block is None:
+        return 0
+    field = block.find("RenderFlags")
+    data = getattr(field, "data", None)
+    return struct.unpack("<i", data)[0] if data and len(data) == 4 else RIVER_FLAGS
+
+
+INTEGER_FIELDS = ("RenderOrder", "RenderFlags", "LavaFlowOffset")  # a River block's integer fields; the rest are floats
+
+
 def inland_water(object_tag: filedb.STag) -> dict | None:
     """A river or lake object's flow and look: ``kind``, per point of its path its flow speeds (``u0``: the left
     shore's, the centre's, the right shore's; None for a point without), and its ``River`` or ``Lake`` block's
-    values by field (floats, a tuple for a colour, ``RenderOrder`` and ``RenderFlags`` integers, 1800's
+    values by field (floats, a tuple for a colour, ``RenderOrder``, ``RenderFlags`` and ``LavaFlowOffset`` integers, 1800's
     ``WaterColor`` its red, green and blue bytes); None for any
     other object (rendering/water.md 1.10)."""
     kind = next((candidate for candidate in ("River", "Lake") if object_tag.find(candidate) is not None), None)
@@ -466,7 +492,7 @@ def inland_water(object_tag: filedb.STag) -> dict | None:
     look = {}
     for field in object_tag.find(kind).children:
         data = getattr(field, "data", None)
-        if field.name in ("RenderOrder", "RenderFlags") and data and len(data) == 4:  # integers
+        if field.name in INTEGER_FIELDS and data and len(data) == 4:  # integers
             look[field.name] = struct.unpack("<i", data)[0]
         elif field.name == "WaterColor" and data and len(data) == 4:  # 1800's packed colour, bytes b, g, r, a
             look[field.name] = tuple(data[2::-1])

@@ -459,6 +459,10 @@ class CMainWindow(CJobRunner, QMainWindow):
                 handlers[id] = lambda is_checked=False, id=id: (
                     self.m_doc is not None and self.m_doc.set_layer(id[6:], is_checked)
                 )
+            elif id.startswith("perf_"):
+                handlers[id] = lambda is_checked=False, id=id: (
+                    self.m_doc is not None and self.m_doc.set_performance(id[5:], is_checked)
+                )
         missing = [id for id in self.m_actions if id not in handlers]
         if missing:
             raise KeyError(f"ribbon buttons without a handler: {missing}")
@@ -534,6 +538,8 @@ class CMainWindow(CJobRunner, QMainWindow):
                 action.setChecked(doc is not None and id == gizmo_action(view.m_gizmo))
             elif id.startswith("layer_"):
                 action.setChecked(not doc or view.m_opts.layers.get(id[6:], True))
+            elif id.startswith("perf_"):
+                action.setChecked(not doc or getattr(view.m_opts, id[5:], True))
         self.m_actions["foliage"].setChecked(bool(doc) and view.m_hidden.m_foliage)
         looks = doc.look_state() if doc else {}
         offers_2070 = bool(doc) and doc.offers_2070_looks()

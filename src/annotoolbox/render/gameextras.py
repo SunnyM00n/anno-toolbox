@@ -39,6 +39,8 @@ class CFrameExtras:
         self.m_clock: Callable[[], float] = time.monotonic  # its time (``steady``: a bench's fixed steps)
         self.m_native_ocean = None  # oceannative.CNativeOcean the island look made (its owner releases it)
         self.m_native_copies = None  # copiesnative.CNativeCopies, likewise
+        self.m_clouds_drawn = False  # the last frame's cloud pass was made (``passes``)
+        self._m_ocean_at: tuple | None = None  # (the ocean, the seconds) it was last stepped to
 
     def _part(self, key: str, compile_: Callable, make: Callable, said: str):
         """The part ``key``: made from ``compile_(source)`` once that is in (None while it compiles); on an error
@@ -101,14 +103,30 @@ class CFrameExtras:
         return self._ok(self._part("inland", lambda s: gameinland.compile_stages(s, egypt),
                                    lambda got: gameinland.CInlandWater(self.m_rhi, *got), N_INLAND))  # fmt: skip
 
-    def passes(self, passes, sky, seconds: float, ctx, transparent: bool) -> None:
+    def passes(
+        self,
+        passes,
+        sky,
+        seconds: float,
+        ctx,
+        transparent: bool,
+        has_sky: bool = True,
+        has_clouds: bool = True,
+        *,
+        held: bool = False,
+    ) -> None:
         """The water's copies (when a transparent part or the sea draws), the visible sky, haze and clouds (when the
-        game's sky passes light the frame: ``sky``) into ``passes``."""
+        game's sky passes light the frame: ``sky``) into ``passes``. ``has_sky`` and ``has_clouds`` False leave the
+        haze (and the clouds on it) or the clouds out: their passes are not made nor drawn. ``held``: the water motion
+        is switched off, so the ocean is not stepped again at the seconds it stands at."""
+        self.m_clouds_drawn = False
         if transparent or passes.sea is not None:
             got = self.water()
             if got is not None:
                 water, ocean = got
-                if ocean is not None and ocean is self.m_native_ocean:
+                if ocean is not None and self._ocean_is_current(ocean, seconds) and held:
+                    pass  # a held clock: the spectrum is in its maps already
+                elif ocean is not None and ocean is self.m_native_ocean:
                     ocean = self._run_native(ocean, ctx, seconds)
                 elif ocean is not None:
                     ocean.run(ctx, seconds)
@@ -117,7 +135,7 @@ class CFrameExtras:
                 else:
                     water.m_waves, water.m_constants = {}, dict(gamewater.CONSTANTS)
                 passes.water = water
-        if sky is None:
+        if sky is None or not has_sky:
             return
         atmosphere = self._ok(self._part(
             "atmosphere", lambda s: (s.stage_set(gameatmosphere.STAGES), s.sky_passes()[1]),
@@ -129,10 +147,19 @@ class CFrameExtras:
         clouds = self._ok(self._part(
             "clouds", lambda s: (s.stage_set(gameclouds.STAGES), gameclouds.read_maps(s.m_files, s.ambient_text())),
             lambda got: gameclouds.CClouds(self.m_rhi, *got), N_CLOUDS,
-        ))  # fmt: skip
+        )) if has_clouds else None  # fmt: skip
         if clouds is not None:
             clouds.m_seconds = seconds  # the weather and the noise drift with the wind over the view's time
             passes.clouds = clouds
+            self.m_clouds_drawn = True
+
+    def _ocean_is_current(self, ocean, seconds: float) -> bool:
+        """Whether ``ocean`` was stepped to ``seconds`` last frame already (a held clock: its FFT passes are not
+        recorded again, the maps keep the same spectrum); remembers this frame's step. Only for the switch: a frame
+        recorded while the shaders compile may never run, so a picture at a set time steps each frame."""
+        same = self._m_ocean_at is not None and self._m_ocean_at[0] is ocean and self._m_ocean_at[1] == seconds
+        self._m_ocean_at = (ocean, seconds)
+        return same
 
     def _run_native(self, ocean, ctx, seconds: float):
         """The native simulation's frame; on a failure said once, a flat sea this frame and the current path's
@@ -147,7 +174,7 @@ class CFrameExtras:
 
     def far(self) -> float:
         """The far plane the clouds' rays reach (0: none drawn, the view's own)."""
-        clouds = self._ok(self.m_made.get("clouds") or None)
+        clouds = self._ok(self.m_made.get("clouds") or None) if self.m_clouds_drawn else None
         return clouds.m_maps.far if clouds is not None else 0.0
 
     def finish(self, ctx, image, size_px: tuple[int, int], lut, noise):

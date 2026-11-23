@@ -10,6 +10,7 @@ under the switcher). Plan: ``docs/tool-suite.md`` section 7, C1 and C4.
 from __future__ import annotations
 
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
@@ -395,6 +396,15 @@ class CSuiteWindow(QMainWindow):
         super().closeEvent(event)
 
 
+def first_apps(
+    start: str | None, pages: Collection[str], windows: Collection[str], saved: str | None
+) -> tuple[str, str | None]:
+    """The page the window opens on and the app window opened over it (None: none) for ``--app start``: a page app
+    is the page; an app with a window of its own opens over the page used last (else the first)."""
+    page = start if start in pages else saved if saved in pages else next(iter(pages))
+    return page, start if start in windows else None
+
+
 def run(
     apps: list[SAppSpec],
     start: str | None = None,
@@ -403,9 +413,10 @@ def run(
     deliveries=None,
     smoke: bool = False,
 ) -> int:
-    """The program: the window on the app ``start`` (else the one last used, else the first). ``smoke``: open every
-    app once, say which started, close without saving the settings; 1 when one failed, 2 for an unknown ``start``."""
-    if start and start not in (keys := [app.key for app in apps if not app.window]):
+    """The program: the window on the app ``start`` (else the one last used, else the first; an app with a window of
+    its own opens that over the last used one). ``smoke``: open every app once, say which started, close without
+    saving the settings; 1 when one failed, 2 for an unknown ``start``."""
+    if start and start not in (keys := [app.key for app in apps]):
         print(f"error: no app {start!r} (the apps: {', '.join(keys)})", file=sys.stderr)
         return 2
     splash.status(tr("common.preparing_graphics"))
@@ -436,11 +447,13 @@ def run(
     window = CSuiteWindow(apps, settings, path, parts, deliveries)
     if smoke:
         return smoke_test(application, window)
-    first = start or window.m_settings.apps.get("shell", {}).get("app")
-    first = first if first in window.m_apps else apps[0].key
+    saved = window.m_settings.apps.get("shell", {}).get("app")
+    first, over = first_apps(start, window.m_apps, window.m_window_apps, saved)
     splash.status(tr("common.starting_app", app=tr(window.m_apps[first].title)))
     window.show_app(first)
     window.show()
+    if over is not None:
+        window.open_app_window(over)
     window.setup = setuppage.attach(window)
     linuxnotice.attach(window)
     if window.m_updates:

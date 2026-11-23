@@ -79,3 +79,18 @@ def test_the_maps_go_up_once_and_2205_makes_no_flow_map():
     inland.run(ctx)
     inland.run(ctx)
     assert len(passes) == 1 and inland._m_targets == [] and not inland._m_flow_due
+
+
+def test_a_rivers_lava_offset_is_read_as_an_integer_and_its_flags_as_the_editors_lines_have_them():
+    """``LavaFlowOffset`` is an integer in the River block (-10000: permanent lava); the island's lines carry the
+    block's ``RenderFlags`` (3 when it has none, 0 for a lake)."""
+    from annotoolbox.islands.islandview import river_flags
+
+    curve = STag("BezierCurve", [STag("", [SAttrib("p", bytes(12))])])
+    path = STag("BezierPath", [STag("Path", [curve])])
+    block = [SAttrib("RenderFlags", struct.pack("<i", 15)), SAttrib("LavaFlowOffset", struct.pack("<i", -10000))]
+    river = STag("EditorObject", [STag("River", block), path])
+    assert inland_water(river)["look"] == {"RenderFlags": 15, "LavaFlowOffset": -10000}
+    assert river_flags(river) == 15
+    assert river_flags(STag("EditorObject", [STag("River", []), path])) == 3
+    assert river_flags(STag("EditorObject", [STag("Lake", []), path])) == 0

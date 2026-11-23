@@ -494,7 +494,7 @@ From top to bottom, then the docks:
 
   | Tab | Groups: buttons |
   |---|---|
-  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` · Layers: Objects, Markers, Effects, Grass, Forest, Water (what the view draws, each on or off; follows the view's state) |
+  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` · Layers: Objects, Markers, Effects, Grass, Forest, Water (what the view draws, each on or off; follows the view's state) · Performance: Shadows, Water motion, Water reflections, Sky haze, Clouds, Ambient occlusion ([Performance switches](#performance-switches)) |
   | Object | Place: Place, Object Groups (raises the library) · Transform: Move, Turn, Tilt, Scale · Edit: Delete, Duplicate · Object Spray: Plant forest, Clear forest, Spray model (O), Radius, Spacing · Visibility: Hide foliage, Show hidden |
   | Terrain | Height: Raise, Lower, Flatten, Smooth · Relief: Noise, Terrace, Ramp, Spike removal · Ground: Paint, Material Gallery (raises it) · Surf: Waves, Calm (U) · Brush: Radius, Strength |
   | Grid | Active map: Draw cells, Erase cells (G), Radius · Checks: Check rules (every island: `islandrules`), Check slots, Check falls |
@@ -618,6 +618,25 @@ work):
 
 Spike Removal (Terrain > Relief), the Object Brush (Object > Spray model) and a camera mode box (Orbit, Free fly) are
 there.
+
+### Performance switches
+
+The Performance group on the Home tab, next to Layers, speeds up the 3D view while you edit.
+Each switch is on by default, which is the look as before.
+Turning one off makes the view skip that work, and the picture stays usable.
+The choice is kept per user (`Settings.view_switches`) and applies to every island.
+A switch that has nothing to skip on the open island is greyed, and an application restricted to some games leaves
+out the switches of the others.
+
+- **Shadows:** no shadow map is made (every game; the Rendering menu's Shadows is the same switch).
+- **Water motion:** the water stands still. The waves are not stepped, and the view stops redrawing while idle (every game).
+- **Water reflections:** the sea does not draw the scene a second time as a mirror (Anno 2070, 1404 and 1701).
+- **Sky haze:** the game look's visible sky and haze passes are left out, with the clouds on them (Anno 117).
+- **Clouds:** the cloud pass is left out (Anno 117).
+- **Ambient occlusion:** the occlusion pass is left out (Anno 1800 and 2205).
+
+The view has no moving sun or time of day, so there is no switch for one.
+What each switch skips, and the looks it applies to, is in [island-editor-view.md](island-editor-view.md#performance-switches).
 
 ## Islands and modes
 

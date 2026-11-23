@@ -230,3 +230,19 @@ def test_the_flow_map_is_drawn_by_the_games_passes_where_the_river_runs():
     assert got["prevent"][:3] == ["ALWAYS", "REPLACE", "1"], got
     assert [(x["is_flood"], x["river_height"]) for x in got["seasons"]] == [(False, 0.01), (True, 0.5)], got
     assert got["outside"] == 0 and got["gradients"] == [512, 512], got
+
+
+def test_a_river_with_the_lava_flag_draws_by_the_lava_technique_and_a_normal_one_stays_water():
+    """``IWF_LAVA`` (RenderFlags bit 4) picks ``LavaRiverDefault``'s pixel shader; Cinis's rivers carry 15, 7 and 6,
+    a lake never is lava; the lava river's own offset reaches the shader as a float (rendering/water.md 1.9a)."""
+    found = [
+        {"kind": "River", "speeds": [None, None], "look": {"RenderFlags": flags, "LavaFlowOffset": -10000}}
+        for flags in (15, 7, 6, 3)
+    ]
+    line = {"kind": "River", "points": [[0, 0, 0], [1, 0, 0]], "widths": []}
+    lava15, lava7, lava6, water = gameinland.bodies([line] * 4, found, None)
+    assert [gameinland.is_lava_river(body) for body in (lava15, lava7, lava6, water)] == [True, True, True, False]
+    assert not gameinland.is_lava_river(gameinland.SBody("Lake", [], flags=15))
+    assert gameinland.STAGES["lava.ps"][1:] == ("LavaRiverDefault", "psRiverLava")
+    assert gameinland.look_values(lava15)["cIWLavaFlowOffset"] == -10000.0  # permanent lava
+    assert gameinland.look_values(water)["cIWFlags"] == 3 and gameinland.LAVA["cLavaTimer"] > 0

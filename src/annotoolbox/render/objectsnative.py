@@ -294,6 +294,7 @@ class STechnique:
     state: dict
     pipelines: dict = field(default_factory=dict)
     named: dict = field(default_factory=dict)  # its own resources by name (a cascade's ``cbShadowPartition``)
+    element_keys: dict = field(default_factory=dict)  # its constant buffers' layout keys by name (``_frame``)
 
 
 class CNativeRun:
@@ -545,6 +546,7 @@ class CNativeObjects(CTold):
         self._m_tables: dict[tuple, object] = {}  # the stand-in tables of unbounded arrays (``_open``)
         self._m_techniques: dict[tuple, STechnique] = {}
         self._m_values: dict[tuple, bytes] = {}  # a pass's constants by layout, this pass (``_frame``)
+        self._m_layout_keys: dict[tuple, int] = {}  # an element layout -> its number, the key in ``_m_values``
         self.m_buffers = nativegpu.CKeptBuffers(device)  # the frame's constant and camera buffers by (pass, layout)
         self.m_failed: list[tuple[CNativePart, str]] = []  # parts whose draws raised: the current path's from now on
         self.m_error = ""
@@ -641,7 +643,10 @@ class CNativeObjects(CTold):
             if not frame_space or binding.space == nativelayout.ROOT_SPACE or cb_name in named:
                 continue
             if binding.kind == "cbuffer":
-                key = (name, element_layout(cbuffer))
+                if cb_name not in technique.element_keys:  # the reflection never changes: walked once, not each frame
+                    layout = element_layout(cbuffer)
+                    technique.element_keys[cb_name] = self._m_layout_keys.setdefault(layout, len(self._m_layout_keys))
+                key = (name, technique.element_keys[cb_name])
                 if key not in self._m_values:
                     constants = gameshader.CConstants(cbuffer)
                     gameshader.fill_frame(constants, camera)

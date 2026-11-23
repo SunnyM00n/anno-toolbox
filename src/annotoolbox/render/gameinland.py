@@ -29,7 +29,8 @@ from .nativepass import draw_models
 EFFECT = "data/shaders/fx/water_inland_water.fx"
 FLOW_EFFECT = "data/shaders/fx/water_cluster_flow.fx"
 STAGES = {"river.vs": (EFFECT, "RiverDefault", "vsRiver"), "river.ps": (EFFECT, "RiverDefault", "psRiver"),
-          "lake.vs": (EFFECT, "LakeDefault", "vsLake"), "lake.ps": (EFFECT, "LakeDefault", "psLake")}  # fmt: skip
+          "lake.vs": (EFFECT, "LakeDefault", "vsLake"), "lake.ps": (EFFECT, "LakeDefault", "psLake"),
+          "lava.ps": (EFFECT, "LavaRiverDefault", "psRiverLava")}  # fmt: skip
 GRADIENTS = (EFFECT, "ComputeRiverGradients", "csComputeRiverGradients")
 # RiverPreventOcean: the rivers mark the sea's cut-out bit before it draws, past their faded ends (Egypt only)
 # (its vertex shader is RiverDefault's ``vsRiver``, the same function: the effect lists the call once)
@@ -60,7 +61,8 @@ FLOW_TEXELS, FLOW_MAX = 2.0, 2048  # the flow map's texels a world unit and its 
 LOOK = {"ColorShallow": "cIWColorShallow", "ColorDeep": "cIWColorDeep", "ScatterColor": "cIWScatterColor",
         "ScatterStrength": "cIWScatterStrength", "WaveIntensity": "cIWWaveIntensity", "ShallowDepth": "cIWShallowDepth",
         "AbsorptionShallow": "cIWAbsorptionShallow", "ViewDepth": "cIWViewDepth",
-        "AbsorptionSmoothness": "cIWAbsorptionSmoothness", "MaxFoamDepth": "cIWMaxFoamDepth"}  # fmt: skip
+        "AbsorptionSmoothness": "cIWAbsorptionSmoothness", "MaxFoamDepth": "cIWMaxFoamDepth",
+        "LavaFlowOffset": "cIWLavaFlowOffset"}  # fmt: skip
 TEMPLATE = {"ColorShallow": (0.847, 0.839, 0.796), "ColorDeep": (0.365, 0.522, 0.831),
             "ScatterColor": (0.278, 1.0, 0.941), "ScatterStrength": 0.18, "WaveIntensity": 1.2, "ShallowDepth": 0.2,
             "AbsorptionShallow": 0.9, "ViewDepth": 8.0, "AbsorptionSmoothness": 0.6, "MaxFoamDepth": 0.1}  # fmt: skip
@@ -74,6 +76,17 @@ FIXED = {"cIWWaveSize": 1.0, "cIWWaveSpeed": 1.0, "cIWPhysicalWaveIntensity": 1.
 # IWF_USE_GLOBAL_SHADING (Egypt's Nile rivers) an Egypt session takes globals.xml's season look instead of the
 # block's (island-117-view.md "Round 12")
 RENDER_FLAGS, GLOBAL_SHADING = 3, 0x20
+LAVA_FLAG = 4  # IWF_LAVA: the river takes ``LavaRiverDefault`` (rendering/water.md 1.9a)
+# cbInlandWaterGlobal's lava values and cLavaTimer: no game file holds them (the engine sets them), so these are
+# stand-ins tuned by eye against the shader's own ranges, the timer high (the lava fully spread) [I]
+LAVA = {"cLavaTimer": 1.0e5, "cLavaNoiseScale": 0.3, "cLavaNoiseDistortion": 0.6, "cLavaNoiseDetail": 6.0,
+        "cLavaNoiseRoughness": 0.5, "cLavaNoiseFactor": 2.0, "cLavaNoiseOffset": 0.3,
+        "cLavaNoiseSpeedOffsetFactor": 0.3, "cLavaSpeedMult": 0.1, "cLavaNormalStrength": 0.5, "cLavaBrightness": 3.0,
+        "cLavaStoneAlbedo": 0.04, "cLavaSpreadSpeed": 10.0, "cLavaDisplacement": 0.3, "cLavaDisplacementDetail": 4.0,
+        "cLavaDisplacementMidlevel": 0.0, "cLavaNoiseDispMax": 0.5, "cLavaNoiseDispMin": -0.5,
+        "cLavaNoiseStoneClamp": 0.6, "cLavaNoiseLavaClamp": 0.0, "cLavaColorTemperatureFactor": 0.4,
+        "cLavaGlowTint": [1.0, 1.0, 1.0], "cLavaGloss": 0.5, "cLavaStoneGloss": 0.2, "cLavaSlowCompress": 0.5,
+        "cLavaSlowBend": 0.01, "cLavaSpeedOff": 0.0}  # fmt: skip
 GLOBALS = "data/base/config/engine/globals.xml"
 SEASON = "DLC03_InlandWater_{}Season"
 # the season record's fields (AmbientInlandWater) and their cbInlandWater names; the colours are vectors
@@ -359,6 +372,7 @@ def look_values(body: SBody, seasons: dict | None = None, season: tuple = (DRY, 
         **FIXED,
     }
     values["cIWFlags"] = body.flags
+    values["cIWLavaFlowOffset"] = float(look.get("LavaFlowOffset", 0))  # an integer in the file, -10000: permanent
     if seasons is not None:
         values["cIWSmallWaveWindGustBoost"] = seasons["gust"]
         if seasons.get("cycle") is not None:
@@ -366,6 +380,11 @@ def look_values(body: SBody, seasons: dict | None = None, season: tuple = (DRY, 
         if body.flags & GLOBAL_SHADING:
             values.update(season_values(seasons, season[0]))
     return values
+
+
+def is_lava_river(body: SBody) -> bool:
+    """Whether the game draws the body by its lava technique: a river whose ``RenderFlags`` has ``IWF_LAVA``."""
+    return body.kind == "River" and bool(body.flags & LAVA_FLAG)
 
 
 def flow_side(size_tiles: float) -> int:
@@ -394,6 +413,7 @@ class CInlandWater(CComputeChain):
         self.m_seasons = seasons  # Egypt's season looks (``read_seasons``; None: not an Egypt session)
         self.m_river = gamedraw.CProgram(stages["river.vs"], stages["river.ps"])
         self.m_lake = gamedraw.CProgram(stages["lake.vs"], stages["lake.ps"])
+        self.m_lava = gamedraw.CProgram(stages["river.vs"], stages["lava.ps"])  # not tessellated (water.md 1.9a)
         self.m_raster = gamedraw.CProgram(flow["vs"], flow["ps"])
         self.m_states = {"river": renderstates.pass_state(stages["river.ps"].state),
                        "lake": renderstates.pass_state(stages["lake.ps"].state),
@@ -561,7 +581,7 @@ class CInlandWater(CComputeChain):
                 model.look = {**model.look, **look_values(model.body, self.m_seasons, season)}
         seconds = self.m_seconds
         frame = {"cTimer": [seconds, 0.0, seconds, seconds], "cWaveTime": seconds, "cTerrainSize": [self.m_size_tiles, self.m_size_tiles, 1 / self.m_size_tiles,
-                 1 / self.m_size_tiles], "cWaterInfoCoord": [1 / self.m_size_tiles] * 2, **self.m_water}  # fmt: skip
+                 1 / self.m_size_tiles], "cWaterInfoCoord": [1 / self.m_size_tiles] * 2, **self.m_water, **LAVA}  # fmt: skip
         for model in self._m_models:
             model.m_values = {**model.look, **frame}
         return list(self._m_models)
@@ -577,11 +597,13 @@ class CInlandWater(CComputeChain):
             mesh = river_mesh(body, self.m_size_tiles) if is_river else lake_mesh(body, self.m_size_tiles)
             if mesh is None:
                 continue
+            is_lava = is_lava_river(body)
             state = self.m_states["river" if is_river else "lake"]
-            model = self._model(self.m_river if is_river else self.m_lake, mesh, state)
+            program = self.m_lava if is_lava else self.m_river if is_river else self.m_lake
+            model = self._model(program, mesh, state)
             model.look, model.body = {**look_values(body, self.m_seasons, self._m_season), **flow}, body
             ordered.append(model)
-            if is_river:  # its depth after its colour (p1: ``psRiverDepthOnly`` writes nothing but the depth)
+            if is_river and not is_lava:  # its depth after its colour (p1: ``psRiverDepthOnly`` writes only the depth)
                 depth = self._model(
                     self.m_river, mesh, replace(state, depth_write=True, colour=False, blends=()), model
                 )

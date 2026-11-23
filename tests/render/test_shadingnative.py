@@ -86,6 +86,7 @@ def test_the_transparent_pass_reads_the_clouds_shadow_only_once_it_was_made():
     assert seen.inputs() == {"cTransmittanceMap": 1, "cCloudBaseNoise": 2}
 
 
+@pytest.mark.xdist_group("island_view")
 def test_every_shader_of_the_step_binds_on_the_software_rasteriser():
     from tests.render.renderfakes import native_module
 

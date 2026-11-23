@@ -318,7 +318,7 @@ void main() {
 WATER_PLAIN_FS = (
     """
 #version 330
-uniform vec3 waterColor; uniform float opacity;
+uniform vec3 waterColor; uniform float opacity; uniform vec3 glow;  // glow: lava, which emits
 in vec3 vWorld; out vec4 color;
 """
     + LIGHT
@@ -330,7 +330,7 @@ void main() {
     vec3 c = lit(waterColor, n, vWorld, shadowAt(vWorld, n)) + sunColor * spec * 0.2;
     float fres = pow(1.0 - max(dot(n, v), 0.0), 4.0);
     c = mix(c, fogColor, envLight * (0.3 + 1.6 * fres));  // the sky's reflection (the page's environment map)
-    color = vec4(fogged(c, vWorld), mix(opacity, 1.0, fres * 0.5));
+    color = vec4(fogged(c + glow, vWorld), mix(opacity, 1.0, fres * 0.5));
 }
 """
 )

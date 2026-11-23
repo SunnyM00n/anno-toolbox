@@ -165,6 +165,7 @@ class CSettings:
     renderer: str = ""  # the 3D views' device (``render.rhiview.BACKENDS``); empty: the default
     rendering: dict = field(default_factory=dict)  # per game: its look, backend and frame switches (render.nativelook)
     quality: dict = field(default_factory=dict)  # per game (render.quality.GAMES): its preset, or a Custom record
+    view_switches: dict = field(default_factory=dict)  # the island editor's Performance switches turned off or on
     hardware: bool = True  # hardware acceleration; off: a software adapter from the next start (render.nativelook)
     native_shaders: bool = True  # 117's game look binds the game's shipped shaders; off: the earlier way (nativegpu)
     check_updates: bool = True  # look for a newer release at the start, once a day (``suite.updates``)

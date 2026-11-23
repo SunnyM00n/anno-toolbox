@@ -25,6 +25,43 @@ RUNTIME_FILES = (  # read beside the program at run time (paths.REPO_ROOT / ...)
     "docs/formats/enums-117.json",
 )
 LICENSE_FILES = ("LICENSE", "LICENSE-UBISOFT.md")
+CODEBOOKS = (
+    "packed_codebooks_aoTuV_603.bin"  # ww2ogg's Vorbis codebooks: Wwise Vorbis sounds need them (tools/README.md)
+)
+CODEBOOKS_NOTICE = "ww2ogg-COPYING.txt"  # their licence, written beside them: a binary copy must carry the notice
+CODEBOOKS_LICENCE = """The file packed_codebooks_aoTuV_603.bin comes from the ww2ogg project (https://github.com/hcs64/ww2ogg),
+whose licence is:
+
+Copyright (c) 2002, Xiph.org Foundation
+Copyright (c) 2009-2016, Adam Gashlin
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+- Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+- Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+- Neither the name of the Xiph.org Foundation nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""
 # What the bundle's libraries are, by distribution name; the version and licence line are read from the build's
 # environment (``third_party``). Python, Qt, the boot loader and texconv are not distributions.
 THIRD_PARTY = (
@@ -45,6 +82,11 @@ THIRD_PARTY_FIXED = (
     ("Qt", "LGPL-3.0", "the Qt libraries are separate files in _internal/PySide6 and can be replaced"),
     ("PyInstaller", "GPL-2.0-with-exception", "the boot loader; the exception allows bundled programs of any licence"),
     ("texconv", "MIT", "Microsoft DirectXTex, in tools/"),
+    (
+        "ww2ogg codebooks",
+        "BSD-3-Clause",
+        "packed_codebooks_aoTuV_603.bin in tools/, with its notice ww2ogg-COPYING.txt",
+    ),
     # the game look's compiled module (native/d3d12/THIRD-PARTY.md: the commits and the licence texts)
     ("NVRHI", "MIT", "NVIDIA's rendering layer, built into the render module _nativegpu.pyd"),
     ("DirectX-Headers", "MIT", "Microsoft's Direct3D 12 headers, built into _nativegpu.pyd"),
@@ -147,6 +189,14 @@ def find_texconv(tree: Path, environ: dict[str, str]) -> Path | None:
     options += [tree / "tools" / "texconv.exe", ROOT / "tools" / "texconv.exe"]
     if on_path := shutil.which("texconv"):
         options.append(Path(on_path))
+    return next((option for option in options if option.is_file()), None)
+
+
+def find_codebooks(tree: Path, environ: dict[str, str]) -> Path | None:
+    """The Vorbis codebook file: ``ANNO_WW_CODEBOOKS``, the tree's ``tools/``, then the checkout's."""
+    explicit = environ.get("ANNO_WW_CODEBOOKS")
+    options = [Path(explicit)] if explicit else []
+    options += [tree / "tools" / CODEBOOKS, ROOT / "tools" / CODEBOOKS]
     return next((option for option in options if option.is_file()), None)
 
 

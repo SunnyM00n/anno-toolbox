@@ -327,11 +327,13 @@ class CGameIsland(CIslandBake):
         shading = (self.m_shading, sky) if not self.m_shading.m_error else None
         passes = SPasses(sky=self.m_sky if self.m_sky is not None and not self.m_sky.m_error else None, ground=ground)
         passes.transparent = objects.transparent
-        passes.sea = self._sea(options, float(lighting.get("uwTime", 0.0))) if shading is not None else None
-        passes.inland = self._inland(options, float(lighting.get("uwTime", 0.0))) if shading is not None else None
+        seconds = float(lighting.get("uwTime", 0.0))
+        passes.sea = self._sea(options, seconds) if shading is not None else None
+        passes.inland = self._inland(options, seconds) if shading is not None else None
         self._water_passes(passes)
         if shading is not None:  # the water's copies, the sea, the visible sky, haze and clouds (phases 6 and 7)
-            self.m_extras.passes(passes, passes.sky, float(lighting.get("uwTime", 0.0)), ctx, bool(passes.transparent))
+            transparent, held = bool(passes.transparent), not options.waves  # held: the ocean is not stepped again
+            self.m_extras.passes(passes, passes.sky, seconds, ctx, transparent, *options.sky_parts, held=held)
             self._fog(passes.atmosphere)
         near, far = frame_planes(camera)  # with clouds the rays reach their own far plane (frame-117-viewer.md 12)
         cam = self.m_frame.camera(size_px, (x, y, z), camera.m_target, camera.m_fov_rad, near, far, self.m_extras.far())
@@ -352,8 +354,9 @@ class CGameIsland(CIslandBake):
         self.m_renderer.m_stats["game_decals"] = sum(decal.m_count for decal in decals)
         for how in ("detailed", "stored"):
             self.m_renderer.m_stats[f"terrain_{how}"] = sum(model.m_kind[0] == how for model in models)
-        clock = getattr(options, "particle_time", None) is None  # the water and the clouds move with the view's clock
-        moving = clock and any(render_pass is not None for render_pass in (passes.sea, passes.inland, passes.clouds))
+        moving = not options.is_clock_held and any(  # the water and the clouds move with the view's clock
+            render_pass is not None for render_pass in (passes.sea, passes.inland, passes.clouds)
+        )
         fitted = (
             shadows and self._m_late and self.m_frame.m_cascades is not None and self.m_frame.m_cascades.gpu
         )  # read back
@@ -392,8 +395,7 @@ class CGameIsland(CIslandBake):
         self._end_copies()
 
     def _end_copies(self) -> None:
-        """The native depth copy's frame end; once it failed, the current path's pass from the next frame (said
-        once)."""
+        """The native depth copy's frame end; once it failed (said once), the current path's pass from then on."""
         copies = self.m_native_copies
         self.m_renderer.m_stats["copies_native"] = int(copies is not None and not copies.m_error)
         if copies is not None and copies.m_error:

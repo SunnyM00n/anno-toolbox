@@ -100,6 +100,7 @@ def test_the_seas_draw_finds_its_maps_before_the_frames():
         "waves", "own", "copy", None]  # fmt: skip
 
 
+@pytest.mark.xdist_group("island_view")
 def test_the_water_binds_the_shipped_shaders_on_the_software_rasteriser():
     from tests.render.renderfakes import native_module
 

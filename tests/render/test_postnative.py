@@ -63,6 +63,7 @@ def test_the_composite_draws_in_the_view_targets_own_formats():
         postnative.target_format(FakeFbo(FakeTex(F.UnknownFormat)))  # a format the module has no name for
 
 
+@pytest.mark.xdist_group("island_view")
 def test_every_shader_of_the_step_binds_on_the_software_rasteriser():
     from tests.render.renderfakes import native_module
 

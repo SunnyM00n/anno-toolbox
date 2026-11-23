@@ -46,6 +46,9 @@ NEEDS = (
     "slots",  # the slot check applies (an island built for 117)
     "brush",  # a brush tool is offered
     "kind117",  # a vanilla 117 island (how it is saved)
+    "sea_mirror",  # the island's sea draws a mirror of the scene (the 2070, 1404 and 1701 seas)
+    "game_sky",  # the game look draws a visible sky, haze and clouds (117's)
+    "game_occlusion",  # the game look makes an ambient occlusion (1800's and 2205's)
     *TOOLS,
 )
 MODES = {
@@ -113,6 +116,13 @@ TABS = (
                          _toggle("layer_grass", N_("islands.layer_grass"), "plant", "island", N_("islands.tip.layer_grass")),
                          _toggle("layer_forest", N_("islands.layer_forest"), "plant", "island", N_("islands.tip.layer_forest")),
                          _toggle("layer_water", N_("islands.layer_water"), "water", "island", N_("islands.tip.layer_water")))),
+            (N_("islands.performance"), (_toggle("perf_shadows", N_("islands.perf_shadows"), "hide", "island", N_("islands.tip.perf_shadows")),
+                         _toggle("perf_waves", N_("islands.perf_waves"), "water", "island", N_("islands.tip.perf_waves")),
+                         _toggle("perf_reflections", N_("islands.perf_reflections"), "surf_on", "sea_mirror", N_("islands.tip.perf_reflections")),
+                         _toggle("perf_sky_haze", N_("islands.perf_sky_haze"), "eye", "game_sky", N_("islands.tip.perf_sky_haze")),
+                         _toggle("perf_clouds", N_("islands.perf_clouds"), "noise", "game_sky", N_("islands.tip.perf_clouds")),
+                         _toggle("perf_ambient_occlusion", N_("islands.perf_ambient_occlusion"), "focus", "game_occlusion",
+                                 N_("islands.tip.perf_ambient_occlusion")))),
         ),
     ),
     (
@@ -208,6 +218,10 @@ ITEM_GAMES = {
     "point_delete": ("anno117", "anno1800"),
     "point_insert": ("anno117", "anno1800"),
     "target": ("anno117",),
+    "perf_reflections": ("anno2070", "anno1404", "anno1701"),
+    "perf_sky_haze": ("anno117",),
+    "perf_clouds": ("anno117",),
+    "perf_ambient_occlusion": ("anno1800", "anno2205"),
 }
 
 

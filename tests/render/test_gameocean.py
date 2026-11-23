@@ -81,6 +81,7 @@ print(json.dumps({"waves": int((np.abs(out["t0"] - out["flat"]).sum(-1) > 6).sum
 """
 
 
+@pytest.mark.time_limit(900)  # compiles the game's shaders: minutes under a full run's load
 def test_the_ocean_simulation_moves_a_fountains_water():
     import os
     import sys
@@ -93,6 +94,6 @@ def test_the_ocean_simulation_moves_a_fountains_water():
     if "d3d12" not in render_backends():
         pytest.skip("no Direct3D 12 device")
     # three pictures, the first compiling the game's shaders: the child's default five minutes ran out under load
-    got = run_child(INSTALL_WAVES.replace("sys.argv[1]", repr(root)), timeout=1800)
+    got = run_child(INSTALL_WAVES.replace("sys.argv[1]", repr(root)), timeout=880)
     assert got["waves"] > 100, got  # the waves' normals and caustics against the flat surface
     assert got["time"] > 100, got  # and they move with the time

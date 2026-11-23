@@ -1,7 +1,8 @@
 """A test that hangs fails fast: after ``seconds`` the guard prints the stacks of every thread to the real stderr and
 ends the process (exit code 3), where a plain run would block until somebody notices. ``arm`` returns the function that
 disarms it. ``ANNO_TEST_TIMEOUT`` (seconds, default 300) sets the limit of one test; the guard is armed for every test
-by ``conftest.py``."""
+by ``conftest.py``, and a test marked ``time_limit(seconds)`` gets that limit when it is longer.
+``limit`` is the limit of the test being watched (``run_child`` stays below it)."""
 
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from collections.abc import Callable
 
 DEFAULT_SECONDS = 300
 EXIT_CODE = 3
+_armed: list[float] = []  # the limits of the tests being watched, the current one last
 
 
 def seconds() -> float:
@@ -20,6 +22,11 @@ def seconds() -> float:
         return float(os.environ.get("ANNO_TEST_TIMEOUT", DEFAULT_SECONDS))
     except ValueError:
         return float(DEFAULT_SECONDS)
+
+
+def limit() -> float:
+    """The limit of the test being watched (``seconds`` outside a test)."""
+    return _armed[-1] if _armed else seconds()
 
 
 def arm(name: str, limit: float, before_exit: Callable[[], None] | None = None) -> Callable[[], None]:
@@ -40,4 +47,11 @@ def arm(name: str, limit: float, before_exit: Callable[[], None] | None = None) 
         os._exit(EXIT_CODE)
 
     threading.Thread(target=watch, name="hang-guard", daemon=True).start()
-    return done.set
+    _armed.append(limit)
+
+    def disarm() -> None:
+        done.set()
+        if _armed:
+            _armed.pop()
+
+    return disarm

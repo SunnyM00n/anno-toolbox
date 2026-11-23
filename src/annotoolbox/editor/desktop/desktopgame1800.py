@@ -456,7 +456,7 @@ class CGameIsland1800(CGameIsland):
         """Whether the view draws on (``Renderer.animated``): the clouds, the sea and the rivers move with the view's
         clock, or the frame still settles (nodes to bake, pages to build, the exposure moving). The cascades are
         fitted in the frame itself (``_cull_casters``): none read back late."""
-        clock = getattr(options, "particle_time", None) is None
+        clock = not options.is_clock_held
         moving = clock and (self.m_ending is not None or self.m_renderer.m_game_sea or self.m_renderer.m_game_inland)
         settling = (self.m_pages is not None and self.m_pages.busy()) or self._m_unbaked
         return bool(moving or settling or (self.m_ending is not None and self.m_ending.m_again))
@@ -606,6 +606,7 @@ class CGameIsland1800(CGameIsland):
         None (the pre-pass's targets let go)."""
         quality, ssao = self.m_quality, self.m_ssao
         is_enabled = ssao is not None and not ssao.m_error and (quality is None or quality.ssao)
+        is_enabled = is_enabled and options.ambient_occlusion
         if not is_enabled:
             self.m_frame.drop_prepass()
         return ssao if is_enabled else None

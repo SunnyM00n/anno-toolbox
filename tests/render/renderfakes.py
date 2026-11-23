@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass, field
 
 import pytest
+from tests import childguard, hangguard
 
 from annotoolbox.models import shadernative
 from annotoolbox.paths import REPO_ROOT
@@ -71,11 +72,25 @@ class FakeHandover:
 ROOT = REPO_ROOT
 
 
-def run_child(code: str, timeout: int = 300) -> dict:
+def run_child(code: str, timeout: float = 300) -> dict:
+    """Run ``code`` in a child and return its last JSON line. The child ends itself when this process is gone or
+    its time is up (tests/childguard.py); the time is cut to stay under the hang guard's limit, so a hung child
+    fails the test with its output before the guard ends the whole run."""
+    timeout = min(timeout, max(30.0, hangguard.limit() - childguard.MARGIN))
     paths = [str(ROOT / "src"), str(ROOT), str(ROOT / "tests")]
-    env = {**os.environ, "QT_QPA_PLATFORM": "windows", "PYTHONPATH": os.pathsep.join(paths)}
+    env = {
+        **os.environ,
+        "QT_QPA_PLATFORM": "windows",
+        "PYTHONPATH": os.pathsep.join(paths),
+        **childguard.child_env(timeout + 5),
+    }
     done = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=ROOT, timeout=timeout
+        [sys.executable, "-c", childguard.child_prelude() + code],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=ROOT,
+        timeout=timeout,
     )
     lines = [ln for ln in done.stdout.splitlines() if ln.startswith("{")]
     if done.returncode != 0 or not lines:

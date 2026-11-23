@@ -32,6 +32,12 @@ LOOKS = (
     ("caustics", N_("islands.caustics"), N_("islands.underwater_looks_light_patterns_sea")),
 )  # fmt: skip
 LOOKS_2070 = ("look2070", "underwater", "caustics")  # the looks of islands edited for 2070
+# The Home tab's Performance switches: ``SViewOptions`` fields, ribbon ids ``perf_<key>``, kept in the settings
+# (``Settings.view_switches``); all on unless the person turned one off (island-editor "Performance switches").
+PERFORMANCE = ("shadows", "waves", "reflections", "sky_haze", "clouds", "ambient_occlusion")
+SEA_MIRROR_GAMES = ("anno2070", "anno1404", "anno1701")  # the seas that draw a mirror of the scene
+GAME_SKY_GAMES = ("anno117",)  # the game look draws a visible sky, haze and clouds
+GAME_OCCLUSION_GAMES = ("anno1800", "anno2205")  # the game look makes an ambient occlusion
 GAME_TERRAIN = ("anno1800",)  # other games whose islands have the game's near terrain (height pages) for the view
 NO_TOOLS = {
     "anno117": {"blocker"},
@@ -190,6 +196,7 @@ class CIslandDoc(QObject):
         self.m_own_materials: list[dict] = []
         self.m_view.load(self.m_session, self.m_editor)
         self.apply_quality()
+        self.apply_performance()
         self.apply_game_look()
         self.m_view.m_allowed = self.m_modes["tools"]
         self.m_gallery = CMaterialGallery(self)
@@ -260,6 +267,7 @@ class CIslandDoc(QObject):
             "slots": not (session.m_island.get("mode") == "2070" or session.m_island.get("game")),
             "brush": editable and bool(self.m_modes["tools"] & set(BRUSHES)),
             "kind117": editable and self.m_info.get("kind") == "anno117",
+            **self.performance_needs(),
         }
 
     def game_key(self) -> str:
@@ -290,6 +298,35 @@ class CIslandDoc(QObject):
         """Draw (or leave out) one of the view's layers (``desktoprender.LAYERS``): the ribbon's Layers group."""
         self.m_view.m_opts.layers[key] = is_on
         self.m_view.update()
+
+    def performance_needs(self) -> dict[str, bool]:
+        """Which Performance switches have something to skip on this island: the seas' mirror (2070, 1404, 1701),
+        the game look's sky, haze and clouds (117's, where the game's own shaders draw) and its ambient occlusion
+        (1800's and 2205's)."""
+        game, is_native = self.game_key(), self.m_view.m_opts.native
+        return {
+            "sea_mirror": game in SEA_MIRROR_GAMES,
+            "game_sky": game in GAME_SKY_GAMES and is_native,
+            "game_occlusion": game in GAME_OCCLUSION_GAMES and is_native,
+        }
+
+    def apply_performance(self) -> None:
+        """The view's Performance switches as the settings keep them (all on for a person who never turned one off)."""
+        stored = getattr(self.m_shell.m_app.m_settings, "view_switches", {})
+        for key in PERFORMANCE:
+            setattr(self.m_view.m_opts, key, bool(stored.get(key, True)))
+        self.m_view.update()
+
+    def set_performance(self, key: str, is_on: bool) -> None:
+        """One Performance switch on the view and in the settings (the Home tab's group and View > Rendering's
+        Shadows entry); off, the view does not make that part of the frame."""
+        if key not in PERFORMANCE:
+            return
+        setattr(self.m_view.m_opts, key, is_on)
+        stored = dict(getattr(self.m_shell.m_app.m_settings, "view_switches", {}))
+        self.m_shell.m_app.set_settings({"view_switches": {**stored, key: is_on}})
+        self.m_view.update()
+        self.m_shell.sync()
 
     def look_state(self) -> dict[str, tuple[bool, bool]]:
         """Per look and ``shadows``: (enabled, checked). 117's rules are for 117's islands, built or vanilla, and the
@@ -357,6 +394,9 @@ class CIslandDoc(QObject):
 
     def set_look(self, key: str, is_on: bool) -> None:
         options = self.m_view.m_opts
+        if key == "shadows":  # the Performance switch of the same name
+            self.set_performance(key, is_on)
+            return
         if key == "particles_frozen":  # hold the effects at the moment of the last frame
             renderer = self.m_view.m_renderer
             options.particle_time = (renderer.m_particles.m_clock if renderer is not None else 0.0) if is_on else None

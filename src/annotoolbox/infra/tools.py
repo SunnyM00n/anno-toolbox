@@ -33,7 +33,7 @@ WHERE_TO_GET = {
     "texconv": "texconv.exe from https://github.com/microsoft/DirectXTex/releases (tools/README.md; optional, the "
     "built-in texture path does without)",
     "ffmpeg": "an ffmpeg build with libvorbis, https://ffmpeg.org/download.html (tools/README.md)",
-    "wwcodebooks": "packed_codebooks_aoTuV_603.bin, the codebook file of the ww2ogg tool (tools/README.md)",
+    "wwcodebooks": "packed_codebooks_aoTuV_603.bin, the codebook file of the ww2ogg tool (tools/README.md; the installed program ships it)",
     "rad": "RAD Video Tools, https://www.radgametools.com/bnkdown.htm (set RAD_VIDEO to radvideo64.exe if elsewhere)",
 }
 RAD_ENV = "RAD_VIDEO"

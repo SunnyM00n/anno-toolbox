@@ -475,7 +475,7 @@ A texture is a DDS (BC1 to BC5, BC7, BC6H, the uncompressed and float layouts, c
   - Double-click a row (or Play) plays its file. For a `.sp` it plays the MP3 beside it.
   - The Sound app edits the database and replaces clips.
 - **A clip** (`.wem`, `.wav`, `.mp3`, `.ogg`) shows its format, channels, rate and length, and Play.
-- Wwise Vorbis clips need the codebook file of the ww2ogg tool (`packed_codebooks_aoTuV_603.bin`) in the tools folder.
+- Wwise Vorbis clips need the codebook file of the ww2ogg tool (`packed_codebooks_aoTuV_603.bin`). The installed program ships it in its tools folder; a checkout puts it in `tools/` (`tools/README.md`).
   PCM and ADPCM clips and the older games' audio files play without it.
 
 ## Data files

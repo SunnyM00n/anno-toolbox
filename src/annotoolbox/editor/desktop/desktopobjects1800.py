@@ -161,7 +161,7 @@ class SDevice:
     rows: objects1800.CFrameRows
 
     def release(self, ctx) -> None:
-        """The maps, stand-ins and rows (the shared buffers are the look's, ``GameIsland1800.shared``)."""
+        """The maps, stand-ins and rows (the shared buffers are the look's, ``CGameIsland1800.m_shared``)."""
         self.pool.release()
         self.dummies.release(ctx)
         self.rows.release()
@@ -304,7 +304,7 @@ class CObjects1800(CGameObjects):
             quality, rhi = getattr(self.m_island, "m_quality", None), self.m_renderer.m_ctx.m_rhi
             pool = objects1800.CMaps2D(rhi, quality.max_texture if quality is not None else 0)
             self.m_device = SDevice(
-                pool, CDummies(rhi), *self.m_island.shared, objects1800.CFrameRows(self.m_renderer.m_ctx)
+                pool, CDummies(rhi), *self.m_island.m_shared, objects1800.CFrameRows(self.m_renderer.m_ctx)
             )
         self.m_parts[key] = self.PART(self.m_renderer.m_ctx, got, self.m_device)
         return self.m_parts[key]

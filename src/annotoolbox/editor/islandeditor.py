@@ -36,7 +36,7 @@ from .modelparts import library_group, model_parts
 
 # Big islands are read coarser: the continental island (768 tiles) at the full 2 samples per tile
 # made a terrain mesh of 4.7 million triangles and a ground image of 3072 pixels, 21 s to draw.
-ISLAND_JSON = 10  # the cached island data's layout: a change makes the editor read the island again
+ISLAND_JSON = 11  # the cached island data's layout: a change makes the editor read the island again
 FINE_TERRAIN_MAX = 512  # tiles: larger islands get 1 height sample per tile
 ALBEDO_MAX = 2048  # pixels across the ground image
 GROUND_MAX = 2048  # texels across the ground's weight maps (the view blends the materials by them)
@@ -328,8 +328,8 @@ class CIslandEditor(CIslandAssets):
             "samples_per_tile": per_tile,
             "heights": base64.b64encode(heightmap.tobytes()).decode("ascii"),
             "splines": [
-                {"kind": k, "points": [list(point) for point in points], "widths": list(widths)}
-                for k, points, widths in self.m_view.splines()
+                {"kind": k, "points": [list(point) for point in points], "widths": list(widths), "flags": flags}
+                for (k, points, widths), flags in zip(self.m_view.splines(), self.m_view.spline_flags(), strict=True)
             ],
             "water": self.water_network(),
             "objects": objects,

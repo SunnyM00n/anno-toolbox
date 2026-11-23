@@ -129,6 +129,7 @@ class CIslandSea:
     def __init__(self, renderer) -> None:
         self.m_renderer = renderer
         self.m_mirror: dict = {}  # the planar reflection's targets
+        self.m_empty_mirror: dict | None = None  # the targets (``m_mirror``) cleared while the reflections are off
         self.m_targets: dict = {}
         self.m_passes: dict = {}
         self.m_error = False  # said once: the view's own sea from then on
@@ -210,7 +211,7 @@ class CIslandSea:
             self.fail(exc)
             self.m_renderer.m_ctx.enable(self.m_renderer.m_ctx.DEPTH_TEST)
             return False
-        self.m_renderer.m_animated |= drew and options.particle_time is None  # the waves move with the view's clock
+        self.m_renderer.m_animated |= drew and not options.is_clock_held  # the waves move with the view's clock
         return drew
 
     def _targets(self, targets: dict) -> dict:
@@ -284,6 +285,16 @@ class CIslandSea:
         view's lit colours stand in for theirs), with the main pass's instances in view."""
         renderer, ctx = self.m_renderer, self.m_renderer.m_ctx
         own = self._mirror_targets()
+        if not options.reflections:  # no scene drawn again: the map is cleared once and stays empty
+            if self.m_empty_mirror is not own:
+                own["fbo"].use()
+                own["fbo"].clear(0.0, 0.0, 0.0, 0.0, depth=1.0)
+                self._pass("gamma", GAMMA_FS).draw(own["gamma_fbo"], {"gLit": own["color"]}, {}, depth_test=False)
+                targets["msaa"].use()
+                ctx.viewport = (0, 0, *targets["size"])
+                self.m_empty_mirror = own
+            return own["gamma"].native
+        self.m_empty_mirror = None
         view = np.asarray(frame.view, float) @ MIRROR_Y
         proj = np.asarray(frame.view_proj, float) @ np.linalg.inv(np.asarray(frame.view, float))
         mirrored = oblique_near(proj, np.linalg.inv(view).T @ np.array([0.0, 1.0, 0.0, 0.0]))
@@ -296,8 +307,10 @@ class CIslandSea:
         ctx.enable(ctx.DEPTH_TEST)
         ctx.disable(ctx.CULL_FACE)
         renderer._draw_ground(mirrored_frame, options)
+        renderer.m_uniforms.forget()
         for batch, part, vaos in renderer.m_drawn_opaque:
             renderer._draw_part(batch, part, vaos, mirrored_frame)
+        renderer.m_uniforms.forget()
         renderer.m_stats, renderer._m_lit = (
             stats,
             {},
@@ -327,7 +340,7 @@ class CIslandSea:
         for key in ("fbo", "gamma_fbo", "color", "depth", "gamma"):
             if key in self.m_mirror:
                 self.m_mirror[key].release()
-        self.m_mirror = {}
+        self.m_mirror, self.m_empty_mirror = {}, None
         if self.m_heights_map is not None:
             self.m_heights_map[1].release()
             self.m_heights_map = None

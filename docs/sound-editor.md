@@ -95,7 +95,7 @@ stores its audio:
 |---|---|---|---|
 | PCM | all three | nothing | PCM in the music mod plays in 117 (verified in game); not tried in 1800 or 2205 |
 | Wwise ADPCM (IMA, 36 bytes a channel and block, 64 samples) | all three | nothing | the encoder is the inverse of the decoder the viewer plays 2205's clips with (round trip tested); **not heard in a game** |
-| Wwise Vorbis | all three | ffmpeg with libvorbis and `packed_codebooks_aoTuV_603.bin` in `tools/` | the writer is `formats/wwvorbis`, the writer of the converted building sounds; 1800's and 2205's Vorbis files are the same layout with 2205's own channel word (the file header written is checked against the games' own files; `sound/bank-objects.md` "Wwise Vorbis files in 1800 and 2205"); **not heard in 1800 or 2205**. ffmpeg is never shipped |
+| Wwise Vorbis | all three | ffmpeg with libvorbis and `packed_codebooks_aoTuV_603.bin` in `tools/` (the codebook file ships with the installed program) | the writer is `formats/wwvorbis`, the writer of the converted building sounds; 1800's and 2205's Vorbis files are the same layout with 2205's own channel word (the file header written is checked against the games' own files; `sound/bank-objects.md` "Wwise Vorbis files in 1800 and 2205"); **not heard in 1800 or 2205**. ffmpeg is never shipped |
 
 Memory: PCM is large (a 10 s stereo clip is 1.9 MB), ADPCM is a quarter of that, and Vorbis a tenth.
 117's sound effects and the music are Vorbis, so put a long clip in as Vorbis where you can.
@@ -137,7 +137,7 @@ Picking a Sound or a music track draws its clip above the facts: the peaks of th
 sample of each pixel column, both channels together), with the clip's length and format under it. The clip is the one
 the **Play** button would play: an edit's, or else the bank's, or else the loose file. It is decoded in the same way
 the Play button decodes it: PCM and Wwise ADPCM directly, and Wwise Vorbis through the codebook file and ffmpeg or
-miniaudio (the same two tools that read an Ogg file). Without them the area says why it is empty.
+miniaudio (the same two tools that read an Ogg file; the installed program ships the codebook file). Without them the area says why it is empty.
 A clip over 40 MB is not drawn.
 A music track's segment draws its markers (entry and exit cues) as lines at their time in the clip.
 `soundedit/waveform.py` makes the peaks (no Qt), and `soundedit/wavewidget.py` draws them.

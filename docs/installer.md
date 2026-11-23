@@ -17,7 +17,7 @@ uninstalls, how a download is verified, how people on the older installer move o
 | `_internal/` | Python, Qt (PySide6, with its shader baker `qsb.exe`, which the 3D views need), moderngl, numpy, scipy, Pillow, the `velopack` module and the package with its data files (the interface languages, the descriptions, the tables) |
 | `_internal/<package>/render/_nativegpu.pyd` | The game look's Direct3D 12 module. See the notes below the table |
 | `docs/formats/` | The three files the program reads next to its exes: the Phoenix schemas of 117 and 1800 and the enum table of 117 |
-| `tools/` | texconv (Microsoft DirectXTex, MIT); the program finds it there |
+| `tools/` | texconv (Microsoft DirectXTex, MIT) and the Vorbis codebook file `packed_codebooks_aoTuV_603.bin` of ww2ogg (BSD-3-Clause) with its notice `ww2ogg-COPYING.txt`; the program finds both there. Linux has the codebook file only |
 | `LICENSE`, `LICENSE-UBISOFT.md`, `THIRD-PARTY.txt` | The licences and the list of the libraries with their versions and licences (written from the build's environment) |
 
 Notes on `AnnoToolbox.exe`:
@@ -417,7 +417,7 @@ GPU BC7 encoder and the Direct3D 12 island view.
 
 | File | What |
 |---|---|
-| `AnnoToolbox-linux-x86_64.AppImage` | The release: one file, run it (`chmod +x`, double click) or put it anywhere. It holds the same program as the Windows folder, without texconv and without the Direct3D 12 module |
+| `AnnoToolbox-linux-x86_64.AppImage` | The release: one file, run it (`chmod +x`, double click) or put it anywhere. It holds the same program as the Windows folder, without texconv (the codebook file is in it) and without the Direct3D 12 module |
 | `AnnoToolbox-<version>-linux-x86_64.tar.gz` | The same program folder as a plain archive, for a computer without FUSE or for a look inside. It has no installer and no updater (the update notice sends to the release page); `install-desktop-entry.sh` in it writes a menu entry for the folder it sits in |
 | `AnnoToolbox-<version>-linux-full.nupkg`, `-linux-delta.nupkg`, `releases.linux.json`, `RELEASES-linux`, `assets.linux.json` | The update feed of the AppImage: the packer's (Velopack's) Linux channel, delta packages included. The names carry `linux` so they never meet the Windows files on the same release |
 | `SHA256SUMS-linux` | The checksums of the Linux files above. Both lists are attested by the release workflow |
@@ -476,7 +476,7 @@ python scripts/build_app.py --smoke --pack      # out/installer/full/: the folde
 
 The script is the same as on Windows. What it does differently on Linux (`scripts/installer_linux.py`):
 
-- one program file and no texconv,
+- one program file and no texconv (the Vorbis codebook file ships),
 - no Direct3D 12 module,
 - `vpk pack` writes an AppImage, with an icon PNG drawn by the script packed in,
 - the AppImage is renamed after its architecture,
@@ -499,7 +499,7 @@ The build needs these:
 - for the game look's module, Visual Studio's C++ build tools (2022 or later, with CMake and Ninja) and git:
   `build_app.py` runs `scripts/build_native.py` when the module is missing or older than `native/d3d12/`
   ([`../native/d3d12/README.md`](../native/d3d12/README.md)); `--no-native` builds a program without it
-- texconv in `tools/`
+- texconv in `tools/`, and the Vorbis codebook file `packed_codebooks_aoTuV_603.bin` there too (the build stops without it; the notice text is written by the build)
 - **vpk**, the installer's packer, a .NET tool installed per user with no administrator
   (`dotnet tool install vpk --version 1.2.161 --tool-path tools/vpk`; [`../tools/README.md`](../tools/README.md)).
   **Its version is the version of the `velopack` module**, pinned exactly in both places.
@@ -526,7 +526,7 @@ The build runs these steps:
 
 1. The PyInstaller spec is written: one analysis, two exes and one folder. The console exe is renamed `AnnoToolbox.com`
    after the build.
-2. The schemas, texconv and the licences are put next to the exes.
+2. The schemas, texconv, the Vorbis codebooks with their notice and the licences are put next to the exes.
 3. The folder is checked: the package data, the schemas, and that Qt's shader baker is there and starts.
 4. `--smoke` runs the console build (`AnnoToolbox.com`) with `--version`, with `rdm --help`, and with every app of the
    suite started once. It uses a settings folder of its own.
@@ -566,6 +566,7 @@ folder are not uploaded again. The workflow's action versions are pinned by comm
 | PyInstaller | 6.22.3 (exact) | `release.yml` |
 | `vpk` (the .NET tool) and the `velopack` module | 1.2.161, both exact | `release.yml`, `build_app.VPK_VERSION` |
 | texconv (DirectXTex) | `may2026`, by its SHA256 | `release.yml` |
+| ww2ogg codebooks | commit `14ed9b0d`, by their SHA256 | `release.yml` (both jobs) |
 | WiX | 6.0.2 (the migration package only) | `release.yml`, `installer_wix.WIX_VERSION` |
 
 The `velopack` module was released on 2026-09-29, and the tool is the same release on NuGet.

@@ -69,6 +69,7 @@ def test_a_recording_that_raises_still_moves_qrhis_resources_back(monkeypatch):
     assert bridge.m_reads == {} and bridge.m_writes == {}
 
 
+@pytest.mark.xdist_group("island_view")
 def test_every_technique_binds_the_games_shipped_shaders_on_the_software_rasteriser():
     from tests.render.renderfakes import native_module
 

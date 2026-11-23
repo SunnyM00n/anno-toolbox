@@ -273,6 +273,83 @@ from 128 to about 30 ms a frame for the whole island (rendering/island-117-view.
 Note: the rest frame rate was measured on 2026-10-15, the culling was added on 2026-10-27 and the level of detail on
 2026-11-13.
 
+### Performance switches
+
+The Home tab's Performance group (next to Layers; [island-editor.md](island-editor.md#performance-switches)) turns off the
+costly parts of a frame. A switch skips the work: the pass is not made, the map is not drawn, the simulation is not
+stepped. `SViewOptions` holds each as a field of the same name, and the settings keep them
+(`Settings.view_switches`, all on by default).
+
+| Switch | Field | What the view skips when it is off | Looks and games |
+|---|---|---|---|
+| Shadows | `shadows` | the shadow map and its casters: the view's own sun pass, the game look's cascades and their read-back | every look and game (the Rendering menu's Shadows is the same switch) |
+| Water motion | `waves` | the water's clock is held: the ocean's FFT steps (117), the coast waves' steps (2070), the caustics' and flowing parts' motion; the view no longer redraws every 15th of a second while nothing else changes | every look and game that has moving water |
+| Water reflections | `reflections` | the scene drawn a second time, mirrored, into the sea's reflection map (the map is cleared once and stays empty) | the seas of Anno 2070, 1404 and 1701 |
+| Sky haze | `sky_haze` | the game look's visible sky and haze passes, and the clouds that go with them; the view's own sky shows | Anno 117's game look |
+| Clouds | `clouds` | the cloud pass | Anno 117's game look |
+| Ambient occlusion | `ambient_occlusion` | the occlusion pre-pass and its blur | Anno 1800's and 2205's game look |
+
+The held clock is `SViewOptions.is_clock_held` (also true for Freeze particles' still picture).
+The view has no time of day: the sun stands at one place (the editor look's fixed sun or the game's own light), so there
+is no sun simulation to switch off.
+The sun's cost is the shadows above and the sky passes.
+What a switch cannot skip is left on: the view's own sky, the lighting and the tone map stay, so the picture stays usable.
+
+Note: added on 2026-11-22; not seen in the game yet.
+
+### Frame cost
+
+What a frame of the editor's look spends beyond the GPU's work is Python: one draw call per part, level and pass, each
+with its uniforms set first. What was done about it (2026-11-22):
+
+- **Uniforms and maps that did not change are not written again** (`desktopuniforms.CUniformMemory`). Most parts of a
+  frame share the plain values (no flipbook, no foam, the same sampler units) and many a map. The memory is forgotten
+  before each run of part draws and after other code drew with the same programs (the decals, the mirrored pass of the
+  sea). A program's uniform names are looked up once (`in` on a program walks all its members).
+- **A still frame keeps the sun's shadow map.** It is drawn again only when the sun's matrix, the level-of-detail
+  camera, the layers, the quality or the scene changed (an instance written, a mesh or a cut-out map in or out:
+  `CRenderer._m_scene_serial`). A selection, a hover, flowing water and a gizmo drag redraw the frame but not the map.
+  A camera that turns draws it each frame, because the levels of detail depend on the view.
+- **The game's heights with the session's edits are added up once**, not each frame
+  (`CFramePasses._game_heights_of`; a continental island's are millions of samples), again when the heights file or an
+  edit of the heights is new.
+
+The asset viewer (`viewer/modelrender`) sets the frame's light once per program and frame, not once per part, and keeps
+its shadow map while only the camera moves, since that map does not depend on the camera. A model with a cloth
+redraws it each frame. The game's own shaders look builds each constant buffer's layout key once per technique, not
+each pass (`objectsnative._frame`).
+
+Measured offscreen at 1600 x 1000, shadows on, medians over 40 frames, with other jobs on the same GPU (the numbers
+move by a fifth from run to run; before and after were run alternately). "Turning" turns the camera a little each frame
+(`scripts/editor_shots.py --bench`), "still" does not:
+
+| Island (editor look) | Camera | Before | After |
+|---|---|---|---|
+| Anno 117 `roman_dlc01_island_continental_01` | whole, still | 138 ms | 44 ms |
+| | whole, turning | 128 ms | 84 ms |
+| | close, still | 37 ms | 16 ms |
+| | close, turning | 40 ms | 24 ms |
+| Anno 2205 `session_earth_08` | whole, still | 21 ms | 13 ms |
+| | whole, turning | 22 ms | 20 ms |
+| | close, still | 11 ms | 8 ms |
+| Anno 1800 `moderate_l_01` | whole, still | 7.7 ms | 5.1 ms |
+| | close, still | 8.6 ms | 7.1 ms |
+| Anno 2070 `n_l03` | whole, still | 7.8 ms | 5.1 ms |
+| | close, still | 7.7 ms | 5.8 ms |
+
+The turning frames of 1800 and 2070 did not change within the noise (7 to 8 ms): their draw calls are few and the
+frame is the GPU's.
+The pictures are the same as before, whole island and close up, in the editor's look on all four islands and in 2070's
+and the underwater look on 2070's.
+At most 30 pixels of a picture differ (by up to 23 of 255), as they do between two runs of the same code.
+The asset viewer drew a ship of nine parts in 1.8 ms instead of 2.3 ms, the same picture.
+The game's own shaders look on Anno 117's `roman_island_medium_03` took 0.32 s instead of 0.56 s of Python in the
+native pass's record step over 30 frames.
+Its frame stays the GPU's and the read-back's (44 ms).
+
+What is left: the draw calls themselves. A turning camera on a continental island still makes about 4,900 of them a
+frame (2,470 in the main pass and as many in the shadow pass), one per part and level, and moderngl has no multi-draw.
+
 ### Drawn by 117's rules
 
 The editor is meant to draw an island in the same way the game does, by the rules read from the game's shaders

@@ -181,6 +181,7 @@ def test_the_maps_let_go_on_the_device_come_back_from_the_file_at_the_first_stro
     assert again._m_kept is None and np.array_equal(g.alphas, base[0]) and np.array_equal(g.ids, base[1])
 
 
+@pytest.mark.xdist_group("island_view")
 def test_a_stroke_after_the_maps_went_with_strokes_in_them_paints_over_the_committed_maps():
     """A session opened with paint strokes has them in the maps before the bake's first run lets the maps go: the
     next stroke wrote into the let-go maps and failed."""

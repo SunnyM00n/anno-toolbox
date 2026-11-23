@@ -274,3 +274,7 @@ class SLodCamera:
     proj: np.ndarray
     size: tuple[int, int]
     rules: SLodRules = SLodRules()
+
+    def signature(self) -> tuple:
+        """A value that is equal for equal cameras: the level of detail chosen from it is the same."""
+        return (self.eye.tobytes(), self.view.tobytes(), self.proj.tobytes(), self.size, self.rules)

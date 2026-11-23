@@ -110,6 +110,18 @@ def desktop_window(tmp_path):
     return qt, workbench.CMainWindow(editorapp.CApp(path))
 
 
+def open_fake_island(main, name: str = "isle"):
+    """The synthetic island opened in ``main`` (read on the window's thread); its document."""
+
+    def open_island(kind, name):
+        main.m_app.m_editor = FakeEditor()
+        return {"kind": "built", "name": name, "editable": True, "buildable": True}
+
+    main.m_app.open = open_island
+    main.open("built", name)
+    return main.m_doc
+
+
 class FakeOpened:
     """What ``CApp.open_path`` hands to ``IslandEditor``."""
 

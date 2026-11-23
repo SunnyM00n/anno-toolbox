@@ -32,6 +32,7 @@ from .desktopframe import CFramePasses, SFrame
 from .desktopgeometry import pin_mesh, terrain_vertices
 from .desktopground import CGroundDraw
 from .desktoppick import CPicking
+from .desktopuniforms import CUniformMemory
 
 LAYERS = ("objects", "markers", "props", "grass", "forest", "water")
 # The threads that load the models. They parse and decode in Python, so more of them do not load faster, they take
@@ -62,6 +63,22 @@ class SViewOptions:
     season_ms: float | None = None  # Egypt's seasons this far into the session (None: the view's clock from its start)
     native: bool = False  # the island's game's own shaders on Direct3D (``desktopgame.CGameIsland``), in game light
     quality: SQuality | None = None  # the rendering quality (``render.quality``); None: the best
+    waves: bool = True  # False: the water's clock is held (no wave step, no redraw while idle), see ``is_clock_held``
+    reflections: bool = True  # False: the old games' seas draw no mirror of the scene (``desktopsea``)
+    sky_haze: bool = True  # False: the game look leaves out its visible sky and haze (and the clouds on it)
+    clouds: bool = True  # False: the game look leaves out its cloud pass
+    ambient_occlusion: bool = True  # False: the 1800 and 2205 game look makes no ambient occlusion
+
+    @property
+    def is_clock_held(self) -> bool:
+        """Whether the water and the clouds stand still: a still picture of the effects (``particle_time``) or the
+        water motion switched off (``waves``)."""
+        return self.particle_time is not None or not self.waves
+
+    @property
+    def sky_parts(self) -> tuple[bool, bool]:
+        """(the game look's visible sky and haze, its clouds) as the switches leave them: no sky, no clouds on it."""
+        return self.sky_haze, self.sky_haze and self.clouds
 
 
 def shrink(raw: bytes, size_px: tuple[int, int], component_count: int, max_side: int) -> tuple[tuple[int, int], bytes]:
@@ -128,6 +145,9 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         self._m_pick = None
         self.m_ghost: CBatch | None = None  # the library pick under the cursor (Place)
         self._m_start = time.monotonic()
+        self._m_held_s: float | None = None  # the water's clock while the water motion is off (``_water_clock``)
+        self._m_water_now = 0.0  # this frame's water clock
+        self._m_waves = True  # this frame's water motion switch
         self.m_animated = False  # flowing water or a flipbook is on screen: the view keeps ticking
         session.m_listeners.append(self.on_change)
         self._upload_terrain()
@@ -157,6 +177,12 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         )
         self._m_members: dict = {}  # program -> its uniform names (``_set_light``)
         self._m_lit: dict = {}  # program -> whether this frame's light is set with the shadow (``_draw_part``)
+        self.m_uniforms = CUniformMemory()  # what the model programs hold (``forget`` it after other code drew)
+        self._m_game_heights: tuple[bytes, np.ndarray] | None = (
+            None  # (the game's file, with the edits) (``_game_heights_of``)
+        )
+        self._m_scene_serial = 0  # counts what changes the shadow pass's picture: instances, meshes, maps
+        self._m_shadow_taken: tuple | None = None  # (key, shadow calls) of the shadow map as it stands
         self._m_table = None  # (key, CCellTable, batch index): every batch's cells (``_pass_codes``)
         self._m_frame_codes: dict = {}  # pass -> this frame's codes of every cell
         self._m_frame_lod: SLodCamera | None = None
@@ -270,6 +296,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         texture.anisotropy = 8.0
         texture.repeat_x = texture.repeat_y = True
         self.m_textures[key] = texture
+        self._m_scene_serial += 1  # a cut-out map in: the shadow map is drawn again
         self.m_library.drop_pixels(key)  # the particles read only an effect map's size
         return texture
 
@@ -299,6 +326,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         """The batch's instance sets (one buffer per level and pass) and its meshes' VAOs: per pass and level the
         meshes drawn at that level (``level_meshes``), picking's over every instance."""
         batch.release_draws()
+        self._m_scene_serial += 1
         batch.m_sets = {name: CInstanceSets(self.m_ctx, batch.m_count, batch.m_levels) for name in PASSES}
         batch.m_vaos = []
         for (part, spec), per in zip(
@@ -371,6 +399,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
     def _sync_batches(self, change: SChange) -> None:
         session = self.m_session
         if change.structure:
+            self._m_scene_serial += 1
             self._request_models()
             for key in [batch_key for batch_key in self.m_batches if batch_key not in session.m_batches]:
                 self.m_batches.pop(key).release_draws()
@@ -422,6 +451,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
             instance_matrices(positions, rotations, scales, self.m_size_tiles) if count else np.zeros((0, 4, 4), "f4")
         )
         batch.m_mats, batch.m_version = matrices, batch.m_version + 1
+        self._m_scene_serial += 1
         data = np.ascontiguousarray(matrices.transpose(0, 2, 1)).tobytes()
         batch.m_cells = CInstanceCells(matrices) if count else None
         if batch.m_inst is None or batch.m_count != count:
@@ -602,12 +632,24 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         target = np.asarray(view_target, "f4")
         light_view = look_at(target + sun * reach * 2, target)
         matrix = ortho(reach, 1.0, reach * 4) @ light_view
+        taken = (
+            matrix.tobytes(),
+            side,
+            tuple(options.layers.items()),
+            lod.signature() if lod is not None else None,
+            self._m_scene_serial,
+        )
+        if self._m_shadow_taken is not None and self._m_shadow_taken[0] == taken:
+            self.m_stats["shadow_calls"] = self._m_shadow_taken[1]  # the same sun, view and scene: the map stands
+            return shadow_texture, matrix
         fbo.use()
         fbo.clear(depth=1.0)
         ctx.enable(ctx.DEPTH_TEST)
         ctx.disable(ctx.BLEND)
         planes, texel = frustum_planes(matrix), 2 * reach / side
         programs = {kind: self.m_prog["depth_" + kind] for kind in ("model", "banner")}
+        memory = self.m_uniforms
+        memory.forget()
         for program in programs.values():  # the sun's camera, once a frame
             program["viewProj"].write(gl(matrix))
             if "view" in self._names(program):
@@ -628,17 +670,32 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
                 if model_part["shader"] in (WATER_SHADER, FOAM_SHADER):
                     continue
                 program = programs["banner" if model_part["shader"] == BANNER_SHADER else "model"]
-                program["part"].write(gl(model_part["matrix"]))
+                memory.put_bytes(program, "part", gl(model_part["matrix"]))
                 diffuse_texture = (
                     self._gpu_texture("d:" + model_part["diffuse"], True) if model_part["diffuse"] else None
                 )
                 if "textured" in self._names(program):
-                    program["textured"].value = diffuse_texture is not None
+                    memory.put(program, "textured", diffuse_texture is not None)
                 if diffuse_texture is not None:
-                    diffuse_texture.use(0)
-                    program["diffuseTex"].value = 0
+                    memory.bind(diffuse_texture, 0)
+                    memory.put(program, "diffuseTex", 0)
                 self.m_stats["shadow_calls"] += self._render_levels(vaos["depth"], counts)
+        memory.forget()
+        self._m_shadow_taken = (taken, self.m_stats["shadow_calls"])
         return shadow_texture, matrix
+
+    def _water_clock(self, options: SViewOptions) -> float:
+        """The seconds the water, the clouds and the flowing parts are drawn at: a still picture's moment, the moment
+        the water motion was switched off (held until it is on again), or the live clock. It also notes the frame's
+        switch and clock for the parts that draw them (``_draw_part``)."""
+        self._m_waves = options.waves
+        if options.waves:
+            self._m_held_s = None
+        elif self._m_held_s is None:
+            self._m_held_s = time.monotonic() - self._m_start
+        live = time.monotonic() - self._m_start if options.waves else self._m_held_s
+        self._m_water_now = options.particle_time if options.particle_time is not None else live
+        return self._m_water_now
 
     def _layer_on(self, batch: CBatch, options: SViewOptions) -> bool:
         return options.layers.get(batch.m_key[0], True)
@@ -661,9 +718,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         self._sync_full(options)
         game_heights = self._sync_scene(options)
         lighting = light(options, self.m_size_tiles)
-        lighting["uwTime"] = (
-            options.particle_time if options.particle_time is not None else time.monotonic() - self._m_start
-        )
+        lighting["uwTime"] = self._water_clock(options)
         self.m_stats = dict.fromkeys(("calls", "instances", "instances_of", "terrain", "terrain_of", "shadow_calls"), 0)
         self._m_lit, self._m_frame_codes = {}, {}
         quality = options.quality
@@ -698,7 +753,9 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         # the view keeps drawing while the game's look makes parts ahead of their first draw
         # and while its water and clouds move with the clock or it settles (bake, pages, cascades: ``CGameIsland``)
         game_moves = drew and (self.m_game.m_objects.m_ahead_left or self.m_game.m_animated or self.m_ctx.m_make_left)
-        self.m_animated = bool(options.underwater and options.caustics) or bool(game_moves) or self._m_sync_left > 0
+        self.m_animated = (
+            bool(options.underwater and options.caustics and options.waves) or bool(game_moves) or self._m_sync_left > 0
+        )
         frame.now = time.monotonic() - self._m_start
         streets, models, translucent = self._visible_parts(frame, options)
         self.m_drawn_opaque = streets + models  # the game's sea mirrors them (``desktopsea``)
@@ -707,12 +764,10 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         if not self.m_game_decals:  # the game's decal shader drew them into its G-buffer
             # the game's ground stage (render.decalmesh); 2070's stored streets, laid as decals, after the decals
             self.m_decals.draw(self, frame, decalmesh.BEFORE_STREETS, decalmesh.STREET_CELLS)
-        for batch, part, vaos in streets:
-            self._draw_part(batch, part, vaos, frame)
+        self._draw_parts(streets, frame)
         if not self.m_game_decals:
             self.m_decals.draw(self, frame, decalmesh.AFTER_STREETS)
-        for batch, part, vaos in models:
-            self._draw_part(batch, part, vaos, frame)
+        self._draw_parts(models, frame)
         if (
             not self.m_game_decals
         ):  # the game lays vehicle tracks only behind moving vehicles (island-117-view "Round 12")
@@ -724,8 +779,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         ctx.enable(ctx.BLEND)
         ctx.blend_func = ctx.SRC_ALPHA, ctx.ONE_MINUS_SRC_ALPHA
         targets["msaa"].depth_mask = False
-        for batch, part, vaos in translucent:
-            self._draw_part(batch, part, vaos, frame)
+        self._draw_parts(translucent, frame)
         self.m_animated |= self.m_particles.draw(options, camera, view_proj, planes, frame.now)
         targets["msaa"].depth_mask = True
         ctx.disable(ctx.BLEND)
@@ -782,6 +836,12 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         ground."""
         return self.m_game.draw(frame, options, target, size_px, camera)
 
+    def _draw_parts(self, parts: list, frame: SFrame) -> None:
+        """Each (batch, part, VAOs) in order; what the programs and units held may be what other draws wrote."""
+        self.m_uniforms.forget()
+        for batch, part, vaos in parts:
+            self._draw_part(batch, part, vaos, frame)
+
     def _draw_part(self, batch: CBatch, part: dict, vaos: dict, frame: SFrame) -> None:
         banner = part["shader"] == BANNER_SHADER
         water = part["shader"] == WATER_SHADER
@@ -795,43 +855,45 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
                 program["view"].write(gl(frame.view))
             self._set_light(program, frame.lt, frame.eye, None if unshadowed else frame.shadow)
             self._m_lit[program] = unshadowed
-        program["part"].write(gl(part["matrix"]))
+        memory = self.m_uniforms
+        memory.put_bytes(program, "part", gl(part["matrix"]))
         texture = self._gpu_texture("d:" + part["diffuse"], not foam) if part.get("diffuse") else None
         normal_texture = self._gpu_texture("n:" + part["normal"], False) if part.get("normal") and not banner else None
-        program["textured"].value = texture is not None
-        (texture or self._m_dummy).use(0)
-        program["diffuseTex"].value = 0
+        memory.put(program, "textured", texture is not None)
+        memory.bind(texture or self._m_dummy, 0)
+        memory.put(program, "diffuseTex", 0)
         if "hasNormal" in names:
-            program["hasNormal"].value = normal_texture is not None
-            (normal_texture or self._m_dummy).use(2)
-            program["normalTex"].value = 2
+            memory.put(program, "hasNormal", normal_texture is not None)
+            memory.bind(normal_texture or self._m_dummy, 2)
+            memory.put(program, "normalTex", 2)
         color = part["color"] if texture is not None or part.get("marker") or banner or water else (0.6, 0.6, 0.6)
         if water:
             white = any(
                 word in (part.get("diffuse") or "").lower() for word in ("white", "foam", "splash", "spray", "mist")
             )
             color = (1.0, 1.0, 1.0) if white else srgb_hex(0xA9D8EE)
-            program["opacity"].value = 0.95 if white else 0.8
-        program["tint"].value = tuple(float(channel) for channel in color)
-        program["emissive"].value = float(part.get("emissive", 0.0))
-        program["kind"].value = 4 if foam else 1 if water else 2 if banner else 0
+            memory.put(program, "opacity", 0.95 if white else 0.8)
+        now = self._m_water_now  # held while the water motion is off or the effects stand still
+        memory.put(program, "tint", tuple(float(channel) for channel in color))
+        memory.put(program, "emissive", float(part.get("emissive", 0.0)))
+        memory.put(program, "kind", 4 if foam else 1 if water else 2 if banner else 0)
         if foam:
-            program["foam"].value = tuple(float(component) for component in foam)
-            program["foamTime"].value = float(frame.now)
-            self.m_animated = True
+            memory.put(program, "foam", tuple(float(component) for component in foam))
+            memory.put(program, "foamTime", float(now))
+            self.m_animated |= self._m_waves
         flip = part.get("flipbook") if water else None
         if "flip" in names:
             if flip:
-                flip_frame = int(frame.now / max(0.01, flip["duration"])) % max(1, flip["frames"])
-                program["flip"].value = (flip_frame % flip["x"], flip_frame // flip["x"], flip["x"], flip["y"])
-                program["flipTiling"].value = tuple(flip["tiling"])
+                flip_frame = int(now / max(0.01, flip["duration"])) % max(1, flip["frames"])
+                memory.put(program, "flip", (flip_frame % flip["x"], flip_frame // flip["x"], flip["x"], flip["y"]))
+                memory.put(program, "flipTiling", tuple(flip["tiling"]))
             else:
-                program["flip"].value = (0, 0, 0, 0)
+                memory.put(program, "flip", (0, 0, 0, 0))
         if "uvOffset" in names:
             flow_per_s = max(0.05, part.get("flow") or 0.25) if water and not flip and texture is not None else 0.0
-            program["uvOffset"].value = (0.0, (flow_per_s * frame.now) % 1.0)
+            memory.put(program, "uvOffset", (0.0, (flow_per_s * now) % 1.0))
         if water:
-            self.m_animated = True
+            self.m_animated |= self._m_waves
         self.m_stats["calls"] += self._render_levels(vaos["model"], batch.m_sets["model"].m_counts)
 
     @staticmethod

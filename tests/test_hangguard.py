@@ -7,6 +7,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 from tests import hangguard
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,19 @@ def test_a_test_that_hangs_ends_the_process_with_the_stacks(tmp_path):
 
 def test_a_disarmed_guard_leaves_the_process_alone():
     hangguard.arm("quick", 0.2)()
+
+
+def test_the_limit_is_the_watched_tests_own():
+    outside = hangguard.limit()
+    disarm = hangguard.arm("slow", 900.0)
+    assert hangguard.limit() == 900.0  # a child of this test may run that long
+    disarm()
+    assert hangguard.limit() == outside
+
+
+@pytest.mark.time_limit(900)
+def test_a_marked_test_is_watched_with_its_own_limit():
+    assert hangguard.limit() == max(900.0, hangguard.seconds())
 
 
 def test_the_limit_comes_from_the_environment(monkeypatch):

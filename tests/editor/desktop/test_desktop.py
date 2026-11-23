@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from tests.editor.editorfakes import FakeEditor, desktop_window
+from tests.editor.editorfakes import FakeEditor, desktop_window, open_fake_island
 
 from annotoolbox.editor import editorapp
 from annotoolbox.editor.desktop import desktopislands, workbench
@@ -887,18 +887,6 @@ def test_the_gallery_offers_only_the_islands_own_games_vanilla_ground():
         assert [item.data(256)[1]["name"] for item in gallery.items()] == [wanted]  # 117 and 1800 never mixed
 
 
-def _open_fake(main, name: str = "isle"):
-    """The synthetic island opened in ``main`` (read on the window's thread); its document."""
-
-    def open_island(kind, name):
-        main.m_app.m_editor = FakeEditor()
-        return {"kind": "built", "name": name, "editable": True, "buildable": True}
-
-    main.m_app.open = open_island
-    main.open("built", name)
-    return main.m_doc
-
-
 def test_a_closed_island_is_let_go_by_the_window_and_its_view(tmp_path):
     """Every closed island stayed alive: its document as a child of the window, and the view's place tool kept its
     asset list (and through it the island) until the next one opened."""
@@ -910,7 +898,7 @@ def test_a_closed_island_is_let_go_by_the_window_and_its_view(tmp_path):
     from annotoolbox.editor.desktop.desktopeditor import CIslandDoc
 
     qt, main = desktop_window(tmp_path)
-    session = weakref.ref(_open_fake(main).m_session)
+    session = weakref.ref(open_fake_island(main).m_session)
     assert main.m_view.m_placer.m_panel is main.m_doc.m_buildings
     main.close_island()
     main.m_background.join()  # the side data and the minimap, still being read
@@ -927,7 +915,7 @@ def test_a_property_field_only_left_changes_nothing_and_an_edit_keeps_the_other_
     """A spin box reports "editing finished" when it is only tabbed through: the object took the field's rounded value
     as a move (an undo step and an edit record), and a river its own width as an edit."""
     qt, main = desktop_window(tmp_path)
-    doc = _open_fake(main)
+    doc = open_fake_island(main)
     s, props = doc.m_session, doc.m_props
     rock = next(e for e in s.m_entries if e.kind == "object" and not e.marker)
     rock.position = [5.12345678, 0.7, 6.5]
@@ -970,7 +958,7 @@ def test_a_minimap_paint_that_fails_is_said_and_the_last_picture_stays(tmp_path,
     from annotoolbox.editor.desktop import minimappanel
 
     qt, main = desktop_window(tmp_path)
-    doc = _open_fake(main)
+    doc = open_fake_island(main)
     main.m_background.join()
     qt.processEvents()
     before, said = doc.m_minimap.m_picture.copy(), []
@@ -1213,3 +1201,12 @@ def test_a_blank_island_that_fails_to_open_is_marked_on_its_row(tmp_path, monkey
     main._loaded(("blank", "anno1404", rows.m_names[0], True), ValueError("no ground"))
     assert rows.marked == [(rows.m_names[0], "ValueError: no ground")]
     main.close()
+
+
+def test_a_river_line_with_the_lava_flag_is_drawn_as_lava_and_a_normal_one_as_water():
+    """The island's river lines carry the River block's ``RenderFlags``; bit 4 is lava (rendering/water.md 1.9a)."""
+    from annotoolbox.editor.desktop.desktopground import is_lava
+
+    assert is_lava({"kind": "River", "flags": 15}) and is_lava({"kind": "River", "flags": 6})
+    assert not is_lava({"kind": "River", "flags": 3}) and not is_lava({"kind": "River"})  # a normal river
+    assert not is_lava({"kind": "Lake", "flags": 15})

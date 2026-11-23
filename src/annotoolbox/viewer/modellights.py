@@ -43,6 +43,14 @@ class _SLook:
 class CModelLights:
     """What the renderer needs for the light of a frame (module docstring)."""
 
+    def _uniform_names(self, prog):
+        """A program's uniform names, for ``in`` (moderngl's own test walks every member; a QRhi device's program
+        answers ``in`` itself)."""
+        names = self._m_names.get(prog)
+        if names is None:
+            names = self._m_names[prog] = set(prog) if hasattr(prog, "__iter__") else prog
+        return names
+
     def _light(self, state: SViewState) -> dict:
         """The frame's light: the editor's in our plain look; in the game's-shaders look the game's (a pass that
         finishes as 2070 does takes 2070's), changed by a pass that lights the view itself (``view_light``)."""
@@ -56,8 +64,15 @@ class CModelLights:
         return view_light(light_values, state.night) if view_light is not None else light_values
 
     def _put_light(self, prog, light_values: dict, eye, shadow) -> None:
+        """The frame's light into ``prog``, once a frame for each way (with the shadow or without): every part of
+        the frame is lit alike."""
+        if self._m_lit.get(prog) == (shadow is None):
+            return
+        self._m_lit[prog] = shadow is None
+        names = self._uniform_names(prog)
+
         def put(name, value):
-            if name in prog:
+            if name in names:
                 prog[name].value = value
 
         for name in ("sunColor", "ambientMode", "fogColor"):
@@ -66,7 +81,7 @@ class CModelLights:
         for name, default in (("hemiSky", (0, 0, 0)), ("hemiGround", (0, 0, 0)), ("envLight", 0.0),
                               ("flatAmbient", (0, 0, 0)), ("shFactor", 0.0), ("uwLight", (0, 0, 0))):  # fmt: skip
             put(name, light_values.get(name, default))
-        if "sh" in light_values and "sh" in prog:
+        if "sh" in light_values and "sh" in names:
             prog["sh"].write(np.asarray(light_values["sh"], "f4").tobytes())
         near, far = light_values.get("fog", (1e5, 2e5))
         put("fogNear", near)
@@ -74,9 +89,9 @@ class CModelLights:
         put("eye", tuple(float(component) for component in eye))
         put("uwFx", (0.0, 0.0))
         put("shadowOn", shadow is not None)
-        if "shadowMatrix" in prog:
+        if "shadowMatrix" in names:
             prog["shadowMatrix"].write(gl(shadow[1] if shadow is not None else np.identity(4)))
-        if "shadowMap" in prog:
+        if "shadowMap" in names:
             (shadow[0] if shadow is not None else self._m_dummy_shadow).use(7)
             prog["shadowMap"].value = 7
 

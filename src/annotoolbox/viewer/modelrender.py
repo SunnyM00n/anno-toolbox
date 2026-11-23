@@ -195,6 +195,9 @@ class CModelRenderer(CModelLights, CModelPoses):
         self.m_by_node: dict[str, tuple[int, SPart]] = {}
         self._m_rigs: dict = {}
         self._m_frame: dict = {}  # this frame's places and joints, by part node
+        self._m_shadow_taken: tuple | None = None  # what the shadow map as it stands is of (``_shadow_key``)
+        self._m_lit: dict = {}  # program -> whether this frame's light is in it without the shadow (``_put_light``)
+        self._m_names: dict = {}  # program -> its uniform names (``_uniform_names``)
         self.m_items: dict[int, list] = {}  # part index -> [(group key, vbo, ibo, count, vaos)]
         self.m_textures: dict[str, object] = {}
         self.m_failed: dict[str, str] = {}  # a texture file that did not load -> why (the Checks panel lists it)
@@ -222,6 +225,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         """Draw this scene from now on; its files start loading."""
         self.release_scene()
         self.m_scene, self.m_box, self._m_game_drew = scene, None, False
+        self._m_shadow_taken = None
         self.m_failed = {}  # what this scene fails to load: the textures that failed before are tried again
         self.m_textures = {k: v for k, v in self.m_textures.items() if v is not None}
         self.m_by_node = {part.node: (k, part) for k, part in enumerate(scene.m_parts)}
@@ -390,7 +394,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         targets = self._frame_targets(width, height)
         view, eye = camera.view(), camera.eye()
         view_proj = camera.proj(width / height) @ view
-        self._m_frame, self.m_state = {}, state
+        self._m_frame, self._m_lit, self.m_state = {}, {}, state
         self.m_cloths.next_frame(MIRROR[:3, :3] @ np.asarray(eye, float), camera.m_fov_rad)  # the eye in model space
         self._m_motion = self._motion_env(state, view, light_values)
         drawn = self._drawn(state)
@@ -559,7 +563,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         prog = self.m_prog["skin_model" if item.get("gpu") else "banner" if banner else "model"]
         self._bind_joints(prog, item)
         prog["viewProj"].write(gl(frame.view_proj))
-        if "view" in prog:
+        if "view" in self._uniform_names(prog):
             prog["view"].write(gl(frame.view))
         prog["part"].write(gl(place))
         self._put_light(prog, frame.lt, frame.eye, None if water or foam else frame.shadow)
@@ -568,7 +572,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         prog["textured"].value = texture is not None
         (texture or self._m_dummy).use(0)
         prog["diffuseTex"].value = 0
-        if "hasNormal" in prog:
+        if "hasNormal" in self._uniform_names(prog):
             prog["hasNormal"].value = normal is not None
             (normal or self._m_dummy).use(2)
             prog["normalTex"].value = 2
@@ -579,11 +583,11 @@ class CModelRenderer(CModelLights, CModelPoses):
         if foam:
             prog["foam"].value = tuple(float(v) for v in foam)
             prog["foamTime"].value = time.monotonic() % 3600.0
-        if "opacity" in prog:
+        if "opacity" in self._uniform_names(prog):
             prog["opacity"].value = material.opacity if decal else 0.8
-        if "flip" in prog:
+        if "flip" in self._uniform_names(prog):
             prog["flip"].value = (0, 0, 0, 0)
-        if "uvOffset" in prog:
+        if "uvOffset" in self._uniform_names(prog):
             prog["uvOffset"].value = (0.0, 0.0)
         item["vaos"]["main"].render()
 
@@ -630,6 +634,9 @@ class CModelRenderer(CModelLights, CModelPoses):
         sun = np.asarray(light_values["sunDir"], "f4")
         lview = look_at(target + sun * reach * 2, target)
         m = ortho(reach, 0.01, reach * 4) @ lview
+        taken = self._shadow_key(drawn, m)
+        if taken is not None and taken == self._m_shadow_taken:
+            return depth_texture, m  # the same sun, parts and poses: the camera alone moved
         fbo.use()
         ctx.viewport = (0, 0, SHADOW_SIZE, SHADOW_SIZE)
         fbo.clear(depth=1.0)
@@ -648,15 +655,35 @@ class CModelRenderer(CModelLights, CModelPoses):
             ]
             self._bind_joints(prog, item)
             prog["viewProj"].write(gl(m))
-            if "view" in prog:
+            if "view" in self._uniform_names(prog):
                 prog["view"].write(gl(lview))
             prog["part"].write(gl(place))
             diffuse = self._texture(material.diffuse, True)
-            if "textured" in prog:
+            if "textured" in self._uniform_names(prog):
                 prog["textured"].value = diffuse is not None
             (diffuse or self._m_dummy).use(0)
             item["vaos"]["depth"].render()
+        self._m_shadow_taken = taken
         return depth_texture, m
+
+    def _shadow_key(self, drawn: list, matrix: np.ndarray) -> tuple | None:
+        """What the shadow map is a picture of: the sun's matrix, each drawn group with its place, pose and material,
+        and how many maps are in (a cut-out map arriving changes it); None when a cloth is in the scene (it moves
+        every frame)."""
+        if any(part.cloth is not None for part, _item, _place in drawn):
+            return None
+        groups = tuple(
+            (
+                part.node,
+                item["key"],
+                place.tobytes(),
+                item["pose"],
+                part.material(item["key"]).shader,
+                part.material(item["key"]).diffuse,
+            )
+            for part, item, place in drawn
+        )
+        return matrix.tobytes(), len(self.m_textures), groups
 
     def _draw_ground(self, frame: _SFrame) -> None:
         """A grey plane under the model at its lowest point, wide enough for its shadow."""
