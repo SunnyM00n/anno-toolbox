@@ -37,7 +37,9 @@ def test_the_window_lists_every_game_and_setup_only_without_a_workspace(tmp_path
     names = [window.m_tabs.tabText(i) for i in range(window.m_tabs.count())]
     assert "Setup" not in names and len(names) > 1  # no games in tmp_path: each tab says what it lacks
     dialog = settingsdialog.CSettingsDialog(window.m_app.m_settings, window)
-    assert set(dialog.values()) == {key for key, _ in settingsdialog.FOLDERS} | {"theme", "language"}
+    assert set(dialog.values()) == {key for key, _ in settingsdialog.FOLDERS} | {
+        "theme", "language", "check_updates", "renderer", "hardware", "native_shaders"
+    }  # fmt: skip
     assert dialog.values()["anno117"] == str(tmp_path) and dialog.values()["theme"] == "system"
     window.close()
 

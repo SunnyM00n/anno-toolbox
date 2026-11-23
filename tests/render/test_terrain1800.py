@@ -225,9 +225,12 @@ def test_the_game_look_is_offered_for_1800_and_2205_islands(monkeypatch):
     for game, terrain in (("anno1800", True), ("anno2205", False), (None, True)):
         island = {"game": game} if game else {}
         view = SimpleNamespace(m_opts=SViewOptions(), m_backend="d3d11", update=lambda: None)
-        doc = SimpleNamespace(m_session=SimpleNamespace(m_island=island), m_view=view)
+        doc = SimpleNamespace(m_session=SimpleNamespace(m_island=island), m_view=view, m_info={})
+        doc.game_key = lambda doc=doc: CIslandDoc.game_key(doc)
+        doc.look_reason = lambda key, doc=doc: CIslandDoc.look_reason(doc, key)
         state = CIslandDoc.look_state(doc)
-        assert state["native"][0] and state["game_terrain"][0] == terrain, game
+        # 117's islands: their game look draws on Direct3D 12 alone, so on Direct3D 11 it is greyed
+        assert state["native"][0] == (game is not None) and state["game_terrain"][0] == terrain, game
         assert not state["look2070"][0], game
         CIslandDoc.apply_game_look(doc)  # an island of another game opens in its look on Direct3D 11
         assert view.m_opts.native == (game is not None) and view.m_opts.game_terrain == (game == "anno1800"), game

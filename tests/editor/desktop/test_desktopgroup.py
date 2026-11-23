@@ -150,11 +150,11 @@ def test_the_edit_menu_shows_the_open_islands_snap_and_falloff(qt):
 
 
 def test_the_settings_page_has_a_row_for_each_start_value_and_returns_it(qt, tmp_path):
-    from annotoolbox.editor.desktop.desktopgroup import new_island_choices
+    from annotoolbox.editor.desktop.desktopeditor import settings_rows
     from annotoolbox.suite.settingsdialog import CSettingsDialog
 
     settings = CSettings(workspace=str(tmp_path), snap_places="cell")
-    dialog = CSettingsDialog(settings, choices=new_island_choices())
+    dialog = CSettingsDialog(settings, rows=(settings_rows(),))
     assert dialog.values()["snap_places"] == "cell" and dialog.values()["brush_falloff"] == "smooth"
     dialog.m_choices["snap_onto_ground"].setCurrentIndex(dialog.m_choices["snap_onto_ground"].findData(True))
     assert dialog.values()["snap_onto_ground"] is True

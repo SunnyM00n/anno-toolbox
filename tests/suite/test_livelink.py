@@ -374,7 +374,7 @@ def test_a_reload_asked_from_a_window_does_not_block_it_and_is_said_when_answere
     notice = linkannounce.announce_in_background(
         background, said.append, lambda: linkannounce.announce((livelink.ASSETS,), mod_id="m")
     )
-    assert notice is None and said == ["game link: reloading …"] and link.names == []
+    assert notice is None and said == ["game link: reloading…"] and link.names == []
     work, callback = background.jobs[0]
     callback(work())
     assert said[-1] == "game reloaded: assets" and link.names == ["reload.assets"]

@@ -30,6 +30,12 @@ def _islands(shell: CSuiteWindow):
     return window
 
 
+def _islands_settings():
+    from ..editor.desktop.desktopeditor import settings_rows
+
+    return settings_rows()
+
+
 def _open_island_of(page, game: str, other: str) -> tuple[object, str]:
     """(the open island's document, "") when the island editor has an island of ``game`` open, else (None, why not);
     ``other`` is the id of the sentence for an island of another game (it names ``{open}`` and the wanted game as
@@ -381,7 +387,8 @@ BUILTIN = (
     SAppSpec("islands", N_("common.islands"), "app_islands", N_("common.island_editor_islands_every_anno"), _islands,
             glformat.prepare, {links.PLACE_MODEL: _islands_place, links.PLACE_ASSET: _islands_place_asset,
                                links.OPEN_ISLAND: _islands_open, links.GAME_SELECTION: _islands_selection},
-            frozenset({links.GAME_SELECTION})),  # following the game's selection never takes the window from the player
+            frozenset({links.GAME_SELECTION}),  # following the game's selection never takes the window from the player
+            settings=_islands_settings),
     SAppSpec("assets", N_("common.assets"), "app_assets", N_("common.asset_editor_games_assets_forms"),
             _assets, links={links.SHOW_ASSET: _assets_show, links.ASSET_FILES: _asset_files},
             quiet_links=frozenset({links.ASSET_FILES})),

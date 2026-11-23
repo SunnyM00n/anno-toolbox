@@ -156,6 +156,15 @@ def test_a_switch_reaches_the_view_and_the_settings_and_the_next_island_opens_wi
     main.close()
 
 
+def test_a_switch_saved_in_the_settings_window_reaches_the_open_island(tmp_path):
+    qt, main = desktop_window(tmp_path)
+    open_fake_island(main)
+    main.m_app.set_settings({"view_switches": {"shadows": False}})  # what the settings window saves
+    main.settings_changed()
+    assert main.m_view.m_opts.shadows is False and not main.m_actions["perf_shadows"].isChecked()
+    main.close()
+
+
 def test_a_switch_is_greyed_where_the_island_has_nothing_to_skip(tmp_path):
     qt, main = desktop_window(tmp_path)
     doc = open_fake_island(main)

@@ -16,9 +16,6 @@ from ..infra.i18n import N_, tr
 from ..render import nativelook, quality, rhiview
 from ..suite import widgets
 
-BACKENDS = {"gl": "OpenGL (moderngl)", "d3d12": "Direct3D 12", "d3d11": "Direct3D 11", "vulkan": "Vulkan",
-            "opengl": "OpenGL (Qt's QRhi)"}  # fmt: skip
-
 
 def toggle_action(menu, text: str, checked: bool, on_toggled) -> QAction:
     """A checkable menu entry that tells ``on_toggled`` its new state (``addAction(text, slot)`` calls the slot
@@ -47,14 +44,9 @@ class CRenderingMenu:
     def backends(self) -> set[str]:
         """The backends this window can draw with (probed once)."""
         if self._m_backends is None:
-            found = set() if rhiview.blocked("gl") else {"gl"}
-            for name in ("d3d12", "d3d11", "vulkan", "opengl"):
-                try:
-                    if rhiview.available(name):
-                        found.add(name)
-                except Exception:  # a backend that cannot even be probed is not there
-                    continue
-            self._m_backends = {rhiview.composable(backend, self.m_window.m_is_gl_host) for backend in found}
+            self._m_backends = {
+                rhiview.composable(backend, self.m_window.m_is_gl_host) for backend in rhiview.offered()
+            }
         return self._m_backends
 
     def options(self) -> nativelook.SOptions:
@@ -139,14 +131,17 @@ class CRenderingMenu:
             action.setToolTip(look.why)
             group.addAction(action)
         root_menu.addSeparator()
-        backends = root_menu.addMenu(tr("viewer.menu.backend_name", name=BACKENDS.get(opts.backend, opts.backend)))
+        backends = root_menu.addMenu(
+            tr("viewer.menu.backend_name", name=rhiview.LABELS.get(opts.backend, opts.backend))
+        )
         auto = backends.addAction(
-            tr("viewer.automatic_name", name=BACKENDS.get(opts.needed, opts.needed)), lambda: self._choose(backend="")
+            tr("viewer.automatic_name", name=rhiview.LABELS.get(opts.needed, opts.needed)),
+            lambda: self._choose(backend=""),
         )
         auto.setCheckable(True)
         chosen = nativelook.SChoice.of(self.m_window.m_settings.rendering, self.game()).backend
         auto.setChecked(not chosen)
-        for key, text in BACKENDS.items():
+        for key, text in rhiview.LABELS.items():
             usable = key in self.backends()
             why = "" if usable else rhiview.blocked(key) or tr("common.needs_backend_cannot_draw", backend=text)
             action = backends.addAction(tr("viewer.label_why", label=text, why=why) if why else text,
@@ -193,7 +188,7 @@ class CRenderingMenu:
             lines.append(
                 tr(
                     "viewer.adapter_name",
-                    name=BACKENDS.get(self.m_window.m_model.m_backend, self.m_window.m_model.m_backend),
+                    name=rhiview.LABELS.get(self.m_window.m_model.m_backend, self.m_window.m_model.m_backend),
                 )
             )
         return lines

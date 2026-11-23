@@ -273,6 +273,6 @@ Nothing here has been heard in a game. These are not built:
 
 ## Language
 
-The sound editor's windows are in English or German. Choose the language in the settings (Games and folders,
+The sound editor's windows are in English or German. Choose the language in the settings (General page,
 "Language"); it applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown
 as the game has it. See [the suite's guide](suite.md#language).

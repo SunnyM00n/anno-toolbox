@@ -318,8 +318,8 @@ def test_the_window_offers_both_ways_and_the_tree_marks_the_mods_assets(tmp_path
     _mod, proj = imported(tmp_path)
     settings.project = str(proj.folder)
     dialog = CProjectDialog(shell.CSuiteWindow([], settings, tmp_path / "settings.json"), apps.parts())
-    take, undo = dialog.m_buttons["Edit on top of the mod (Assets)..."], dialog.m_buttons["Undo the layered editing"]
-    hand = dialog.m_buttons["Hand the patch files to the Assets app..."]
+    take, undo = dialog.m_buttons["Edit on top of the mod (Assets)…"], dialog.m_buttons["Undo the layered editing"]
+    hand = dialog.m_buttons["Hand the patch files to the Assets app…"]
     assert take.isEnabled() and hand.isEnabled() and not undo.isEnabled()
     dialog.take_handover("assets+1", is_waiting=True, confirm=lambda _p, _lines: False)
     assert "Nothing was handed over" in dialog.m_log.toPlainText() and layered.state(proj) is None

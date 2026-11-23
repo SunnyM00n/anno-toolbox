@@ -140,6 +140,6 @@ Note: the editor was written on 2026-11-07, and the list above is as of that dat
 
 ## Language
 
-The Flash UI editor's windows are in English or German. Choose the language in the settings (Games and folders,
+The Flash UI editor's windows are in English or German. Choose the language in the settings (General page,
 "Language"). It applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown
 as the game has it. See [the suite's guide](../../suite.md#language).

@@ -377,7 +377,7 @@ The user's side is [Placing buildings](island-editor-tools.md#placing-buildings)
 
 ```bash
 pip install -e ".[gui]"              # PySide6, moderngl, numpy, scipy, Pillow
-anno-toolbox              # the window; File > Games and folders the first time
+anno-toolbox              # the window; File > Settings the first time
 anno-toolbox data/anno2070/islands/pool/a2070_n_l03/a2070_n_l03.a7m --mod out/anno2070-islandtest
 anno-toolbox --games anno1800     # the editor for 1800 only
 ```
@@ -478,7 +478,7 @@ It has a dark or light theme with an orange accent (`suite/theme`; the Fusion st
 From top to bottom, then the docks:
 
 - **Menu bar**:
-  - File: Save, Build & install, Open island from a mod, Games and folders (with the theme), Reload islands, Close island,
+  - File: Save, Build & install, Open island from a mod, Settings (the one settings window), Reload islands, Close island,
     Quit.
   - Edit: Undo, Redo, Delete, Duplicate, De-Select, Copy, Paste, Select the same model, Snap places, Snap turns, Snap
     onto the ground, Brush falloff, Selection to a layer and Layers
@@ -625,6 +625,9 @@ The Performance group on the Home tab, next to Layers, speeds up the 3D view whi
 Each switch is on by default, which is the look as before.
 Turning one off makes the view skip that work, and the picture stays usable.
 The choice is kept per user (`Settings.view_switches`) and applies to every island.
+The Island editor page of the settings window (File > Settings) shows the same switches, beside the start values of a new island.
+The same window holds the 3D views' device (Rendering page); a change applies to views opened from then on, and the
+island editor reads it when it starts.
 A switch that has nothing to skip on the open island is greyed, and an application restricted to some games leaves
 out the switches of the others.
 
@@ -1499,6 +1502,6 @@ Note: this work was built on 2026-11-12 and 2026-11-13.
 ## Language
 
 The island editor's windows are in English or German.
-Choose the language in the settings (Games and folders, "Language"); it applies the next time the app starts.
+Choose the language in the settings (General page, "Language"); it applies the next time the app starts.
 Game data (asset and file names, the games' own texts) is shown as the game has it.
 See [the suite's guide](suite.md#language).

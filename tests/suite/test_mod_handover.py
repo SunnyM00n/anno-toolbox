@@ -224,7 +224,7 @@ def test_the_command_line_and_the_window_take_and_undo(tmp_path, game, settings,
     _mod, proj = imported(tmp_path)
     settings.project = str(proj.folder)
     dialog = CProjectDialog(shell.CSuiteWindow([], settings, tmp_path / "settings.json"), apps.parts())
-    take, undo = dialog.m_buttons["Hand the patch files to the Assets app..."], dialog.m_buttons["Undo the hand-over"]
+    take, undo = dialog.m_buttons["Hand the patch files to the Assets app…"], dialog.m_buttons["Undo the hand-over"]
     assert take.isEnabled() and not undo.isEnabled()
     dialog.take_handover(is_waiting=True, confirm=lambda _p, _lines: False)
     assert "Nothing was handed over" in dialog.m_log.toPlainText() and take.isEnabled()

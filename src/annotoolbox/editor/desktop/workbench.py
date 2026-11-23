@@ -42,7 +42,7 @@ from ...islands.donor117 import GRID_SIZES
 from ...render import quality, rhiview
 from ...suite import centralmenu, features, gamesync, icons, theme, widgets
 from ...suite.background import CBackground, long_lived, release_long_lived
-from ...suite.settingsdialog import CSettingsDialog
+from ...suite.settingsdialog import CSettingsDialog, applied
 from .. import archivedelivery, editorapp
 from . import flycamera
 from .desktopeditor import (
@@ -53,10 +53,11 @@ from .desktopeditor import (
     look_blocker,
     open_session,
     set_shipped,
+    settings_rows,
     shipped_state,  # fmt: skip
 )
 from .desktopforms import edit_menu as forms_menu
-from .desktopgroup import edit_menu, new_island_choices
+from .desktopgroup import edit_menu
 from .desktopislands import CGameTab, tab_title
 from .desktopjobs import CANCEL, STOP, WAIT, CJobRunner
 from .desktopprogress import COpenProgress
@@ -330,7 +331,7 @@ class CMainWindow(CJobRunner, QMainWindow):
         file.addSeparator()
         file.addAction(tr("islands.open_island_mod"), self.open_from_mod)
         file.addAction(tr("islands.open_island_project"), self.open_from_project)
-        centralmenu.mark(file.addAction(tr("islands.games_folders"), self.edit_settings), centralmenu.SETTINGS)
+        centralmenu.mark(file.addAction(tr("common.settings_dots"), self.edit_settings), centralmenu.SETTINGS)
         file.addAction(tr("islands.reload_islands"), lambda: self.reload(is_waiting=False))
         self.m_close_island_action = file.addAction(tr("islands.close_island"), self.close_island)
         file.addSeparator()
@@ -547,7 +548,7 @@ class CMainWindow(CJobRunner, QMainWindow):
             is_enabled, is_on = looks.get(key, (False, False))
             action.setVisible(key not in LOOKS_2070 or offers_2070)
             action.setEnabled(is_enabled)
-            action.setToolTip(look_blocker(key) or self.m_look_tips[key])
+            action.setToolTip((doc.look_reason(key) if doc else look_blocker(key)) or self.m_look_tips[key])
             action.setChecked(is_on)
         is_enabled, is_on, why = shipped_state(getattr(view, "m_backend", "gl"))
         self.m_shipped_action.setEnabled(is_enabled)
@@ -851,15 +852,20 @@ class CMainWindow(CJobRunner, QMainWindow):
 
     # settings
     def edit_settings(self) -> None:
-        dialog = CSettingsDialog(self.m_app.m_settings, self, self.m_app.m_games, choices=new_island_choices())
+        dialog = CSettingsDialog(self.m_app.m_settings, self, self.m_app.m_games, rows=(settings_rows(),))
         if dialog.exec():
             self.m_app.set_settings(dialog.values())
+            applied(dialog.values())
             self.settings_changed()
 
     def settings_changed(self) -> None:
-        """The settings were saved (here, or in the suite's Settings menu): the theme and the island lists again."""
+        """The settings were saved (here, or in the suite's Settings menu): the theme and the island lists again, and
+        the open island follows its Performance switches; the menus and the ribbon show the new state."""
         self.apply_theme()
         self.reload(is_waiting=False)
+        if self.m_doc is not None:
+            self.m_doc.apply_performance()
+        self.sync()
 
 
 def smoke_report(window: CMainWindow, started: float) -> dict | None:

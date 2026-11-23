@@ -88,6 +88,16 @@ class SModelImport:
 
 
 @dataclass(frozen=True)
+class SSettingsRows:
+    """What an app adds to the settings window's page of its own (``SAppSpec.settings``): ``choices`` are drop-downs
+    (settings key, label id, {value: shown text}), ``switches`` the dict-valued settings shown as tick boxes
+    (settings key, {switch: (label id, hint id)}); a switch the dict does not hold is on."""
+
+    choices: tuple = ()
+    switches: tuple = ()
+
+
+@dataclass(frozen=True)
 class SAppSpec:
     """An app of the suite's window (``features.APPS`` for one an extension adds): ``make(shell)`` returns its page,
     made when it is first shown; ``prepare`` runs before the program's first window (the OpenGL format); ``links``:
@@ -104,6 +114,7 @@ class SAppSpec:
     quiet_links: frozenset[str] = frozenset()  # queries: answered without the page, which they get only if it is made
     game: Any = None
     window: bool = False  # ``make`` returns a window of its own the switcher opens, not a page of the stack
+    settings: Callable[[], SSettingsRows] | None = None  # its page of the settings window (its modules load then)
 
 
 @dataclass(frozen=True)

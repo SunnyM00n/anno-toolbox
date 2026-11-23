@@ -16,8 +16,10 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMessageBox
 from ...infra.i18n import N_, tr
 from ...render import nativelook, quality
 from ...suite import features
+from ...suite.extspecs import SSettingsRows
 from .. import islandrules, terraintools
 from ..editsession import CEditSession, game_of
+from .desktopgroup import new_island_choices
 from .desktoppanels import CLibraryPanel, CMaterialGallery, CObjectsPanel, CPropertiesPanel
 from .desktopplace import CPlaceablesPanel
 from .desktopslotstab import SLOT_GAMES
@@ -35,9 +37,20 @@ LOOKS_2070 = ("look2070", "underwater", "caustics")  # the looks of islands edit
 # The Home tab's Performance switches: ``SViewOptions`` fields, ribbon ids ``perf_<key>``, kept in the settings
 # (``Settings.view_switches``); all on unless the person turned one off (island-editor "Performance switches").
 PERFORMANCE = ("shadows", "waves", "reflections", "sky_haze", "clouds", "ambient_occlusion")
+PERFORMANCE_TEXTS = {  # (label id, hint id) of each switch, for the settings window
+    "shadows": (N_("islands.perf_shadows"), N_("islands.tip.perf_shadows")),
+    "waves": (N_("islands.perf_waves"), N_("islands.tip.perf_waves")),
+    "reflections": (N_("islands.perf_reflections"), N_("islands.tip.perf_reflections")),
+    "sky_haze": (N_("islands.perf_sky_haze"), N_("islands.tip.perf_sky_haze")),
+    "clouds": (N_("islands.perf_clouds"), N_("islands.tip.perf_clouds")),
+    "ambient_occlusion": (N_("islands.perf_ambient_occlusion"), N_("islands.tip.perf_ambient_occlusion")),
+}
 SEA_MIRROR_GAMES = ("anno2070", "anno1404", "anno1701")  # the seas that draw a mirror of the scene
 GAME_SKY_GAMES = ("anno117",)  # the game look draws a visible sky, haze and clouds
 GAME_OCCLUSION_GAMES = ("anno1800", "anno2205")  # the game look makes an ambient occlusion
+# The island view's devices each game look draws on (``CGameIsland.why_not``); 117's islands: Direct3D 12 alone.
+GAME_LOOK_DEVICES = {"anno1800": ("d3d12", "d3d11"), "anno2205": ("d3d12", "d3d11")}
+DEVICE_NAMES = {"d3d12": "Direct3D 12", "d3d11": "Direct3D 11", "vulkan": "Vulkan", "gl": "OpenGL", "opengl": "OpenGL"}
 GAME_TERRAIN = ("anno1800",)  # other games whose islands have the game's near terrain (height pages) for the view
 NO_TOOLS = {
     "anno117": {"blocker"},
@@ -57,10 +70,26 @@ CHECK_NAMES = {
 OTHER_NO_TOOLS = {"water", "forest", "place", "blocker", "spray", "active", "surf"}  # an island of another game
 
 
-def look_blocker(key: str) -> str:
-    """Why the look ``key`` cannot be switched on on this system ("" when it can): the game's own shaders are
-    Direct3D shaders (docs/linux.md "Phase 3 done")."""
-    return tr("common.game_look_windows_only") if key == "native" and not nativelook.direct3d_here() else ""
+def settings_rows() -> SSettingsRows:
+    """The island editor's page of the settings window: the start values of a new island and the Performance
+    switches (``Settings.view_switches``)."""
+    return SSettingsRows(new_island_choices(), (("view_switches", PERFORMANCE_TEXTS),))
+
+
+def look_blocker(key: str, game: str | None = None, backend: str | None = None) -> str:
+    """Why the look ``key`` cannot be switched on ("" when it can): the game's own shaders are Direct3D shaders
+    (docs/linux.md "Phase 3 done"), and those of ``game``'s islands draw only on the devices of
+    ``GAME_LOOK_DEVICES`` - the island view on ``backend`` (the renderer the Viewer last chose) may be another."""
+    if key != "native":
+        return ""
+    if not nativelook.direct3d_here():
+        return tr("common.game_look_windows_only")
+    devices = GAME_LOOK_DEVICES.get(game or "", ("d3d12",))
+    if backend is None or backend in devices:
+        return ""
+    names = [DEVICE_NAMES[device] for device in devices]
+    return tr("islands.game_look_needs_device", devices=" / ".join(names), device=DEVICE_NAMES.get(backend, backend),
+              first=names[0])  # fmt: skip
 
 
 def shipped_state(backend: str) -> tuple[bool, bool, str]:
@@ -345,9 +374,13 @@ class CIslandDoc(QObject):
                 or (key == "native" and game in GAME_LOOKS)
                 or (key == "game_terrain" and game in GAME_TERRAIN)
             )
-            is_enabled = is_enabled and not look_blocker(key)
+            is_enabled = is_enabled and not self.look_reason(key)
             out[key] = (is_enabled and (options.underwater or key != "caustics"), getattr(options, key))
         return out
+
+    def look_reason(self, key: str) -> str:
+        """Why the look ``key`` cannot be switched on for this island in this view ("" when it can)."""
+        return look_blocker(key, self.game_key(), getattr(self.m_view, "m_backend", None))
 
     def offers_2070_looks(self) -> bool:
         """Whether the view offers the 2070 looks at all (``LOOKS_2070``): only for an island of 2070;

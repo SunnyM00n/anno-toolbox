@@ -19,7 +19,7 @@ into your project, from which the suite builds the mod. The design and what is s
 anno-toolbox --app objects      # the suite's window on the object builder, beside the other apps
 ```
 
-The game folders are the suite's (File > Games and folders in the island editor). **File > Open game** picks a game.
+The game folders are the suite's (File > Settings in the island editor). **File > Open game** picks a game.
 
 A double-click on a model config in **Files** (or File > Open a file by its path, Ctrl+O) opens its object. The object
 is the `.cfg` (1701: `.mcf`, 1800 and 2205 props: `.prp`) with the `.ifo` and `.fc` of the same name beside it. Opening
@@ -196,6 +196,6 @@ Note: the `shared/` saving was never tried in the game.
 
 ## Language
 
-The object builder's windows are in English or German. Choose the language in the settings (Games and folders,
+The object builder's windows are in English or German. Choose the language in the settings (General page,
 "Language"); it applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown
 as the game has it. See [the suite's guide](suite.md#language).

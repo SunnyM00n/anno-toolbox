@@ -136,12 +136,12 @@ Once it has been answered (*Save* or *Later*), the setting `setup_done` keeps it
 
 - **The interface language**, a combo of the languages found. A change applies when an app is next started.
 - **The games' install folders**, one line per game of the suite. They are the folders the settings found when they
-  were loaded. That is the same detection as the *Games and folders* dialog: the install settings, Steam's and Ubisoft's
+  were loaded. That is the same detection as the Settings window: the install settings, Steam's and Ubisoft's
   registrations, and the drives. Each folder has *found* or *not found* beside it, and a *Browse...* button.
   - A start looks for the games that are not set once a day at most, because a drive that sleeps made every start wait.
     Help > *Setup...* looks again at once.
   - A folder that is not that game's install is refused and named. The old value stays.
-  - A button opens the island editor's own *Games and folders* dialog for the rest (mods folder, workspace, theme).
+  - A button opens the island editor's own Settings window for the rest (mods folder, workspace, theme).
     The page does not copy that dialog. A folder typed in the page and not saved yet stays when that dialog closes.
 - **The Start menu entry and the desktop shortcut** (only in an installed program). Both are ticked unless the old
   install had neither (see "The move").

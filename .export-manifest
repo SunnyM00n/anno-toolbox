@@ -1255,6 +1255,7 @@ tests/suite/test_project.py
 tests/suite/test_projectguids.py
 tests/suite/test_projectimport.py
 tests/suite/test_settings.py
+tests/suite/test_settingsdialog.py
 tests/suite/test_shaderbar.py
 tests/suite/test_splash.py
 tests/suite/test_suite.py

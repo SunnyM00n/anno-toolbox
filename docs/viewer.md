@@ -18,7 +18,7 @@ pip install -e ".[gui]"                        # the windows (the light install 
 python -m annotoolbox --app viewer        # the suite's window, on the Viewer (Ctrl+4)
 ```
 
-The game folders are the suite's. They are set once in the island editor, under File > Games and folders.
+The game folders are the suite's. They are set once in the island editor, under File > Settings.
 
 - **File > Open game** picks a game. The first opening of Anno 117 indexes its archives (a few seconds). The others
   open at once.
@@ -538,6 +538,6 @@ another `.rdm` or a glTF (as the `.rdm` its import would write).
 
 ## Language
 
-The viewer's windows are in English or German. Choose the language in the settings (Games and folders, "Language").
+The viewer's windows are in English or German. Choose the language in the settings (General page, "Language").
 It applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown as the game
 has it. See [the suite's guide](suite.md#language).

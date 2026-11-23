@@ -7,7 +7,7 @@ archive games (see below). The rules it follows are the loader's, as recorded in
 `engine-modloader.md`. Where that document says "not checked in game", so does this guide.
 
 Start it with `python -m annotoolbox --app mods`, or press the **Mods** button of the suite. The game folders and
-the mods folders are the suite's settings (File > Games and folders in the island editor). An empty mods folder
+the mods folders are the suite's settings (File > Settings in the island editor). An empty mods folder
 setting means the standard place, `<Documents>/Anno 117 - Pax Romana/mods` or `<Documents>/Anno 1800/mods`.
 
 ## The window
@@ -213,6 +213,6 @@ is never run in a test: `tests/conftest.py` replaces `gameguard.system_lister`. 
 
 ## Language
 
-The mod manager's windows are in English or German. Choose the language in the settings (Games and folders,
+The mod manager's windows are in English or German. Choose the language in the settings (General page,
 "Language"); it applies the next time the app starts. Game data (asset and file names, the games' own texts) is shown
 as the game has it. See [the suite's guide](suite.md#language).

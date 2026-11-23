@@ -186,7 +186,7 @@ def test_the_117_islands_come_from_each_sessions_own_document(tmp_path: Path):
     save = container.open_file(fake_save117(tmp_path / "P" / "a.a8s", sessions=2), "anno117")
     said = []
     islands = summary.sessions(save, lambda text, **places: said.append(tr(text, **places)))
-    assert said == ["reading session 3245", "reading session 3246"]
+    assert said == ["Reading session 3245…", "Reading session 3246…"]
     assert (tr(islands.rows[0][0]), islands.rows[0][1]) == ("Map template", "3245: data/maps/test.a7tinfo")
     assert islands.table.rows[0] == ["3245", "4120", "32777", "506097522914230528", "1", "2068: 186, 2071: 5", ""]
     assert len(islands.table.rows) == 4

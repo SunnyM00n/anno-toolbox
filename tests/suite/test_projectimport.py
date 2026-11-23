@@ -402,7 +402,7 @@ def test_the_project_window_imports_a_mod_with_its_report_and_opens_the_project(
     log = dialog.m_log.toPlainText()
     assert "Big mod 1.2.0 imported for anno117" in log and "18 files" in log
     assert dialog.m_mod_id.text() == "big-mod" and settings.project == str(tmp_path / "proj")
-    assert dialog.m_stop_button.isHidden() and dialog.m_buttons["Import a mod as a project..."].isEnabled()
+    assert dialog.m_stop_button.isHidden() and dialog.m_buttons["Import a mod as a project…"].isEnabled()
     dialog.import_mod(mod, tmp_path / "proj", is_waiting=True)  # not empty now: said, not raised
     assert "not empty" in dialog.m_log.toPlainText() and dialog.m_buttons["Save"].isEnabled()
 

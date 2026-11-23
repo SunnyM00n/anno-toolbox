@@ -271,7 +271,7 @@ moment.
 
 Snap places, Snap turns, Snap onto the ground and Brush falloff belong to the open island: the menu shows the island's own
 state each time it opens, and a change on one island does not follow the next.
-A new island starts from the values in the settings page (File > Games and folders, "A new island starts with"; the
+A new island starts from the values in the settings page (File > Settings, "A new island starts with"; the
 defaults are off, off, off and smooth).
 
 **Snapping** (`snapping.SSnap`: a place mode, a turn step, onto the ground) offers tile centres, tile corners, half and

@@ -293,7 +293,7 @@ def test_an_import_applies_rows_as_one_undo_step_and_an_old_source_makes_them_ou
     assert doc.undo() == "import 2 texts" and doc.m_edits.count() == 0
     added = exchange.apply(doc, [exchange.SRow("-555", "Ghost", "Geist")], add_new=True)
     assert added.added == 1 and doc.status("-555") == NEW and doc.text("english", "-555") == "Ghost"
-    assert "unknown ids" in added.line()
+    assert "unknown IDs" in added.line()
     assert exchange.format_of("x.XLF") == "xliff" and pytest.raises(ValueError, exchange.format_of, "x.txt")
 
 

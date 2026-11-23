@@ -82,7 +82,7 @@ under them. An app's page is made the first time you open it, so the window open
 shows, a start-up screen with the program's name and the step being loaded is up. When you close the window, every app
 that holds unsaved work or a running job asks first, all of them before any app lets go of its work: a Cancel in one
 keeps every app as it was. A running project import or build asks as well; closing then stops the import, which keeps
-its work and is offered again at the next start. The game folders are set once, in Settings > Games and folders, and are the same
+its work and is offered again at the next start. The game folders are set once, in Settings > Settings…, and are the same
 for every app. The settings are kept under `%LOCALAPPDATA%/anno-toolbox`.
 
 ## Keys of the suite
@@ -122,7 +122,7 @@ is in front.
 |---|---|
 | **File** | *Project...* (the Project window: new, open, build, install), *Open game* (every app follows, "One game for every app"), **Save** (the front app's save, greyed with the reason when it has no document), then the front app's own File entries, *Quit* (Ctrl+Q) |
 | the front app's menus | Edit, View, Rendering, Tools, Check, Add, Map, Profile, ... as the app has them, between File and Settings; they change with the app |
-| **Settings** | *Games and folders...* (folders, workspace, theme, language), *Game link...*, *Debug commands*, *Manage apps*, *Setup...*, *Uninstall...*, *Remove unused game shaders...* |
+| **Settings** | *Settings...* (the one settings window: language, theme, update check; game folders and workspace; the 3D views' device, hardware acceleration and the game's own shaders; the island editor's start values and Performance switches), *Game link...*, *Debug commands*, *Manage apps*, *Setup...*, *Uninstall...*, *Remove unused game shaders...* |
 | **Window** | *Full screen* (F11), *Apps* (the switcher's keys), then the app's own docks and panels (the Layout menu of the island editor is its Window menu here) |
 | **Help** | the app's own help (the island editor's *Controls...*), *Check for updates...*, *Check for updates at start*, *About the Toolbox...* |
 
@@ -319,7 +319,7 @@ edit is drawn or that a mod loads. The notes of each app list what was looked at
 ## Language
 
 Every app's windows, menus, tool tips, dialogs and messages are in English or German. English is the default. The
-language is a setting of the suite (Islands, File > Games and folders, "Language") and is shared by all apps. The
+language is a setting of the suite (Islands, File > Settings, General page, "Language") and is shared by all apps. The
 setting lists every file found in the suite's `infra/lang/` folder. It takes effect the next time an app is started, so
 a window is never half in one language. Setting the environment variable `ANNO_TOOLBOX_LANG` to `en` or `de` overrides
 it for one run. A text that the chosen language's file lacks is shown in English. To add another language, copy

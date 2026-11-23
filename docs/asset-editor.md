@@ -29,7 +29,7 @@ Later openings therefore take under a second.
 ## The window
 
 **File > Open game** picks the game.
-The game folders are set in the island editor (File > Games and folders).
+The game folders are set in the island editor (File > Settings).
 
 - **The tree** (left) lists the assets by file group, or by template (117 has no groups).
   The groups are nested, and a group shows its own assets and its subgroups' under it.
@@ -300,7 +300,7 @@ Then open the multiplayer lobby.
 ## Language
 
 The asset editor's windows are in English or German.
-Choose the language in the settings (Games and folders, "Language").
+Choose the language in the settings (General page, "Language").
 It applies the next time the app starts.
 Game data (asset and file names, the games' own texts) is shown as the game has it.
 See [the suite's guide](suite.md#language).

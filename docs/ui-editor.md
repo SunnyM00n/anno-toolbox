@@ -22,7 +22,7 @@ Note: the codec's output was loaded in the game on 2026-09-21; the editor's stat
 - `anno-toolbox --app ui` starts the suite's window on it.
   In the suite it is **UI** in the app switcher (Ctrl+4).
   The switcher on top of the app changes the page, and the app opens on the page it had last.
-- File > Open game takes the game's folder from the suite's settings (the island editor's File > Games and folders).
+- File > Open game takes the game's folder from the suite's settings (the island editor's File > Settings).
   The first opening indexes the game's UI files (117: about 6 seconds).
   The index is kept in the workspace's `game-index/<game>/ui/`, the one index folder that every app of the suite uses
   per game.
@@ -1128,6 +1128,6 @@ The numbers and what is left are in `tool-suite.md` section 20, "Speed".
 ## Language
 
 The UI editor's windows are in English or German.
-Choose the language in the settings (Games and folders, "Language"); it applies the next time the app starts.
+Choose the language in the settings (General page, "Language"); it applies the next time the app starts.
 Game data (asset and file names, the games' own texts) is shown as the game has it.
 See [the suite's guide](suite.md#language).

@@ -257,14 +257,17 @@ class CSuiteWindow(QMainWindow):
         return window
 
     def edit_settings(self) -> bool:
-        """Settings > Games and folders: the game folders, the workspace, the theme and the language of every app;
-        False when cancelled. The island editor, when made, reads its lists again."""
-        dialog = settingsdialog.CSettingsDialog(self.m_settings, self)
+        """Settings > Settings: every global setting of the apps (``settingsdialog``); False when cancelled. The apps'
+        own rows come from their specs. The island editor, when made, reads its lists again."""
+        rows = tuple(app.settings() for app in self.m_apps.values() if app.settings is not None)
+        dialog = settingsdialog.CSettingsDialog(self.m_settings, self, rows=rows)
         if not dialog.exec():
             return False
-        for name, value in dialog.values().items():
+        values = dialog.values()
+        for name, value in values.items():
             if name in CSettings.__dataclass_fields__ and isinstance(value, type(getattr(self.m_settings, name))):
                 setattr(self.m_settings, name, value)
+        settingsdialog.applied(values)
         self.save_settings()
         self.apply_theme()
         changed = getattr(self.m_pages.get("islands"), "settings_changed", None)

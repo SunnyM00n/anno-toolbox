@@ -147,7 +147,7 @@ class CSetupDialog(QDialog):
         layout.addWidget(helper)
         buttons = QDialogButtonBox()
         if more is not None:
-            buttons.addButton(tr("islands.games_folders"), QDialogButtonBox.ButtonRole.ActionRole).clicked.connect(
+            buttons.addButton(tr("common.settings_dots"), QDialogButtonBox.ButtonRole.ActionRole).clicked.connect(
                 self._more
             )
         buttons.addButton(tr("common.save"), QDialogButtonBox.ButtonRole.AcceptRole)

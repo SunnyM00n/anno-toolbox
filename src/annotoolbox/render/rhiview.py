@@ -29,6 +29,8 @@ ENV = "ANNO_RENDERER"
 DEBUG_ENV = "ANNO_D3D12_DEBUG"  # "1": the graphics API's debug layer, where Windows' Graphics Tools are installed
 BACKENDS = ("gl", "d3d12", "d3d11", "vulkan", "opengl")  # gl: moderngl; opengl: QRhi's OpenGL backend
 DEFAULT = "gl"
+LABELS = {"gl": "OpenGL (moderngl)", "d3d12": "Direct3D 12", "d3d11": "Direct3D 11", "vulkan": "Vulkan",
+          "opengl": "OpenGL (Qt's QRhi)"}  # fmt: skip  # i18n: ok (the APIs' own names)
 EGL_PLATFORMS = ("wayland", "eglfs", "minimalegl")  # Qt platforms whose OpenGL contexts are EGL
 _API = {
     "d3d12": QRhiWidget.Api.Direct3D12,
@@ -47,6 +49,19 @@ def chosen(setting: str = "") -> str:
         if name.lower() in BACKENDS and _usable(name.lower()):
             return name.lower()
     return "d3d12" if _has_d3d12() else _default()
+
+
+def offered() -> list[str]:
+    """The backends this machine can draw with (``gl`` unless Qt's contexts are EGL; the others when a device of
+    them can be made), in ``BACKENDS`` order; the settings and the Viewer's Rendering menu list these."""
+    found = [] if blocked("gl") else ["gl"]
+    for name in BACKENDS[1:]:
+        try:
+            if available(name):
+                found.append(name)
+        except Exception:  # pattern: ok (a boundary: a backend that cannot even be probed is not there)
+            continue
+    return found
 
 
 def _default() -> str:

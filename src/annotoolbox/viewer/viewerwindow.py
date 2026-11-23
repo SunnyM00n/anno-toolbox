@@ -35,7 +35,6 @@ from .modelscene import CScene, SPlacedEffect
 from .modelview import make_view, save_picture
 from .panels import NODE_ROLE, CChecksPanel, CPartsPanel, CPropertiesPanel, CSequencePanel, CUsersPanel
 from .referencetools import CReferenceTools
-from .renderingmenu import BACKENDS as RENDERERS
 from .renderingmenu import CRenderingMenu, toggle_action
 from .sounddb import CSoundDbView
 from .soundview import CSoundView
@@ -196,7 +195,7 @@ class CViewerWindow(QMainWindow):
             self.statusBar().showMessage(
                 tr(
                     "viewer.next_start_viewer_window_keeps",
-                    renderer=RENDERERS[name],
+                    renderer=rhiview.LABELS[name],
                 ),
                 12000,
             )
@@ -215,7 +214,7 @@ class CViewerWindow(QMainWindow):
         self.m_pages.removeWidget(old)
         old.deleteLater()
         note = tr("viewer.backend_in_this_window", backend=backend) if backend != name else ""
-        self.statusBar().showMessage(tr("viewer.3d_view_draws", renderer=RENDERERS[name], note=note), 8000)
+        self.statusBar().showMessage(tr("viewer.3d_view_draws", renderer=rhiview.LABELS[name], note=note), 8000)
 
     # games and files
     def open_game(self, key: str, then: str = "", is_waiting: bool = False) -> None:

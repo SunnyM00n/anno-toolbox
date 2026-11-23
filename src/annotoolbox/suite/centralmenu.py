@@ -100,7 +100,7 @@ class CCentralMenus:
     def _settings(self) -> None:
         shell = self.m_shell
         menu = self._make(SETTINGS, tr("central.menu.settings"))
-        menu.addAction(tr("islands.games_folders"), shell.edit_settings)
+        menu.addAction(tr("common.settings_dots"), shell.edit_settings)
         menu.addAction(tr("central.game_link"), shell.open_link_panel)
         menu.addAction(tr("common.debug_commands"), shell.open_palette)
         menu.addAction(tr("appapi.manage_apps"), shell.open_apps_manager)
