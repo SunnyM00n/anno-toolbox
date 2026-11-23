@@ -117,10 +117,10 @@ def add_beside_program(app: Path, tree: Path, texconv: Path | None, codebooks: P
     for source, rel in bundle.runtime_files(tree):
         (app / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, app / rel)
+    (app / "tools").mkdir(exist_ok=True)
     if texconv is not None:
         shutil.copy2(texconv, app / "tools" / texconv.name)
         shutil.copy2(ROOT / "tools" / "README.md", app / "tools" / "README.md")
-    (app / "tools").mkdir(exist_ok=True)
     shutil.copy2(codebooks, app / "tools" / bundle.CODEBOOKS)
     (app / "tools" / bundle.CODEBOOKS_NOTICE).write_text(bundle.CODEBOOKS_LICENCE, encoding="utf-8", newline="\n")
     for name in bundle.LICENSE_FILES:
