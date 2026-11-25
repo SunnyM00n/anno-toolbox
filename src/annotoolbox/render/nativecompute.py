@@ -30,10 +30,28 @@ COMPUTE_STAGE = "cs"
 
 def records(element: SConstantBuffer, count: int) -> SConstantBuffer:
     """A structured buffer of ``count`` records (the reflection's element type, ``$Element``) as a buffer of one
-    array named as the buffer, so its records are written by path (``cSplatsBuffer[3].MatID``)."""
+    array named as the buffer, so its records are written by path (``cSplatsBuffer[3].MatID``); one for each element
+    and count, kept: a new one each frame made the constants look every path up again (performance.md 4, item 2)."""
+    key = (id(element), count)  # the entry holds the element: its id stays its own
+    held = _g_records.get(key)
+    if held is not None and held[0] is element:
+        return held[1]
     one = element.variables[0]
     array = SVariable(element.name, 0, element.size * count, one.type, elements=count, members=one.members)
-    return SConstantBuffer(element.name, element.size * count, [array])
+    made = SConstantBuffer(element.name, element.size * count, [array])
+    if len(_g_records) >= KEPT_RECORDS:
+        del _g_records[next(iter(_g_records))]
+    _g_records[key] = (element, made)
+    return made
+
+
+KEPT_RECORDS = 256  # the record buffers ``records`` keeps (the oldest goes first) [ours]
+_g_records: dict[tuple[int, int], tuple] = {}
+
+
+def reset_records() -> None:
+    """``records``' kept buffers let go (a test's, or a closed island's reflections)."""
+    _g_records.clear()
 
 
 def pointer(wrapper) -> int:

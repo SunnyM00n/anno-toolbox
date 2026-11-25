@@ -4,6 +4,7 @@ import struct
 from pathlib import Path
 
 import pytest
+from tests.ddsfiles import dxt5_flat_file
 
 from annotoolbox.infra.tools import SToolResult
 from annotoolbox.models import bc7encode, ddsdecode, textures
@@ -20,6 +21,11 @@ def fake_texconv(calls: list):
         return SToolResult(0, "", "")
 
     return run
+
+
+def test_a_dds_with_line_breaks_added_by_a_text_copy_reads_as_the_whole_texture():
+    pixels = textures.read_pixels(dxt5_flat_file().replace(b"\n", b"\r\n"))
+    assert pixels.shape == (4, 4, 4) and (pixels == pixels[0, 0]).all() and pixels[0, 0, 3] == 255
 
 
 def png(tmp_path, colour=(10, 20, 30, 255), name="a.png"):

@@ -383,12 +383,13 @@ class CMesh:
     m_count: int
     m_version: int = 0  # which vertices it holds (a moving cloth's frame): a device copy of another uploads again
     m_rest: bytes = b""  # the vertices as first made, once they changed
+    m_box: tuple | None = None  # ``box``, kept: a native part lets its vertices' bytes go once they are on the device
 
     def set_vertices(self, data: bytes, version: int) -> None:
         """New vertices in the same layout (``render.clothmesh``), known as ``version``."""
         if not self.m_rest:
             self.m_rest = self.m_data
-        self.m_data, self.m_version = data, version
+        self.m_data, self.m_version, self.m_box = data, version, None
 
     @classmethod
     def of_rdm(cls, mesh, indices) -> CMesh:
@@ -409,9 +410,11 @@ class CMesh:
         return np.ascontiguousarray(raw).view("<f2" if kind == 6 else "<f4")[:, :3].astype(np.float32)
 
     def box(self) -> tuple[np.ndarray, np.ndarray]:
-        """The corners (min, max) of the box the positions span."""
-        positions = self.positions()
-        return positions.min(axis=0), positions.max(axis=0)
+        """The corners (min, max) of the box the positions span (worked out once while the vertices are here)."""
+        if self.m_box is None:
+            positions = self.positions()
+            self.m_box = (positions.min(axis=0), positions.max(axis=0))
+        return self.m_box
 
     def draw(self, command_buffer, pipeline, resource_bindings, area: tuple, buffers: tuple, instances: int = 1,
              dynamic_offset: tuple[int, int] | None = None, state: SPassState | None = None) -> None:  # fmt: skip

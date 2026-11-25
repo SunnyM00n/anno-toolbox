@@ -31,6 +31,14 @@ def test_asset_models_follow_variation_base_template_and_placeholder():
     assert models.model_for(1).why == CReason.NO_ASSET
 
 
+def test_a_config_that_is_the_editors_placeholder_file_is_a_placeholder_not_an_unreadable_config():
+    ed = opened_island()
+    assert (
+        ed.model_problem("data/dev/graphics/placeholder/placeholder.cfg") == CReason.PLACEHOLDER
+    )  # named, not shipped
+    assert ed.model_problem("data/b/missing.cfg").startswith(CReason.UNREADABLE)
+
+
 def test_the_islands_objects_get_the_model_of_their_asset_and_variation():
     items = {o["guid"]: o for o in opened_island().objects()}
     assert items[3402]["cfg"] == KONTOR and items[3402]["clone"] and not items[3402]["marker"]

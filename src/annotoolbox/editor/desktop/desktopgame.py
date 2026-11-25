@@ -18,15 +18,17 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from ...infra.i18n import tr
-from ...render import gameinland, gameshadow, terrainbake, terraindraw, terrainnative, terrainnodes, terrainpages
-from ...render.cull import boxes_in_view
+from ...render import gameinland, terrainbake, terraindraw, terrainnative, terrainnodes, terrainpages
 from ...render.gamecompute import carry
 from ...render.gameframe import CGameFrame, SLight, SPasses
 from ...render.gamelight import CDeferredShading, SSky
 from ...render.gamesea import coast_for
 from ..editchange import SChange, union_box
 from .desktopgamebake import GROUND_JOB, CIslandBake, CPaintedMaps
+from .desktopgameend import CGameEnd
 from .desktopgameparts import native_shaders, shadow_stages
+from .desktopgameshadow import CGameShadow
+from .desktopgamestill import nodes_of, reuse_of
 from .desktopgeometry import river_lines, triangulate
 
 BACKEND = "D3D12"
@@ -116,12 +118,13 @@ def frame_planes(camera) -> tuple[float, float]:
     return max(0.1, camera.m_distance_m / 500), max(4000.0, camera.m_distance_m * 8)
 
 
-class CGameIsland(CIslandBake):
+class CGameIsland(CGameEnd, CGameShadow, CIslandBake):
     """The island's frame by the game's own shaders (module docstring)."""
 
     # how the view's final pass takes ``finish``'s picture (``CFramePasses._finish``, the final shader's modes): 3 linear
     # light, encoded by sRGB there; 4 encoded already (a look whose chain ends encoded skips its decode)
     FINISH_MODE = 3
+    m_settling = False  # the last frame still bakes, builds pages or waits for the cascades (not only moving water)
 
     def __new__(cls, renderer):
         """The look of the island's game where it has one of its own (``LOOKS``)."""
@@ -154,7 +157,7 @@ class CGameIsland(CIslandBake):
         self._m_unbaked = 0  # shown nodes the game's bake has still to do or did this frame
         self._m_painted: CPaintedMaps | None = None  # the session's strokes in the bake's material maps
         self._m_heights = None  # (game heights or not) the terrain was last made from
-        self._m_ranges = None  # the heights' range per block of the finest nodes (``_bounds``)
+        self._m_ranges = None  # the heights' range per block of the finest nodes (``_block_ranges``)
         self._m_pending = SChange()
         self._m_coarse = False  # the coarse heights were handed to the pages
         self._m_cascades = None  # gameshadow.SCascades read back from the game's analysis (casters culled by them)
@@ -162,6 +165,9 @@ class CGameIsland(CIslandBake):
             None  # the camera they were fitted for, the one of the read in flight
         )
         self._m_late = False  # this frame's camera is not the one ``_cascades`` were fitted for
+        self._m_cull_failed = False  # the GPU's caster culling failed once: the CPU culls (``desktopgameshadow``)
+        self.m_nodes: tuple | None = None  # (what they were picked for, the nodes) of the last frame (``nodes_of``)
+        self.m_edits = 0  # edits seen: the kept opaque frame ends with one (``desktopgamestill``)
         self.m_animated = False  # the frame moves with the view's clock or still settles: the view draws on
         self.m_error = ""
         self.m_source = None  # models.shaderview.CShaderSource: the install's shaders, once read (the objects compile)
@@ -201,6 +207,7 @@ class CGameIsland(CIslandBake):
         renderer.m_session.m_listeners.append(self.on_change)
 
     def on_change(self, change: SChange) -> None:
+        self.m_edits += 1
         pending = self._m_pending
         for name in ("heights", "weights"):
             box = getattr(change, name)
@@ -295,14 +302,14 @@ class CGameIsland(CIslandBake):
         self._sync_files(view_frame)
         x, y, z = camera.eye()
         eye = (session.m_size_tiles - float(x), float(y), float(z))  # the view's x is mirrored
-        models = terrain.nodes(eye, self._visible(view_frame.planes))
+        models = nodes_of(self, view_frame, eye, options)
         quality = getattr(options, "quality", None)  # this frame's: what the look was made with is ``self.quality``
         self.m_frame.set_quality(quality)  # its shadow cascades (the map's side is in ``quality.MADE_WITH``)
         shadows = getattr(options, "shadows", True) and (quality is None or quality.shadows)
         ground = self.m_ground.ground(self.m_pages.m_coarse if self.m_pages is not None else None)
         self.m_objects.m_is_terrain_adapted = ground is not None  # without the session's terrain no model adapts to it
         objects = self.m_objects.frame(
-            view_frame, options, shadows, size_px, self._seen_cascades(view_frame, size_px) if shadows else None
+            view_frame, options, shadows, size_px, self._caster_cascades(view_frame, size_px, options, shadows)
         )
         self.m_renderer.m_game_parts = self.m_objects.m_drawn
         decals = (
@@ -333,7 +340,7 @@ class CGameIsland(CIslandBake):
         self._water_passes(passes)
         if shading is not None:  # the water's copies, the sea, the visible sky, haze and clouds (phases 6 and 7)
             transparent, held = bool(passes.transparent), not options.waves  # held: the ocean is not stepped again
-            self.m_extras.passes(passes, passes.sky, seconds, ctx, transparent, *options.sky_parts, held=held)
+            self.m_extras.passes(passes, passes.sky, seconds, ctx, transparent, options.sky_parts, held=held)
             self._fog(passes.atmosphere)
         near, far = frame_planes(camera)  # with clouds the rays reach their own far plane (frame-117-viewer.md 12)
         cam = self.m_frame.camera(size_px, (x, y, z), camera.m_target, camera.m_fov_rad, near, far, self.m_extras.far())
@@ -341,7 +348,13 @@ class CGameIsland(CIslandBake):
         passes.objects = self._object_passes(objects, ground, shading is not None and shadows)
         # the ground stage's order: the terrain, the cut-outs clearing its depth, the decals, the models
         drawn = (models if native is None else []) + objects.cutouts + decals + objects.gbuffer
-        self.m_frame.render(target, size_px, drawn, cam, light, finish=False, shading=shading, passes=passes)
+        self.m_frame.render(
+            target, size_px, drawn, cam, light, finish=False, shading=shading, passes=passes,
+            reuse=reuse_of(
+                self, view_frame, size_px, options, models, decals, objects, passes.shading is not None, shadows
+            ),
+        )  # fmt: skip
+        ctx.native_pass(lambda _queue, _batch: self._submit_native(native))  # after every pass that wrote them
         self._end_native(native)
         self.m_renderer.m_stats["terrain_nodes"] = len(models)
         native_casters = len(passes.native.caster_list) if passes.native is not None else 0  # the terrain's
@@ -357,61 +370,19 @@ class CGameIsland(CIslandBake):
         moving = not options.is_clock_held and any(  # the water and the clouds move with the view's clock
             render_pass is not None for render_pass in (passes.sea, passes.inland, passes.clouds)
         )
-        fitted = (
-            shadows and self._m_late and self.m_frame.m_cascades is not None and self.m_frame.m_cascades.gpu
-        )  # read back
-        settling = self._m_unbaked or (self.m_pages is not None and self.m_pages.busy()) or fitted
-        self.m_animated = bool(moving or settling)
+        fitted = shadows and self._m_late and self.m_frame.m_cascades is not None and self.m_frame.m_cascades.gpu
+        settling = self._m_unbaked or (self.m_pages is not None and self.m_pages.busy()) or fitted  # fitted: read back
+        self.m_animated, self.m_settling = (
+            bool(moving or settling or (self.m_native_shading and self.m_native_shading.settling())),
+            bool(settling),
+        )
         return True
 
-    def _end_native(self, native) -> None:
-        """The frame's end for the native parts (``native``: the terrain's, None when the current path drew it):
-        the device's frame ended once for all of them (their late releases count in it), which ways drew."""
-        if native is not None:
-            native.end_frame()
-        if self.m_native_objects is not None:
-            self.m_native_objects.end_frame()
-        water = self.m_native_water
-        self.m_renderer.m_stats["water_native"] = water.m_drawn if water is not None else 0
-        if water is not None:
-            water.end_frame()
-        if self.m_native_shading is not None:
-            self.m_native_shading.end_frame()
-        if self._m_device is not None:
-            self._m_device.end_frame()
-        self.m_renderer.m_stats["terrain_native"] = int(native is not None)
-        self.m_renderer.m_stats["pages_native"] = int(getattr(self.m_pages, "m_native", False))
-        self.m_renderer.m_stats["bake_native"] = int(getattr(self.m_bake, "m_native", False))
-        self.m_renderer.m_stats["shading_native"] = int(
-            self.m_native_shading is not None and not self.m_native_shading.m_error
-        )
-        post = self.m_native_post
-        if post is not None:
-            post.end_frame()
-        self.m_renderer.m_stats["post_native"] = int(post is not None and not post.m_error)
-        self.m_renderer.m_stats["ocean_native"] = int(
-            self.m_native_ocean is not None and not self.m_native_ocean.m_error
-        )
-        self._end_copies()
-
-    def _end_copies(self) -> None:
-        """The native depth copy's frame end; once it failed (said once), the current path's pass from then on."""
-        copies = self.m_native_copies
-        self.m_renderer.m_stats["copies_native"] = int(copies is not None and not copies.m_error)
-        if copies is not None and copies.m_error:
-            self.m_renderer._message(tr("islands.games_native_water", reason=f"copy: {copies.m_error}"[:300]))
-            copies.release()
-            self.m_native_copies = self.m_extras.m_native_copies = None
-        elif copies is not None:
-            copies.end_frame()
-        inland = self.m_native_inland
-        self.m_renderer.m_stats["inland_native"] = int(inland is not None and not inland.m_error)
-        if inland is not None and inland.m_error:  # the rivers' passes by the current path from now on, said once
-            self.m_renderer._message(tr("islands.games_native_water", reason=f"rivers: {inland.m_error}"[:300]))
-            inland.release()
-            self.m_native_inland = None
-        elif inland is not None:
-            inland.end_frame()
+    def _submit_native(self, native) -> None:
+        """The native terrain's and objects' lists to the queue once a frame (performance.md section 4, item 2)."""
+        for part in (native, self.m_native_objects):
+            if part is not None and part.m_is_deferred:
+                part.submit()
 
     def _object_passes(self, objects, ground, shadows_enabled: bool):
         """The frame's objects by the shipped shaders (``objectsnative.SFrameDraws``: recorded last in the G-buffer's
@@ -590,31 +561,6 @@ class CGameIsland(CIslandBake):
         self.m_renderer.m_game_inland = not inland.m_error
         return inland if not inland.m_error else None
 
-    def _seen_cascades(self, frame, size_px: tuple[int, int]):
-        """The sun's cascades as last known on the CPU (the casters are culled by them): fitted there, or read back
-        from the game's analysis a frame or two ago (one read in flight at a time); None before the first.
-        ``_late``: they were fitted for another camera than this frame's (the view draws on until they are not)."""
-        fit = self._fit()
-        self._m_late = False
-        if fit is None:
-            cascades = self.m_frame.m_cascades if self.m_frame is not None else None
-            return cascades if cascades is not None and not cascades.gpu else None
-        seen = (np.asarray(frame.view_proj).tobytes(), tuple(size_px))
-        if fit.m_readbacks and fit.m_readbacks[1].data.size() >= gameshadow.INFO_BYTES * gameshadow.COUNT:
-            self._m_cascades = gameshadow.read_info(bytes(fit.m_readbacks[1].data), np.zeros(3), 0.0)
-            self._m_cascades_for, fit.m_readbacks = self._m_asked_for, []
-        if not fit.m_readbacks:
-            fit.m_read_back, self._m_asked_for = True, seen
-        self._m_late = self._m_cascades_for != seen
-        return self._m_cascades
-
-    def _fit(self):
-        """The cascades' analysis: the native one with the native shading, else the current path's (None: none)."""
-        native = self.m_native_shading
-        if native is not None and not native.m_error:
-            return native.m_fit
-        return self.m_fit if self.m_fit is not None and not self.m_fit.m_error else None
-
     def _sync_files(self, future) -> None:
         """The island files' geometry for the nodes when the view shows the game's terrain: the pages and meshes
         read once in the background, the coarse heights uploaded once (the file's: an edited block draws from the
@@ -638,43 +584,22 @@ class CGameIsland(CIslandBake):
             self._m_coarse = True
 
     def _visible(self, planes):
-        """Whether a node's box (its heights' range) is in view (None: cull off, all are)."""
-        if planes is None:
-            return None
-        session = self.m_renderer.m_session
-        bounds = self._bounds
-
-        def visible(node) -> bool:
-            low, high = bounds(node)
-            box_lo = np.array([[session.m_size_tiles - node.x - node.tiles, low, node.z]])
-            box_hi = np.array([[session.m_size_tiles - node.x, high, node.z + node.tiles]])
-            return bool(boxes_in_view(planes, box_lo, box_hi)[0])
-
-        return visible
+        """Whether a node's box (its heights' range) is in view, one node or many at once (None: cull off, all are)."""
+        return self._block_ranges().view(planes)
 
     def _box(self) -> tuple[np.ndarray, np.ndarray]:
         """The island's bounds in the view's axes: what the sun's cascades are fitted to on the CPU."""
-        low, high = self._block_ranges()
+        low, high = self._block_ranges().m_levels[0]
         size_px = float(self.m_renderer.m_session.m_size_tiles)
         return np.array([0.0, float(low.min()), 0.0]), np.array([size_px, float(high.max()), size_px])
 
-    def _block_ranges(self) -> tuple[np.ndarray, np.ndarray]:
-        """The heights' range per block of the finest nodes, made once per height change."""
+    def _block_ranges(self) -> terrainnodes.CNodeBoxes:
+        """The nodes' boxes from the heights' range per block of the finest nodes, made once per height change."""
         if self._m_ranges is None:
-            self._m_ranges = block_ranges(
-                self.m_terrain.m_heights, self.m_renderer.m_session.m_step_tiles, 2.0**terrainnodes.MIN_LEVEL
-            )
+            session = self.m_renderer.m_session
+            low, high = block_ranges(self.m_terrain.m_heights, session.m_step_tiles, 2.0**terrainnodes.MIN_LEVEL)
+            self._m_ranges = terrainnodes.CNodeBoxes(low, high, session.m_size_tiles)
         return self._m_ranges
-
-    def _bounds(self, node) -> tuple[float, float]:
-        """The lowest and highest height under a node (from ``_block_ranges``)."""
-        low, high = self._block_ranges()
-        per = 2**terrainnodes.MIN_LEVEL
-        block_i, block_j = int(node.x // per), int(node.z // per)
-        blocks = max(1, int(node.tiles // per))
-        return float(low[block_j : block_j + blocks, block_i : block_i + blocks].min()) - 0.5, float(
-            high[block_j : block_j + blocks, block_i : block_i + blocks].max()
-        ) + 2.5
 
     def _take_failures(self) -> None:
         """A node that did not prepare in the last frame, or a pass that raised, turns the look off (said once):
@@ -814,6 +739,7 @@ class CGameIsland(CIslandBake):
             self._m_natives = natives
             if terrainnative.is_enabled():
                 self.m_native = terrainnative.CNativeTerrain(self._m_device, natives, has_stencil=True)
+                self.m_native.m_is_deferred = True  # submitted once a frame (``_submit_native``)
         except Exception as exc:
             self.m_native = None
             self.m_renderer._message(tr("islands.games_native_terrain", reason=f"{type(exc).__name__}: {exc}"[:300]))
@@ -823,6 +749,7 @@ class CGameIsland(CIslandBake):
             try:
                 most = self.m_quality.max_texture if self.m_quality is not None else 0
                 self.m_native_objects = objectsnative.CNativeObjects(self._m_device, natives, True, most)
+                self.m_native_objects.m_is_deferred = True
             except Exception as exc:  # the objects by the current path, said once
                 self.m_renderer._message(
                     tr("islands.games_native_objects", reason=f"{type(exc).__name__}: {exc}"[:300])

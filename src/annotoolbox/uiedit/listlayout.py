@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 
 from . import fields
+from .arrange import components
 from .viewmodels import CSamples
 
 # the widget types a list file names (or extends), by their GUID's first part
@@ -34,6 +35,15 @@ SECTOR, SECTOR_POSITION, SECTOR_ROTATION, SECTOR_SIZE = "5065a655", 0x77B097F0, 
 ELEMENT = 0x90000000  # the data source's element i is 0x90000000 + i in the files' preview values
 # ValueCompare on a list's item: each item reports MyValue, the game gives every item the Min and Max of all of them
 COMPARE, COMPARE_MINE, COMPARE_MIN, COMPARE_MAX = "cf1d5ae2", 0x7F71FFA6, 0x77A51626, 0x72E77949
+TAB_ELEMENT, TAB_SELECTED = "f36d9167", 0x7F7463C9  # the TabElement component on an item's file, its IsSelected
+
+
+def selected(placed_root: dict | None, index: int) -> dict:
+    """What the game gives the ``index``-th item of a list whose item file is a tab (a ``TabElement`` on its root):
+    ``IsSelected`` on the first only, as a list opens on its first entry (layout.md "A list opens on its first
+    entry"). Empty for any other item."""
+    comp = components(placed_root).get(TAB_ELEMENT) if placed_root is not None else None
+    return {} if comp is None else {(comp, TAB_SELECTED): index == 0}
 
 
 def compared(values: list) -> tuple[tuple, tuple] | None:

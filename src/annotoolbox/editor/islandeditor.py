@@ -208,7 +208,11 @@ class CIslandEditor(CIslandAssets):
                     else assetmodels.CReason.EMPTY
                 )
             except Exception as error:
-                self._m_problems[cfg] = f"{assetmodels.CReason.UNREADABLE}: {type(error).__name__}"
+                self._m_problems[cfg] = (
+                    assetmodels.CReason.PLACEHOLDER  # the editor's placeholder file is named but not shipped
+                    if assetmodels.is_missing_placeholder(cfg)
+                    else f"{assetmodels.CReason.UNREADABLE}: {type(error).__name__}"
+                )
         return self._m_problems[cfg]
 
     def water_network(self) -> dict | None:

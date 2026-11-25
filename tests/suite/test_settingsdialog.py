@@ -58,6 +58,16 @@ def test_the_apps_rows_make_a_page_and_keep_the_other_switches(qt, tmp_path):
     assert values["view_switches"] == {"waves": False, "shadows": False} and values["snap_places"] == "off"
 
 
+def test_a_switch_not_set_shows_its_own_default(qt, tmp_path):
+    texts = {"shadows": ("islands.perf_shadows", "islands.tip.perf_shadows"),
+             "cloud_cache": ("islands.perf_cloud_cache", "islands.tip.perf_cloud_cache", False)}  # fmt: skip
+    dialog = settingsdialog.CSettingsDialog(
+        CSettings(workspace=str(tmp_path)), rows=(SSettingsRows((), (("view_switches", texts),)),)
+    )
+    boxes = dialog.m_switches["view_switches"]
+    assert boxes["shadows"].isChecked() and not boxes["cloud_cache"].isChecked()
+
+
 def test_the_games_limit_still_applies(qt, tmp_path):
     dialog = settingsdialog.CSettingsDialog(CSettings(workspace=str(tmp_path)), games=("anno117",))
     assert set(dialog.m_edits) == {"anno117", "workspace", "mods1800"}

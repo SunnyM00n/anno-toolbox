@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from . import baseline, elements, fields, placeholders
 
 TEXT = 0x80000008  # a label's Text, the built-in a binding writes
+LOCALIZATION_ID = 0x8000000A  # its LocalizationId
 PLANE = 0x8000000F  # its TextPlane
 MODE_IDS = {  # the built-ins a binding writes a label's layout modes through
     "HorizontalSizing": 0x80000055,
@@ -102,21 +103,22 @@ def _pair(value) -> tuple[float, float]:
 
 
 def label_text(ctx, node: dict, overrides: dict) -> str:
-    """What a label shows: the game's held text, a binding's, else the line its ``LocalizationId`` names (with an id
-    the label shows the line, as the game does: ui/117/loading-screen-and-main-menu.md "Texts"), else its stored
-    text. A filler a binding got from the preview (``placeholders.TEXTS``) gives way to the label's own line."""
+    """What a label shows: the game's held text, else the line its ``LocalizationId`` names over any text (as the
+    game does: docs/ui-editor.md "What the preview fills"), else a binding's text, else its stored text. A filler a
+    binding got from the preview (``placeholders.TEXTS``) gives way to the baseline's text."""
     live = elements.held_for(ctx.m_live_text, elements.SElement(node, "label"))
     if live is not None:  # the game's own text, held by an optional panel, in place of the sample value
         return live
+    loca = overrides[(LOCALIZATION_ID,)] if (LOCALIZATION_ID,) in overrides else fields.get(node, "LocalizationId")
+    loca = loca if isinstance(loca, str) else ""
+    line = ctx.m_files.text_of(loca, ctx.m_language) if loca else None
+    if line:  # the id wins over a text a binding or the file holds (the dumps: every label with both shows the line)
+        return line
     text = overrides.get((TEXT,))
     if not text or (isinstance(text, str) and text in placeholders.FILLERS):
-        loca = overrides.get((0x8000000A,)) or fields.get(node, "LocalizationId") or ""
-        loca = loca if isinstance(loca, str) else ""
-        line = ctx.m_files.text_of(loca, ctx.m_language) if loca else None
         stored = fields.get(node, "Text") if text is None else None  # a binding that wrote "" keeps it empty
         shown = overrides.get(baseline.BASELINE_TEXT)  # set only where the text is a filler or none (``baseline``)
-        own = shown if shown is not None else text or stored or (f"[{loca}]" if loca else "")
-        text = line or own
+        text = shown if shown is not None else text or stored or (f"[{loca}]" if loca else "")
     return str(text) if isinstance(text, (str, int, float)) else ""  # a game object is no text (a list's reference)
 
 

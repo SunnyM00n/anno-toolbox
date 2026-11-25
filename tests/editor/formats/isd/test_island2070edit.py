@@ -302,3 +302,36 @@ def test_a_2070_model_is_drawn_from_the_games_own_files(tmp_path):
     assert [a["count"] for a in doc["accessors"] if a.get("type") == "SCALAR"] == [3]  # the bark's triangle only
     assert ed.convert2070(palm) == palm  # the library places it as it is
     assert any("palm_01" in n for n in ed.model_notes())
+
+
+STREET = "data/graphics/effects/street/"
+STREET_DECAL = (
+    "<m_Config><m_TerrainDecals><m_Config><m_Extend.x>0.200000</m_Extend.x><m_Extend.y>0.300000</m_Extend.y>"
+    "<m_TexCoords.x>0.0</m_TexCoords.x><m_TexCoords.y>0.0</m_TexCoords.y><m_TexCoords.z>1.0</m_TexCoords.z>"
+    "<m_TexCoords.w>1.0</m_TexCoords.w><m_ConfigType>TERRAINDECAL</m_ConfigType><m_Materials><m_Config>"
+    "<m_ShaderIndex>0</m_ShaderIndex><m_DiffuseTexture>{texture}</m_DiffuseTexture><m_DiffuseEnabled>1"
+    "</m_DiffuseEnabled><m_ConfigType>MATERIAL</m_ConfigType></m_Config></m_Materials><m_Transformer><m_Config>"
+    "<m_Position.x>0.5</m_Position.x><m_Position.y>0.0</m_Position.y><m_Position.z>0.5</m_Position.z>"
+    "<m_Rotation.w>1.0</m_Rotation.w><m_Scale>1.4</m_Scale><m_Conditions>0</m_Conditions>"
+    "<m_ConfigType>ORIENTATION_TRANSFORM</m_ConfigType></m_Config></m_Transformer></m_Config></m_TerrainDecals>"
+    "<m_ConfigType>ROOT</m_ConfigType></m_Config>"
+)
+
+
+def test_a_ground_decal_config_draws_as_a_decal_and_a_pin_stays_where_its_map_is_missing(tmp_path):
+    cracks, lost = STREET + "cracks.cfg", STREET + "lost.cfg"
+    files = {
+        cracks: STREET_DECAL.format(texture=(STREET + "cracks.png").replace("/", "\\")).encode(),
+        lost: STREET_DECAL.format(texture=(STREET + "lost.png").replace("/", "\\")).encode(),
+        STREET + "cracks_0.dds": b"DDS ",
+    }
+    ed = isd_edit.CIsland2070Editor(install(files), SOURCE, tmp_path / "cache")
+    assert ed.model_cfg(cracks) == cracks
+    spec = ed.model(cracks)
+    assert spec["parts"] == []
+    (decal,) = spec["decals"]
+    assert decal["extents"] == (0.2, 0.3) and decal["on_streets"] is True and decal["kind"] == "Terrain"
+    assert decal["diffuse"] == STREET + "cracks_0.dds" and decal["scale"] == [1.4, 1.4, 1.4]
+    assert decal["position"] == [0.5, 0.0, 0.5]
+    assert ed.model_cfg(lost) == ""  # its map is not in the game's files: the object stays a pin
+    assert ed._model_state()[0][lost].startswith("its model config cannot be read")

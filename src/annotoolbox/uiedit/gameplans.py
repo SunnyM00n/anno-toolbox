@@ -135,17 +135,22 @@ def _option_entries(game, ctx) -> list[Node]:
     return [(guid, f"{at}[{i + 1}]") for i, it in enumerate(items) if "PC" not in (it.findtext("HideOnPlatform") or "")]
 
 
-def _first_category(game, ctx) -> list[Node]:
-    """The construction menu's buildings: the first need category of the player's region (``LinearBuildingsMenu``),
-    its ``BuildingList``."""
+def _categories(game, ctx) -> list[Node]:
+    """The construction menu's categories of the player's region (``LinearBuildingsMenu``): its infrastructure
+    category first, then its need categories, as the game showed them (2026-11-23)."""
     element = game.m_assets.element(ctx.config)
-    item = (
-        element.find(f"Values/*/LinearBuildingsMenu/{region_of(game)}/NeedCategories/Item/TierCategory")
-        if element
-        else None
+    menu = element.find(f"Values/*/LinearBuildingsMenu/{region_of(game)}") if element is not None else None
+    if menu is None:
+        return []
+    return _guids(
+        [menu.findtext("InfrastructureCategory")] + [x.text for x in menu.findall("NeedCategories/Item/TierCategory")]
     )
-    category = game.m_assets.element(int(item.text)) if item is not None and (item.text or "").isdigit() else None
-    found = category.findall("Values/ConstructionCategory/BuildingList/Item/Building") if category is not None else []
+
+
+def _category_buildings(game, ctx) -> list[Node]:
+    """A construction category's buttons: its ``BuildingList``, in order."""
+    element = game.m_assets.element(ctx.node[0]) if ctx.node else None
+    found = element.findall("Values/ConstructionCategory/BuildingList/Item/Building") if element is not None else []
     return _guids(x.text for x in found)
 
 
@@ -210,20 +215,24 @@ PLANS: dict[str, SPlan] = {
     ),
 }
 PLANS["constructionmenuscene"] = SPlan(
-    config="ConstructionMenu", lists={"ConstructionData.CategoryBuildingsData": _first_category}
+    config="ConstructionMenu",
+    lists={"ConstructionData.CategoryBuildingsData": _categories, "BuildingsBtns": _category_buildings},
+    aliases={"CategoryImage": "CategoryIcon"},  # an Icon asset's GUID, or the category itself (its portrait)
 )
 EMPTY = SPlan()
 
 
 def _selected(game, _ctx) -> list[Node]:
     """An object menu's object: the residence or the production building the preview assumes
-    (``previewdefaults.SDefaults``)."""
-    defaults = game.m_defaults
-    guid = getattr(defaults, "residence" if "residence" in game.m_scene.lower() else "production", None)
+    (``previewdefaults.SDefaults``) in the residence and the production menu; no other menu names its object."""
+    low = game.m_scene.lower()
+    kind = "residence" if "residence" in low else "production" if "production" in low else None
+    guid = getattr(game.m_defaults, kind, None) if kind else None
     return [(int(guid), "")] if guid else []
 
 
-OBJECT_MENU = SPlan(main=_selected)
+# the header's second line is the building's category under its name (the game's object menus, 2026-11-23)
+OBJECT_MENU = SPlan(main=_selected, aliases={"SubHeadline": "BuildingCategoryName"})
 
 
 def plan_for(scene: str) -> SPlan:

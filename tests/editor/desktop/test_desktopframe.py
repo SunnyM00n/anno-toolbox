@@ -47,3 +47,26 @@ def test_an_edit_of_the_heights_while_the_game_terrain_is_off_is_in_its_heights_
     assert _sync(view, game, heights_edited=True, game_terrain=False) is None
     again = _sync(view, game, heights_edited=False)
     assert again[2, 2] == first[2, 2] + 1.5
+
+
+def test_a_laying_of_the_decals_begun_before_the_games_decals_draw_is_given_up(monkeypatch):
+    """The view's own decals are laid over several frames; once the game's decal shader draws them the view stops
+    laying, so ``busy`` does not wait for a laying no frame goes on with (a parallel test run waited 800 s)."""
+    from annotoolbox.editor.desktop import desktopdecals
+
+    monkeypatch.setattr(desktopdecals, "DECAL_BUDGET", -1.0)  # every frame's share of the laying is used up at once
+    layer = desktopdecals.CDecalLayer(SimpleNamespace(buffer=lambda data: object()))
+    decal = {"kind": "Terrain", "on_streets": False, "diffuse": "", "normal": "", "color": (1.0, 1.0, 1.0), "opacity": 1.0,
+             "extents": (1.0, 1.0), "matrix": np.identity(4)}  # fmt: skip
+    batch = SimpleNamespace(m_count=1, m_parts=["part"], m_mats=np.array([np.identity(4)] * 3), m_key=("objects", "a.cfg"),
+                            m_version=1)  # fmt: skip
+    session = SimpleNamespace(m_heights=np.zeros((3, 3)), m_step_tiles=1.0, m_width_samples=3)
+    view = SimpleNamespace(m_library=SimpleNamespace(decals=lambda cfg: [decal]), _all_batches=lambda: [batch],
+                           _street_cells=lambda: [], _layer_on=lambda b, opts: True, _m_ground_version=0,
+                           m_decals=layer, m_prog={"model": 0}, m_session=session, m_game_decals=False)  # fmt: skip
+    frame = SimpleNamespace(game_heights=None)
+    CFramePasses._lay_decals(view, frame, None)
+    assert layer.is_laying()  # three objects: more frames to come
+    view.m_game_decals = True  # the game's decals compiled: the view's own are neither laid nor drawn
+    CFramePasses._lay_decals(view, frame, None)
+    assert not layer.is_laying()

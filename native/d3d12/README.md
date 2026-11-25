@@ -15,7 +15,8 @@ look. The installer carries the module; a source checkout builds it with `script
 |---|---|
 | `src/gpu.h` | the layer's types: the device, one wrapper per resource, the pipeline state, a draw's arguments |
 | `src/device.cpp` | the device (see below the table), NVRHI's and the debug layer's messages, the shader model and binding tier it offers, the process's use of the adapter's own memory with its budget (`video_memory`, for `scripts/native_compare.py`), and the names Python passes (NVRHI's format names, binding kinds, comparisons) |
-| `src/resources.cpp` | buffers, textures, samplers, binding layouts (by register space, bindless ranges), binding sets, descriptor tables, shaders from DXIL, input layouts, graphics pipelines and compute pipelines (see below the table) |
+| `src/resources.cpp` | buffers, textures, samplers, binding layouts (by register space, bindless ranges), binding sets (a constant buffer's piece by offset and size), descriptor tables, shaders from DXIL, input layouts, and the descriptions of graphics and compute pipelines (see below the table) |
+| `src/pipelines.cpp` | the pipelines made: on the module's worker threads when asked (`background`), and loaded from or stored into the device's pipeline library, whose bytes Python keeps on disk (see below the table) |
 | `src/commands.cpp` | command lists, and the work recorded into a command list someone else owns (QRhi's) (see below the table) |
 | `src/interop.cpp` | QRhi's own resources: a `QRhiTexture`'s or `QRhiBuffer`'s Direct3D 12 resource and the state QRhi tracks it in, wrapped for binding sets, and the transitions a draw on QRhi's list needs; the other way, a module texture handed to a `QRhiTexture` (`qrhi_create_from`) |
 | `src/module.cpp` | the Python interface |
@@ -29,21 +30,47 @@ over from QRhi.
 The graphics pipelines of `src/resources.cpp` carry the game's stencil test: both faces' compare and operations, masks
 and reference. They also carry dual-source blend factors.
 
+A binding set, a descriptor table and a write into one refuse a released resource, sampler, layout or table: they
+raise. NVRHI would write the view through the released object's null handle and crash the process. A binding set
+also raises when its descriptor heap is full. The shader-visible sampler heap holds 2048 descriptors at most. NVRHI
+writes a set past that through an invalid index, and the driver crashes the process.
+
 `src/commands.cpp` holds these:
 - command lists: uploads, clears, copies of a whole texture or a rectangle of a layer and level, draws, dispatches,
-  timers, and transitions of a texture someone else left in another state;
+  timers, and transitions of a texture someone else left in another state. An open list with nothing recorded since
+  its last submit is not submitted again (`execute`: most passes leave theirs empty);
 - the work recorded into a command list someone else owns (QRhi's):
   - one draw (`record_external`);
   - many draws made once (`SDrawItem`, `record_draws`), each with its instance count and root offset a frame, and with
     what the draw before set not set again. A pipeline with a stencil test sets its reference. A kept draw holds its
     pipeline, buffers and sets alive. A released draw, an offset past a buffer's end, or push constants larger than the
     root signature's raise instead of being recorded;
+  - many indexed draws made once whose instance counts the GPU wrote (`record_indirect`): each one an
+    `ExecuteIndirect` of one `DrawIndexedInstanced` from its five words of an `indirect` buffer, which the caller has
+    moved into the indirect argument state (the shadow casters' culling, `render/shadowcullnative.py`). The device
+    keeps the one command signature. Arguments past the buffer's end, a buffer made without `indirect` and a draw
+    without indices raise;
   - a compute dispatch (`record_dispatch`, inside a compute pass of QRhi's);
 - a barrier between unordered accesses (`uav_barrier`, also on the module's own lists, where NVRHI places none between
   dispatches of an unchanged set);
-- a copy between buffers (`copy_buffer`, refused past either buffer's end).
+- a copy between buffers (`copy_buffer`, refused past either buffer's end);
+- and a copy of a whole texture into one of the same size and format (`copy_texture`, refused between unlike ones).
 
 Draws and dispatches bind their root parameters through one routine (`bind_root`).
+
+`src/pipelines.cpp` makes every pipeline as the game makes its own:
+- A pipeline asked for with `background=True` is made by one of the module's worker threads (a quarter of the
+  processor's threads, 1 to 4). Its `ready` turns true once it is in. A draw recorded with one still being made is
+  left out (`record_draws`), and a draw on the module's own lists waits for it.
+- Every pipeline is first looked up in the device's pipeline library (`ID3D12PipelineLibrary`), by a 128-bit name of
+  its shaders, input elements, fixed state, targets and binding layouts. One not there is made by the driver and
+  stored. `pipeline_library()` gives the library's bytes behind a header naming the adapter, the driver's version,
+  the module's version and NVRHI's commit, and `open_pipeline_library(bytes)` takes them back on a later start.
+  Bytes of another adapter, driver or module are refused (Direct3D refuses another driver's itself), and the library
+  starts empty.
+- The workers touch Direct3D 12's own objects only. NVRHI's root signature cache and the pipeline's NVRHI handle are
+  made on the caller's thread: the root signatures are kept per set of binding layouts by the module, and a done
+  worker's pipeline is wrapped when `ready` is next asked.
 
 Three places reach past NVRHI's public interface, each to NVRHI's own Direct3D 12 types (`nvrhi/src/d3d12`,
 pinned with the commit):

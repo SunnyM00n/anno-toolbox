@@ -1,4 +1,5 @@
-// Buffers, textures, samplers, binding layouts and sets, shaders, input layouts and pipelines.
+// Buffers, textures, samplers, binding layouts and sets, shaders, input layouts and pipelines' descriptions (made in
+// pipelines.cpp).
 #include "gpu.h"
 
 #include <d3d12/d3d12-backend.h>  // NVRHI's own types: the descriptors and input elements set here
@@ -35,7 +36,9 @@ Buffer* Device::buffer(uint64_t size, const std::string& usage, uint32_t stride,
     nvrhi::ResourceStates state = nvrhi::ResourceStates::ShaderResource;
     if (desc.isVertexBuffer || desc.isIndexBuffer)
         state = nvrhi::ResourceStates::VertexBuffer | nvrhi::ResourceStates::IndexBuffer;
-    if (desc.isConstantBuffer) state = nvrhi::ResourceStates::ConstantBuffer;
+    if (desc.isConstantBuffer)  // a pool of vertices, indices and constants (CBufferPool) is read in all three ways
+        state = desc.isVertexBuffer || desc.isIndexBuffer ? state | nvrhi::ResourceStates::ConstantBuffer
+                                                          : nvrhi::ResourceStates::ConstantBuffer;
     if (has(usage, "upload"))
         desc.cpuAccess = nvrhi::CpuAccessMode::Write;  // in its heap's one state: NVRHI tracks none
     else if (has(usage, "readback"))
@@ -196,7 +199,10 @@ static nvrhi::TextureDimension dimension_named(const std::string& name) {
     return it->second;
 }
 
+// a released resource's handle is null, and NVRHI writes its view through it: refused here, not a crash in NVRHI
 static nvrhi::BindingSetItem item_of(const Binding& b) {
+    if ((b.texture && !b.texture->handle) || (b.buffer && !b.buffer->handle) || (b.sampler && !b.sampler->handle))
+        throw Error("a released resource in a binding of kind " + b.kind + " at slot " + std::to_string(b.slot));
     nvrhi::ResourceType kind = kind_named(b.kind);
     nvrhi::Format f = format_named(b.format);
     nvrhi::BindingSetItem out = nvrhi::BindingSetItem::None(b.slot);
@@ -219,7 +225,9 @@ static nvrhi::BindingSetItem item_of(const Binding& b) {
     case nvrhi::ResourceType::RawBuffer_UAV: out = nvrhi::BindingSetItem::RawBuffer_UAV(b.slot, b.buffer ? b.buffer->get() : nullptr); break;
     case nvrhi::ResourceType::ConstantBuffer:
     case nvrhi::ResourceType::VolatileConstantBuffer:
-        out = nvrhi::BindingSetItem::ConstantBuffer(b.slot, b.buffer ? b.buffer->get() : nullptr);
+        out = nvrhi::BindingSetItem::ConstantBuffer(
+            b.slot, b.buffer ? b.buffer->get() : nullptr,
+            b.range ? nvrhi::BufferRange(b.offset, b.range) : nvrhi::EntireBuffer);
         out.type = kind;
         break;
     case nvrhi::ResourceType::Sampler: out = nvrhi::BindingSetItem::Sampler(b.slot, b.sampler->get()); break;
@@ -290,7 +298,29 @@ static void patch_set(Device& device, nvrhi::IBindingSet* set, const std::vector
     }
 }
 
+// Whether the heaps hold a set of ``layout``: NVRHI writes a set's descriptors through the index its heap hands
+// out, an invalid one once the heap is full (the shader-visible sampler heap holds 2048 at most), so a full heap
+// is refused here; the range taken to ask is given back at once (no other thread takes descriptors)
+static void check_room(Device& device, Layout& layout) {
+    auto* laid = static_cast<nvrhi::d3d12::BindingLayout*>(layout.get());
+    const std::pair<nvrhi::d3d12::DescriptorHeapType, int> wanted[] = {
+        {nvrhi::d3d12::DescriptorHeapType::Sampler, laid->descriptorTableSizeSamplers},
+        {nvrhi::d3d12::DescriptorHeapType::ShaderResourceView, laid->descriptorTableSizeSRVetc}};
+    for (const auto& [type, count] : wanted) {
+        if (count <= 0) continue;
+        auto* heap = device.native->getDescriptorHeap(type);
+        nvrhi::d3d12::DescriptorIndex at = heap->allocateDescriptors(uint32_t(count));
+        if (at == nvrhi::d3d12::c_InvalidDescriptorIndex)
+            throw Error(std::string("the ") + (type == nvrhi::d3d12::DescriptorHeapType::Sampler ? "sampler" : "view") +
+                        " descriptor heap is full: no room for a binding set");
+        heap->releaseDescriptors(at, uint32_t(count));
+    }
+}
+
 Set* Device::binding_set(Layout& layout, const std::vector<Binding>& items) {
+    if (!layout.handle) throw Error("a binding set of a released layout");
+    if (layout.bindless) throw Error("a binding set of a bindless layout (it takes a descriptor table)");
+    check_room(*this, layout);
     nvrhi::BindingSetDesc desc;
     bool patch = false;
     for (const auto& b : items) {
@@ -319,6 +349,7 @@ Set* Device::binding_set(Layout& layout, const std::vector<Binding>& items) {
 }
 
 Table* Device::descriptor_table(Layout& layout, uint32_t size) {
+    if (!layout.handle) throw Error("a descriptor table of a released layout");
     auto* t = new Table();
     t->device = this;
     t->handle = nv->createDescriptorTable(layout.get());
@@ -331,6 +362,7 @@ Table* Device::descriptor_table(Layout& layout, uint32_t size) {
 }
 
 void Device::write_table(Table& table, const Binding& item) {
+    if (!table.handle) throw Error("a write to a released descriptor table");
     if (!item.texture && !item.buffer) throw Error("a bindless table takes a texture or a buffer");
     if (!nv->writeDescriptorTable(table.get(), item_of(item))) throw Error("the table refused the descriptor");
 }
@@ -459,7 +491,7 @@ static nvrhi::FramebufferInfo targets_of(const PipelineState& state) {
 }
 
 Pipeline* graphics_pipeline(Device& device, Shader* vs, Shader* hs, Shader* ds, Shader* ps, InputLayout* input,
-                            const std::vector<Layout*>& layouts, const PipelineState& state) {
+                            const std::vector<Layout*>& layouts, const PipelineState& state, bool background) {
     nvrhi::GraphicsPipelineDesc desc;
     desc.VS = vs ? vs->get() : nullptr;
     desc.HS = hs ? hs->get() : nullptr;
@@ -518,29 +550,14 @@ Pipeline* graphics_pipeline(Device& device, Shader* vs, Shader* hs, Shader* ds, 
         t.blendOpAlpha = op_named(opa);
         t.colorWriteMask = nvrhi::ColorMask(mask);
     }
-    auto* p = new Pipeline();
-    p->device = &device;
-    p->handle = device.nv->createGraphicsPipeline(desc, targets_of(state));
-    if (!p->handle) {
-        delete p;
-        throw Error("the graphics pipeline was not made (the debug layer says why, where it is installed)");
-    }
-    return p;
+    return make_graphics(device, desc, targets_of(state), background);
 }
 
-Pipeline* compute_pipeline(Device& device, Shader& cs, const std::vector<Layout*>& layouts) {
+Pipeline* compute_pipeline(Device& device, Shader& cs, const std::vector<Layout*>& layouts, bool background) {
     nvrhi::ComputePipelineDesc desc;
     desc.CS = cs.get();
     for (auto* l : layouts) desc.bindingLayouts.push_back(l->get());
-    auto* p = new Pipeline();
-    p->device = &device;
-    p->compute = true;
-    p->handle = device.nv->createComputePipeline(desc);
-    if (!p->handle) {
-        delete p;
-        throw Error("the compute pipeline was not made");
-    }
-    return p;
+    return make_compute(device, desc, background);
 }
 
 }  // namespace gpu

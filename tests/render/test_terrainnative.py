@@ -5,6 +5,9 @@ rasteriser, and an island's terrain drawn both ways in the island view."""
 
 from __future__ import annotations
 
+import gc
+import weakref
+
 import numpy as np
 import pytest
 
@@ -16,6 +19,7 @@ from annotoolbox.infra.dxc import SConstantBuffer, SVariable
 from annotoolbox.models import shadercache, shadernative
 from annotoolbox.render import gameshader as gs
 from annotoolbox.render import terrainnative
+from annotoolbox.render.nativelayout import SItem, SLayoutSpec
 
 
 def test_the_camera_buffer_is_three_records_written_by_the_frames_paths():
@@ -49,6 +53,44 @@ def test_qrhis_resources_go_into_shader_reads_and_back():
     assert bridge.after() == [(10, 0xC0, 0x8), (12, 0xC0, 0x400)]
 
 
+def test_a_qrhi_texture_is_wrapped_once_whichever_python_object_hands_it(monkeypatch):
+    """PySide hands a new Python object for the same QRhi texture: the bridge keys a wrap by the Direct3D resource
+    and its view, so the same wrap (and the binding sets made with it) serve every frame; keyed by the object's id, a
+    new wrap and new sets came every frame, and the sets kept filled the sampler heap until the driver crashed."""
+    from PySide6.QtGui import QRhiTexture
+
+    class FakeQRhiTexture:
+        def __init__(self, pointer: int, texture_format=QRhiTexture.Format.RGBA8) -> None:
+            self.pointer, self.m_format = pointer, texture_format
+
+        def format(self):
+            return self.m_format
+
+        def flags(self):
+            return QRhiTexture.Flag(0)
+
+        def arraySize(self) -> int:
+            return 0
+
+    wraps = []
+    bridge = object.__new__(terrainnative.CBridge)
+    bridge.m_held, bridge.m_frame, bridge.m_reads, bridge.m_writes = {}, 0, {}, {}
+    bridge.m_module = type("M", (), {"qrhi_texture": lambda self, pointer: (pointer * 16, 0),
+                                     "qrhi_buffer": lambda self, pointer: pointer * 16})()  # fmt: skip
+    bridge.m_device = type("D", (), {"wrap_texture": lambda self, *args: wraps.append(args) or object(),
+                                     "wrap_buffer": lambda self, *args: wraps.append(args) or object()})()  # fmt: skip
+    monkeypatch.setattr(
+        terrainnative, "shiboken6", type("S", (), {"getCppPointer": staticmethod(lambda o: (o.pointer,))})
+    )
+    handed = [FakeQRhiTexture(7) for _ in range(4)]  # alive together: four Python objects of one texture
+    first = bridge.texture(handed[0])[0]
+    assert all(bridge.texture(other)[0] is first for other in handed[1:]) and len(wraps) == 1
+    assert bridge.texture(FakeQRhiTexture(8))[0] is not first  # another texture: its own wrap
+    assert bridge.texture(FakeQRhiTexture(7, QRhiTexture.Format.R8))[0] is not first  # another view of it: its own
+    assert bridge.buffer(FakeQRhiTexture(9), 16)[0] is not bridge.buffer(FakeQRhiTexture(9), 32)[0]
+    assert len(wraps) == 5
+
+
 def test_a_recording_that_raises_still_moves_qrhis_resources_back(monkeypatch):
     """``CBridge.send``: the module's list first, then the draws between the moves there and back; a draw that raises
     leaves no resource in another state than QRhi tracks (the rest of QRhi's frame is recorded from those)."""
@@ -67,6 +109,32 @@ def test_a_recording_that_raises_still_moves_qrhis_resources_back(monkeypatch):
         bridge.send(own, None, record)
     assert calls == ["sent", ("qrhi", [(10, 0x8, 0xC0)]), ("drawn", "qrhi"), ("qrhi", [(10, 0xC0, 0x8)])]
     assert bridge.m_reads == {} and bridge.m_writes == {}
+
+
+def test_a_kept_set_holds_what_it_binds_so_a_successor_at_its_address_is_not_taken_for_it(monkeypatch):
+    """A frame's shared set is kept while it binds the same resources: its key holds them, so a wrap let go cannot
+    die and hand its address (its id) to a new wrap of another texture, which the old set would then stand for."""
+
+    class FakeWrap:
+        pass
+
+    class FakeSet:
+        def release(self) -> None:
+            pass
+
+    made = []
+    monkeypatch.setattr(terrainnative.nativegpu, "binding_set", lambda *args: made.append(len(args)) or FakeSet())
+    terrain = object.__new__(terrainnative.CNativeTerrain)
+    terrain.m_device, terrain.m_sets, terrain.m_samplers = None, {}, {"T": {}}
+    spec = SLayoutSpec(0, [SItem("texture", 0, 1, "cMap")])
+    tech = type("FakeTechnique", (), {"name": "T", "plan": type("P", (), {"layouts": [spec]})(), "layouts": [None]})()
+    wrap = FakeWrap()
+    first = terrain._shared_set(tech, 0, {"cMap": wrap})
+    gone = weakref.ref(wrap)
+    del wrap
+    gc.collect()
+    assert gone() is not None  # held by the kept set's key
+    assert terrain._shared_set(tech, 0, {"cMap": FakeWrap()}) is not first and len(made) == 2
 
 
 @pytest.mark.xdist_group("island_view")

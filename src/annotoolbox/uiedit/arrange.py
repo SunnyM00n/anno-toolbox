@@ -19,6 +19,7 @@ STACK_ORIENTATION, STACK_SPACE, VERTICAL = 2086100441, 2115500691, 1410225626
 STACK_INVERT, STACK_MARGIN, STACK_ALIGN = 0x71ADECBB, 0x75274045, 0x7E2576CB
 ALIGN_VALUE, PADDING_VALUE, BACKGROUND_MARGIN = 0x7869C5A7, 652292905, 0x7D19BB74
 BEGIN, MIDDLE, END, INHERITED = 1403909053, 1503000153, 1378142755, 1449164074  # the LayoutAlignment enum
+INFO_TIP, REFERENCE_WIDGET = "d2efb1b6", 0x71FFEDC5  # the InfoTip component of a widget file, its sibling reference
 
 
 @dataclass
@@ -92,6 +93,21 @@ def read_child(comps: dict[str, int], overrides: dict) -> tuple[tuple[float, flo
     return pad, align
 
 
+def reference_of(placed_root: dict | None, overrides: dict) -> str | None:
+    """The sibling an instance hangs on when the widget file it places has an ``InfoTip`` component: its
+    ``ReferenceWidget`` (an instance GUID), else None."""
+    comp = components(placed_root).get(INFO_TIP) if placed_root is not None else None
+    reference = overrides.get((comp, REFERENCE_WIDGET)) if comp is not None else None
+    return reference if isinstance(reference, str) and reference else None
+
+
+def hang(tip: SSlot, reference: SSlot) -> None:
+    """An info tip's area takes its reference's rectangle: placed at its corner, as large as it (layout.md "Info
+    tips")."""
+    x0, y0, x1, y1 = reference.rect
+    tip.size, tip.local, tip.rect = (x1 - x0, y1 - y0), (1.0, 0.0, 0.0, 1.0, x0, y0), reference.rect
+
+
 def _shift(slot: SSlot, delta_x: float, delta_y: float) -> None:
     matrix_a, matrix_b, matrix_c, matrix_d, translate_x, translate_y = slot.local
     slot.local = (matrix_a, matrix_b, matrix_c, matrix_d, translate_x + delta_x, translate_y + delta_y)
@@ -115,15 +131,14 @@ def _across(rule: SRule, slot: SSlot, extent: float) -> float:
 
 
 def arrange(rule: SRule, slots: list[SSlot]) -> None:
-    """Put the stack's children one after another along its axis (``flows`` ones only) and each aligned across it;
-    then stretch the background round them. The first child is the background of a background layout."""
-    slots_in_flow = [slot for slot in slots if slot.flows and not slot.background]
+    """Put the stack's children one after another along its axis and each aligned across it; then stretch the
+    background round them. Both take the children that count, hidden ones too (``holds``). The first child is the
+    background of a background layout."""
+    content = [slot for slot in slots if (slot.flows if slot.holds is None else slot.holds) and not slot.background]
     if rule.flow:
-        _stack(
-            rule, [slot for slot in slots if (slot.flows if slot.holds is None else slot.holds) and not slot.background]
-        )
+        _stack(rule, content)
     if rule.background is not None:
-        _stretch(rule.background, slots, slots_in_flow)
+        _stretch(rule.background, slots, content)
 
 
 def _stack(rule: SRule, flow: list[SSlot]) -> None:

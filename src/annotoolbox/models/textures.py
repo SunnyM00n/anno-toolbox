@@ -42,6 +42,8 @@ def read_pixels(data: bytes) -> np.ndarray:
     try:
         return ddsdecode.read_dds(data)
     except ddsdecode.CUnsupportedDds:
+        if (mended := ddsdecode.without_text_copy(data)) is not None:
+            return read_pixels(mended)
         try:
             return ddsdecode.CDdsFile(data).level(0)
         except IndexError as exc:

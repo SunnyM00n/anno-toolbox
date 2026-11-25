@@ -190,8 +190,10 @@ class CSettingsDialog(QDialog):
             form.addRow("", _hint(tr("settings.performance_hint")))
             stored = getattr(self.m_settings, key)
             boxes = self.m_switches[key] = {}
-            for name, (label, tip) in switches.items():
-                box = QCheckBox(tr(label).replace("\n", " "), checked=bool(stored.get(name, True)))
+            for name, (label, tip, *default) in switches.items():  # a third entry: the switch's state when not set
+                box = QCheckBox(
+                    tr(label).replace("\n", " "), checked=bool(stored.get(name, default[0] if default else True))
+                )
                 box.setToolTip(tr(tip))
                 form.addRow("", box)
                 boxes[name] = box

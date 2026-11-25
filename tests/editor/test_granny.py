@@ -14,6 +14,7 @@ from tests.fakes import FakeTree
 from tests.formats.formatfakes import granny_file, oodle1
 
 from annotoolbox.editor import modelviewer
+from annotoolbox.editor.assetmodels import CReason
 from annotoolbox.editor.grannyviewer import CGrannyModels, piece_parts
 from annotoolbox.formats import grannyoodle
 from annotoolbox.formats import grannyread as gr
@@ -218,3 +219,28 @@ def test_viewer_draws_readable_models_and_names_the_rest(tmp_path):
     assert spec["files"][0]["cfg"] == "data/gfx/flag.cfg"
     assert viewer.mesh_glb(spec["parts"][1]["mesh"])[:4] == b"glTF"
     assert len(viewer.banner(spec["parts"][-1]["mesh"])["positions"]) == 24
+
+
+EFFECT_ONLY = (
+    "<m_Config><m_Effects><m_Config><m_FileName>data\\gfx\\fx\\smoke.efc</m_FileName>"
+    "<m_ConfigType>EFFECT</m_ConfigType></m_Config></m_Effects></m_Config>"
+)
+DECAL_ONLY = (
+    "<m_Config><m_TerrainDecals><m_Config><m_Extend.x>0.5</m_Extend.x><m_ConfigType>TERRAINDECAL</m_ConfigType>"
+    "</m_Config></m_TerrainDecals></m_Config>"
+)
+
+
+def test_a_config_of_an_effect_alone_draws_when_a_sprite_does_and_a_decal_alone_says_so(tmp_path):
+    tree = FakeTree(
+        {
+            "data/gfx/smoke.cfg": EFFECT_ONLY,
+            "data/gfx/ring.cfg": EFFECT_ONLY.replace("smoke", "ring"),
+            "data/gfx/crack.cfg": DECAL_ONLY,
+        }
+    )
+    viewer = FakeViewer(tree, tmp_path)
+    viewer.effect = lambda path: [path] if "smoke" in path else []  # a model effect gives no sprite
+    assert viewer.model_cfg("data/gfx/smoke.cfg") == "data/gfx/smoke.cfg"  # its particles are the model
+    assert viewer.model_cfg("data/gfx/ring.cfg") == "" and viewer.model_cfg("data/gfx/crack.cfg") == ""
+    assert viewer._model_state()[0]["data/gfx/crack.cfg"] == CReason.EMPTY  # a pin with a reason the Checks tab lists

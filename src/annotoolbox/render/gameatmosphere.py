@@ -11,7 +11,7 @@ stand-ins: docs/rendering/frame-117-viewer.md sections 8, 11 and 12.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from PySide6.QtCore import QSize
@@ -52,14 +52,18 @@ FOG = {"cFogDensityNoise": [0.014, 0.75, 0.11], "cFogHeight": 90.0, "cFogColorNo
 # the cloud layer's dome bounds the atmosphere's passes even without clouds: the engine's (frame-117-viewer.md 12)
 CLOUD_LAYER = {"cCloudDomeRadius": gameclouds.DOME_RADIUS, "cWeathermapScale": gameclouds.WEATHERMAP_SCALE,
                "cCloudLayerHeight": gameclouds.LAYER_HEIGHT}  # fmt: skip
+# cEnvironmentFlags' EF_TEMPORAL_ACCUM_CLOUDS and EF_TEMPORAL_ACCUM_FOG: one pixel of each 2 x 2 quad marched a frame
+TEMPORAL_FLAGS = (1 << 1) | (1 << 2)
 
 
 @dataclass(frozen=True)
 class SLook:
-    """Which optional parts of the passes run: the blur, the haze's fade."""
+    """Which optional parts of the passes run: the blur, the haze's fade, the clouds and fog accumulated over frames
+    (``temporal``: only the native passes do, ``atmospherenative``; performance.md 4, item 5)."""
 
     blur: bool = True
     fade: bool = True
+    temporal: bool = False
 
 
 class CAtmosphere(CComputeChain):
@@ -122,7 +126,7 @@ class CAtmosphere(CComputeChain):
         for key, value in CLOUD_LAYER.items():
             constants.set(key, value)
         constants.set("cGlobalFlags", 0)  # GCF_CLOUDS clear: the clouds' pass writes "no clouds"
-        constants.set("cEnvironmentFlags", 0)
+        constants.set("cEnvironmentFlags", TEMPORAL_FLAGS if look.temporal else 0)
         if self.m_fog is not None:  # the island's fog over the session's heights (none handed: the terrain at 0)
             fog_size, valid = self.m_fog_size, int(self.m_heights is not None)
             for key, value in {
@@ -140,7 +144,7 @@ class CAtmosphere(CComputeChain):
         (``cDepthBuffer``), the sky passes' tables, the shadow map and the cascades' information, the light buffer,
         the blue noise, by name; ``look``: which of the optional parts run; ``clouds`` (``gameclouds.CClouds``): the
         clouds, None for none."""
-        look = look or SLook()
+        look = replace(look or SLook(), temporal=False)  # these passes march every pixel every frame
         self.targets(ctx, size_px)
         half = tuple(self.m_target.size[:2])
 

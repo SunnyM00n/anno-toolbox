@@ -20,11 +20,13 @@ from PySide6.QtGui import QRhiBuffer
 from ...infra.i18n import tr
 from ...render import cull, gamedraw, gameshadow
 from ...render.gamecompute import carry
-from ...render.gameinstances import CFrameInstances, CInstanceRun, CPartPass, SPartInputs
+from ...render.gameinstances import NO_INSTANCES, CFrameInstances, CInstanceRun, CPartPass, SDrawnSet, SPartInputs
 from ...render.gamemaps import CMapPool, CPooledTable
+from ...render.instancestore import SPlaces
 from ...render.objectsnative import CNativePart, SNativeStages, SPartLevel, SPartShaders
 from ...render.quality import lod_rules
 from .desktopframe import GRASS_FAR
+from .desktopgameclusters import CGameClusters, SClusterFrame
 from .desktopgameparts import (
     DEPTH_ONLY,
     SHADOW,
@@ -64,6 +66,7 @@ class SDrawn:
     native_cut_casters: list = field(default_factory=list)
     instances: int = 0
     levels: list = field(default_factory=lambda: [0] * 6)  # instances per level of detail, too small last
+    clusters: SClusterFrame = field(default_factory=SClusterFrame)  # the distance clusters (``desktopgameclusters``)
 
 
 class CAheadRun(CInstanceRun):
@@ -74,9 +77,7 @@ class CAheadRun(CInstanceRun):
     ahead = True  # it draws nothing and binds nothing (``gameframe``: the shadow information's state after QRhi)
 
     def __init__(self, setup: CPartPass, mesh: gamedraw.CMesh, is_shadow: bool = False) -> None:
-        super().__init__(
-            setup, mesh, 0, np.zeros((0, 4, 4), np.float32), np.zeros((0, 4), np.uint32) if is_shadow else None
-        )
+        super().__init__(setup, mesh, 0, NO_INSTANCES, np.zeros((0, 4), np.uint32) if is_shadow else None)
 
     def draw(self, command_buffer, size_px: tuple[int, int], instances: int | None = None) -> None:
         """Nothing: it is made, not drawn."""
@@ -125,39 +126,38 @@ class _CPart:
         """A new frame: no draws yet (``models``)."""
         self.m_runs: list[CInstanceRun] = []
 
-    def models(self, level: int, worlds: np.ndarray, has_shadows: bool, mask: np.ndarray | None = None,
-               is_deformed: bool = False) -> tuple:  # fmt: skip
-        """This frame's draws of ``worlds`` at ``level`` (and their casters when ``has_shadows``, into the cascades
-        ``mask`` marks: None all), their instances placed in the frame's buffers (``is_deformed``: bent to the terrain)."""
+    def models(self, level: int, drawn: SDrawnSet, has_shadows: bool, mask: np.ndarray | None = None) -> tuple:
+        """This frame's draws of the instances ``drawn`` at ``level`` (and their casters when ``has_shadows``, into the
+        cascades ``mask`` marks: None all), their words placed in the frame's buffers."""
         out, cast = [], []
         part_level = self.m_levels[min(level, len(self.m_levels) - 1)]
         prepass, shadow, clear = self.m_passes.get("prepass"), self.m_passes.get("shadow"), self.m_passes.get("clear")
-        reach = mask if mask is not None else np.ones((len(worlds), CASCADES), bool)
+        reach = mask if mask is not None else np.ones((drawn.count, CASCADES), bool)
         for mesh, joints in zip(part_level.meshes, part_level.joints, strict=True):
-            slot = self.m_frame.place(worlds, joints, is_deformed)
+            slot = self.m_frame.place(drawn.places, drawn.local, joints)
             if prepass is not None:  # its depth first
-                out.append(CInstanceRun(prepass, mesh, slot, worlds))
-            out.append(CInstanceRun(self.m_passes["main"], mesh, slot, worlds))
+                out.append(CInstanceRun(prepass, mesh, slot, drawn))
+            out.append(CInstanceRun(self.m_passes["main"], mesh, slot, drawn))
             if clear is not None:  # a cut-out's second pass
-                out.append(CInstanceRun(clear, mesh, slot, worlds))
+                out.append(CInstanceRun(clear, mesh, slot, drawn))
             if has_shadows and shadow is not None:
-                caster_slot, words = self.m_frame.place_casters(worlds, joints, reach, is_deformed)
+                caster_slot, words = self.m_frame.place_casters(drawn.places, drawn.local, joints, reach)
                 if len(words):
-                    cast.append(CInstanceRun(shadow, mesh, caster_slot, worlds, words))
+                    cast.append(CInstanceRun(shadow, mesh, caster_slot, drawn, words))
             elif has_shadows and self.m_cutout:
-                cast += self._cut_casters(mesh, joints, worlds, reach, is_deformed)
+                cast += self._cut_casters(mesh, joints, drawn, reach)
         self.m_runs += out + cast
         return out, cast
 
-    def _cut_casters(self, mesh, joints: int, worlds: np.ndarray, reach: np.ndarray, is_deformed: bool) -> list:
+    def _cut_casters(self, mesh, joints: int, drawn: SDrawnSet, reach: np.ndarray) -> list:
         """A cut-out volume's count and clear in each cascade it reaches (``CFrameInstances.place_each_cascade``)."""
         out = []
         if "shadow_mark0" not in self.m_passes:  # every cascade's passes or none (``SCutOutStages.shadow``)
             return out
-        for k, caster_slot, words in self.m_frame.place_each_cascade(worlds, joints, reach, is_deformed):
+        for k, caster_slot, words in self.m_frame.place_each_cascade(drawn.places, drawn.local, joints, reach):
             mark, clear = self.m_passes[f"shadow_mark{k}"], self.m_passes[f"shadow_clear{k}"]
             quarter = gameshadow.DIVISIONS[k]  # the engine's viewport for the cascade: the shaders do not place it
-            out += [CInstanceRun(setup, mesh, caster_slot, worlds, words, quarter) for setup in (mark, clear)]
+            out += [CInstanceRun(setup, mesh, caster_slot, drawn, words, quarter) for setup in (mark, clear)]
         return out
 
     def ahead(self, has_shadows: bool) -> tuple[list, list, list]:
@@ -254,7 +254,12 @@ class CGameObjects:
         self._m_swept = 0.0  # when ``_let_go`` last looked
         self._m_last: tuple = (None, SDrawn())  # the last frame's key and draws (``_frame_key``)
         self._m_frame_table: CFrameTable | None = None  # every shown batch's instances (``_draws``)
+        # (id of a batch, id of a view part) -> (the part, its places in the store: ``_places``)
+        self._m_places: dict[tuple, tuple] = {}
+        self.m_qrhi_drawn = False  # the last frame drew a part by the current path: its QRhi buffers take the rows
+        self.m_is_background = True  # native parts' pipelines made by the module's workers (``background_pipelines``)
         self._m_reach: CReach | None = None  # every shown batch's cells against the camera (``_near``)
+        self.m_clusters = CGameClusters(island)  # the far objects merged per region, as the game's distance clusters
 
     def _key(self, part: dict) -> tuple:
         got = self.m_keys.get(id(part))
@@ -266,8 +271,8 @@ class CGameObjects:
         """The device side of a view part: its ``_CPart``, an exception (the view draws it) or None while it compiles."""
         key = self._key(part)
         found = self.m_parts.get(key)
-        if found is not None:
-            return found
+        if found is not None:  # a native part is drawn once its pipelines are in, as the engine draws a model
+            return None if isinstance(found, CNativePart) and not found.is_ready() else found
         job = self.m_jobs.setdefault(key, JOB.format(len(self.m_jobs)))
         if self.m_files is None:
             self.m_files = CSharedMaps(self.m_renderer.m_editor.m_files)
@@ -301,9 +306,15 @@ class CGameObjects:
             states = cutout_states(got.stages) if cutout else {"main": main_state(got.stages),
                                                                 "prepass": DEPTH_ONLY, "shadow": SHADOW}  # fmt: skip
             try:
-                self.m_parts[key] = native.part(got, got.native, self.m_instances, states)
+                made = native.part(got, got.native, self.m_instances, states)
+                try:
+                    made.prepare(self.m_is_background)
+                except Exception:  # pattern: ok (its device side let go; said below like a part that failed)
+                    made.release()
+                    raise
+                self.m_parts[key] = made
                 self._m_made += time.perf_counter() - started
-                return self.m_parts[key]
+                return made if made.is_ready() else None
             except Exception as exc:  # the current path draws it, said once
                 self.m_native_off.add(key)
                 self.m_renderer._message(tr("islands.mesh_games_shader_reason", mesh=part["mesh"],
@@ -333,6 +344,7 @@ class CGameObjects:
             self.m_drawn, self.m_waiting = set(), 0
             return SDrawn()
         self._neutral()
+        self.m_is_background = getattr(options, "background_pipelines", True)
         # the quality of this frame (a Custom bias applies at once), not the one the look was made for
         rules = lod_rules(getattr(options, "quality", None), self._rules())
         projection = view_frame.view_proj @ np.linalg.inv(view_frame.view)
@@ -342,6 +354,7 @@ class CGameObjects:
             self._frame_key(view_frame, projection, size_px, has_shadows, known, batches),
             rules,
             self.m_is_terrain_adapted,
+            self.m_clusters.update(batches, options),  # a region built or changed: the draws change
         )
         still = key == self._m_last[0]
         self._let_go(self._m_kept if still else ())  # a still camera keeps what is near it: the last frame drew it
@@ -380,9 +393,13 @@ class CGameObjects:
         # a model not looked at this frame keeps its look: its batch's parts are made again for a frame when it
         # changes looks, and leaving it out made it flip between the looks every frame (its meshes loaded and let go)
         self.m_fallback = fallback | (self.m_fallback - {batch.m_key[1] for batch in near})
+        out.clusters = self._clusters(view_frame, options, rules, has_shadows, known)
         if drawing:
             self._draws(out, drawing, view_frame, (view_frame.view, projection, size_px, rules), has_shadows, known)
+        out.native += out.clusters.gbuffer
+        out.native_casters += out.clusters.casters
         self._ahead(out, has_shadows, list(near_parts.values()))
+        self.m_ahead_left += self.m_clusters.m_waiting  # the view draws on while regions are read or built
         if not self.m_waiting and self.m_files is not None:  # every part near compiled: the shared reads are done with
             self.m_files.clear()
         # while parts compile or are made ahead the next frame asks again: a still camera would never take them in
@@ -409,6 +426,8 @@ class CGameObjects:
         if now - self._m_swept < 1.0:
             return
         self._m_swept = now
+        if self.m_instances is not None:  # the records not drawn for a while let go
+            self.m_instances.m_store.drop_unused()
         self.m_near_at.update(dict.fromkeys(kept, now))
         old = {model for model, last_seen in self.m_near_at.items() if now - last_seen > KEEP_SECONDS}
         for model in old:
@@ -438,11 +457,24 @@ class CGameObjects:
             out.casters.extend(casters)
         self.m_ahead_left = max(0, len(left) - AHEAD)
 
+    def _clusters(self, view_frame, options, rules, has_shadows: bool, cascades) -> SClusterFrame:
+        """This frame's distance clusters from the quality level's start distance to the view's object distance,
+        their casters into the cascades they reach (``cascades`` None: every used one)."""
+        if not self.m_clusters.is_on(options):  # off: not even the engine settings are read
+            return SClusterFrame()
+        frame = getattr(self.m_island, "m_frame", None)
+        used = frame.m_shadow_cascades if frame is not None else gameshadow.COUNT
+        texels = (frame.m_shadow_size if frame is not None else gameshadow.SIZE) // 2  # a cascade: a quarter
+        start_m = self.m_clusters.start_distance(getattr(options, "quality", None))
+        shadows = (cascades, used, texels) if has_shadows else None
+        return self.m_clusters.frame(view_frame, options, start_m, rules.far, shadows)
+
     def upload(self, batch) -> None:
         """The frame's instances into their buffers, before the passes (``desktopgame``; nothing new at a still
         camera)."""
         if self.m_instances is not None:
-            self.m_instances.upload(batch)
+            if self.m_qrhi_drawn:  # the QRhi buffers only for the current path's parts
+                self.m_instances.upload(batch)
             native = getattr(self.m_island, "m_native_objects", None)
             if native is not None:  # the native parts' copy, on the module's list
                 native.upload(self.m_instances)
@@ -466,7 +498,9 @@ class CGameObjects:
             has_shadows,
             known,
         )
-        return camera, tuple((batch, batch.m_version, batch.m_parts) for batch in batches), self.m_failures
+        native = getattr(self.m_island, "m_native_objects", None)
+        culled = native is not None and native.m_cull is not None  # the casters' draws differ: culled on the GPU
+        return camera, tuple((batch, batch.m_version, batch.m_parts) for batch in batches), self.m_failures, culled
 
     def _in_view(self, batch, view_frame) -> np.ndarray:
         """Which of a batch's cells hold instances in view and not too small to draw: the view's own codes of this
@@ -484,6 +518,7 @@ class CGameObjects:
     def _table(self, batches: list) -> CFrameTable:
         if self._m_frame_table is None or not self._m_frame_table.same(batches):
             self._m_frame_table = CFrameTable(batches)
+            self._m_places = {}  # the store finds a batch's rows again by the batch and its instances
         return self._m_frame_table
 
     def _draws(self, out: SDrawn, drawing: list, view_frame, camera: tuple, has_shadows: bool, cascades) -> None:
@@ -494,6 +529,8 @@ class CGameObjects:
         table = self._table([batch for batch, _built in drawing])
         index = table.visible(np.concatenate([self._in_view(batch, view_frame) for batch, _built in drawing]))
         levels = cull.lod_levels(table.m_centres[index], table.m_radii[index], *camera, 5)
+        if len(out.clusters.full):  # a distance cluster drawn in full stands for them
+            levels[self.m_clusters.hidden(table, out.clusters)[index]] = -1
         masks = None
         if has_shadows and cascades is not None:
             frame = getattr(self.m_island, "m_frame", None)
@@ -507,25 +544,22 @@ class CGameObjects:
         keep = levels >= 0
         index, levels = index[keep], levels[keep]
         order, runs = table.runs(index, levels)
-        matrices = table.m_mats[index[order]]
+        picked = index[order]
+        local = picked - table.m_starts[table.m_batch[picked]]  # each drawn instance among its batch's
         masks = masks[keep][order] if masks is not None else None
         cut: list = []  # the cut-out volumes' casters
-        for k, (_batch, built) in enumerate(drawing):
+        self.m_qrhi_drawn = False
+        for k, (batch, built) in enumerate(drawing):
             got = runs.get(k)
             if not got:
                 continue
-            batch_start, batch_stop = got[0][1], got[-1][2]  # the batch's instances, level by level
             for view_part, part in built:
-                worlds = part_worlds(matrices[batch_start:batch_stop], view_part["matrix"])
+                places = self._places(table, k, batch, view_part)
+                self.m_qrhi_drawn |= isinstance(part, _CPart)
                 for level, run_start, run_stop in got:
                     masked = masks[run_start:run_stop] if masks is not None else None
-                    draws, cast = part.models(
-                        level,
-                        worlds[run_start - batch_start : run_stop - batch_start],
-                        has_shadows,
-                        masked,
-                        bool(view_part.get("deform")),
-                    )
+                    drawn = SDrawnSet(self.m_instances, places, local[run_start:run_stop], run_stop - run_start)
+                    draws, cast = part.models(level, drawn, has_shadows, masked)
                     native = getattr(part, "m_native", False)  # objectsnative.CNativePart: recorded by the backend
                     into = out.transparent if part.m_is_transparent else out.cutouts if part.m_cutout else out.gbuffer
                     if native and part.m_cutout:  # after the native terrain in both passes
@@ -535,6 +569,25 @@ class CGameObjects:
                     (out.native if native and not part.m_is_transparent else into).extend(draws)  # ordered with QRhi's
                     (cut if part.m_cutout else out.native_casters if native else out.casters).extend(cast)
         out.casters[:0] = cut  # the terrain's shadow cleared inside the volumes before any model casts into it
+
+    def _places(self, table: CFrameTable, k: int, batch, view_part: dict) -> SPlaces:
+        """A batch's part as the instance store keeps it: one record set for every frame while the batch's instances
+        stay (``SPlaces.version``), made again in place when they change (an edit: only the rows that differ go out)."""
+        key = (id(batch), id(view_part))  # the entry holds both: their ids stay their own
+        found = self._m_places.get(key)
+        if (
+            found is None
+            or found[0] is not view_part
+            or found[1].owner is not batch
+            or (found[1].version is not batch.m_cells)
+        ):
+            start, stop = int(table.m_starts[k]), int(table.m_starts[k + 1])
+            mats, matrix = table.m_mats, np.asarray(view_part["matrix"], np.float32)
+            # the records depend on the part's place in its model alone: parts at one place share them
+            places = SPlaces(batch, batch.m_cells, matrix.tobytes(), bool(view_part.get("deform")),
+                             lambda: part_worlds(mats[start:stop], matrix))  # fmt: skip
+            found = self._m_places[key] = (view_part, places)
+        return found[1]
 
     def _rules(self) -> cull.SLodRules:
         """The game's level-of-detail rules, read once in the background (vanilla's until then, or without them)."""
@@ -567,6 +620,9 @@ class CGameObjects:
         part whose draw raised is compiled again for the current path."""
         native = getattr(self.m_island, "m_native_objects", None)
         for part, error in native.m_failed if native is not None else ():
+            if part is self.m_clusters.m_native:  # the clusters off, said once: the objects draw on
+                self.m_clusters.fail(error)
+                continue
             key = next((candidate_key for candidate_key, candidate in self.m_parts.items() if candidate is part), None)
             if key is not None:
                 part.release()
@@ -607,9 +663,11 @@ class CGameObjects:
             part.release()
             del self.m_parts[key]
             self.m_renderer.m_loader.forget(self.m_jobs.get(key, ""))
+        self.m_clusters.release()  # made again with the next native objects
         self._m_last = (None, SDrawn())
 
     def release(self) -> None:
+        self.m_clusters.release()
         for part in self.m_parts.values():
             if _on_device(part):
                 part.release()
@@ -624,4 +682,5 @@ class CGameObjects:
         self.m_parts, self.m_keys, self.m_drawn, self.m_jobs, self.m_files = {}, {}, set(), {}, None
         self.m_native_off = set()
         self._m_frame_table, self._m_reach, self.m_near_at, self.m_users, self._m_kept = None, None, {}, {}, []
+        self._m_places = {}
         self._m_last = (None, SDrawn())

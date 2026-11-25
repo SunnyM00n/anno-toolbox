@@ -33,6 +33,8 @@ TEXT_LEAVES = ("text", "name", "title", "headline", "header", "caption", "label"
 LONG_LEAVES = ("description", "desc", "tooltip", "hint", "info", "body", "flavour", "flavor")
 PICTURE_LEAVES = ("icon", "image", "picture", "portrait", "artwork", "background", "emblem")
 GUID_LEAVES = ("guid", "assetguid", "asset", "refguid", "id")
+GENERIC_LEAVES = ("text", "value", "icon", "name", "data")  # read from the field named like the object holding them
+HOLD_SCAN = 200  # assets of a template looked at for whether it has a field at all (a bound on the time)
 _LOCA = re.compile(r"^-?\d{12,20}$")  # a text id of 117's tables (negative 64-bit)
 
 
@@ -275,6 +277,8 @@ class CGameData:
         self.m_classes: dict[str, frozenset[str]] = {}  # ``class_fields``: each data class's field names
         self.m_play = None  # Play mode's kept choices (``playstate.SChoices``), set by ``lookup``
         self.m_note = None  # the preview's ``Memo.note``, set by ``lookup``: what a plan's read of a choice depends on
+        # (template, field) -> whether the template's assets hold the field (``resolve_left_out``)
+        self.m_holds: dict[tuple[str, str], bool] = {}
 
     @property
     def stamp(self) -> tuple:
@@ -384,14 +388,26 @@ class CGameData:
             found = found or self.by_name((other, ""), ctx.trail, want, ctx.plan, is_own=other == ctx.config)
         if found is not None or config or base:  # a config, or a part of an asset, answers by name only
             return found
-        return self.from_node(guid, names, want)
+        return self.from_node(guid, names, want) or self.resolve_left_out(guid, ctx.trail[-1], want)
+
+    def resolve_left_out(self, guid: int, leaf: str, want: str) -> SFound | None:
+        """A text or picture field named like an asset field that this asset leaves out and other assets of its
+        template hold (the infrastructure category's ``SecondaryIcon``): the game shows it empty."""
+        element = self.m_assets.element(guid)
+        if want not in ("text", "long", "picture") or element is None or _flat(leaf) in GENERIC_LEAVES:
+            return None
+        template = element.findtext("Template") or ""
+        if (template, leaf) not in self.m_holds:
+            others = self.m_assets.by_template(template)[:HOLD_SCAN]
+            self.m_holds[(template, leaf)] = any(self.m_assets.values((other, ""), leaf) for other in others)
+        return SFound("", f"{guid} {leaf}: none") if self.m_holds[(template, leaf)] else None
 
     def by_name(self, node: tuple[int, str], trail: list[str], want: str, plan, is_own: bool = False) -> SFound | None:
         """The node's field named like the data field (or its plan alias); for a text object's ``Text`` the field
         named like the object."""
         leaf = trail[-1]
         parent = trail[-2] if len(trail) > 1 and not trail[-2].startswith("[") else ""  # an element's own Text
-        generic = _flat(leaf) in ("text", "value", "icon", "name", "data")
+        generic = _flat(leaf) in GENERIC_LEAVES
         wanted = (parent or leaf) if generic else leaf
         if not wanted:
             return None
@@ -445,7 +461,10 @@ class CGameData:
 
 
 def _leaf_kind(low: str, want: str) -> str | None:
-    """What of an asset a field of this (flattened) name shows, by its name and the kind its binding wants."""
+    """What of an asset a field of this (flattened) name shows, by its name and the kind its binding wants; a
+    reference to another asset (``InfotipGUID``) shows nothing of the node."""
+    if low.endswith("guid") and low not in GUID_LEAVES:
+        return None
     if any(word in low for word in PICTURE_LEAVES):
         return "picture" if want in ("picture", "text", "value") else None
     if want == "guid" or (low in GUID_LEAVES and want in ("number", "value", "guid")):

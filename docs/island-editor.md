@@ -180,11 +180,26 @@ The pictures and the counts are in the Status table.
   after `configtree.parse` drops it.
   Props use the same reader.
 - **What stays a pin**: an editor-only object (position markers, audio spots) is a pin in its kind's colour.
-  An object whose asset names no model, only an editor placeholder, or whose config draws nothing (decals, an effect
-  only) is a white pin (`marker` `NoModel`).
-  An object whose asset the game does not have, or whose config cannot be read, is a pin of the same shape
-  (`marker` `Unresolved`).
+  An object whose asset names no model, only an editor placeholder (the editor's `placeholder.cfg` too where the game
+  lacks the file: 117's under `data/dev`, 2205's under `test_data`; 117 ships the one under `ui`, and it is drawn), or
+  whose config draws nothing (a ground decal, a light, an empty config) is a white pin (`marker`
+  `NoModel`).
+  So is one whose variation is past its asset's list in 2205 (the game draws its placeholder there).
+  An object whose asset the game does not have, or whose config cannot be read or is not in the game's files, is a pin
+  of the same shape (`marker` `Unresolved`).
   `unresolved` names the reason.
+  A config of a particle effect alone draws its sprites and is no pin when one can be laid (2070 and 1404: 39 and 11
+  objects on the sampled islands, 2026-11-24; a model effect, the rainbow's, is not laid, and the object stays a pin).
+  The asset's blocks may stand before its `Standard` block (2205's do): they are the asset's own (1,614 pins fewer on
+  24 maps, 2026-11-24).
+- **The pin's size**: a pin is 1.1 units wide and 2.45 high on an island of up to 208 tiles a side and grows in step
+  with the island above that, up to four times (`desktopgeometry.pin_scale`; both numbers are [I], no game has such
+  a marker).
+  Before, every pin was that size: 13 px on the whole view (1,000 px high) of a 208-tile island, 5 px on a 512-tile one (117's large
+  islands) and 2.6 px on a 2205 map of 1,024 tiles, and 17% of the screen on a 16-tile island of 1701.
+  It stays 13 px high on the whole view from 208 to 832 tiles, and is 10.5 px on a 2205 map.
+  A pin ignores its object's scale (a decal's, 0.2 to 4.4 in the islands), which the decals keep.
+  Picking, the selection box and the framing use the pin's own size.
   The Checks tab (Check rules) lists one row per kind of pin with its count and the reason.
   A defect (no asset, unreadable config) is a warning, and a missing model is information.
 - **Editing**: the object list lists each object of a model placed up to 60 times under it by place.
@@ -494,7 +509,7 @@ From top to bottom, then the docks:
 
   | Tab | Groups: buttons |
   |---|---|
-  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` · Layers: Objects, Markers, Effects, Grass, Forest, Water (what the view draws, each on or off; follows the view's state) · Performance: Shadows, Water motion, Water reflections, Sky haze, Clouds, Ambient occlusion ([Performance switches](#performance-switches)) |
+  | Home | Edit: Undo, Redo · File: Save, Build & install, "Saved" (117 island: replaces the original / as a new island) · Selection: Select, De-Select, Focus · Camera: go to `x z [distance] [turn]` · Layers: Objects, Markers, Effects, Grass, Forest, Water (what the view draws, each on or off; follows the view's state) · Performance: Shadows, Water motion, Water reflections, Sky haze, Clouds, Clouds over frames, Cloud shadow cache, Ambient occlusion, Still frame, Idle rate, Models in background ([Performance switches](#performance-switches)) |
   | Object | Place: Place, Object Groups (raises the library) · Transform: Move, Turn, Tilt, Scale · Edit: Delete, Duplicate · Object Spray: Plant forest, Clear forest, Spray model (O), Radius, Spacing · Visibility: Hide foliage, Show hidden |
   | Terrain | Height: Raise, Lower, Flatten, Smooth · Relief: Noise, Terrace, Ramp, Spike removal · Ground: Paint, Material Gallery (raises it) · Surf: Waves, Calm (U) · Brush: Radius, Strength |
   | Grid | Active map: Draw cells, Erase cells (G), Radius · Checks: Check rules (every island: `islandrules`), Check slots, Check falls |
@@ -621,8 +636,8 @@ there.
 
 ### Performance switches
 
-The Performance group on the Home tab, next to Layers, speeds up the 3D view while you edit.
-Each switch is on by default, which is the look as before.
+The ribbon's Performance tab speeds up the 3D view while you edit.
+Each switch but Cloud shadow cache is on by default, which is the look as before.
 Turning one off makes the view skip that work, and the picture stays usable.
 The choice is kept per user (`Settings.view_switches`) and applies to every island.
 The Island editor page of the settings window (File > Settings) shows the same switches, beside the start values of a new island.
@@ -636,7 +651,15 @@ out the switches of the others.
 - **Water reflections:** the sea does not draw the scene a second time as a mirror (Anno 2070, 1404 and 1701).
 - **Sky haze:** the game look's visible sky and haze passes are left out, with the clouds on them (Anno 117).
 - **Clouds:** the cloud pass is left out (Anno 117).
+- **Clouds over frames:** the clouds and the fog are built up over frames as the game does: each frame computes a
+  quarter of their pixels (Anno 117). Off, every pixel is computed in every frame.
+- **Cloud shadow cache:** the clouds' self-shadow cache is kept between frames as the game does (Anno 117). This switch
+  is off by default: kept, the clouds' lit parts come out brighter than the view's until the game's own blend is
+  known.
 - **Ambient occlusion:** the occlusion pass is left out (Anno 1800 and 2205).
+- **Still frame:** with it on, the game look keeps its lit scene while camera, sun and island stand still and draws only the water, sky and post chain over it. Off: every pass is drawn every frame (Anno 117).
+- **Idle rate:** with it on, moving water and clouds redraw 5 times a second instead of 15 after 3 seconds without input, and the first input brings the full rate back (every game).
+- **Models in background:** with it on, a model's pipelines are made on background threads as the game makes them, and a model seen for the first time appears once they are in. Off: they are made in the frame that first draws the model, which then takes longer (Anno 117).
 
 The view has no moving sun or time of day, so there is no switch for one.
 What each switch skips, and the looks it applies to, is in [island-editor-view.md](island-editor-view.md#performance-switches).

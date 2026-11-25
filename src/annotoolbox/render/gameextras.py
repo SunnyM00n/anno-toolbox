@@ -12,6 +12,7 @@ from __future__ import annotations
 import struct
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from ..infra.i18n import N_, tr
 from . import eyeadapt, gameatmosphere, gameclouds, gameinland, gameocean, gamepost, gamesea, gamewater
@@ -27,6 +28,18 @@ N_EYE = N_("islands.games_eye_adaptation")
 N_SEA = N_("islands.games_sea_reason")
 N_INLAND = N_("common.games_rivers_lakes")
 N_OCEAN_NATIVE = "the ocean's simulation"  # within ``islands.games_native_water``'s reason, as the others' are English
+
+
+@dataclass(frozen=True)
+class SSkyParts:
+    """Which of the visible sky's parts the view's switches leave in: the sky and haze, the clouds on it, the clouds
+    and fog accumulated over frames and their self-shadow cache kept between frames (both the native passes' alone,
+    performance.md 4 items 5 and 6)."""
+
+    has_sky: bool = True
+    has_clouds: bool = True
+    is_temporal: bool = False
+    is_cache_kept: bool = False
 
 
 class CFrameExtras:
@@ -110,15 +123,15 @@ class CFrameExtras:
         seconds: float,
         ctx,
         transparent: bool,
-        has_sky: bool = True,
-        has_clouds: bool = True,
+        parts: SSkyParts | None = None,
         *,
         held: bool = False,
     ) -> None:
         """The water's copies (when a transparent part or the sea draws), the visible sky, haze and clouds (when the
-        game's sky passes light the frame: ``sky``) into ``passes``. ``has_sky`` and ``has_clouds`` False leave the
+        game's sky passes light the frame: ``sky``) into ``passes``. ``parts`` without the sky or the clouds leaves the
         haze (and the clouds on it) or the clouds out: their passes are not made nor drawn. ``held``: the water motion
         is switched off, so the ocean is not stepped again at the seconds it stands at."""
+        parts = parts or SSkyParts()
         self.m_clouds_drawn = False
         if transparent or passes.sea is not None:
             got = self.water()
@@ -135,7 +148,7 @@ class CFrameExtras:
                 else:
                     water.m_waves, water.m_constants = {}, dict(gamewater.CONSTANTS)
                 passes.water = water
-        if sky is None or not has_sky:
+        if sky is None or not parts.has_sky:
             return
         atmosphere = self._ok(self._part(
             "atmosphere", lambda s: (s.stage_set(gameatmosphere.STAGES), s.sky_passes()[1]),
@@ -143,13 +156,14 @@ class CFrameExtras:
         ))  # fmt: skip
         if atmosphere is None:
             return
-        passes.atmosphere, passes.look = atmosphere, gameatmosphere.SLook()
+        passes.atmosphere, passes.look = atmosphere, gameatmosphere.SLook(temporal=parts.is_temporal)
         clouds = self._ok(self._part(
             "clouds", lambda s: (s.stage_set(gameclouds.STAGES), gameclouds.read_maps(s.m_files, s.ambient_text())),
             lambda got: gameclouds.CClouds(self.m_rhi, *got), N_CLOUDS,
-        )) if has_clouds else None  # fmt: skip
+        )) if parts.has_clouds else None  # fmt: skip
         if clouds is not None:
             clouds.m_seconds = seconds  # the weather and the noise drift with the wind over the view's time
+            clouds.m_is_cache_kept = parts.is_cache_kept
             passes.clouds = clouds
             self.m_clouds_drawn = True
 

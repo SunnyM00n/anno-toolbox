@@ -181,6 +181,7 @@ Device* Device::create(bool debug, int adapter) {
 }
 
 Device::~Device() {
+    works.reset();  // its workers stopped and joined: they make pipelines on this device
     if (nv) nv->waitForIdle();
     std::lock_guard<std::mutex> hold(late_lock);
     late.clear();

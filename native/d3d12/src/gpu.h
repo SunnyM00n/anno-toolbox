@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -50,6 +51,7 @@ nvrhi::ComparisonFunc compare_named(const std::string& name);
 nvrhi::ResourceStates state_named(const std::string& name);
 
 struct Device;
+struct PipelineWorks;  // the device's pipeline library and the workers that make pipelines (pipelines.cpp)
 
 // A resource with the device that made it: released a few frames late (a command list of QRhi's may still read it)
 struct Held {
@@ -60,7 +62,7 @@ struct Held {
     Held(const Held&) = default;
     Held& operator=(const Held&) = default;
     virtual ~Held();
-    void release();
+    virtual void release();
 };
 
 struct Buffer : Held {
@@ -103,10 +105,17 @@ struct InputLayout : Held {
     nvrhi::IInputLayout* get() const { return static_cast<nvrhi::IInputLayout*>(handle.Get()); }
 };
 
+struct PipelineMaking;  // a pipeline a worker still makes (pipelines.cpp)
+
 struct Pipeline : Held {
     bool compute = false;
+    std::shared_ptr<PipelineMaking> making;  // made in the background: the handle once the worker is done
+    std::string error;                       // why the making failed ("" while it runs or once it is made)
     nvrhi::IGraphicsPipeline* graphics() const;
     nvrhi::IComputePipeline* compute_pipeline() const;
+    bool ready();  // made (a done worker's result taken in here, on the caller's thread)
+    void wait();   // made, waiting for the worker if need be; raises when the making failed
+    void release() override;
 };
 
 struct Framebuffer : Held {
@@ -135,6 +144,7 @@ struct Binding {
     std::string format;           // a typed view's format ("" the resource's own)
     uint32_t mip = 0, mips = 0;   // a texture view's levels (0 levels: all)
     std::string dimension;        // "2d", "2darray", "3d", "cube" ("" the texture's own)
+    uint64_t offset = 0, range = 0;  // a constant buffer's piece (a pooled one's: 256-byte aligned; 0 bytes: all)
 };
 
 struct LayoutItem {
@@ -156,6 +166,8 @@ struct Device {
     std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> late;
     std::mutex late_lock;
     uint32_t keep_frames = 3;  // QRhi's frames in flight and one more [ours]
+    ComPtr<ID3D12CommandSignature> indexed_signature;  // ExecuteIndirect's: one DrawIndexedInstanced (record_indirect)
+    std::shared_ptr<PipelineWorks> works;  // made with the first pipeline; stopped before the device goes
 
     static Device* attach(uintptr_t device, uintptr_t queue);
     static constexpr int WARP = -2;  // create's adapter: Windows' software rasteriser
@@ -170,6 +182,9 @@ struct Device {
     std::pair<uint64_t, uint64_t> video_memory() const;  // (this process's use, its budget) in bytes
     int shader_model() const;   // 0x62 for 6.2 ...
     int binding_tier() const;
+    std::string adapter_id() const;  // "vendor-device-subsystem-revision" in hex: a pipeline library's file
+    std::string driver_version() const;  // the user-mode driver's version: a pipeline library holds for it alone
+    PipelineWorks& pipeline_works();
 
     Buffer* buffer(uint64_t size, const std::string& usage, uint32_t stride, const std::string& format,
                    const std::string& name);
@@ -222,10 +237,26 @@ struct PipelineState {
     uint32_t samples = 1;
 };
 
-// hs and ds: the tessellated pipelines (topology "patch4", the patches' control points by the topology)
+// hs and ds: the tessellated pipelines (topology "patch4", the patches' control points by the topology);
+// ``background``: made by a worker, ``Pipeline::ready`` says when (both from the pipeline library where it has them)
 Pipeline* graphics_pipeline(Device& device, Shader* vs, Shader* hs, Shader* ds, Shader* ps, InputLayout* input,
-                            const std::vector<Layout*>& layouts, const PipelineState& state);
-Pipeline* compute_pipeline(Device& device, Shader& cs, const std::vector<Layout*>& layouts);
+                            const std::vector<Layout*>& layouts, const PipelineState& state, bool background = false);
+Pipeline* compute_pipeline(Device& device, Shader& cs, const std::vector<Layout*>& layouts, bool background = false);
+// the making itself (pipelines.cpp): NVRHI's description in, the module's pipeline out
+Pipeline* make_graphics(Device& device, const nvrhi::GraphicsPipelineDesc& desc,
+                        const nvrhi::FramebufferInfo& targets, bool background);
+Pipeline* make_compute(Device& device, const nvrhi::ComputePipelineDesc& desc, bool background);
+
+// The pipeline library of a device: opened from the bytes a file held (false: they were for another driver, module
+// or adapter, or there were none; the library starts empty), its bytes to keep, and what it did
+bool open_pipeline_library(Device& device, const std::string& data);
+std::string pipeline_library_data(Device& device);
+struct PipelineStats {
+    uint32_t loaded = 0, made = 0, failed = 0, pending = 0, stored = 0;
+    double load_ms = 0.0, make_ms = 0.0;  // the workers' and callers' time in loads and in makes
+    bool library = false, opened = false, changed = false;  // a library at all, read from bytes, stored to since
+};
+PipelineStats pipeline_stats(Device& device);
 
 // One draw or dispatch's bindings and arguments, as the command list takes them
 struct Draw {
@@ -246,7 +277,7 @@ public:
     CommandList(Device& device);
     void open();
     void close();
-    void execute();   // close, submit on the device's queue, open again
+    void execute();   // close, submit on the device's queue, open again (an open list of nothing: nothing)
     void write_buffer(Buffer& b, const std::string& data, uint64_t offset);
     void write_texture(Texture& t, uint32_t layer, uint32_t mip, const std::string& data, size_t row_pitch,
                        size_t depth_pitch);
@@ -271,12 +302,18 @@ public:
     void end_timer(Timer& t);
     void marker(const std::string& name, bool begin);
     void set_state(Texture& t, const std::string& state);
-    nvrhi::ICommandList* get() { return list_.Get(); }
+    // the list itself: what its caller records is unknown, so the next execute submits it
+    nvrhi::ICommandList* get() {
+        recorded_ = true;
+        return list_.Get();
+    }
 
 private:
+    nvrhi::ICommandList* rec() { return get(); }  // the list a command is recorded into
     Device& device_;
     nvrhi::CommandListHandle list_;
     bool open_ = false;
+    bool recorded_ = false;  // anything recorded since the last submit: an execute of nothing submits nothing
 };
 
 std::string read_staging(Device& device, Staging& s);  // the pixels, rows packed (waits for the GPU)
@@ -289,6 +326,13 @@ void record_external(Device& device, uintptr_t list, const Draw& d, bool indexed
 void record_draws(Device& device, uintptr_t list, const std::vector<const Draw*>& draws,
                   const std::vector<uint32_t>& instances, const std::vector<uint64_t>& offsets, float x, float y,
                   float w, float h);
+// Indexed draws made once whose instance counts the GPU wrote (the shadow casters' culling): each one's
+// DrawIndexedInstanced arguments (five words, ``INDIRECT_STRIDE``) at its ``args_offsets`` byte of ``args``, which the
+// caller has moved into the indirect argument state; root offsets as record_draws'
+constexpr uint32_t INDIRECT_STRIDE = 20;
+void record_indirect(Device& device, uintptr_t list, const std::vector<const Draw*>& draws, Buffer& args,
+                     const std::vector<uint64_t>& args_offsets, const std::vector<uint64_t>& offsets, float x, float y,
+                     float w, float h);
 // A compute dispatch into a foreign list (QRhi's, inside beginExternal of a compute pass): our heaps, root signature,
 // pipeline and tables; the barriers are the caller's (``transitions``, ``uav_barrier``)
 void record_dispatch(Device& device, uintptr_t list, const Draw& d, uint32_t x, uint32_t y, uint32_t z);
@@ -296,6 +340,8 @@ void uav_barrier(uintptr_t list);  // every unordered access before it done befo
 // bytes of one buffer into another on a foreign list, both in the copy states already (resources by pointer)
 void copy_buffer(uintptr_t list, uintptr_t dst, uint64_t dst_offset, uintptr_t src, uint64_t src_offset,
                  uint64_t size);
+// one whole texture into another of the same size and format on a foreign list, both in their copy states
+void copy_texture(uintptr_t list, uintptr_t dst, uintptr_t src);
 
 // A QRhiTexture's resource and the state QRhi tracks it in; a QRhiBuffer's resource of a frame slot (interop.cpp)
 std::pair<uintptr_t, int> qrhi_texture(uintptr_t texture);

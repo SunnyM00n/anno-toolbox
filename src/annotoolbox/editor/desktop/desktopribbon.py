@@ -116,13 +116,6 @@ TABS = (
                          _toggle("layer_grass", N_("islands.layer_grass"), "plant", "island", N_("islands.tip.layer_grass")),
                          _toggle("layer_forest", N_("islands.layer_forest"), "plant", "island", N_("islands.tip.layer_forest")),
                          _toggle("layer_water", N_("islands.layer_water"), "water", "island", N_("islands.tip.layer_water")))),
-            (N_("islands.performance"), (_toggle("perf_shadows", N_("islands.perf_shadows"), "hide", "island", N_("islands.tip.perf_shadows")),
-                         _toggle("perf_waves", N_("islands.perf_waves"), "water", "island", N_("islands.tip.perf_waves")),
-                         _toggle("perf_reflections", N_("islands.perf_reflections"), "surf_on", "sea_mirror", N_("islands.tip.perf_reflections")),
-                         _toggle("perf_sky_haze", N_("islands.perf_sky_haze"), "eye", "game_sky", N_("islands.tip.perf_sky_haze")),
-                         _toggle("perf_clouds", N_("islands.perf_clouds"), "noise", "game_sky", N_("islands.tip.perf_clouds")),
-                         _toggle("perf_ambient_occlusion", N_("islands.perf_ambient_occlusion"), "focus", "game_occlusion",
-                                 N_("islands.tip.perf_ambient_occlusion")))),
         ),
     ),
     (
@@ -207,6 +200,30 @@ TABS = (
             (N_("islands.roads"), (_button("road_pieces", N_("islands.road_pieces"), "road", "", N_("islands.road_piece_editor")),)),
         ),
     ),
+    (
+        N_("islands.performance"),
+        (
+            (N_("islands.performance"), (_toggle("perf_shadows", N_("islands.perf_shadows"), "hide", "island", N_("islands.tip.perf_shadows")),
+                         _toggle("perf_waves", N_("islands.perf_waves"), "water", "island", N_("islands.tip.perf_waves")),
+                         _toggle("perf_reflections", N_("islands.perf_reflections"), "surf_on", "sea_mirror", N_("islands.tip.perf_reflections")),
+                         _toggle("perf_sky_haze", N_("islands.perf_sky_haze"), "eye", "game_sky", N_("islands.tip.perf_sky_haze")),
+                         _toggle("perf_clouds", N_("islands.perf_clouds"), "noise", "game_sky", N_("islands.tip.perf_clouds")),
+                         _toggle("perf_temporal_scattering", N_("islands.perf_temporal_scattering"), "noise", "game_sky",
+                                 N_("islands.tip.perf_temporal_scattering")),
+                         _toggle("perf_cloud_cache", N_("islands.perf_cloud_cache"), "noise", "game_sky",
+                                 N_("islands.tip.perf_cloud_cache")),
+                         _toggle("perf_ambient_occlusion", N_("islands.perf_ambient_occlusion"), "focus", "game_occlusion",
+                                 N_("islands.tip.perf_ambient_occlusion")),
+                         _toggle("perf_still_frame", N_("islands.perf_still_frame"), "hide", "game_sky", N_("islands.tip.perf_still_frame")),
+                         _toggle("perf_idle_rate", N_("islands.perf_idle_rate"), "water", "island", N_("islands.tip.perf_idle_rate")),
+                         _toggle("perf_gpu_culling", N_("islands.perf_gpu_culling"), "hide", "game_sky",
+                                 N_("islands.tip.perf_gpu_culling")),
+                         _toggle("perf_background_pipelines", N_("islands.perf_background_pipelines"), "eye", "game_sky",
+                                 N_("islands.tip.perf_background_pipelines")),
+                         _toggle("perf_distance_clusters", N_("islands.perf_distance_clusters"), "models", "game_sky",
+                                 N_("islands.tip.perf_distance_clusters")))),
+        ),
+    ),
 )  # fmt: skip
 
 
@@ -221,7 +238,13 @@ ITEM_GAMES = {
     "perf_reflections": ("anno2070", "anno1404", "anno1701"),
     "perf_sky_haze": ("anno117",),
     "perf_clouds": ("anno117",),
+    "perf_temporal_scattering": ("anno117",),
+    "perf_cloud_cache": ("anno117",),
     "perf_ambient_occlusion": ("anno1800", "anno2205"),
+    "perf_still_frame": ("anno117",),
+    "perf_gpu_culling": ("anno117",),
+    "perf_background_pipelines": ("anno117",),
+    "perf_distance_clusters": ("anno117",),
 }
 
 

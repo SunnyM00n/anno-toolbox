@@ -3,7 +3,7 @@ it for its size, so that near ground is baked finer (a node's bake has the same 
 cache that keeps a slice of the baked arrays per node. No Qt, no GPU.
 
 ``select(size, eye, ...)`` is the entry (the nodes, nearest first); ``CSliceCache`` hands out and takes back slices;
-``stand_ins`` what draws while new nodes wait for their bake.
+``stand_ins`` what draws while new nodes wait for their bake; ``CNodeBoxes`` the nodes' boxes and their culling.
 The engine's own rule is decided at run time and not read: ours is in docs/rendering/island-117-view.md.
 """
 
@@ -12,15 +12,19 @@ from __future__ import annotations
 import heapq
 import math
 from collections import OrderedDict
-from dataclasses import dataclass
+from typing import NamedTuple
+
+import numpy as np
+
+from .cull import boxes_in_view
 
 MIN_LEVEL = 2  # the finest node: 4 tiles [ours]
 SPLIT = 2.5  # a node is split while the eye is nearer than this many times its size [ours]
 
 
-@dataclass(frozen=True)
-class SNode:
-    """A square of the island: its level (2^level tiles a side), its corner in tiles."""
+class SNode(NamedTuple):
+    """A square of the island: its level (2^level tiles a side), its corner in tiles (a tuple: hashed and compared
+    in C, a frame's node selection does it thousands of times)."""
 
     level: int
     x: float
@@ -73,8 +77,73 @@ def select(size_tiles: float, eye, budget: int = 128, split: float = SPLIT, visi
         for kid in kids:
             heapq.heappush(heap, (-_need(kid, eye), serial, kid))
             serial += 1
-    shown = [candidate for candidate in done if visible is None or visible(candidate)]
+    many = getattr(visible, "many", None)  # all of them at once (``CNodeBoxes.view``)
+    if many is not None:
+        shown = [candidate for candidate, is_shown in zip(done, many(done), strict=True) if is_shown]
+    else:
+        shown = [candidate for candidate in done if visible is None or visible(candidate)]
     return sorted(shown, key=lambda candidate: candidate.distance(eye))
+
+
+class CNodeBoxes:
+    """The nodes' boxes from the heights' range per block of the finest nodes (``low``, ``high``: [rows, columns]),
+    one min and max pyramid for every level: a node's box is one lookup, not a min over its blocks; ``view(planes)``
+    tests nodes against the camera, many at once (performance.md section 4, item 2). ``size_tiles``: the island's
+    side, x turned over into the view's axes."""
+
+    BELOW, ABOVE = 0.5, 2.5  # how far a box reaches past the heights (the bake's and the tessellation's play) [ours]
+
+    def __init__(self, low: np.ndarray, high: np.ndarray, size_tiles: float) -> None:
+        self.m_size_tiles = float(size_tiles)
+        self.m_levels = [(np.asarray(low, float), np.asarray(high, float))]
+        while max(self.m_levels[-1][0].shape) > 1:
+            below, above = self.m_levels[-1]
+            self.m_levels.append((_halved(below, np.min, np.inf), _halved(above, np.max, -np.inf)))
+
+    def bounds(self, node: SNode) -> tuple[float, float]:
+        """The lowest and highest height under ``node``, with the box's play."""
+        low, high = self.m_levels[min(node.level - MIN_LEVEL, len(self.m_levels) - 1)]
+        side = 2.0**node.level
+        row, column = min(int(node.z // side), low.shape[0] - 1), min(int(node.x // side), low.shape[1] - 1)
+        return float(low[row, column]) - self.BELOW, float(high[row, column]) + self.ABOVE
+
+    def view(self, planes):
+        """Whether a node is in view of ``planes`` (None: cull off, every node is): a test of one node, with
+        ``many(nodes)`` for a list at once."""
+        if planes is None:
+            return None
+        return _CNodeView(self, planes)
+
+
+class _CNodeView:
+    """``CNodeBoxes.view``: the nodes tested against one camera, each answer kept for the frame."""
+
+    def __init__(self, boxes: CNodeBoxes, planes: np.ndarray) -> None:
+        self.m_boxes, self.m_planes = boxes, planes
+        self._m_seen: dict[SNode, bool] = {}
+
+    def many(self, nodes: list[SNode]) -> list[bool]:
+        new = [node for node in nodes if node not in self._m_seen]
+        if new:
+            size = self.m_boxes.m_size_tiles
+            ranges = np.array([self.m_boxes.bounds(node) for node in new])
+            corners = np.array([(node.x, node.z, node.tiles) for node in new])
+            box_lo = np.stack([size - corners[:, 0] - corners[:, 2], ranges[:, 0], corners[:, 1]], axis=1)
+            box_hi = np.stack([size - corners[:, 0], ranges[:, 1], corners[:, 1] + corners[:, 2]], axis=1)
+            self._m_seen.update(zip(new, boxes_in_view(self.m_planes, box_lo, box_hi).tolist(), strict=True))
+        return [self._m_seen[node] for node in nodes]
+
+    def __call__(self, node: SNode) -> bool:
+        found = self._m_seen.get(node)
+        return found if found is not None else self.many([node])[0]
+
+
+def _halved(array: np.ndarray, reducer, pad: float) -> np.ndarray:
+    """Each 2 x 2 of ``array`` reduced to one (an odd edge padded with ``pad``)."""
+    rows, columns = array.shape
+    padded = np.full((rows + rows % 2, columns + columns % 2), pad)
+    padded[:rows, :columns] = array
+    return reducer(padded.reshape(padded.shape[0] // 2, 2, padded.shape[1] // 2, 2), axis=(1, 3))
 
 
 def stand_ins(wanted: list[SNode], ready, before, size_tiles: float, visible=None) -> list[SNode]:

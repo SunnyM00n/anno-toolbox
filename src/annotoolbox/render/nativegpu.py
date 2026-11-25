@@ -1,10 +1,10 @@
-"""The native backend's Direct3D 12 layer from Python: the compiled module (``_nativegpu``, built by
-scripts/build_native.py from native/d3d12/, shipped in the installer), QRhi's device, queue and command list taken
-over from a view, and the layouts, sets and samplers of a pass made from its ``nativelayout.SBindingPlan``.
+"""The native backend's Direct3D 12 layer from Python: the compiled module (``_nativegpu``, scripts/build_native.py),
+QRhi's device, queue and command list taken over from a view, a pass's layouts, sets and samplers from its
+``nativelayout.SBindingPlan``, the pipeline library on disk (``open_pipelines``, ``keep_pipelines``) and pooled
+static buffers (``CBufferPool``).
 
-``load()`` is the module or None (``reason()`` says why: not built, not Windows, no Direct3D 12); without it the
-view draws its own look, as before the backend. ``attach(rhi)`` is NVRHI on a QRhi's device and queue (route A of
-native-backend.md, step 0), ``own_device()`` one of our own (route B); ``command_list(command_buffer)`` is QRhi's list inside
+``load()`` is the module or None (``reason()`` says why); ``attach(rhi)`` is NVRHI on a QRhi's device and queue
+(route A), ``own_device()`` one of our own (route B); ``command_list(command_buffer)`` is QRhi's list inside
 ``beginExternal``. docs/rendering/native-backend.md.
 """
 
@@ -13,8 +13,13 @@ from __future__ import annotations
 import ctypes
 import os
 import sys
+import threading
 from collections import OrderedDict
+from pathlib import Path
+from typing import NamedTuple
 
+from ..infra import buildcache
+from ..sources.overlay import cache_base
 from . import nativelayout
 
 MODULE = "_nativegpu"
@@ -22,6 +27,10 @@ ENV = "ANNO_NATIVE_GPU"  # "0": never use the module (the current path draws eve
 DEBUG_ENV = "ANNO_D3D12_DEBUG"  # "1": the debug layer on an own device, where Windows' Graphics Tools are installed
 # QRhiD3D12NativeHandles: dev (0), minimumFeatureLevel, adapterLuidLow, adapterLuidHigh, commandQueue (24)
 DEVICE_AT, QUEUE_AT = 0, 24
+PIPELINES_DIR = "pipelines"  # the cache's folder of the pipeline libraries, one file per adapter
+SAVE_AFTER_S = 10.0  # a changed library is written once no worker made a pipeline for this long [I: ours]
+POOL_BLOCK_BYTES = 4 << 20  # one buffer of a ``CBufferPool`` [I: ours, about 300 of an island's meshes]
+POOL_ALIGN = 256  # a piece's start: a constant buffer view's alignment, so every usage can share a pool
 _g_state: dict = {}
 
 
@@ -134,6 +143,7 @@ def attach(rhi):
     found = held.get(device)
     if found is None:  # each view's QRhi has a device of its own: one NVRHI each, until ``detach``
         found = held[device] = module.Device.attach(device, queue)
+        open_pipelines(found)
     return found
 
 
@@ -149,6 +159,7 @@ def detach(rhi) -> None:
         return
     found = held.pop(device, None)
     if found is not None:
+        save_pipelines(found)
         made = _g_state.get("samplers", {})
         for key in [k for k in made if k[0] == id(found)]:
             del made[key]
@@ -195,12 +206,156 @@ def static_buffer(device, command_list, data: bytes, usage: str, name: str):
     return buffer
 
 
-def mesh_pipeline(device, command_list, shaders: tuple, bytecode: bytes, layouts: list, state: dict, mesh) -> tuple:
+def mesh_pipeline(device, command_list, shaders: tuple, bytecode: bytes, layouts: list, state: dict, mesh,
+                  is_background: bool = False) -> tuple:  # fmt: skip
     """(pipeline, the constant vertex buffer of the inputs the mesh lacks) of a vertex and a pixel shader for a
-    mesh's stored layout (``bytecode``: the vertex shader's, whose inputs it reads)."""
+    mesh's stored layout (``bytecode``: the vertex shader's, whose inputs it reads); ``is_background``: made by the
+    module's workers, its ``ready`` says when."""
     laid, fill = nativelayout.input_elements(mesh.m_elements, nativelayout.signature(bytecode), mesh.m_stride)
-    pipe = device.graphics_pipeline(shaders[0], shaders[1], device.input_layout(laid), layouts, state)
+    pipe = device.graphics_pipeline(shaders[0], shaders[1], device.input_layout(laid), layouts, state,
+                                    background=is_background)  # fmt: skip
     return pipe, static_buffer(device, command_list, fill or bytes(16), "vertex", "constant vertex")
+
+
+def library_path(device) -> Path:
+    """The file of a device's pipeline library: one per adapter, made again when its driver changes."""
+    return cache_base() / PIPELINES_DIR / f"{device.adapter_id}.bin"
+
+
+def open_pipelines(device) -> bool:
+    """The device's pipeline library read from its file (``library_path``): False when there is none or it was made
+    for another driver or module (the library then starts empty and is written anew)."""
+    if not buildcache.enabled():
+        return False
+    try:
+        data = library_path(device).read_bytes()
+    except OSError:
+        return False
+    return device.open_pipeline_library(data)
+
+
+def save_pipelines(device, is_background: bool = False) -> bool:
+    """The device's pipeline library written to its file when pipelines were stored into it since: whole or not at
+    all (``buildcache.write_atomic``); ``is_background``: the file written on a thread of its own."""
+    if not buildcache.enabled() or not device.pipeline_stats["changed"]:
+        return False
+    data, path = device.pipeline_library(), library_path(device)
+    if not data:
+        return False
+    if is_background:
+        threading.Thread(target=_write_library, args=(path, data), name="pipeline-library", daemon=True).start()
+        return True
+    return _write_library(path, data)
+
+
+def _write_library(path: Path, data: bytes) -> bool:
+    try:
+        buildcache.write_atomic(path, data)
+    except OSError:  # a full disk or a folder that cannot be written: made again at the next start
+        return False
+    return True
+
+
+def keep_pipelines(device, now_s: float) -> None:
+    """Once a frame: the pipeline library written when it changed and no worker has been busy for ``SAVE_AFTER_S``,
+    so a later start loads what this one made (the view's own frames: performance.md section 4, item 8)."""
+    due = _g_state.setdefault("saved_at", {})
+    if now_s - due.get(device.adapter_id, 0.0) < SAVE_AFTER_S:
+        return
+    stats = device.pipeline_stats
+    if stats["pending"]:
+        return
+    due[device.adapter_id] = now_s
+    if stats["changed"]:
+        save_pipelines(device, is_background=True)
+
+
+class SPlaced(NamedTuple):
+    """A piece of a ``CBufferPool``: its buffer, where it starts there, its block (negative: a buffer of its own) and
+    its size."""
+
+    buffer: object
+    offset: int
+    block: int
+    size_bytes: int
+
+
+class CBufferPool:
+    """Small static buffers of one usage placed in a few large ones, as the engine places its meshes: a buffer made
+    per mesh cost about 0.3 ms on the window's thread, one per node or part a frame (performance.md section 4, item
+    8). ``place`` writes bytes and gives (buffer, offset); ``free`` gives a range back, reused ``device.keep_frames``
+    frames later (a frame in flight may still read it); a piece over a quarter of a block gets a buffer of its own."""
+
+    def __init__(self, device, usage: str, name: str, block_bytes: int = POOL_BLOCK_BYTES) -> None:
+        self.m_device, self.m_usage, self.m_name, self.m_block_bytes = device, usage, name, block_bytes
+        self.m_blocks: list = []  # [buffer, sorted free ranges [(offset, size)]]
+        self.m_freed: list[tuple[int, int, int, int]] = []  # (device frame, block, offset, size) not reusable yet
+        self.m_own: dict[int, object] = {}  # a large piece's buffer by its number
+        self._m_next_own = 0
+
+    def place(self, command_list, data: bytes) -> SPlaced:
+        """The piece holding ``data``, written on the module's list ``command_list``; ``free`` takes it back."""
+        size = -(-max(len(data), 16) // POOL_ALIGN) * POOL_ALIGN
+        if size > self.m_block_bytes // 4:
+            buffer = self.m_device.buffer(size, self.m_usage, name=self.m_name)
+            command_list.write_buffer(buffer, data)
+            self._m_next_own += 1
+            self.m_own[self._m_next_own] = buffer
+            return SPlaced(buffer, 0, -self._m_next_own, size)
+        self._recycle()
+        found = self._take(size)
+        if found is None:
+            self.m_blocks.append([self.m_device.buffer(self.m_block_bytes, self.m_usage, name=self.m_name),
+                                  [(0, self.m_block_bytes)]])  # fmt: skip
+            found = self._take(size)
+        block, offset = found
+        command_list.write_buffer(self.m_blocks[block][0], data, offset)
+        return SPlaced(self.m_blocks[block][0], offset, block, size)
+
+    def free(self, placed: SPlaced) -> None:
+        """Give back a piece that ``place`` handed out. A piece from before a ``release`` is ignored: its range in a
+        block made since would be handed out twice."""
+        if placed.block < 0:
+            if self.m_own.get(-placed.block) is placed.buffer:
+                self.m_own.pop(-placed.block).release()  # late: a frame in flight may still read it
+            return
+        if placed.block >= len(self.m_blocks) or self.m_blocks[placed.block][0] is not placed.buffer:
+            return
+        self.m_freed.append((self.m_device.frame, placed.block, placed.offset, placed.size_bytes))
+
+    def _take(self, size: int) -> tuple[int, int] | None:
+        for block, (_buffer, ranges) in enumerate(self.m_blocks):
+            for k, (offset, length) in enumerate(ranges):
+                if length >= size:
+                    ranges[k : k + 1] = [(offset + size, length - size)] if length > size else []
+                    return block, offset
+        return None
+
+    def _recycle(self) -> None:
+        """The ranges freed ``keep_frames`` frames ago back into their blocks' free lists, joined to their neighbours."""
+        if not self.m_freed:
+            return
+        frame, keep = self.m_device.frame, self.m_device.keep_frames
+        ready = [entry for entry in self.m_freed if entry[0] + keep < frame]
+        if not ready:
+            return
+        self.m_freed = [entry for entry in self.m_freed if entry[0] + keep >= frame]
+        for _frame, block, offset, size in ready:
+            ranges = sorted([*self.m_blocks[block][1], (offset, size)])
+            joined = [ranges[0]]
+            for start, length in ranges[1:]:
+                if joined[-1][0] + joined[-1][1] == start:
+                    joined[-1] = (joined[-1][0], joined[-1][1] + length)
+                else:
+                    joined.append((start, length))
+            self.m_blocks[block][1] = joined
+
+    def release(self) -> None:
+        for buffer, _ranges in self.m_blocks:
+            buffer.release()
+        for buffer in self.m_own.values():
+            buffer.release()
+        self.m_blocks, self.m_freed, self.m_own = [], [], {}
 
 
 class CKeptBuffers:
@@ -226,10 +381,12 @@ class CKeptBuffers:
         held[2] = frame
         return held[0]
 
-    def let_go(self, before: int) -> None:
-        """The buffers last used before frame ``before``."""
-        for key in [k for k, held in self.m_held.items() if held[2] < before]:
-            self.m_held.pop(key)[0].release()
+    def let_go(self, before: int) -> list:
+        """The buffers last used before frame ``before`` let go (late); returned, so the sets made with them go too."""
+        gone = [self.m_held.pop(key)[0] for key in [k for k, held in self.m_held.items() if held[2] < before]]
+        for buffer in gone:
+            buffer.release()
+        return gone
 
     def release(self) -> None:
         for held in self.m_held.values():
@@ -245,9 +402,20 @@ class CSetCache:
         self.m_size = max_sets
         self.m_sets: OrderedDict = OrderedDict()  # (layout, resources' ids) -> ((layout, resources), set)
 
-    def get(self, layout, held: tuple, make):
-        """The set of ``layout`` for the resources ``held``, ``make()`` when there is none yet."""
+    def touch(self, keys: list) -> bool:
+        """Whether every set of ``keys`` (``get``'s) is still kept, each marked as used now."""
+        for key in keys:
+            if key not in self.m_sets:
+                return False
+            self.m_sets.move_to_end(key)
+        return True
+
+    def get(self, layout, held: tuple, make, keys: list | None = None):
+        """The set of ``layout`` for the resources ``held``, ``make()`` when there is none yet (``keys``: its key
+        appended, for ``touch``)."""
         key = (id(layout), *map(id, held))
+        if keys is not None:
+            keys.append(key)
         found = self.m_sets.get(key)
         if found is None:
             found = self.m_sets[key] = ((layout, held), make())
@@ -256,6 +424,18 @@ class CSetCache:
         else:
             self.m_sets.move_to_end(key)
         return found[1]
+
+    def let_go(self, resources: list) -> None:
+        """The sets made with any of ``resources`` let go (late) with them: one kept past its resource is never asked
+        for again (its successor has another id) and holds its sampler descriptors, of which the device has 2048."""
+        if not resources:
+            return
+
+        def holds_one(held: tuple) -> bool:
+            return any(resource is gone for resource in held if resource is not None for gone in resources)
+
+        for key in [key for key, ((_layout, held), _made) in self.m_sets.items() if holds_one(held)]:
+            self.m_sets.pop(key)[1].release()
 
     def __len__(self) -> int:
         return len(self.m_sets)
@@ -276,6 +456,8 @@ def binding_set(device, layout, spec: nativelayout.SLayoutSpec, named: dict, sam
             items.append(("sampler", item.slot, sampler_of[(spec.space, item.slot)]))
         elif item.kind == "push":
             items.append(("push", item.slot, None, {"size": item.count}))
+        elif isinstance(found := named.get(item.name), SPlaced):  # a constant buffer's piece of a pool
+            items.append((item.kind, item.slot, found.buffer, {"offset": found.offset, "range": found.size_bytes}))
         else:
-            items.append((item.kind, item.slot, named.get(item.name)))
+            items.append((item.kind, item.slot, found))
     return device.binding_set(layout, items)

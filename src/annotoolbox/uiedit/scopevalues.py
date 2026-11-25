@@ -19,6 +19,7 @@ ALPHA, FADED = 0x80000006, 0.01  # AlphaTint; below FADED the design view shows 
 ANIMATOR = "d2506d55"  # the Animator component: StartValue, EndValue, CurrentValue (docs/ui/117/components.md)
 ANIM_START, ANIM_END, ANIM_CURRENT = 0x71047B15, 0x7BEB711E, 0x7FB90677
 ANIM_GO, ADDED = 0x78773C49, 0x8000003C  # the Animator's Start action; AddedToScene, fired as the scene opens
+ANIM_RAN = (0x7B18ECA5, 0x7631EFBB)  # the Animator's Started and Completed events (Tween's)
 
 SIZE = 0x80000004
 DATA_SOURCE, DATA_ITEM = 0x30000001, 0x30000002  # a list's array; the element (or its index) an item gets

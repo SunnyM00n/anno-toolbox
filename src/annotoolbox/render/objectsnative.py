@@ -11,6 +11,7 @@ a frame. docs/rendering/native-backend.md sections 11 and 12.
 from __future__ import annotations
 
 import itertools
+import operator
 import os
 import struct
 from dataclasses import dataclass, field
@@ -18,9 +19,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import gameshader, gameshadow, nativegpu, nativelayout
-from .gameinstances import KINDS, SLOT_BUFFER
+from .gameinstances import SLOT_BUFFER, SDrawnSet
 from .nativecompute import CTold, guarded
-from .nativematerials import CBindlessMaps, CMaterialTables, CStandIns
+from .nativedraws import CCulledGroup, CInstanceBuffers, CLevelDraws, CNativeGroup, CNativeRun
+from .nativematerials import CBindlessMaps, CMaterialTables, CStandIns, element_layout
 from .terrainnative import COPY_SOURCE, GBUFFER_FORMATS, LIT_FORMATS, UNORDERED, CBridge, camera_buffer
 
 ENV = "ANNO_NATIVE_OBJECTS"  # "0": the objects by the current path (the rewrite), to hold the two against each other
@@ -46,8 +48,6 @@ FACTORS = {"Zero": "zero", "One": "one", "SrcColor": "src_color", "OneMinusSrcCo
            "OneMinusDstAlpha": "inv_dst_alpha", "DstColor": "dst_color", "OneMinusDstColor": "inv_dst_color",
            "Src1Color": "src1_color", "OneMinusSrc1Color": "inv_src1_color", "Src1Alpha": "src1_alpha",
            "OneMinusSrc1Alpha": "inv_src1_alpha"}  # fmt: skip
-# the frame's instance buffers by the names the shaders read them (``gameinstances.KINDS``)
-INSTANCE_NAMES = {name: kind for kind, (_stride, names) in KINDS.items() for name in names}
 
 
 class CNativeError(RuntimeError):
@@ -297,36 +297,6 @@ class STechnique:
     element_keys: dict = field(default_factory=dict)  # its constant buffers' layout keys by name (``_frame``)
 
 
-class CNativeRun:
-    """One draw of a native part this frame: a role, a mesh, its slot (``cbModel``'s byte offset) and how many
-    instances (a shadow draw: its culled words); in the transparent pass ordered by its box as the current path's
-    runs and recorded by the backend in its place (``native``: ``nativepass.draw_models``); ``viewport``: a share
-    of the target (x, y from the top left, width, height), None the whole."""
-
-    __slots__ = ("m_part", "m_role", "m_mesh", "m_slot", "m_worlds", "m_words", "m_viewport")
-    m_native = True
-    m_world = np.identity(4)
-
-    def box(self) -> tuple[np.ndarray, np.ndarray]:
-        places = np.asarray(self.m_worlds, float)[:, :3, 3]
-        return places.min(axis=0), places.max(axis=0)
-
-    def __init__(self, part, role: str, mesh, slot: int, worlds, words=None, viewport=None) -> None:
-        self.m_part, self.m_role, self.m_mesh, self.m_slot, self.m_worlds, self.m_words = (
-            part,
-            role,
-            mesh,
-            slot,
-            worlds,
-            words,
-        )
-        self.m_viewport = viewport
-
-    @property
-    def m_instances(self) -> int:
-        return len(self.m_words) if self.m_words is not None else len(self.m_worlds)
-
-
 @dataclass
 class SPartLevel:
     """A level of detail of a compiled part: its meshes and their bones (both ways' parts)."""
@@ -363,7 +333,9 @@ class CNativePart:
         self.m_push = struct.pack("<4I", self.m_index, 0, 0, 0)
         self.m_levels = SPartLevel.of(got)
         self._m_meshes: dict[int, tuple] = {}  # id of a mesh -> (vertices, indices, mesh)
-        self._m_items: dict[tuple, tuple] = {}  # (role, id of a mesh) -> (sets' key, SDrawItem, what it holds)
+        self.m_items: dict[tuple, tuple] = {}  # (role, id of a mesh) -> (sets' key, SDrawItem, what it holds)
+        self._m_levels_drawn: dict[int, tuple] = {}  # level -> its draws into the G-buffer and the cascades
+        self.m_is_ready = False  # every pipeline of its roles and meshes made (``prepare``)
         self.begin()
 
     def _techniques(self, objects: CNativeObjects, shaders: SPartShaders, states: dict) -> dict:
@@ -372,31 +344,78 @@ class CNativePart:
                                         targets.get(role, "gbuffer")) for role in shaders.stages}  # fmt: skip
 
     def begin(self) -> None:
-        self.m_runs: list[CNativeRun] = []
+        """A new frame: a native part keeps none of its runs (the frame's lists hold them)."""
 
-    def models(self, level: int, worlds: np.ndarray, shadows: bool, mask=None, deform: bool = False) -> tuple:
-        """This frame's runs of ``worlds`` at ``level`` (the prepass first where there is one) and their casters
-        into the cascades ``mask`` marks (None: all)."""
-        out, cast = [], []
+    def models(self, level: int, drawn: SDrawnSet, shadows: bool, mask=None) -> tuple:
+        """This frame's draws of the instances ``drawn`` at ``level`` (the prepass first where there is one) and
+        their casters into the cascades ``mask`` marks (None: all): one ``CNativeGroup`` each, of the level's draws
+        made once (``_level_draws``); a transparent part's one run per draw (the transparent pass orders them)."""
         if not self.m_filled:  # its maps go up with its first draw (``CBindlessMaps.fill``)
             self.m_objects.m_maps.fill(self.m_maps)
             self.m_filled = True
-        part_level = self.m_levels[min(level, len(self.m_levels) - 1)]
-        reach = mask if mask is not None else np.ones((len(worlds), gameshadow.COUNT), bool)
-        for mesh, joints in zip(part_level.meshes, part_level.joints, strict=True):
-            slot = self.m_frame.place(worlds, joints, deform)
-            if "prepass" in self.m_techniques:
-                out.append(CNativeRun(self, "prepass", mesh, slot, worlds))
-            out.append(CNativeRun(self, "main", mesh, slot, worlds))
-            if shadows and "shadow" in self.m_techniques:
-                caster_slot, words = self.m_frame.place_casters(worlds, joints, reach, deform)
-                if len(words):
-                    cast.append(CNativeRun(self, "shadow", mesh, caster_slot, worlds, words))
-        self.m_runs += out + cast
-        return out, cast
+        main, shadow = self._level_draws(level)
+        slots = {joints: self.m_frame.place(drawn.places, drawn.local, joints) for joints in set(main.m_joints)}
+        if self.m_is_transparent:
+            out = [CNativeRun(self, role, mesh, slots[joints], drawn)
+                   for (role, mesh), joints in zip(main.m_pairs, main.m_joints, strict=True)]  # fmt: skip
+        else:
+            out = [CNativeGroup(self, main, main.slots(slots), drawn.count)]
+        if not (shadows and shadow.m_pairs):
+            return out, []
+        culled = CCulledGroup.of(self, shadow, drawn, self.m_frame) if self.m_objects.m_cull is not None else None
+        if culled is not None:  # the GPU culls them into the cascades (``shadowcullnative``)
+            return out, [culled]
+        reach = mask if mask is not None else np.ones((drawn.count, gameshadow.COUNT), bool)
+        casters = {joints: self.m_frame.place_casters(drawn.places, drawn.local, joints, reach)
+                   for joints in set(shadow.m_joints)}  # fmt: skip
+        count = len(next(iter(casters.values()))[1])  # one word an instance and cascade it reaches, whatever its skin
+        if not count:
+            return out, []
+        return out, [
+            CNativeGroup(self, shadow, shadow.slots({joints: got[0] for joints, got in casters.items()}), count)
+        ]
+
+    def _level_draws(self, level: int) -> tuple[CLevelDraws, CLevelDraws]:
+        """The draws of a level made once: into the G-buffer (each mesh's prepass first where there is one) and the
+        cascades."""
+        level = min(level, len(self.m_levels) - 1)
+        found = self._m_levels_drawn.get(level)
+        if found is None:
+            part_level = self.m_levels[level]
+            pairs = list(zip(part_level.meshes, part_level.joints, strict=True))
+            roles = [role for role in ("prepass", "main") if role in self.m_techniques]
+            main = CLevelDraws([(role, mesh) for mesh, _j in pairs for role in roles],
+                               [joints for _m, joints in pairs for _role in roles])  # fmt: skip
+            casts = "shadow" in self.m_techniques
+            shadow = CLevelDraws([("shadow", mesh) for mesh, _j in pairs] if casts else [],
+                                 [joints for _m, joints in pairs] if casts else [])  # fmt: skip
+            found = self._m_levels_drawn[level] = (main, shadow)
+        return found
 
     def ahead(self, shadows: bool) -> tuple[list, list, list]:
-        return [], [], []  # its pipelines come from DXIL in milliseconds, its maps go up with its first draw
+        return [], [], []  # its pipelines are asked for by ``prepare``, its maps go up with its first draw
+
+    def prepare(self, is_background: bool) -> None:
+        """Every level's meshes on the device and the pipelines of each role for their layouts asked for
+        (``is_background``: made by the module's workers; the part is drawn once all are in, ``is_ready``), as the
+        engine makes a model's pipelines ahead of its first draw (performance.md section 4, item 8)."""
+        for part_level in self.m_levels:
+            for mesh in part_level.meshes:
+                kept = self.mesh(mesh)[2]
+                for technique in self.m_techniques.values():
+                    self.m_objects.pipeline(technique, kept, is_background)
+
+    def is_ready(self) -> bool:
+        """Whether every pipeline ``prepare`` asked for is made (one that failed counts: its draw raises and the part
+        goes to the current path)."""
+        if not self.m_is_ready:
+            self.m_is_ready = all(pipeline.ready or pipeline.error for pipeline, _fill in self._pipelines())
+        return self.m_is_ready
+
+    def _pipelines(self) -> list:
+        """(pipeline, constant vertex) of each role for each of its meshes' layouts."""
+        return [self.m_objects.pipeline(technique, kept) for technique in self.m_techniques.values()
+                for _vertices, _indices, kept in self._m_meshes.values()]  # fmt: skip
 
     def all(self) -> list:
         return []
@@ -405,10 +424,12 @@ class CNativePart:
         """A mesh's vertex and index buffers on the device, made once (its bytes let go after)."""
         got = self._m_meshes.get(id(mesh))
         if got is None:
-            objects = self.m_objects
-            vertices = objects.static(mesh.m_data, "vertex", "vertices")
-            indices = objects.static(np.ascontiguousarray(mesh.m_indices, "<u4").tobytes(), "index", "indices")
+            pool, command_list = self.m_objects.m_pool, self.m_objects.m_list
+            vertices = pool.place(command_list, mesh.m_data)
+            indices = pool.place(command_list, np.ascontiguousarray(mesh.m_indices, "<u4").tobytes())
             got = self._m_meshes[id(mesh)] = (vertices, indices, mesh)
+            if mesh.m_data:
+                mesh.box()  # kept on the mesh: the GPU's caster culling reads it (``CCulledGroup``)
             mesh.m_data = b""
         return got
 
@@ -416,23 +437,26 @@ class CNativePart:
         """The draw of ``mesh`` in ``role`` with ``sets`` (the frame's and its own, in its layouts' order), made
         again when they changed."""
         key = (role, id(mesh))
+        found = self.m_items.get(key)
+        if found is not None and found[2][2] is sets:  # the pass's kept list (``CNativeObjects._pass_sets``)
+            return found[1]
         ids = tuple(map(id, sets))
-        found = self._m_items.get(key)
         if found is not None and found[0] == ids:
+            self.m_items[key] = (ids, found[1], (*found[2][:2], sets, *found[2][3:]))
             return found[1]
         technique = self.m_techniques[role]
         vertices, indices, kept = self.mesh(mesh)
         pipeline, fill = self.m_objects.pipeline(technique, kept)
-        item = self.m_objects.m_module.draw_item(pipeline, sets, len(kept.m_indices), [vertices, fill], indices, True,
-                                             self.m_push)  # fmt: skip
-        self._m_items[key] = (ids, item, (pipeline, fill, sets, vertices, indices))
+        item = self.m_objects.m_module.draw_item(pipeline, sets, len(kept.m_indices), [vertices[:2], fill], indices.buffer,
+                                                 True, self.m_push, index_offset=indices.offset)  # fmt: skip
+        self.m_items[key] = (ids, item, (pipeline, fill, sets, vertices, indices))
         return item
 
     def release(self) -> None:
         for vertices, indices, _mesh in self._m_meshes.values():
-            vertices.release()
-            indices.release()
-        self._m_meshes, self._m_items = {}, {}
+            self.m_objects.m_pool.free(vertices)
+            self.m_objects.m_pool.free(indices)
+        self._m_meshes, self.m_items, self.m_is_ready = {}, {}, False
         self.m_objects.m_maps.give_back(self.m_maps)
         if self.m_index is not None:  # its record free for the next part (a part let go and made again took a new one)
             self.m_objects.m_tables.remove(self.m_group, self.m_index)
@@ -456,73 +480,51 @@ class CNativeCutOut(CNativePart):
                                                       "shadow", k)  # fmt: skip
         return out
 
-    def models(self, level: int, worlds: np.ndarray, shadows: bool, mask=None, deform: bool = False) -> tuple:
-        """This frame's count and clear of ``worlds`` and their casters per cascade ``mask`` marks (None: all)."""
+    def models(self, level: int, drawn: SDrawnSet, shadows: bool, mask=None) -> tuple:
+        """This frame's count and clear of the instances ``drawn`` and their casters per cascade ``mask`` marks (None:
+        all)."""
         out, cast = [], []
         if not self.m_filled:
             self.m_objects.m_maps.fill(self.m_maps)
             self.m_filled = True
         part_level = self.m_levels[min(level, len(self.m_levels) - 1)]
-        reach = mask if mask is not None else np.ones((len(worlds), gameshadow.COUNT), bool)
+        reach = mask if mask is not None else np.ones((drawn.count, gameshadow.COUNT), bool)
         for mesh, joints in zip(part_level.meshes, part_level.joints, strict=True):
-            slot = self.m_frame.place(worlds, joints, deform)
+            slot = self.m_frame.place(drawn.places, drawn.local, joints)
             out += [
-                CNativeRun(self, role, mesh, slot, worlds) for role in ("main", "clear") if role in self.m_techniques
+                CNativeRun(self, role, mesh, slot, drawn) for role in ("main", "clear") if role in self.m_techniques
             ]
             if not (shadows and "shadow_mark0" in self.m_techniques):
                 continue
-            for k, caster_slot, words in self.m_frame.place_each_cascade(worlds, joints, reach, deform):
-                cast += [CNativeRun(self, f"{role}{k}", mesh, caster_slot, worlds, words, gameshadow.DIVISIONS[k])
+            for k, caster_slot, words in self.m_frame.place_each_cascade(drawn.places, drawn.local, joints, reach):
+                cast += [CNativeRun(self, f"{role}{k}", mesh, caster_slot, drawn, words, gameshadow.DIVISIONS[k])
                          for role in ("shadow_mark", "shadow_clear")]  # fmt: skip
-        self.m_runs += out + cast
         return out, cast
 
 
-class CInstanceBuffers:
-    """The frame's instance buffers (``gameinstances.CFrameInstances.gathered``) as the module's structured buffers,
-    and the draws' slots as one constant buffer whose slot a draw's ``cbModel`` root view points at; written when the
-    frame's instances are new, grown to the next power of two (made again: the sets follow by their ids)."""
+class _CPassSets:
+    """One pass's sets per technique and material group, looked at once a pass (``CNativeObjects._sets``), and its
+    constants per technique (``_frame``), worked out with the first draw that reads them."""
 
-    def __init__(self, device) -> None:
-        self.m_device = device
-        self.m_buffers: dict[str, object] = {}
-        self.m_serial = None
+    def __init__(self, objects: CNativeObjects, name: str, camera, fills: list, frame_named: dict) -> None:
+        self.m_objects, self.m_name, self.m_camera = objects, name, camera
+        self.m_fills, self.m_named = fills, frame_named
+        self.m_kept = objects._pass_sets(name, frame_named)
+        self.m_checked: dict[tuple, list] = {}
+        self.m_frames: dict[int, dict] = {}
+        objects._m_values = {}
 
-    def _fit(self, kind: str, size_bytes: int, usage: str, stride: int):
-        buffer = self.m_buffers.get(kind)
-        need = max(1 << 16, 1 << max(0, size_bytes - 1).bit_length())
-        if buffer is None or buffer.size < size_bytes:
-            if buffer is not None:
-                buffer.release()
-            buffer = self.m_buffers[kind] = self.m_device.buffer(need, usage, stride=stride, name=f"frame {kind}")
-        return buffer
-
-    def send(self, command_list, frame) -> None:
-        if frame.m_serial == self.m_serial and self.m_buffers:
-            return
-        self.m_serial = frame.m_serial
-        got = frame.gathered()
-        for kind, (stride, _names) in KINDS.items():
-            buffer = self._fit(kind, len(got[kind]), "structured", stride)
-            if got[kind]:
-                command_list.write_buffer(buffer, got[kind])
-        buffer = self._fit("slots", len(got["slots"]), "constant", 0)
-        if got["slots"]:
-            command_list.write_buffer(buffer, got["slots"])
-
-    def named(self) -> dict:
-        """The buffers by the shaders' names, and ``cbModel``'s slots under its own."""
-        if not self.m_buffers:
-            raise RuntimeError("the frame's instances were not sent")
-        return {
-            **{name: self.m_buffers[kind] for name, kind in INSTANCE_NAMES.items()},
-            SLOT_BUFFER: self.m_buffers["slots"],
-        }
-
-    def release(self) -> None:
-        for buffer in self.m_buffers.values():
-            buffer.release()
-        self.m_buffers, self.m_serial = {}, None
+    def get(self, tech: STechnique, group: int) -> list:
+        key = (id(tech), group)  # the technique is the device's for good: its id stays its own
+        sets = self.m_checked.get(key)
+        if sets is None:
+            objects = self.m_objects
+            frame = self.m_frames.get(id(tech))
+            if frame is None:
+                frame = self.m_frames[id(tech)] = objects._frame(self.m_name, tech, self.m_camera, self.m_fills,
+                                                                 self.m_named)  # fmt: skip
+            sets = self.m_checked[key] = objects._sets(self.m_kept, tech, group, frame, self.m_named)
+        return sets
 
 
 class CNativeObjects(CTold):
@@ -532,12 +534,14 @@ class CNativeObjects(CTold):
         self.m_device, self.m_natives = device, natives
         self.m_module = nativegpu.load()
         self.m_list = device.command_list()
+        self.m_is_deferred = False  # True: its owner submits the list once a frame after the passes (``submit``)
         self.m_list.open()
         self.m_bridge = CBridge(device)
         self.m_maps = CBindlessMaps(device, self.m_list, max_texture)
         self.m_tables = CMaterialTables(device)
         self.m_stand_ins = CStandIns(device, self.m_list)
         self.m_instances = CInstanceBuffers(device)
+        self.m_pool = nativegpu.CBufferPool(device, "vertex,index", "meshes")  # every part's vertices and indices
         self.m_depth = "D32S8" if has_stencil else "D32"
         self._m_layouts: dict[tuple, object] = {}
         self._m_shaders: dict[tuple, object] = {}
@@ -548,7 +552,10 @@ class CNativeObjects(CTold):
         self._m_values: dict[tuple, bytes] = {}  # a pass's constants by layout, this pass (``_frame``)
         self._m_layout_keys: dict[tuple, int] = {}  # an element layout -> its number, the key in ``_m_values``
         self.m_buffers = nativegpu.CKeptBuffers(device)  # the frame's constant and camera buffers by (pass, layout)
+        # per pass: [what the frame hands it by name, its ids, (technique, material group) -> (what its sets bind, sets)]
+        self._m_passes: dict[str, list] = {}
         self.m_failed: list[tuple[CNativePart, str]] = []  # parts whose draws raised: the current path's from now on
+        self.m_cull = None  # shadowcullnative.CShadowCull: the casters culled on the GPU (None: on the CPU)
         self.m_error = ""
         self.m_drawn = 0  # the native draws of the last frame
         self.m_messages, self.m_foreign = [], []
@@ -596,8 +603,9 @@ class CNativeObjects(CTold):
         return STechnique(plan, [self.layout(layout_spec) for layout_spec in plan.layouts], shaders, stages["vs"].bytecode, bindings,
                          cbuffers, pass_state(state, TARGETS[target], self.m_depth))  # fmt: skip
 
-    def pipeline(self, technique: STechnique, mesh) -> tuple:
-        """(pipeline, the constant vertex buffer of the inputs the mesh lacks) for a mesh's stored layout."""
+    def pipeline(self, technique: STechnique, mesh, is_background: bool = False) -> tuple:
+        """(pipeline, the constant vertex buffer of the inputs the mesh lacks) for a mesh's stored layout, made once
+        (``is_background``: by the module's workers, its ``ready`` says when)."""
         key = (
             id(technique.shaders[0]),
             id(technique.shaders[1]),
@@ -607,7 +615,7 @@ class CNativeObjects(CTold):
         )
         if key not in self._m_pipelines:
             self._m_pipelines[key] = nativegpu.mesh_pipeline(self.m_device, self.m_list, technique.shaders, technique.bytecode,
-                                                           technique.layouts, technique.state, mesh)  # fmt: skip
+                                                           technique.layouts, technique.state, mesh, is_background)  # fmt: skip
         return self._m_pipelines[key]
 
     def static(self, data: bytes, usage: str, name: str):
@@ -631,8 +639,6 @@ class CNativeObjects(CTold):
 
     def _frame(self, name: str, technique: STechnique, camera, fills: list, named: dict) -> dict:
         """The pass's constant buffers and camera records a technique reads, by name (``name``: the pass)."""
-        from .nativematerials import element_layout
-
         out = {}
         for cb_name, cbuffer in technique.cbuffers.items():
             binding = technique.bindings.get(cb_name)
@@ -663,18 +669,27 @@ class CNativeObjects(CTold):
                 out[cb_name] = self._constant(key, self._m_values[key], "structured", cbuffer.size)
         return out
 
-    def _resource(self, item: nativelayout.SItem, technique: STechnique, named: dict):
-        """What a set item binds: the frame's by name (QRhi's textures wrapped), else its stand-in."""
+    def _bridged(self, found, stride: int | None, usage: str = ""):
+        """QRhi's texture (``stride`` None) or storage buffer wrapped, read in this pass."""
+        if stride is None:
+            return self.m_bridge.texture(found)[0]
+        return self.m_bridge.buffer(found, stride, UNORDERED, usage)[0]
+
+    def _resource(self, item: nativelayout.SItem, technique: STechnique, named: dict, bridged: list):
+        """What a set item binds: the frame's by name (QRhi's wrapped, each into ``bridged``: a kept set wraps them
+        again each frame, ``_sets``), else its stand-in."""
         found = named.get(item.name)
         if item.kind == "texture":
             if found is not None and not isinstance(found, self.m_module.Texture):  # QRhi's
-                return self.m_bridge.texture(found)[0]
+                bridged.append((found, None, "", self._bridged(found, None)))
+                return bridged[-1][3]
             return found if found is not None else self.m_stand_ins.texture(technique.bindings[item.name])
         cbuffer = technique.cbuffers.get(item.name)
         stride = cbuffer.size if cbuffer is not None and item.kind == "structured" else 0
         if found is not None and not isinstance(found, self.m_module.Buffer):  # QRhi's: its passes bind it for storage
             usage = "raw" if item.kind in ("raw", "rwraw") else ""
-            return self.m_bridge.buffer(found, stride, UNORDERED, usage)[0]
+            bridged.append((found, stride, usage, self._bridged(found, stride, usage)))
+            return bridged[-1][3]
         if found is not None:
             return found
         if item.kind == "structured":
@@ -683,14 +698,17 @@ class CNativeObjects(CTold):
             return self.m_stand_ins.raw(item.kind == "rwraw")
         raise CNativeError(f"nothing to bind for {item.name} ({item.kind})")
 
-    def _set(self, technique: STechnique, index: int, named: dict):
-        """A layout's set for the frame's ``named`` resources, made when what it binds changed (``KEPT_SET_COUNT`` kept)."""
+    def _set(self, technique: STechnique, index: int, named: dict, bridged: list, keys: list):
+        """A layout's set for the frame's ``named`` resources, made when what it binds changed (``KEPT_SET_COUNT``
+        kept; its key into ``keys``, the QRhi resources it wraps into ``bridged``)."""
         spec = technique.plan.layouts[index]
         if spec.bindless:
             item = spec.items[0]
             return self.m_maps.m_table if item.name == BINDLESS else self._open(technique, index)
         held = tuple(
-            self._resource(layout_item, technique, named) if layout_item.kind not in ("sampler", "push") else None
+            self._resource(layout_item, technique, named, bridged)
+            if layout_item.kind not in ("sampler", "push")
+            else None
             for layout_item in spec.items
         )
         resources = {
@@ -699,7 +717,37 @@ class CNativeObjects(CTold):
             if resource is not None
         }
         return self._m_sets.get(technique.layouts[index], held, lambda: nativegpu.binding_set(
-            self.m_device, technique.layouts[index], spec, resources, nativegpu.samplers(self.m_device, technique.plan)))  # fmt: skip
+            self.m_device, technique.layouts[index], spec, resources, nativegpu.samplers(self.m_device, technique.plan)), keys)  # fmt: skip
+
+    def _pass_sets(self, name: str, frame_named: dict) -> dict:
+        """The sets pass ``name`` made, kept while the frame hands it the same resources (held: their ids stay
+        theirs)."""
+        ids = tuple((key, id(value)) for key, value in frame_named.items())
+        held = self._m_passes.get(name)
+        if held is None or held[1] != ids:
+            held = self._m_passes[name] = [frame_named, ids, {}]
+        return held[2]
+
+    def _sets(self, kept: dict, tech: STechnique, group: int, frame_buffers: dict, frame_named: dict) -> list:
+        """A technique's sets for a material group in a pass, the kept ones while the pass's constant buffers, the
+        group's tables and the maps' table are the same objects, their sets still kept and QRhi's resources wrapped
+        alike (wrapped again here: the pass reads them, ``CBridge``); made otherwise (performance.md 4, item 2)."""
+        group_buffers = self.m_tables.group(group).buffers
+        stamp = (
+            tuple(map(id, frame_buffers.values())),
+            tuple(map(id, group_buffers.values())),
+            id(self.m_maps.m_table),
+        )
+        entry = kept.get((id(tech), group))  # the technique is the device's for good: its id stays its own
+        if entry is not None and entry[0] == stamp and self._m_sets.touch(entry[4]):
+            if all(self._bridged(found, stride, usage) is wrapped for found, stride, usage, wrapped in entry[3]):
+                return entry[2]
+        bridged, keys = [], []
+        own = {**frame_named, **frame_buffers, **group_buffers, **tech.named}
+        sets = [self._set(tech, k, own, bridged, keys) for k in range(len(tech.layouts))]
+        held = (dict(frame_buffers), dict(group_buffers), self.m_maps.m_table)  # the stamp's objects, kept
+        kept[(id(tech), group)] = (stamp, held, sets, bridged, keys)
+        return sets
 
     def _open(self, technique: STechnique, index: int):
         """An unbounded array no pass fills (``cModelVoxelTextures[]``): a table of stand-ins of its declared kind,
@@ -717,50 +765,95 @@ class CNativeObjects(CTold):
                 self.m_device.write_table(table, (item.kind, slot, stand_in))
         return table
 
-    def record(
-        self, command_buffer, name: str, runs: list, camera, fills: list, named: dict, size_px: tuple[int, int]
-    ) -> None:
-        """``runs`` on QRhi's list (inside ``beginExternal``) into the targets it has bound: the module's list (the
-        uploads, the frame's constants) goes to the queue first; a part whose draw raised goes to ``failed``."""
+    def record(self, command_buffer, name: str, runs: list, camera, fills: list, named: dict, size_px: tuple[int, int],
+               is_indirect: bool = False) -> None:  # fmt: skip
+        """``runs`` (``CNativeGroup``s and ``CNativeRun``s) on QRhi's list (inside ``beginExternal``) into the targets
+        it has bound: the module's list (the uploads, the frame's constants) goes to the queue first; a part whose
+        draw raised goes to ``failed``. ``is_indirect``: ``CCulledGroup``s alone, drawn as the GPU culled them."""
         self._told_before()
-        frame_named = {**named, **self.m_instances.named()}
-        made: dict[tuple, list] = {}  # (technique, material group) -> its sets: worked out once a pass
-        frames: dict[int, dict] = {}  # technique -> the pass's constants it reads
-        self._m_values = {}
-        items, counts, offsets = [], [], []
-        for run in runs:
+        frame_named = {**named, **self.m_instances.named(), **(self.m_cull.named() if is_indirect else {})}
+        sets_of = _CPassSets(self, name, camera, fills, frame_named)
+        items, counts, offsets, args = [], [], [], []
+        is_plain = not self.m_failed  # every draw into the whole target: one call as gathered
+        for run in runs:  # every draw of the frame: kept short (performance.md section 4, item 1)
             part = run.m_part
+            if run.m_grouped:
+                size = len(run.m_draws.m_pairs)
+                try:
+                    items.extend(self._group_items(name, run, sets_of))
+                except Exception as exc:
+                    self.m_failed.append((part, f"{type(exc).__name__}: {exc}"))
+                    items.extend([None] * size)
+                    is_plain = False
+                counts.extend([run.m_count] * size)
+                offsets.extend(run.m_slots)
+                args.extend(run.m_args if is_indirect else ())
+                continue
+            role, mesh = run.m_role, run.m_mesh
             try:
-                tech = part.m_techniques[run.m_role]
-                sets = made.get((id(tech), part.m_group))
-                if sets is None:
-                    if id(tech) not in frames:
-                        frames[id(tech)] = self._frame(name, tech, camera, fills, frame_named)
-                    own = {**frame_named, **frames[id(tech)], **self.m_tables.group(part.m_group).buffers, **tech.named}
-                    sets = made[(id(tech), part.m_group)] = [self._set(tech, k, own) for k in range(len(tech.layouts))]
-                items.append(part.item(run.m_role, run.m_mesh, sets))
+                sets = sets_of.get(part.m_techniques[role], part.m_group)
+                found = part.m_items.get((role, id(mesh)))  # the draw kept with this pass's sets: no call
+                items.append(found[1] if found is not None and found[2][2] is sets else part.item(role, mesh, sets))
             except Exception as exc:
                 self.m_failed.append((part, f"{type(exc).__name__}: {exc}"))
                 items.append(None)
             counts.append(run.m_instances)
             offsets.append(run.m_slot)
-        failed = {id(failed_part) for failed_part, _why in self.m_failed}
-        keep = [k for k, draw_item in enumerate(items) if draw_item is not None and id(runs[k].m_part) not in failed]
+            is_plain = is_plain and run.m_viewport is None and items[-1] is not None
+        shares = None if is_plain else self._shares(runs, items)
 
         def record(list_ptr) -> None:
-            for share, group in itertools.groupby(keep, key=lambda k: runs[k].m_viewport):  # a cascade's part: a call
-                run_indices = list(group)
+            if is_indirect:
+                kept = range(len(items)) if shares is None else [k for k, _share in shares]
+                self.m_cull.record(list_ptr, [items[k] for k in kept], [args[k] for k in kept],
+                                   [offsets[k] for k in kept], (0.0, 0.0, *map(float, size_px)))  # fmt: skip
+                return
+            if shares is None:
+                self.m_module.record_draws(
+                    self.m_device, list_ptr, items, counts, offsets, (0.0, 0.0, *map(float, size_px))
+                )
+                return
+            for share, group in itertools.groupby(shares, key=lambda kept: kept[1]):  # a cascade's part: a call
+                indices = [k for k, _share in group]
                 x, y, share_width, share_height = share or (0.0, 0.0, 1.0, 1.0)
                 area = (x * size_px[0], y * size_px[1], share_width * size_px[0], share_height * size_px[1])
-                self.m_module.record_draws(self.m_device, list_ptr, [items[k] for k in run_indices], [counts[k] for k in run_indices],
-                                         [offsets[k] for k in run_indices], area)  # fmt: skip
+                self.m_module.record_draws(self.m_device, list_ptr, [items[k] for k in indices], [counts[k] for k in indices],
+                                         [offsets[k] for k in indices], area)  # fmt: skip
 
-        self.m_bridge.send(self.m_list, command_buffer, record)
-        self.m_drawn += len(keep)
+        self.m_bridge.send(None if self.m_is_deferred else self.m_list, command_buffer, record)
+        self.m_drawn += len(items) if shares is None else len(shares)
         self._told_after()
 
+    def _group_items(self, name: str, group: CNativeGroup, sets_of: _CPassSets) -> list:
+        """A group's module draws in this pass: the ones kept with its level's draws while the sets of their roles
+        are the same objects, else each made (``CNativePart.item``)."""
+        part, draws = group.m_part, group.m_draws
+        sets = [sets_of.get(part.m_techniques[role], part.m_group) for role in draws.m_roles]
+        kept = draws.m_items.get(name)
+        if kept is not None and all(map(operator.is_, kept[0], sets)):
+            return kept[1]
+        by_role = dict(zip(draws.m_roles, sets, strict=True))
+        made = [part.item(role, mesh, by_role[role]) for role, mesh in draws.m_pairs]
+        draws.m_items[name] = (sets, made)
+        return made
+
+    def _shares(self, runs: list, items: list) -> list[tuple[int, tuple | None]]:
+        """(draw, its share of the target) of the draws to record: a failed part's left out."""
+        failed = {id(failed_part) for failed_part, _why in self.m_failed}
+        owners: list = []
+        for run in runs:
+            owners.extend([(run.m_part, run.m_viewport)] * (len(run) if run.m_grouped else 1))
+        return [(k, share) for k, (part, share) in enumerate(owners) if items[k] is not None and id(part) not in failed]
+
+    def submit(self) -> None:
+        """The module's list to the queue: once a frame after every pass when ``is_deferred`` (QRhi's list is
+        submitted at the frame's end, so each pass submitting its own put nothing earlier on the GPU)."""
+        self.m_list.execute()
+
     def end_frame(self) -> None:
-        self.m_bridge.end_frame()
+        # A set kept past its wrap or a grown-out buffer is never hit again, but it still holds sampler descriptors.
+        gone = self.m_bridge.end_frame() + self.m_instances.take_let_go()
+        self._m_sets.let_go(gone + (self.m_cull.take_let_go() if self.m_cull is not None else []))
         self.m_maps.end_frame()
         self.m_drawn = 0
 
@@ -778,8 +871,12 @@ class CNativeObjects(CTold):
             self.m_stand_ins,
             self.m_instances,
             self.m_bridge,
+            self.m_pool,
         ):
             part.release()
+        if self.m_cull is not None:
+            self.m_cull.release()
+            self.m_cull = None
         self.m_list.close()
         self._m_pipelines, self._m_tables, self._m_layouts, self._m_shaders, self._m_techniques = {}, {}, {}, {}, {}
 
@@ -839,11 +936,27 @@ class SFrameDraws:
         if self.ground is not None:
             fills.append(self.ground.fill())
         objects = self.objects
-        buffer, read = analysis
+        culled = [run for run in runs if isinstance(run, CCulledGroup)]
+        if len(culled) < len(runs):
+            rest = [run for run in runs if not isinstance(run, CCulledGroup)] if culled else runs
+            named = self._shadow_named(cascades, analysis)
+            guarded(objects, objects.record, command_buffer, "shadow", rest, camera, fills, named, (side, side))
+        cull = objects.m_cull
+        if culled and cull is not None:  # culled on the GPU (``shadowcullnative``), recorded ahead of their draws
+            named = self._shadow_named(cascades, analysis)
+            if cull.prepare(objects, camera, cascades, named["cShadowInformation"]):
+                # a pass name of its own: its sets bind the culled words
+                guarded(
+                    objects, objects.record, command_buffer, "culled", culled, camera, fills, named, (side, side), True
+                )
+
+    def _shadow_named(self, cascades, analysis) -> dict:
+        """What a record of casters binds by name besides the frame's: the parts' and the ground's maps and the
+        cascades' information (the analysis's, moved for that record's pass, or the CPU's fit)."""
+        objects, (buffer, read) = self.objects, analysis
         if buffer is not None and cascades.gpu:  # the analysis's last pass left it, or the read-back's copy
             information = objects.m_bridge.buffer(buffer, gameshadow.INFO_BYTES, COPY_SOURCE if read else UNORDERED)[0]
         else:
             information = objects._constant(("shadow", "cShadowInformation"), gameshadow.info_bytes(cascades), "structured",
                                       gameshadow.INFO_BYTES)  # fmt: skip
-        named = {**self.textures, "cShadowInformation": information}
-        guarded(objects, objects.record, command_buffer, "shadow", runs, camera, fills, named, (side, side))
+        return {**self.textures, "cShadowInformation": information}

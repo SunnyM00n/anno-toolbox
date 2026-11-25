@@ -319,8 +319,8 @@ class CNativeWater(CTold):
             _mesh, vertices, indices, _last = self._m_meshes.pop(key)
             vertices.release()
             indices.release()
-        self._m_buffers.let_go(self.m_frame - KEEP_FRAMES)
-        self.m_bridge.end_frame()
+        gone = self._m_buffers.let_go(self.m_frame - KEEP_FRAMES) + self.m_bridge.end_frame()
+        self._m_sets.let_go(gone)  # a set kept past its buffer or wrap is never hit again
         self.m_drawn = 0
 
     def release(self) -> None:

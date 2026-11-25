@@ -6,9 +6,9 @@ import struct
 
 import numpy as np
 import pytest
-from tests.ddsfiles import dx10, header
+from tests.ddsfiles import dx10, dxt5_flat_file, header
 
-from annotoolbox.models.ddsdecode import CDdsFile, CUnsupportedDds, read_dds
+from annotoolbox.models.ddsdecode import CDdsFile, CUnsupportedDds, read_dds, without_text_copy
 
 
 def test_an_rgba8_file_reads_every_mip_level():
@@ -58,6 +58,18 @@ def test_a_short_file_and_an_unknown_format_are_refused():
         CDdsFile(header(8, 8, 1) + dx10(28) + bytes(10)).level(0)
     with pytest.raises(CUnsupportedDds):
         CDdsFile(header(4, 4, 1) + dx10(777))
+
+
+def test_a_file_a_text_copy_gave_line_breaks_is_mended_when_that_makes_it_whole():
+    whole = dxt5_flat_file()
+    damaged = whole.replace(b"\n", b"\r\n")
+    assert len(damaged) == len(whole) + 1
+    with pytest.raises(CUnsupportedDds):
+        read_dds(damaged)
+    assert without_text_copy(damaged) == whole
+    assert without_text_copy(whole) is None  # nothing to take out
+    assert without_text_copy(damaged[:-3]) is None  # still cut short after it: not this damage
+    assert without_text_copy(b"not a dds\r\n") is None
 
 
 @pytest.mark.parametrize("code", [10, 95])  # half floats, BC6H: the layouts ``level_float`` reads itself

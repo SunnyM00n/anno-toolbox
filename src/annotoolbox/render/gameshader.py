@@ -12,6 +12,7 @@ from __future__ import annotations
 import functools
 import math
 import re
+import struct
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -280,21 +281,62 @@ def _matrix_shape(type_name: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
+def _is_integer(type_name: str) -> bool:
+    return type_name.startswith(("dword", "uint", "int", "bool"))
+
+
+# the numbers a write packs without numpy (most of a frame's writes: numpy's round trip was most of a write's time)
+PLAIN_TYPES = frozenset({float, int, bool, np.float64, np.float32, np.int64, np.int32, np.uint32, np.bool_})
+_is_plain = PLAIN_TYPES.__contains__
+_g_packers: dict[tuple[int, str], struct.Struct] = {}  # (count, "f" or "I") -> its packer; at most 32 entries
+
+
+def _plain(value, letter: str) -> bytes | None:
+    """A scalar or a short list of plain numbers packed as ``letter`` ("f" float, "I" a 32-bit integer) without
+    numpy; None for anything else, or a value numpy packs differently (out of float range)."""
+    kind = type(value)
+    if kind in PLAIN_TYPES:
+        items = (value,)
+    elif (kind is list or kind is tuple) and len(value) <= 16 and all(map(_is_plain, map(type, value))):
+        items = value
+    else:
+        return None
+    packer = _g_packers.get((len(items), letter))
+    if packer is None:
+        packer = _g_packers[(len(items), letter)] = struct.Struct(f"<{len(items)}{letter}")
+    try:
+        if letter == "I":
+            return packer.pack(*[int(item) & 0xFFFFFFFF for item in items])
+        return packer.pack(*items)
+    except (OverflowError, ValueError, struct.error):
+        return None
+
+
+def _letter(type_name: str) -> str | None:
+    """How ``_plain`` packs a member of ``type_name`` (None: a matrix, packed by numpy)."""
+    return None if _matrix_shape(type_name) is not None else "I" if _is_integer(type_name) else "f"
+
+
 def _pack(value, type_name: str, is_row_major: bool = False) -> bytes:
-    array = np.asarray(value)
     shape = _matrix_shape(type_name)
+    if shape is None:
+        plain = _plain(value, "I" if _is_integer(type_name) else "f")
+        if plain is not None:
+            return plain
+    array = np.asarray(value)
     if shape is not None:  # each column (each row of a row_major member) padded to four
         matrix = _matrix(array, *shape)
         lines = matrix if is_row_major else matrix.T
         out = np.zeros((lines.shape[0], 4), np.float32)
         out[:, : lines.shape[1]] = lines
         return out.tobytes()
-    if type_name.startswith(("dword", "uint", "int", "bool")):
+    if _is_integer(type_name):
         return array.astype(np.int64).astype(np.uint32).tobytes()
     return array.astype(np.float32).tobytes()
 
 
 _PATHS: dict[int, tuple] = {}  # a layout's id -> (its reflection, member path -> its slot): the lookups made once
+_UNKNOWN = object()  # a member path not looked up yet (``CConstants.set``)
 KEPT_LAYOUTS = 4096  # layouts each cache below keeps (and keeps alive): a session of many islands would hold them all
 
 
@@ -326,7 +368,8 @@ class CConstants:
         return None if slot is None else slot[:2]
 
     def _slot(self, path: str):
-        """(offset, variable, its size, its type, row major) of a member path, or None; looked up once per layout."""
+        """(offset, variable, its size, its type, row major, how plain numbers pack: ``_letter``) of a member path,
+        or None; looked up once per layout."""
         try:
             return self._m_slots[path]
         except KeyError:
@@ -340,17 +383,24 @@ class CConstants:
             offset += variable.offset + (int(index) * _stride(variable) if index else 0)
             level = variable.members
         else:
-            slot = (offset, variable, size_of(variable), variable.type, getattr(variable, "row_major", False))
+            row_major = getattr(variable, "row_major", False)
+            slot = (offset, variable, size_of(variable), variable.type, row_major, _letter(variable.type))
         self._m_slots[path] = slot
         return slot
 
     def set(self, path: str, value) -> bool:
-        slot = self._slot(path)
+        slot = self._m_slots.get(path, _UNKNOWN)
+        if slot is _UNKNOWN:
+            slot = self._slot(path)
         if slot is None:
             return False
-        offset, _var, size, type_name, row_major = slot
+        offset, _var, size, type_name, row_major, letter = slot
+        raw = _plain(value, letter) if letter is not None else None
+        if raw is None:
+            raw = _pack(value, type_name, row_major)
         # no further than the member: a wider value must not overwrite its neighbour
-        raw = _pack(value, type_name, row_major)[: max(0, min(size, len(self.m_data) - offset))]
+        if len(raw) > size or offset + len(raw) > len(self.m_data):
+            raw = raw[: max(0, min(size, len(self.m_data) - offset))]
         self.m_data[offset : offset + len(raw)] = raw
         return True
 
@@ -644,7 +694,7 @@ def fill_material(constants: CConstants, fields: dict[str, dict[str, float | lis
             for member in variable.members:
                 used = member.name.removesuffix("Index") in {structure.removesuffix("Struct") for structure in fields}
                 constants.set(f"cMaterialComponentIndices[0].{member.name}", 0 if used else 0xFFFFFFFF)
-    for struct, values in fields.items():
-        name = "c" + struct.removesuffix("Struct")
+    for structure, values in fields.items():
+        name = "c" + structure.removesuffix("Struct")
         for key, value in {**values, **slots}.items():
             constants.set(f"{name}[0].{key}", value)

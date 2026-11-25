@@ -35,7 +35,7 @@ set(NVRHI_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory("${NVRHI_DIR}" nvrhi EXCLUDE_FROM_ALL)
 
 nanobind_add_module(_nativegpu STABLE_ABI NB_STATIC LTO
-  src/module.cpp src/device.cpp src/resources.cpp src/commands.cpp src/interop.cpp)
+  src/module.cpp src/device.cpp src/resources.cpp src/pipelines.cpp src/commands.cpp src/interop.cpp)
 target_include_directories(_nativegpu PRIVATE "${NVRHI_DIR}/src")  # NVRHI's own D3D12 types (README)
 target_link_libraries(_nativegpu PRIVATE nvrhi nvrhi_d3d12 DirectX-Headers DirectX-Guids)
 target_compile_definitions(_nativegpu PRIVATE MODULE_VERSION="${MODULE_VERSION}" NVRHI_REVISION="${NVRHI_REVISION}"
@@ -45,7 +45,7 @@ if(MSVC)
 endif()
 
 # the tests of the layer that need no GPU (formats, names, the patch of the input layout's semantics)
-add_executable(nativegpu_test EXCLUDE_FROM_ALL tests/layer_test.cpp src/device.cpp src/resources.cpp src/interop.cpp
+add_executable(nativegpu_test EXCLUDE_FROM_ALL tests/layer_test.cpp src/device.cpp src/resources.cpp src/pipelines.cpp src/interop.cpp
   src/commands.cpp)
 target_include_directories(nativegpu_test PRIVATE src "${NVRHI_DIR}/src")
 target_link_libraries(nativegpu_test PRIVATE nvrhi nvrhi_d3d12 DirectX-Headers DirectX-Guids)

@@ -44,7 +44,7 @@ PPP = "c7b1e237"  # ProportionalPivotPoint, by the first part of its GUID
 PPP_VALUE = 1965950531  # its own property (the Widget Library)
 SIZE_OVERRIDE, OVERRIDE_SIZE = "72b40010", 0x76C0BADC  # SizeOverride: the size a widget reports
 FIXED_SIZE = "072d960f"  # a template that keeps its ReferenceSize as its size (inferred: layout.md "ConsiderSize")
-VIDEO_SIZE = (640.0, 360.0)
+VIDEO_SIZE = (160.0, 160.0)  # the Resolution every video asset of 117 stores (layout.md "Scale is the size")
 MASK_KINDS = ("image", "shape")
 HIDDEN_ALPHA = 0.01
 REPLACE = 3  # placings of one frame at most: a value seeded or made up late drops what read it before
@@ -79,8 +79,9 @@ class CPlacer:
             return tuple(fields.get(image, "Size", (64.0, 64.0))) if image is not None else (64.0, 64.0)
         if element.kind == "label":
             return labels.label(self.m_ctx, node, overrides)[2]
-        if element.kind == "video":
-            return VIDEO_SIZE
+        if element.kind == "video":  # its asset's Resolution, not the frames' size (layout.md "Scale is the size")
+            video = self.m_ctx.root(fields.get(node, "Video"))
+            return tuple(fields.get(video, "Resolution", VIDEO_SIZE)) if video is not None else VIDEO_SIZE
         if element.kind == "container":
             root = self.m_ctx.root(element.template)
             return (
@@ -104,9 +105,9 @@ class CPlacer:
         return self._measured(key, root, inputs, owner)[:2]
 
     def start_of(self, key: str, root: dict, inputs: dict, owner: str | None = None) -> tuple[float, float]:
-        """Where a widget file's measured box starts from its origin: above or left of it where what it holds lies
-        there (the options tab's content stands above its origin: layout.md "ConsiderSize and the size of a
-        container"), else at it."""
+        """Where a widget file's measured box starts from its origin: the smallest corner of what counts, before or
+        after the origin (the options tab's content stands above it: layout.md "ConsiderSize and the size of a
+        container")."""
         if fields.get(root, FIXED_SIZE):
             return (0.0, 0.0)
         return self._measured(key, root, inputs, owner)[2]
@@ -122,16 +123,14 @@ class CPlacer:
             sub_frame = SFrame(reference_size)
             run = STemplateRun(True, self.m_stack, data_owner=owner)
             scope = CPlacer(self.m_ctx, sub_frame)._template(key, root, IDENTITY, inputs, run)
-            boxes = [bounds(box.matrix, *box.size) for box in sub_frame.boxes.values() if box.visible and box.counts]
+            # a hidden child that counts stays in the measure (layout.md "ConsiderSize and the size of a container")
+            boxes = [bounds(box.matrix, *box.size) for box in sub_frame.boxes.values() if box.counts]
             if not boxes:
                 return (0.0, 0.0), scope.computed(), (0.0, 0.0)
-            # from the origin to the far edge; the near edge only where it lies before the origin
-            start = (min(0.0, min(box[0] for box in boxes)), min(0.0, min(box[1] for box in boxes)))
-            size_px = (
-                max(0.0, max(box[2] for box in boxes)) - start[0],
-                max(0.0, max(box[3] for box in boxes)) - start[1],
-            )
-            return size_px, scope.computed(), start  # still the edge: a list's boxes repeat one node (layout.md "Open")
+            # the union from its smallest corner, not from the origin (layout.md "ConsiderSize and the size ...")
+            start = (min(box[0] for box in boxes), min(box[1] for box in boxes))
+            size_px = (max(box[2] for box in boxes) - start[0], max(box[3] for box in boxes) - start[1])
+            return size_px, scope.computed(), start  # a list's copies each keep a box (``_template``)
 
         # the open file names the sample keys; a file that reads its own size while it is measured gets the reference
         cache_key = (
@@ -196,14 +195,34 @@ class CPlacer:
         )
 
     def size_of(self, node: dict, scope: CScope) -> tuple[float, float]:
-        """The size a binding reads from an instance of ``scope``'s template (``scope.IHost``)."""
+        """The size a binding reads from an instance of ``scope``'s template (``scope.IHost``): its box times its
+        ``Scale``, as the game reports ``Size`` for every kind (layout.md "Scale is the size")."""
         element = scope.m_by_node.get(id(node))
         if element is None:
             return (0.0, 0.0)
         overrides = self.own(element, scope)
+        if is_size(overrides.get((SIZE,))):  # a given size is read back as given
+            return float(overrides[(SIZE,)][0]), float(overrides[(SIZE,)][1])
         if element.kind == "group":
-            return self.group_size(element, scope, tuple(fields.get(scope.m_root, "ReferenceSize", (1920.0, 1080.0))))
-        return self.natural_size(element, overrides, inputs_of(overrides, node), f"{scope.m_key}:{element.guid}")
+            size_px = self.group_size(
+                element, scope, tuple(fields.get(scope.m_root, "ReferenceSize", (1920.0, 1080.0)))
+            )
+        else:
+            size_px = self.natural_size(element, overrides, inputs_of(overrides, node), f"{scope.m_key}:{element.guid}")
+        scale_x, scale_y = vector(self.drawn_scale(node, overrides), (1.0, 1.0))
+        return (size_px[0] * scale_x, size_px[1] * scale_y)
+
+    def drawn_scale(self, node: dict, overrides: dict):
+        """The ``Scale`` an instance is drawn with: in the design view a scale of 0 a binding gives (an animation's
+        start) stays as stored, as ``_child`` keeps it."""
+        value = overrides.get((0x80000035,))
+        if value is None or (
+            self.m_ctx.m_design
+            and isinstance(value, (tuple, list))
+            and any(isinstance(component, (int, float)) and abs(component) < 1e-6 for component in value[:2])
+        ):
+            return fields.get(node, "Scale")
+        return value
 
     def outputs(self, node: dict, scope: CScope) -> dict[int, object]:
         """The own property values of the widget file an instance places, given what the instance passes in."""
@@ -264,20 +283,23 @@ class CPlacer:
         self, element: elements.SElement, scope: CScope, parent_size: tuple[float, float]
     ) -> tuple[float, float]:
         """The size of the union of the rectangles of a group's children that count for its size."""
+        return self.group_extent(element, scope, parent_size)[0]
+
+    def group_extent(self, element: elements.SElement, scope: CScope, parent_size: tuple[float, float]) -> tuple:
+        """A group's size and where its box starts from its origin: the union of its children that count, a
+        background stretched round the others among them (the size the game reports: layout.md "ConsiderSize and
+        the size of a container"), grown by a stack's margin."""
         sub_placer = CPlacer(self.m_ctx, SFrame(parent_size))
         sub_placer.m_stack = self.m_stack
         rule = self.group_rule(element, scope)
         sub_placer._children(element, scope, IDENTITY, parent_size, None, True, SPaint(), rule)
-        content = element.children[1:] if rule is not None and rule.background is not None else element.children
-        kids = [sub_placer.m_frame.boxes.get(id(k.node)) for k in content]  # a background is not content
-        width_px, height_px = union_size(
-            [bounds(box.matrix, *box.size) for box in kids if box is not None and box.visible and box.counts]
-        )
+        kids = [sub_placer.m_frame.boxes.get(id(k.node)) for k in element.children]
+        rects = [bounds(box.matrix, *box.size) for box in kids if box is not None and box.counts]
+        width_px, height_px = union_size(rects)
+        start = (min(r[0] for r in rects), min(r[1] for r in rects)) if rects else (0.0, 0.0)
         margin_px = rule.margin if rule is not None and rule.flow and (width_px or height_px) else (0.0,) * 4
-        return (
-            width_px + margin_px[0] + margin_px[2],
-            height_px + margin_px[1] + margin_px[3],
-        )  # a stack's margin grows its box
+        size_px = (width_px + margin_px[0] + margin_px[2], height_px + margin_px[1] + margin_px[3])
+        return size_px, start  # a stack's margin grows its box
 
     def group_rule(self, element: elements.SElement, scope: CScope) -> arrange.SRule | None:
         """The stack and background rule of a group instance, None without either component."""
@@ -357,10 +379,13 @@ class CPlacer:
             if sectors is not None:  # a wheel's item stands at its arc point, its stored place is the editor's
                 self._sector(item, copy, sectors[i])
                 offset_x = offset_y = 0.0
+            if self.m_ctx.m_play is None and item.kind == "container":  # Play mode's tab choice is its own
+                if tab := listlayout.selected(self.m_ctx.root(item.template), i):
+                    self.m_filled.setdefault(item.guid or "", {}).update(tab)
             self._children(SimpleNamespace(children=[item]), copy, mul(matrix, translate(offset_x, offset_y)), size_px, owner,
                            measure_only, paint)  # fmt: skip
             box = self.m_frame.boxes.get(id(item.node))
-            if box is not None and i:  # each copy measures; the first keeps the item's own key
+            if box is not None:  # each copy measures; the item's own key holds the last one placed
                 self.m_frame.boxes[hash((id(item.node), i))] = box
         self.m_filled.pop(item.guid or "", None)
         return scope
@@ -469,10 +494,11 @@ class CPlacer:
         return (float(bound[0]) / base[0], float(bound[1]) / base[1]), tuple(base)
 
     def _child(self, element: elements.SElement, scope: CScope, matrix: Matrix, parent_size, is_sized: bool = True,
-               is_stacked: bool = False) -> SChild:  # fmt: skip
-        """One child of a group or template, placed by its own values (the group's rule comes after); ``sized``
-        False: a hidden child's size is not worked out (nothing it holds is drawn or counted), unless ``stacked``
-        (it is in a stack, which gives a hidden child that counts its room: layout.md "Layout components")."""
+               is_room_needed: bool = False) -> SChild:  # fmt: skip
+        """One child of a group or template, placed by its own values (the group's rule comes after); ``is_sized``
+        False: a hidden child's size is not worked out (nothing it holds is drawn), unless ``is_room_needed`` and it
+        counts: a stack gives it its room and a measure keeps it (layout.md "Layout components", "ConsiderSize and
+        the size of a container")."""
         overrides = self.own(element, scope)
         if self.m_ctx.m_design:  # a scale or size the game feeds at run time (its UI scale) stays as stored
             closed = (
@@ -492,7 +518,7 @@ class CPlacer:
         inputs = inputs_of(overrides, element.node)
         counts = overrides.get((0x80000080,))
         counts = bool(fields.get(element.node, "ConsiderSize", True) if counts is None else counts)
-        if not visible and not is_sized and not (is_stacked and counts):
+        if not visible and not is_sized and not (is_room_needed and counts):
             return self._hidden(element, overrides, inputs, parent_size)
         origin = (0.0, 0.0)
         if element.kind == "label" and not is_size(overrides.get((SIZE,))):  # its box may start at its text
@@ -508,21 +534,19 @@ class CPlacer:
             if placed is not None:  # its box starts where what it holds starts, above or left of it
                 origin = self.start_of(element.template or "", placed, inputs, f"{scope.m_key}:{element.guid}")
         if element.kind == "group" and (SIZE,) not in overrides:  # a group is as large as what it holds
-            size_px = self.group_size(element, scope, parent_size)
+            size_px, origin = self.group_extent(element, scope, parent_size)  # from its smallest corner
+        start = origin if element.kind in ("container", "group") else (0.0, 0.0)
         stretch = self.stretch_to(element, overrides, inputs)
         if stretch is not None:
             size_px = stretch[1]
         components = arrange.components(element.node)
         if SIZE_OVERRIDE in components and is_size(overrides.get((components[SIZE_OVERRIDE], OVERRIDE_SIZE))):
-            size_px, origin = (
-                tuple(float(value) for value in overrides[(components[SIZE_OVERRIDE], OVERRIDE_SIZE)][:2]),
-                (0.0, 0.0),
-            )
+            size_px = tuple(float(value) for value in overrides[(components[SIZE_OVERRIDE], OVERRIDE_SIZE)][:2])
+            origin = start = (0.0, 0.0)
         fraction = overrides.get((components[PPP], PPP_VALUE)) if PPP in components else None
         if fraction is None and PPP in components:  # not stored: the component's default (the main menu's list: 0, 0)
             fraction = component_default(self.m_ctx, element.node, (components[PPP], PPP_VALUE)) or (0.0, 0.0)
         ancestors = own_scale(matrix)
-        start = origin if element.kind == "container" else (0.0, 0.0)
         local = self.local(element, overrides, size_px, parent_size, fraction, ancestors, stretch and stretch[0], start)
         pad, align = arrange.read_child(components, overrides)
         rectangle = bounds(mul(local, translate(*origin)), *size_px)
@@ -542,17 +566,36 @@ class CPlacer:
             arrange.SSlot(element.guid, local, (0.0, 0.0), bounds(local, 0, 0), False),
         )
 
+    def _info_tips(self, in_file: list[SChild]) -> list[tuple[SChild, SChild]]:
+        """The children that place an info tip, each with the sibling it hangs on; they count for no size (the
+        game's placings have ``ConsiderSize`` off: layout.md "Info tips")."""
+        by_guid = {kid.element.guid: kid for kid in in_file}
+        out = []
+        for kid in in_file:
+            placed = self.m_ctx.root(kid.element.template) if kid.element.kind == "container" else None
+            reference = by_guid.get(arrange.reference_of(placed, kid.overrides))
+            if reference is not None and reference is not kid:
+                kid.counts = kid.slot.flows = kid.slot.holds = False
+                out.append((kid, reference))
+        return out
+
     def _children(self, parent, scope, matrix, parent_size, owner, measure_only, paint: SPaint,
                   rule: arrange.SRule | None = None) -> None:  # fmt: skip
         sized = owner is None and not measure_only  # the open file's boxes, the selection's outline among them
-        stacked = rule is not None and rule.flow
-        in_file = [self._child(element, scope, matrix, parent_size, sized, stacked) for element in parent.children]
+        is_room_needed = measure_only or rule is not None
+        in_file = [
+            self._child(element, scope, matrix, parent_size, sized, is_room_needed) for element in parent.children
+        ]
+        tips = self._info_tips(in_file)
         if (
             rule is not None
         ):  # the game's child array is the file's order, not the ZIndex's (layout.md "Layout components")
             if rule.background is not None and in_file:
                 in_file[0].slot.background = True  # the first layer's the background
             arrange.arrange(rule, [k.slot for k in in_file])
+        for tip, reference in tips:
+            arrange.hang(tip.slot, reference.slot)
+            tip.origin = (0.0, 0.0)
         kids = draw_order(in_file, lambda k: is_mask_widget(k.element.node), lambda k: bool(fields.get(k.element.node, "c90bf7fc")),
                           lambda k: int(fields.get(k.element.node, "ZIndex", 0) or 0))  # fmt: skip
         masks: list[SClip] = []
@@ -623,7 +666,7 @@ class CPlacer:
             self._children(element, scope, world, size_px, owner, measure_only, below, self.group_rule(element, scope))
             self.m_parent_scale = outer
             if owner is None:  # a group's own box: its children's bounds
-                self._group_box(element, world)
+                self._group_box(element, world, kid.counts, matrix)
 
     def _place_file(self, kid: SChild, scope, world, owner, measure_only, paint: SPaint, item_owner) -> None:
         """The widget file a container places, placed at the container with the values it passes in."""
@@ -657,16 +700,23 @@ class CPlacer:
             self.m_frame.notes.extend(notes)
             self.m_frame.hits.extend(hits)
 
-    def _group_box(self, element: elements.SElement, world: Matrix) -> None:
+    def _group_box(self, element: elements.SElement, world: Matrix, counts: bool, parent: Matrix) -> None:
+        """A group's own box: its counting children's union (``counts``, ``parent``: its own box's, kept)."""
         kids = [
             self.m_frame.boxes.get(id(k.node)) for k in element.children
         ]  # what counts, as for its size (``group_size``)
-        rects = [bounds(box.matrix, *box.size) for box in kids if box is not None and box.visible and box.counts]
-        if rects:
+        rects = [bounds(box.matrix, *box.size) for box in kids if box is not None and box.counts]
+        if rects:  # the union from its smallest corner, as a container's (layout.md "ConsiderSize and the size ...")
             inverse_world = invert(world)
-            far_x = max(apply(inverse_world, rectangle_bounds[2], rectangle_bounds[3])[0] for rectangle_bounds in rects)
-            far_y = max(apply(inverse_world, rectangle_bounds[2], rectangle_bounds[3])[1] for rectangle_bounds in rects)
-            self.m_frame.boxes[id(element.node)] = SBox(world, (max(far_x, 1.0), max(far_y, 1.0)), True)
+            corners = [
+                apply(inverse_world, x, y) for rect in rects for x, y in ((rect[0], rect[1]), (rect[2], rect[3]))
+            ]
+            near_x, near_y = min(corner[0] for corner in corners), min(corner[1] for corner in corners)
+            far_x, far_y = max(corner[0] for corner in corners), max(corner[1] for corner in corners)
+            self.m_frame.boxes[id(element.node)] = SBox(
+                mul(world, translate(near_x, near_y)), (max(far_x - near_x, 1.0), max(far_y - near_y, 1.0)), True,
+                counts, parent,
+            )  # fmt: skip
 
     def _emit(self, element, world, size_px, paint: SPaint, owner, overrides, is_mask, effect_values=None) -> None:
         node = element.node

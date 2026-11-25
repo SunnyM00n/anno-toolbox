@@ -25,6 +25,7 @@ from .scopevalues import (
     ANIM_CURRENT,
     ANIM_END,  # noqa: F401
     ANIM_GO,
+    ANIM_RAN,
     ANIM_START,  # noqa: F401
     COMPUTED,
     DATA_SOURCE,
@@ -39,7 +40,7 @@ from .scopevalues import (
     OWN_TYPES,
     PASSES,
     SHARES,
-    SIZE,  # noqa: F401
+    SIZE,
     STORED,
     TWO_WAY,
     SGameObjectRef,
@@ -84,6 +85,7 @@ class CScope:
             host, "pinned", frozenset()
         )  # own values the host holds as given (a dump's)
         self.m_given: dict[tuple[int, ...], object] = {}  # fields the placing file wrote below an own property
+        self._m_starts: dict | None = None  # (child, animator) -> the bindings that start it (``_ran``)
         # the fields of each game object this file holds, by who wrote them: STORED and GIVEN (the placing instance),
         # an instance of this file (what its file wrote), OWN (this file's bindings); keyed by (holder, key)
         self.m_shared: dict[tuple, dict[str, dict[tuple[int, ...], object]]] = {}
@@ -411,6 +413,8 @@ class CScope:
         if end.mode == bindings.SELF:
             if first not in self.m_own_info and rest:  # a component of the widget itself: written, filled, its default
                 written = self.m_writes.get(None, {}).get(tuple(end.ids), self.m_given.get(tuple(end.ids)))
+                if written is None:  # filled from the player's state (a region info's region) or stored on the root
+                    written = self.m_ctx.values(self.m_root).get(tuple(end.ids))
                 return axis(written if written is not None else component_default(self.m_ctx, self.m_root, tuple(end.ids)),
                             end.field)  # fmt: skip
             own = self.m_own.get(first)
@@ -444,6 +448,8 @@ class CScope:
                                lambda uid: component_default(self.m_ctx, node, (path[0], uid)))  # fmt: skip
             if end is not None:
                 return end
+        if self.m_ctx.m_design and target in self.m_children and len(path) == 2 and path[1] in ANIM_RAN:
+            return self._ran(target, path[0])  # its Started and Completed have fired (layout.md "A list opens ...")
         if self.m_slot is not None and target == self.m_slot.item and self.m_slot.given:
             hit = dict(self.m_slot.given).get(path)  # a list item's compared values (``listlayout.compared``)
             if hit is not None:
@@ -487,6 +493,16 @@ class CScope:
                         return True
                     seen = seen or fired is not None
         return not seen
+
+    def _ran(self, target: str, comp: int) -> bool:
+        """Whether the scene's opening starts the animation ``comp`` of the child ``target`` (``_fires``)."""
+        if self._m_starts is None:  # the bindings that start each child's animation, found once
+            self._m_starts = {}
+            for binding in self.m_graph.bindings:
+                for end in binding.targets:
+                    if len(end.ids) == 2 and end.ids[1] == ANIM_GO:
+                        self._m_starts.setdefault((self._target(end), end.ids[0]), []).append(binding)
+        return any(self._fires(binding, FIRES_DEPTH) is True for binding in self._m_starts.get((target, comp), ()))
 
     def _fires(self, binding: bindings.SBinding, depth: int) -> bool | None:
         """Whether a binding's event fires as the scene opens: from ``AddedToScene``, or from a change of a flag to
@@ -604,9 +620,22 @@ class CScope:
         if len(path) != 1:
             return component_default(self.m_ctx, node, path)
         if path[0] >= 0x80000000:
-            return builtin_value(node, path[0])
+            value = builtin_value(node, path[0])
+            return self._read_picture_size(node) if value is None and path[0] == SIZE else value
         default = self._placed_info(node, path[0]).get("default")
         return default[1] if isinstance(default, tuple) else None
+
+    def _read_picture_size(self, node: dict) -> tuple[float, float] | None:
+        """A picture's size as stored: its image's size times its ``Scale``, the axis a binding that writes the other
+        one keeps (the buttons' "Selected_Gold": 54 wide by its binding, 3 high as stored; layout.md "Scale is the
+        size"). None for any other instance."""
+        image = fields.get(node, "Image")
+        if not image:
+            return None
+        image_root = self.m_ctx.root(image)
+        width, height = fields.get(image_root, "Size", (64.0, 64.0)) if image_root is not None else (64.0, 64.0)
+        scale = fields.get(node, "Scale") or (1.0, 1.0, 1.0)
+        return (float(width) * float(scale[0]), float(height) * float(scale[1]))
 
     def _placed_info(self, node: dict, uid: int) -> dict:
         """``bindings.property_info`` of a property of the widget file the instance ``node`` places ({} if none)."""

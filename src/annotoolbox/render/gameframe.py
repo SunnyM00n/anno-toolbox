@@ -19,6 +19,7 @@ from . import gameshadow, lightclusters
 from .camera import gl, look_at, perspective
 from .gamecompute import storage_buffer
 from .gamelight import CDeferredShading, SExtras, SSky
+from .gamestill import CStill
 from .nativepass import CComposite, draw_models
 from .rhidevice import CTexture
 
@@ -182,6 +183,7 @@ class CGameFrame:
         self.m_ray = np.identity(4)  # our camera's inverse view-projection: which way a pixel looks (the composite)
         self.m_planes = (0.1, 100.0, 100.0)  # near, the view's far plane, the G-buffer's (the composite's depth)
         self.m_composite = CComposite(ctx, LIGHT_FS)
+        self.m_still = CStill()  # the opaque frame kept while the view stands (``render``'s ``reuse``)
 
     def set_quality(self, quality) -> None:
         """The rendering quality's shadow map side and cascade count (``render.quality.SQuality``; None: the best),
@@ -239,10 +241,12 @@ class CGameFrame:
 
     def render(self, target, size_px: tuple[int, int], models: list, camera: gs.SCamera, light: SLight | None = None,
                finish: bool = True, shading: tuple[CDeferredShading, SSky] | None = None,
-               passes: SPasses | None = None) -> None:  # fmt: skip
+               passes: SPasses | None = None, reuse: bool | None = None) -> None:  # fmt: skip
         """The G-buffer pass with ``models`` (``gamedraw.CGameModel``), the sun's shadow map when ``passes`` has
         casters, the game's deferred shading when ``shading`` is given, then the composite into ``target`` (a
-        framebuffer of the device; ``finish``: the whole picture, else the lit models over what it holds)."""
+        framebuffer of the device; ``finish``: the whole picture, else the lit models over what it holds).
+        ``reuse`` (``gamestill``): None draws as always, False also keeps the opaque frame, True restores the kept
+        one and draws none of its passes (the shading's native path only)."""
         light = light or SLight()
         passes = passes or SPasses()
         self._gbuffer(size_px)
@@ -261,13 +265,20 @@ class CGameFrame:
         after = (
             (lambda command_buffer: objects.gbuffer(command_buffer, camera, size_px)) if objects is not None else None
         )
-        self._record(self.m_fbo, models, size_px, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps,
-                     external=external, after=after)  # fmt: skip
-        self.m_cascades = None
-        casters = passes.casters or any(draw_pass is not None and draw_pass.casters for draw_pass in (native, objects))
-        if shading is not None and casters and passes.box is not None:
-            self._shadow(size_px, camera, shading[1].sun, passes)
-        sky_drawn = self._lit(size_px, camera, shading, passes) if shading is not None else False
+        if reuse:
+            self.m_still.restore(self)  # the cascades stay those of the kept frame
+        else:
+            self._record(self.m_fbo, models, size_px, camera, len(GBUFFER), ground and ground.fill(), ground and ground.maps,
+                         external=external, after=after)  # fmt: skip
+            if reuse is False:
+                self.m_still.save_depth(self)
+            self.m_cascades = None
+            casters = passes.casters or any(
+                draw_pass is not None and draw_pass.casters for draw_pass in (native, objects)
+            )
+            if shading is not None and casters and passes.box is not None:
+                self._shadow(size_px, camera, shading[1].sun, passes)
+        sky_drawn = self._lit(size_px, camera, shading, passes, reuse) if shading is not None else False
         textures = dict(zip(("gNormal", "gAlbedo", "gMaterial", "gDepth", "gLit"),
                             (*self.m_targets[:3], self.m_depth, self.m_lit[0]), strict=True))  # fmt: skip
         sun_direction = np.asarray(light.sun, float)
@@ -301,7 +312,7 @@ class CGameFrame:
             **native,
         )
 
-    def _lit(self, size_px, camera: gs.SCamera, shading: tuple, passes: SPasses) -> bool:
+    def _lit(self, size_px, camera: gs.SCamera, shading: tuple, passes: SPasses, reuse: bool | None = None) -> bool:
         """The deferred shading, the copies and the transparent pass, then the visible sky and haze over the lit
         colour (``passes.atmosphere``, with the sky passes' tables); True when the sky was drawn so."""
         clusters = (
@@ -310,7 +321,11 @@ class CGameFrame:
         clouds = passes.clouds if passes.clouds is not None and not passes.clouds.m_error else None
         native = passes.shading if passes.shading is not None and not passes.shading.m_error else None
         if native is not None:
-            inputs, extras = native.shade(self.m_ctx, self, size_px, camera, *shading, clusters, clouds)
+            inputs, extras = native.shade(
+                self.m_ctx, self, size_px, camera, *shading, clusters, clouds, held=bool(reuse)
+            )
+            if reuse is False:
+                self.m_still.save_lit(self)
             if passes.native_water is not None:
                 passes.native_water.overlay = native.overlay(self)
         else:
@@ -445,6 +460,7 @@ class CGameFrame:
         self._record(self.m_lit_fbo, ordered, size_px, camera, len(self.m_lit), fill, shared, clear=False, **native)
 
     def _drop(self) -> None:
+        self.m_still.release()
         # a framebuffer releases only its render targets: every attachment is the owner's to release
         for texture in (*self.m_targets, *self.m_lit, self.m_depth, self.m_fbo, self.m_lit_fbo):
             if texture is not None:

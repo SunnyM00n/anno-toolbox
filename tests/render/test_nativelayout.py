@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 
 import pytest
+from tests.render.renderfakes import FakeBinding, FakeReflection
 
 from annotoolbox.render import nativelayout
 
@@ -38,6 +39,17 @@ def test_a_signature_is_read_with_its_semantics_registers_and_width():
     assert [(e.semantic, e.register, e.component, e.width) for e in found] == [("POSITION", 0, "float", 3),
                                                                               ("TEXCOORD", 1, "float", 3)]  # fmt: skip
     assert nativelayout.signature(_container(b"", b"XXXX")) == []  # no such part: no inputs
+
+
+def test_a_root_view_of_another_space_stays_in_its_own_layout_and_rooted_alone_changes_nothing_there():
+    vs = FakeReflection([FakeBinding("cbPerFrame", "cbuffer", 0), FakeBinding("cbDistanceCluster", "cbuffer", 0, space=1),
+                         FakeBinding("cClusterMaterialBuffer", "structured", 3, space=1)])  # fmt: skip
+    plan = nativelayout.SBindingPlan.of([vs], root_views=("cbDistanceCluster",))
+    assert plan.layouts[1].space == 1
+    assert plan.layouts[1].tuples() == [("structured", 3, 1), ("volatile", 0, 1)]
+    assert plan.push is None and plan.layouts[0].tuples() == [("cbuffer", 0, 1)]  # the others stay as they were
+    plain = nativelayout.SBindingPlan.of([vs], rooted=("cbDistanceCluster",))  # cbModel's way: the root space only
+    assert plain.layouts[1].tuples() == [("cbuffer", 0, 1), ("structured", 3, 1)]
 
 
 def test_a_cut_signature_raises_valueerror_not_a_struct_error():

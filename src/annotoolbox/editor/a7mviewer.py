@@ -119,14 +119,14 @@ class CA7mViewer(othermaterials.COtherMaterials, CIslandEditor):
                     "position": placed_object["position"],
                     "rotation": placed_object["rotation"],
                     "scale": placed_object["scale"],
-                    **({} if cfg else {"unresolved": self._why_no_model(placed_object["guid"])}),
+                    **({} if cfg else {"unresolved": self._why_no_model(placed_object)}),
                 }
             )
         return out
 
-    def _why_no_model(self, guid: int) -> str:
+    def _why_no_model(self, placed_object: dict) -> str:
         """Why an object has no model to draw: the game has no such asset, or its asset names none."""
-        return CReason.NO_MODEL if self._asset(guid) is not None else CReason.NO_ASSET
+        return CReason.NO_MODEL if self._asset(placed_object["guid"]) is not None else CReason.NO_ASSET
 
     def island(self) -> dict:
         heightmap = np.ascontiguousarray(self.m_view.heights(), "<f4")
@@ -220,8 +220,13 @@ class CA6mViewer(CA7mViewer):
     CACHE_FORMAT = b"2205-1"
     EDITABLE = ("GameObject", "EditorObject", "NaturePreset")  # the groups formats.a7m.edit2205 finds objects in
 
-    def _why_no_model(self, guid: int) -> str:
-        return CReason.NO_MODEL  # 2205 keeps its variations by asset: none, or a file that is not there
+    def _why_no_model(self, placed_object: dict) -> str:
+        """2205 keeps its variations by asset: none, a variation past the list, a placeholder, or a file not there."""
+        guid, variation = placed_object["guid"], placed_object.get("variation", 0)
+        found = self.game_assets().why_none(guid, variation)
+        if found:
+            return found
+        return f"{CReason.UNREADABLE}: " + tr("islands.source_not_game", source=self._asset(guid).variations[variation])
 
     def island(self) -> dict:
         out = super().island()

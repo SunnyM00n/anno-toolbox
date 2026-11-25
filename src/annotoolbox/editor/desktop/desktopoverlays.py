@@ -36,7 +36,8 @@ class COverlayDraw:
             return []
         low, high = batch.m_box
         corners = box_corners(low, high)
-        scale = np.asarray(entry.scale if isinstance(entry.scale, list) else [entry.scale] * 3, "f4")[None]
+        own = 1.0 if entry.marker else entry.scale  # a pin keeps its own size (``desktoprender._write_instances``)
+        scale = np.asarray(own if isinstance(own, list) else [own] * 3, "f4")[None]
         matrix = instance_matrices(
             np.asarray([entry.position], "f4"), np.asarray([entry.rotation], "f4"), scale, self.m_session.m_size_tiles
         )[0]

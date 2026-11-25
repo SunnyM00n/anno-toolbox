@@ -52,6 +52,10 @@ class CDecalLayer:
         """Whether the decals are still being laid (``update`` goes on in the next frames)."""
         return self._m_work is not None
 
+    def stop_laying(self) -> None:
+        """The laying under way given up (the game's decal shader lays them now); the meshes made before stay."""
+        self._m_work = None
+
     @staticmethod
     def _lay(placed, height_at, step_tiles: float, found: dict):
         """The decals' grids into ``found`` by their look, handing control back after each."""

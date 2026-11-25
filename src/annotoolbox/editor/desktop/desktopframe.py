@@ -166,13 +166,20 @@ class CFramePasses:
         return streets, models, translucent
 
     def _lay_decals(self, frame: SFrame, opts: SViewOptions) -> None:
-        """The decals of the shown models laid on the drawn ground, again when the objects or the ground changed."""
+        """The decals of the shown models laid on the drawn ground, again when the objects or the ground changed; none
+        while the game's decal shader lays them."""
+        if self.m_game_decals:  # a laying begun while the game's compiled is given up: ``busy`` waited on it for good
+            self.m_decals.stop_laying()
+            return
         if self.m_library is None:
             return
         shown = [
             batch
             for batch in self._all_batches()
-            if batch.m_count and batch.m_parts and self._layer_on(batch, opts) and batch.m_mats is not None
+            if batch.m_count
+            and batch.m_parts is not None  # a model of ground decals alone has no parts
+            and self._layer_on(batch, opts)
+            and batch.m_mats is not None
         ]
         baked = getattr(self, "m_baked_decal", None)  # what the game's ground bake drew (1800's look): left out here
         placed = [

@@ -61,11 +61,14 @@ class SBindingPlan:
     samplers: dict[tuple[int, int], str] = field(default_factory=dict)  # (space, register) -> name
 
     @classmethod
-    def of(cls, reflections: list, bindless: tuple = (), volatile: bool = False, rooted: tuple = ()) -> SBindingPlan:
+    def of(cls, reflections: list, bindless: tuple = (), volatile: bool = False, rooted: tuple = (),
+           root_views: tuple = ()) -> SBindingPlan:  # fmt: skip
         """The union of every stage's bindings (a register two stages share is bound once). ``bindless``: arrays
         the engine declares bindless, bound as unbounded ranges (a descriptor table); ``volatile``: the constant
         buffers written per dispatch on the module's own lists (NVRHI's volatile ones); ``rooted``: root constant
-        buffers that stay root views, never push constants (``cbModel``, a draw's slot of one buffer)."""
+        buffers that stay root views, never push constants (``cbModel``, a draw's slot of one buffer);
+        ``root_views``: constant buffers of other spaces bound as root views in their space's layout
+        (``cbDistanceCluster``)."""
         seen: dict[tuple[int, str, int], tuple[str, int]] = {}
         sizes = {
             constant_buffer.name: constant_buffer.size
@@ -78,7 +81,7 @@ class SBindingPlan:
                 kind = KINDS.get(binding.kind, "texture")
                 if kind == "sampler":
                     samplers.setdefault((binding.space, binding.register), binding.name)
-                if volatile and kind == "cbuffer" and binding.space != ROOT_SPACE:
+                if kind == "cbuffer" and binding.space != ROOT_SPACE and (volatile or binding.name in root_views):
                     kind = "volatile"
                 seen.setdefault(
                     (binding.space, kind, binding.register),

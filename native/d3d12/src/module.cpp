@@ -27,7 +27,8 @@ static T* as(nb::handle h) {
     return h.is_none() ? nullptr : nb::cast<T*>(h);
 }
 
-// (kind, slot, resource) or (kind, slot, resource, {"size": .., "element": .., "format": .., "mip": .., ...})
+// (kind, slot, resource) or (kind, slot, resource, {"size": .., "element": .., "format": .., "mip": .., "offset": ..,
+// "range": .., ...})
 static Binding binding_of(nb::handle item) {
     nb::tuple t = nb::cast<nb::tuple>(item);
     Binding b;
@@ -52,6 +53,8 @@ static Binding binding_of(nb::handle item) {
         if (o.contains("mip")) b.mip = nb::cast<uint32_t>(o["mip"]);
         if (o.contains("mips")) b.mips = nb::cast<uint32_t>(o["mips"]);
         if (o.contains("dimension")) b.dimension = nb::cast<std::string>(o["dimension"]);
+        if (o.contains("offset")) b.offset = nb::cast<uint64_t>(o["offset"]);
+        if (o.contains("range")) b.range = nb::cast<uint64_t>(o["range"]);
     }
     if ((b.kind == "sampler" && !b.sampler)) throw Error("a sampler binding without its sampler");
     return b;
@@ -162,7 +165,11 @@ NB_MODULE(_nativegpu, m) {
     nb::class_<Table>(m, "Table").def("release", &Table::release);
     nb::class_<Shader>(m, "Shader").def("release", &Shader::release);
     nb::class_<InputLayout>(m, "InputLayout").def("release", &InputLayout::release);
-    nb::class_<Pipeline>(m, "Pipeline").def_ro("compute", &Pipeline::compute).def("release", &Pipeline::release);
+    nb::class_<Pipeline>(m, "Pipeline")
+        .def_ro("compute", &Pipeline::compute)
+        .def_prop_ro("ready", &Pipeline::ready, "made: a worker's pipeline once it is in (draws of one not ready are left out)")
+        .def_ro("error", &Pipeline::error, "why its making failed")
+        .def("release", &Pipeline::release);
     nb::class_<Framebuffer>(m, "Framebuffer")
         .def_ro("width", &Framebuffer::width)
         .def_ro("height", &Framebuffer::height)
@@ -238,7 +245,7 @@ NB_MODULE(_nativegpu, m) {
         .def(
             "graphics_pipeline",
             [](Device& d, nb::handle vs, nb::handle ps, nb::handle input, const std::vector<Layout*>& layouts,
-               const nb::dict& state, nb::handle hs, nb::handle ds) {
+               const nb::dict& state, nb::handle hs, nb::handle ds, bool background) {
                 Shader* v = as<Shader>(vs);
                 Shader* p = as<Shader>(ps);
                 Shader* h = as<Shader>(hs);
@@ -246,10 +253,11 @@ NB_MODULE(_nativegpu, m) {
                 InputLayout* i = as<InputLayout>(input);
                 PipelineState s = state_of(state);
                 nb::gil_scoped_release unlocked;  // the driver may compile for a while
-                return graphics_pipeline(d, v, h, m, p, i, layouts, s);
+                return graphics_pipeline(d, v, h, m, p, i, layouts, s, background);
             },
             "vs"_a, "ps"_a.none(), "input_layout"_a.none(), "layouts"_a, "state"_a, "hs"_a = nb::none(), "ds"_a = nb::none(),
-            nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership)
+            "background"_a = false, nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership,
+            "background: made by a worker, ``ready`` once it is in; from the pipeline library where it holds it")
         .def("wrap_texture", &Device::wrap_texture, "resource"_a, "format"_a, "kind"_a = "", "name"_a = "",
              nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership,
              "a QRhi texture's resource (qrhi_texture) for binding sets; never in a command list of NVRHI's")
@@ -257,8 +265,43 @@ NB_MODULE(_nativegpu, m) {
              nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership)
         .def(
             "compute_pipeline",
-            [](Device& d, Shader& cs, const std::vector<Layout*>& layouts) { return compute_pipeline(d, cs, layouts); },
-            "cs"_a, "layouts"_a, nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership)
+            [](Device& d, Shader& cs, const std::vector<Layout*>& layouts, bool background) {
+                return compute_pipeline(d, cs, layouts, background);
+            },
+            "cs"_a, "layouts"_a, "background"_a = false, nb::keep_alive<0, 1>(), nb::rv_policy::take_ownership)
+        .def("open_pipeline_library",
+             [](Device& d, const nb::bytes& data) { return open_pipeline_library(d, bytes_of(data)); }, "data"_a,
+             "the pipeline library from the bytes a file held (``pipeline_library``'s): False where they are for "
+             "another adapter, driver or module, or none (it starts empty)")
+        .def("pipeline_library",
+             [](Device& d) {
+                 std::string out;
+                 {
+                     nb::gil_scoped_release unlocked;
+                     out = pipeline_library_data(d);
+                 }
+                 return nb::bytes(out.data(), out.size());
+             },
+             "the pipeline library's bytes to keep (empty where the driver offers none)")
+        .def_prop_ro("pipeline_stats",
+                     [](Device& d) {
+                         PipelineStats s = pipeline_stats(d);
+                         nb::dict out;
+                         out["loaded"] = s.loaded;
+                         out["made"] = s.made;
+                         out["failed"] = s.failed;
+                         out["pending"] = s.pending;
+                         out["stored"] = s.stored;
+                         out["load_ms"] = s.load_ms;
+                         out["make_ms"] = s.make_ms;
+                         out["library"] = s.library;
+                         out["opened"] = s.opened;
+                         out["changed"] = s.changed;
+                         return out;
+                     })
+        .def_prop_ro("adapter_id", &Device::adapter_id)
+        .def_prop_ro("driver_version", &Device::driver_version)
+        .def_ro("frame", &Device::frame, "the frames ``end_frame`` counted")
         .def(
             "framebuffer",
             [](Device& d, const std::vector<Texture*>& colors, nb::handle depth, uint32_t mip, uint32_t layer) {
@@ -367,18 +410,20 @@ NB_MODULE(_nativegpu, m) {
     m.def(
         "draw_item",
         [](Pipeline& p, const nb::list& bindings, uint32_t count, const nb::list& vertex_buffers,
-           nb::handle index_buffer, bool index32, const nb::bytes& push) {
-            auto* d = new Draw(draw_of(p, bindings, count, 1, 0, 0, 0, vertex_buffers, index_buffer, index32, 0, push));
+           nb::handle index_buffer, bool index32, const nb::bytes& push, uint64_t index_offset) {
+            auto* d = new Draw(
+                draw_of(p, bindings, count, 1, 0, 0, 0, vertex_buffers, index_buffer, index32, index_offset, push));
             // its sets' objects held: a set let go while the draw is kept would leave it a freed pointer
             for (nb::handle h : bindings)
                 d->held.push_back(nb::isinstance<Set>(h) ? nb::cast<Set*>(h)->handle : nb::cast<Table*>(h)->handle);
             return d;
         },
         "pipeline"_a, "bindings"_a, "count"_a, "vertex_buffers"_a = nb::list(), "index_buffer"_a = nb::none(),
-        "index32"_a = true, "push"_a = nb::bytes(""), nb::keep_alive<0, 1>(), nb::keep_alive<0, 4>(),
-        nb::keep_alive<0, 5>(), nb::rv_policy::take_ownership,
-        "a draw made once for record_draws (indexed when it has an index buffer); it keeps its pipeline and buffers "
-        "alive, and its sets' objects");
+        "index32"_a = true, "push"_a = nb::bytes(""), "index_offset"_a = 0, nb::keep_alive<0, 1>(),
+        nb::keep_alive<0, 4>(), nb::keep_alive<0, 5>(), nb::rv_policy::take_ownership,
+        "a draw made once for record_draws (indexed when it has an index buffer; a vertex buffer may be a (buffer, "
+        "offset) pair, the indices start at index_offset bytes); it keeps its pipeline and buffers alive, and its "
+        "sets' objects");
     m.def(
         "record_draws",
         [](Device& device, uintptr_t list, const std::vector<const Draw*>& draws,
@@ -389,6 +434,19 @@ NB_MODULE(_nativegpu, m) {
         },
         "device"_a, "list"_a, "draws"_a, "instances"_a, "offsets"_a, "viewport"_a,
         "DrawItems recorded into a foreign list, each with its instances and root offset (cbModel's slot) this frame");
+    m.attr("INDIRECT_STRIDE") = INDIRECT_STRIDE;
+    m.def(
+        "record_indirect",
+        [](Device& device, uintptr_t list, const std::vector<const Draw*>& draws, Buffer& args,
+           const std::vector<uint64_t>& args_offsets, const std::vector<uint64_t>& offsets,
+           std::tuple<float, float, float, float> viewport) {
+            auto [x, y, w, h] = viewport;
+            record_indirect(device, list, draws, args, args_offsets, offsets, x, y, w, h);
+        },
+        "device"_a, "list"_a, "draws"_a, "args"_a, "args_offsets"_a, "offsets"_a, "viewport"_a,
+        "indexed DrawItems into a foreign list, each drawn by ExecuteIndirect from INDIRECT_STRIDE bytes at its "
+        "args_offsets byte of args (an 'indirect' buffer in the indirect argument state: the GPU wrote the instance "
+        "counts), with its root offset");
     m.def(
         "record_dispatch",
         [](Device& device, uintptr_t list, Pipeline& p, const nb::list& bindings, std::tuple<uint32_t, uint32_t,
@@ -402,4 +460,6 @@ NB_MODULE(_nativegpu, m) {
     m.def("uav_barrier", &uav_barrier, "list"_a, "a barrier between every unordered access before and after it");
     m.def("copy_buffer", &copy_buffer, "list"_a, "dst"_a, "dst_offset"_a, "src"_a, "src_offset"_a, "size"_a,
           "bytes between two buffers (ID3D12Resource*) on a foreign list, both in their copy states");
+    m.def("copy_texture", &copy_texture, "list"_a, "dst"_a, "src"_a,
+          "one whole texture into a like one (ID3D12Resource*) on a foreign list, both in their copy states");
 }

@@ -233,11 +233,12 @@ class CNativeShading(nativecompute.CTold):
             self.m_info = self.m_device.buffer(len(data), "structured", stride=gameshadow.INFO_BYTES, name="info")
         self.m_common.m_list.write_buffer(self.m_info, data)
 
-    def shade(self, ctx, frame, size_px, camera, lighting, sky, clusters, clouds):
+    def shade(self, ctx, frame, size_px, camera, lighting, sky, clusters, clouds, held: bool = False):
         """The sky's chain, the clouds' shadow in the cascades' parts and the deferred shading into ``frame``'s lit
         colour (``gameframe.CGameFrame._shading``'s work); returns (the inputs, the extras) as the passes still on
         QRhi read them (the transparent pass, the post chain's noise): QRhi's resources, the module's handed over,
-        and ``lighting``'s (the current path's shading) tables and lights, bound without a dispatch."""
+        and ``lighting``'s (the current path's shading) tables and lights, bound without a dispatch. ``held``: the lit
+        colour is the kept frame's (``gamestill``), nothing is dispatched."""
         cascades = frame.m_cascades
         seen = SCloudsSeen(clouds, dict(self.m_sky.m_qrhi_clouds)) if clouds is not None else None
         extras = SExtras(cascades, clusters, seen)
@@ -271,7 +272,8 @@ class CNativeShading(nativecompute.CTold):
                 shadowed,
             )
 
-        compute_pass(ctx, record, before)
+        if not held:
+            compute_pass(ctx, record, before)
         return inputs, extras
 
     def _shade(self, command_buffer, frame, size_px, camera, lighting, sky, clusters, clouds, extras, shadowed) -> None:
@@ -326,6 +328,11 @@ class CNativeShading(nativecompute.CTold):
             return False
         self.m_atmosphere_part.run(ctx, frame, size_px, camera, sky, atmosphere, passes.look, clouds)
         return True
+
+    def settling(self) -> bool:
+        """Whether the clouds and fog, accumulated over frames, still fill in after the camera moved (the view draws
+        on until they are whole)."""
+        return self.m_atmosphere_part.settling()
 
     def end_frame(self) -> None:
         self.m_common.m_bridge.end_frame()

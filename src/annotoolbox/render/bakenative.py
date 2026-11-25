@@ -116,6 +116,7 @@ class CNativeBake(CGroundPaint, CTold):
                        if constant_buffer.name == "cSplatsBuffer")  # fmt: skip
         self.m_splat_records = records(element, SPLATS)
         self.m_list = device.command_list()
+        self.m_pool = nativegpu.CBufferPool(device, "vertex,index", "bake meshes")  # a node's mesh for its one bake
         self.m_list.open()
         self.m_targets = {name: device.texture(size_texels, size_texels, texture_format, usage="target", name=f"bake {name}")
                         for name, texture_format in zip(("albedo", "height", "gloss"), TARGETS, strict=True)}  # fmt: skip
@@ -225,19 +226,13 @@ class CNativeBake(CGroundPaint, CTold):
     def _bake(self, job: SBakeJob, layer: int) -> None:
         """One node: its splats into the targets, the normal, granularity and height's blocks made from the baked
         height, then each copied into the arrays at ``layer``."""
-        device, command_list, values = self.m_device, self.m_list, job.values
-        mesh = job.mesh
-        vertices = device.buffer(max(16, len(mesh.m_data)), "vertex", name="bake vertices")
+        command_list, values, mesh, pool = self.m_list, job.values, job.mesh, self.m_pool
         indices = np.ascontiguousarray(mesh.m_indices, "<u4")
-        index = device.buffer(max(16, indices.nbytes), "index", name="bake indices")
-        command_list.write_buffer(vertices, mesh.m_data)
-        command_list.write_buffer(index, indices.tobytes())
+        pieces = [pool.place(command_list, mesh.m_data), pool.place(command_list, indices.tobytes())]
         pipeline, fill = self.m_draw.pipeline_for(mesh.m_elements, mesh.m_stride)
-        streams = [vertices]
         if fill:
-            stream = device.buffer(max(16, len(fill)), "vertex", name="bake fill")
-            command_list.write_buffer(stream, fill)
-            streams.append(stream)
+            pieces.append(pool.place(command_list, fill))
+        streams = [piece[:2] for piece in (pieces[0], *pieces[2:])]
         splats = gs.CConstants(self.m_splat_records)
         for name, value in values.items():
             if name.startswith("cSplatsBuffer["):
@@ -255,9 +250,10 @@ class CNativeBake(CGroundPaint, CTold):
         for target in self.m_targets.values():
             command_list.clear_color(target, 0.0, 0.0, 0.0, 0.0)
         command_list.draw(self.m_framebuffer, pipeline, self.m_draw.sets(named), len(indices), vertex_buffers=streams,
-                 index_buffer=index, viewport=(0.0, 0.0, float(self.m_size_texels), float(self.m_size_texels)))  # fmt: skip
-        for resource in (vertices, index, *streams[1:]):
-            resource.release()  # late: the list still reads them
+                          index_buffer=pieces[1].buffer, index_offset=pieces[1].offset,
+                          viewport=(0.0, 0.0, float(self.m_size_texels), float(self.m_size_texels)))  # fmt: skip
+        for piece in pieces:
+            pool.free(piece)  # reused a few frames later: the list still reads them
         self._derive(values["cTrnBakedTexelSizeWS"], layer)
 
     def _derive(self, texel: float, layer: int) -> None:
@@ -297,6 +293,7 @@ class CNativeBake(CGroundPaint, CTold):
             resource.release()
         if self.m_table is not None:
             self.m_table.release()
+        self.m_pool.release()
         self.m_list.close()
         self.m_arrays, self.m_maps, self.m_splat_maps, self.m_table = {}, {}, [], None
 

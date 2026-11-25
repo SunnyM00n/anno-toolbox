@@ -234,6 +234,7 @@ def test_1800s_look_hands_the_shown_objects_baked_decals_to_its_bake_and_the_vie
     assert look.m_renderer.m_baked_decal is bake1800.baked
     view = SimpleNamespace(m_library=library, m_baked_decal=bake1800.baked, _all_batches=lambda: [batch], _street_cells=lambda: [],
                            _layer_on=lambda b, opts: True, _m_ground_version=0, m_decals=mock.Mock(), m_prog={"model": 0},
+                           m_game_decals=False,
                            m_session=SimpleNamespace(m_heights=np.zeros((3, 3)), m_step_tiles=1.0, m_width_samples=3))  # fmt: skip
     batch.m_parts = ["part"]
     desktopframe.CFramePasses._lay_decals(view, SimpleNamespace(game_heights=None), None)

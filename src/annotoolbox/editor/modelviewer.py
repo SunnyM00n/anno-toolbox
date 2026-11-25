@@ -16,9 +16,10 @@ from ..formats.rdmread import CRdmReadError
 from ..infra.buildcache import write_atomic
 from ..infra.i18n import N_, tr
 from ..models import cfg2070, modelread
-from ..models.modelread import SLeaves, SModelConfig, SPiece, SPlace
+from ..models.modelread import SLeaves, SModelConfig, SPiece, SPlace, SPlacedDecal
 from ..render.modellibrary import FOAM_SHADER
 from ..render.particlefx import load_efc
+from .assetmodels import CReason, describe
 
 NOTES_LISTED = 12  # models named one by one in the Log; the rest are counted
 MODEL_SHADER, WATER_SHADER, BANNER_SHADER = 8, 7, 28  # the view's shaders (modelparts.model_parts)
@@ -44,6 +45,16 @@ def leaves_part(leaves: SLeaves) -> dict:
     """The part of a leaf cluster: on the banner shader, its mesh named ``<cfg>|leaves<index>``
     (``leaf_cards`` gives the cards)."""
     return part(f"{leaves.cfg}|leaves{leaves.index}", (leaves.diffuse, ""), leaves.color, BANNER_SHADER, leaves.place)
+
+
+def decal_part(decal: SPlacedDecal) -> dict:
+    """A ``TERRAINDECAL`` in the shape of ``modelparts._decals``: laid on the ground after the streets (2070 draws its
+    ground decals there, rendering/frame-2070.md), a decal whose map it cannot find left to the checker texture."""
+    return {
+        **part("", (decal.diffuse, ""), decal.color, MODEL_SHADER, decal.place),
+        "opacity": 1.0, "values": {}, "extents": decal.extents, "kind": "Terrain", "on_streets": True,
+        "texcoords": list(decal.texcoords),
+    }  # fmt: skip
 
 
 def leaves_ref(mesh: str) -> tuple[str, int] | None:
@@ -129,12 +140,20 @@ class CConfigModels:
     def _problem(self, cfg: str) -> str:
         try:
             model = self.model_config(cfg)
+            found = [self._mesh_problem(piece.mesh) for piece in model.pieces]
+            drawn = (  # an effect counts when the view lays a sprite of it (a model effect is not converted)
+                not all(found)
+                or bool(model.leaves or model.files)
+                or any(self.m_tree2070.exists(decal.diffuse) for decal in model.decals)
+                or any(self.effect(placed.file) for placed in model.effects)
+            )
         except Exception as exc:  # a config the reader does not take: a marker, said in the Log
             return tr("islands.config_not_read", error=f"{type(exc).__name__}: {exc}")
-        if not model.pieces and not model.leaves and not model.files:
-            return tr("islands.config_names_no_mesh")
-        found = [self._mesh_problem(piece.mesh) for piece in model.pieces]
-        return found[0] if all(found) and not model.leaves and not model.files else ""
+        if drawn:
+            return ""
+        if model.decals and not found:  # a ground decal whose map is not in the game's files: a pin stands
+            return f"{CReason.UNREADABLE}: " + tr("islands.source_not_game", source=model.decals[0].diffuse)
+        return found[0] if found else CReason.EMPTY  # a light or an empty config: nothing to model
 
     def model_notes(self) -> list[str]:
         """The configs drawn as markers and the meshes left out of the others, and why, for the Log."""
@@ -149,7 +168,7 @@ class CConfigModels:
         ):
             if rows:
                 notes.append(tr(title, n=len(rows)))
-                notes += [tr("islands.name_why", name=name, why=why) for name, why in rows[:NOTES_LISTED]]
+                notes += [tr("islands.name_why", name=name, why=describe(why)) for name, why in rows[:NOTES_LISTED]]
                 if len(rows) > NOTES_LISTED:
                     notes.append(tr("islands.and_n_more", n=len(rows) - NOTES_LISTED))
         return notes
@@ -178,7 +197,7 @@ class CConfigModels:
             }
             for effect in model.effects
         ]
-        return {"parts": parts, "files": nested, "effects": effects}
+        return {"parts": parts, "files": nested, "effects": effects, "decals": [decal_part(d) for d in model.decals]}
 
     def effect(self, path: str) -> list:
         """The sprite emitters of a 2070 effect file (``particlefx``); what is not a sprite is listed in ``notes``."""

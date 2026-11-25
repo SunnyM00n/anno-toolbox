@@ -214,6 +214,7 @@ class CClouds(CComputeChain):
         self.m_transmittance = self._texture(TEXTURE_FORMAT.RG8, (SHADOW_SIZE, SHADOW_SIZE), storage=True)
         self.m_shadowed = False  # whether the transmittance holds this frame's cascades
         self.m_seconds, self.m_wind = 0.0, session_wind(maps.ambient)  # the view's time and the wind (the scroll)
+        self.m_is_cache_kept = False  # the native sky keeps the self-shadow cache between frames (``skynative``)
         self._m_white = None
 
     def _texture(self, texture_format, size_px: tuple, levels: int = 1, storage: bool = False):

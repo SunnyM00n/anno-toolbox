@@ -1,5 +1,5 @@
 """What the preview takes from the game's files instead of a placeholder: a label shows the line its text id names
-(also when a binding gave it a filler, and in 1800's decimal ids), a text property a file feeds into a picture holds a
+(also over a text a binding gave it, and in 1800's decimal ids), a text property a file feeds into a picture holds a
 picture's name and not a text, and a game object is never shown as a text."""
 
 from __future__ import annotations
@@ -45,11 +45,15 @@ def test_a_label_with_a_text_id_shows_its_line_not_the_stored_text():
     assert labels.label_text(ctx, _label(loca="0000 0000 0000 0001"), {}) == "[0000 0000 0000 0001]"
 
 
-def test_a_filler_gives_way_to_the_label_own_line_but_a_real_value_does_not():
+def test_a_text_id_wins_over_any_text_a_binding_writes_as_in_the_game():
     ctx = _ctx({LOCA: "Tom & Jerry"})
     filler = placeholders.TEXTS["medium"]
     assert labels.label_text(ctx, _label(loca=LOCA), {(labels.TEXT,): filler}) == "Tom & Jerry"
-    assert labels.label_text(ctx, _label(loca=LOCA), {(labels.TEXT,): "Marcia"}) == "Marcia"
+    # the game shows the line of a label that holds an id and a text (every such label of the dumps, 2026-11-23)
+    assert labels.label_text(ctx, _label(loca=LOCA), {(labels.TEXT,): "!Game is paused"}) == "Tom & Jerry"
+    assert labels.label_text(ctx, _label(), {(labels.TEXT,): "!x", (labels.LOCALIZATION_ID,): LOCA}) == "Tom & Jerry"
+    written_empty = {(labels.TEXT,): "Marcia", (labels.LOCALIZATION_ID,): ""}  # a binding cleared the id
+    assert labels.label_text(ctx, _label(loca=LOCA), written_empty) == "Marcia"
     assert labels.label_text(ctx, _label(), {(labels.TEXT,): filler}) == filler  # nothing of its own: the filler
 
 

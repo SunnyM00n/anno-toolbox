@@ -16,9 +16,11 @@ from tests.editor.editorfakes import desktop_window, open_fake_island
 from annotoolbox.editor.desktop import desktopeditor, desktopribbon, desktopsea
 from annotoolbox.editor.desktop.desktopgame1800 import CGameIsland1800
 from annotoolbox.editor.desktop.desktoprender import CRenderer, SViewOptions
+from annotoolbox.render.gameextras import SSkyParts
 from annotoolbox.suite.settings import CSettings
 
 SWITCHES = desktopeditor.PERFORMANCE
+OFF = desktopeditor.PERFORMANCE_OFF
 
 
 class FakeRenderer:
@@ -54,14 +56,18 @@ class FakeCompositePass:
 
 def test_every_switch_is_on_by_default_and_a_held_clock_is_either_the_still_picture_or_the_water_motion_off():
     options = SViewOptions()
-    assert all(getattr(options, key) for key in SWITCHES) and not options.is_clock_held
+    assert all(getattr(options, key) is (key not in OFF) for key in SWITCHES) and not options.is_clock_held
+    # the cache's picture differs until the game's own blend is known; the clusters change it and gained nothing
+    assert OFF == {"cloud_cache", "distance_clusters"}
     options.waves = False
     assert options.is_clock_held
     options.waves, options.particle_time = True, 3.0
     assert options.is_clock_held
-    assert options.sky_parts == (True, True)
-    assert SViewOptions(clouds=False).sky_parts == (True, False)
-    assert SViewOptions(sky_haze=False).sky_parts == (False, False)  # no sky, no clouds on it
+    assert options.sky_parts == SSkyParts(True, True, True, False)  # accumulated over frames as the game does
+    assert SViewOptions(clouds=False).sky_parts == SSkyParts(True, False, True, False)
+    assert SViewOptions(sky_haze=False).sky_parts == SSkyParts(False, False, True, False)  # no sky, no clouds on it
+    parts = SViewOptions(temporal_scattering=False, cloud_cache=True).sky_parts
+    assert not parts.is_temporal and parts.is_cache_kept
 
 
 def test_the_water_clock_is_held_from_the_moment_the_water_motion_goes_off_until_it_is_on_again(monkeypatch):
@@ -116,15 +122,16 @@ def test_the_ambient_occlusion_switch_leaves_the_pass_out_and_lets_go_of_the_pre
     assert CGameIsland1800._ambient(island, SViewOptions(ambient_occlusion=False)) is None and dropped
 
 
-def test_the_ribbon_has_a_performance_group_beside_layers_and_leaves_out_what_a_game_does_not_have():
-    home = dict(desktopribbon.TABS[0][1])
-    names = [name for name, _group in desktopribbon.TABS[0][1]]
-    group = [item.id for item in home[desktopribbon.N_("islands.performance")]]
+def test_the_ribbon_has_a_performance_tab_and_leaves_out_what_a_game_does_not_have():
+    tabs = dict(desktopribbon.TABS)  # a tab of their own: on Home they left half its buttons without a key
+    group = [
+        item.id for item in dict(tabs[desktopribbon.N_("islands.performance")])[desktopribbon.N_("islands.performance")]
+    ]
     assert group == [f"perf_{key}" for key in SWITCHES]
-    assert names.index(desktopribbon.N_("islands.performance")) == names.index(desktopribbon.N_("islands.layers")) + 1
     only_2070 = {item.id for item in desktopribbon.items(desktopribbon.tabs_for(("anno2070",), set()))}
     assert {"perf_shadows", "perf_waves", "perf_reflections"} <= only_2070
-    assert not {"perf_sky_haze", "perf_clouds", "perf_ambient_occlusion"} & only_2070
+    assert not {"perf_sky_haze", "perf_clouds", "perf_temporal_scattering", "perf_cloud_cache",
+                "perf_ambient_occlusion"} & only_2070  # fmt: skip
     only_1800 = {item.id for item in desktopribbon.items(desktopribbon.tabs_for(("anno1800",), set()))}
     assert "perf_ambient_occlusion" in only_1800 and "perf_reflections" not in only_1800
 
@@ -133,14 +140,14 @@ def test_a_switch_reaches_the_view_and_the_settings_and_the_next_island_opens_wi
     qt, main = desktop_window(tmp_path)
     doc = open_fake_island(main)
     options = main.m_view.m_opts
-    assert all(main.m_actions[f"perf_{key}"].isChecked() for key in SWITCHES) and all(
-        getattr(options, key) for key in SWITCHES
+    assert all(main.m_actions[f"perf_{key}"].isChecked() is (key not in OFF) for key in SWITCHES) and all(
+        getattr(options, key) is (key not in OFF) for key in SWITCHES
     )
     for key in SWITCHES:
         action = main.m_actions[f"perf_{key}"]
-        if action.isEnabled():
+        if action.isEnabled() and key not in OFF:
             action.trigger()
-        else:  # greyed: the island has nothing of that kind (``performance_needs``), the call alone changes it
+        else:  # greyed (the island has nothing of that kind: ``performance_needs``) or off already: the call alone
             doc.set_performance(key, False)
         assert getattr(options, key) is False and not action.isChecked()
     assert main.m_app.m_settings.view_switches == dict.fromkeys(SWITCHES, False)
@@ -152,7 +159,8 @@ def test_a_switch_reaches_the_view_and_the_settings_and_the_next_island_opens_wi
     for key in SWITCHES:
         setattr(options, key, True)
     doc.apply_performance()  # a new island's view takes what the settings keep
-    assert [getattr(options, key) for key in SWITCHES] == [True, True, False, False, False, False]
+    assert [getattr(options, key) for key in SWITCHES] == [True, True, *[False] * (len(SWITCHES) - 2)]  # shadows, waves
+    assert [getattr(options, key) for key in SWITCHES] == [True, True] + [False] * (len(SWITCHES) - 2)
     main.close()
 
 

@@ -241,9 +241,11 @@ def enable_unless(item, why: str = "", tip: str = "") -> None:
 
 def access_letters(texts: Iterable[str]) -> str:
     """The access keys (``&x``) the texts carry, in lower case."""
-    return "".join(
-        text[i + 1].lower() for text in texts for i in range(len(text) - 1) if text[i] == "&" and text[i + 1] != "&"
-    )
+    found = []
+    for text in texts:
+        plain = text.replace("&&", "")  # an escaped ampersand is no key
+        found += [plain[i + 1].lower() for i in range(len(plain) - 1) if plain[i] == "&"]
+    return "".join(found)
 
 
 def access_keys(titles: Iterable[str], avoid: str = "") -> list[str]:

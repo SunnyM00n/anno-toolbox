@@ -363,6 +363,12 @@ class CRecorder:
             lambda update_batch: update_batch.copyTexture(dst_tex.native, source.color_attachments[0].native)
         )
 
+    def copy_texture(self, destination, source) -> None:
+        """``source``'s pixels (level 0, whole) into ``destination`` between the passes recorded so far and the next one
+        (the pass in progress ends first)."""
+        self._close()
+        self._m_pending.append(lambda update_batch: update_batch.copyTexture(destination.native, source.native))
+
     # running
     def _run(self, command_buffer) -> None:
         """Run the recorded passes; whatever raises, the recording is cleared and the frame's resources rotate, so one

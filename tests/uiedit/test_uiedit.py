@@ -246,9 +246,11 @@ def test_real_scenes_place_and_widget_files_keep_their_bytes(tmp_path):
     if not folder or not Path(folder).is_dir():
         pytest.skip("needs ANNO117_DIR")
     files = uifiles.CUiFiles(gametree.open_game("anno117", Path(folder), tmp_path), tmp_path)
-    for key in ("maintitlescene", "loadingscreenscene", "hudgovernorsbarscene"):
+    # the title scene's online player card is hidden in every recording of the game (Visible false), so the
+    # preview leaves it out: 93 items, not the 119 that drew it
+    for key, least in (("maintitlescene", 80), ("loadingscreenscene", 100), ("hudgovernorsbarscene", 100)):
         frame = layout.place(key, files.root(key), layout.CContext(files))
-        assert len(frame.items) > 100 and not frame.notes
+        assert len(frame.items) > least and not frame.notes
     for entry in files.of_kind("WI")[:150]:
         doc = uidoc.CUiDoc(files, entry.key, files.read(entry.key))
         assert doc.m_exact and doc.to_bytes() == doc.m_original

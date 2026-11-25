@@ -54,7 +54,9 @@ The view's parts:
 - **Markers**: 117's editor-only objects (herds, audio spots, markers, blockers) as coloured pins per kind.
 - **Pins for objects without a model**: an object whose asset names no model, only a placeholder, or whose config
   draws nothing (decals, effects only) is a white pin. An object whose asset or config the editor cannot read is the
-  same pin, and the Checks tab says why. Buildings, slots, ruins and units of an island are drawn with the model their
+  same pin, and the Checks tab says why. A pin keeps one size whatever its object's scale, and grows with the island
+  (`desktopgeometry.pin_scale`: the base size up to 208 tiles a side, then in step with the island up to four times, so
+  it stays about 13 px high on the whole view of an island of 208 to 832 tiles). Buildings, slots, ruins and units of an island are drawn with the model their
   asset names, by the object's variation, through the same model library as props
   ([Placed objects](island-editor.md#placed-objects)).
 - **Sea, rivers and lakes**: plain lit surfaces (the sea at height 0, rivers as ribbons, lakes at their spline
@@ -200,6 +202,21 @@ chapter's sinking island, whose bridges and junctions show the rule.
 
 Also seen in those pictures and left for later (owner, 2026-11-22): the buildings' video screens draw flat grey, and
 white pin shapes stand over the city's buildings.
+The pins are objects whose config draws no model: the ground decals of the streets (cracks, sewers, crosswalks:
+`SimpleObject` "street_props", 321 of the 415 pins on 40 islands), light sources (71) and the rainbows (16, a model
+effect the view does not lay).
+A config of a particle effect alone (fires and smoke: 39 of them) is no longer a pin, since 2026-11-24: its sprites
+draw.
+
+**2070's ground decals (2026-11-24).** A `TERRAINDECAL` of a 2070 config is laid as the view's decals:
+`modelread.read_config` reads it (`SPlacedDecal`: half sizes `m_Extend`, the rectangle `m_TexCoords`, the first
+material's diffuse map and colour, the transform), `CConfigModels.model` hands it on in the shape of
+`modelparts._decals`, and the pass is "after the streets" (2070 draws its ground decals there, as 117 does a decal
+with `OnStreets` 1). An object whose config holds nothing but such decals is no
+pin any more and no dot (`desktoprender._dots_vao` leaves a batch out whose model lays decals); a decal whose map is not
+in the game's files stays a pin, with its reason. The pin count of `tycooncity_n_l21` fell from 312 to 0. Not done:
+the decal's colour alpha (2070's is 1 on all three), the normal map (none is set) and clicking a decal to select it (it
+has no mesh to pick).
 
 ### Props of 1800 and 2205
 
@@ -275,10 +292,11 @@ Note: the rest frame rate was measured on 2026-10-15, the culling was added on 2
 
 ### Performance switches
 
-The Home tab's Performance group (next to Layers; [island-editor.md](island-editor.md#performance-switches)) turns off the
+The ribbon's Performance tab ( [island-editor.md](island-editor.md#performance-switches)) turns off the
 costly parts of a frame. A switch skips the work: the pass is not made, the map is not drawn, the simulation is not
 stepped. `SViewOptions` holds each as a field of the same name, and the settings keep them
-(`Settings.view_switches`, all on by default).
+(`Settings.view_switches`, all on by default but `cloud_cache`: `desktopeditor.PERFORMANCE_OFF`). Clouds over
+frames and Cloud shadow cache work the other way round: on, they save work by the game's own techniques.
 
 | Switch | Field | What the view skips when it is off | Looks and games |
 |---|---|---|---|
@@ -287,7 +305,12 @@ stepped. `SViewOptions` holds each as a field of the same name, and the settings
 | Water reflections | `reflections` | the scene drawn a second time, mirrored, into the sea's reflection map (the map is cleared once and stays empty) | the seas of Anno 2070, 1404 and 1701 |
 | Sky haze | `sky_haze` | the game look's visible sky and haze passes, and the clouds that go with them; the view's own sky shows | Anno 117's game look |
 | Clouds | `clouds` | the cloud pass | Anno 117's game look |
+| Clouds over frames | `temporal_scattering` | on: three quarters of the clouds' and fog's march, the rest reprojected from the last frames (`EF_TEMPORAL_ACCUM_CLOUDS`, `EF_TEMPORAL_ACCUM_FOG`); off, every pixel is marched every frame | Anno 117's game look on Direct3D 12 |
+| Cloud shadow cache | `cloud_cache` | on: the self-shadow cache is not made anew in every frame but scrolled with the camera and blended; off by default, its blend changes the clouds' light | Anno 117's game look on Direct3D 12 |
 | Ambient occlusion | `ambient_occlusion` | the occlusion pre-pass and its blur | Anno 1800's and 2205's game look |
+| Still frame | `still_frame` | the game look's lit scene is kept while the camera, the light and the island stand still, and only the water, the sky and the post chain are drawn over it (the depth, the shadow casters and the shading are not made again) | Anno 117's game look |
+| Idle rate | `idle_rate` | the redraws of moving water and clouds drop from 15 to 5 a second once there was no input for 3 seconds; the first input brings the full rate back | every look and game |
+| Models in background | `background_pipelines` | on: a model's pipelines are made on background threads, and the model is drawn once they are in (a frame never waits for them); off, they are made in the frame that first draws the model | Anno 117's game look on Direct3D 12 |
 
 The held clock is `SViewOptions.is_clock_held` (also true for Freeze particles' still picture).
 The view has no time of day: the sun stands at one place (the editor look's fixed sun or the game's own light), so there

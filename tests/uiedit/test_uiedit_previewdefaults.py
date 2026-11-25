@@ -114,6 +114,34 @@ def test_the_preview_reads_the_region_component_from_the_defaults(tmp_path):
     assert ctx.values(lock)[(77, PD.REGION_INFO[1])] == PD.PROVINCE["Egyptian"]
 
 
+def _region_on_root(tmp_path) -> uifiles.CUiFiles:
+    """A file whose own root holds the region component, its region written into a label (the hairlines' files)."""
+    root = phoenixedit.new_object(SCHEMA, "1795cb2b", guid=uuid.uuid4().bytes_le, root=True, versions=VERSIONS)
+    phoenixedit.set_field(root, "ReferenceSize", (1920.0, 1080.0))
+    phoenixedit.set_objects(root, "Components", [phoenixedit.component(
+        SCHEMA, "30427a23-7a8d-45a9-b659-58fff382c12e", "PlayerRegionInfo", 78, VERSIONS)])  # fmt: skip
+    label = scene_instance("41a404e5", "Region")
+    wf = phoenixedit.CWidgetFile(SCHEMA, root, versions=VERSIONS)
+    wf.add_instance(label)
+    wf.bind(wf.end(None, [78, PD.REGION_INFO[1]]), wf.end(label, [phoenixedit.BUILTIN["Text"]]))
+    wf.finish("scene")
+    gen = tmp_path / "game" / GEN
+    gen.mkdir(parents=True)
+    (gen / "regionscene").write_bytes(_write("SC", root))
+    return uifiles.CUiFiles(gametree.loose_tree(tmp_path / "game"))
+
+
+def test_a_files_own_region_component_reads_the_players_region(tmp_path):
+    files = _region_on_root(tmp_path)
+
+    def shown(defaults) -> set[str]:
+        frame = layout.place("regionscene", files.root("regionscene"), layout.CContext(files, m_defaults=defaults))
+        return {item.text for item in frame.items if item.kind == "text"}
+
+    assert shown(PD.SDefaults()) == {str(PD.PROVINCE["Roman"])}  # was the component's declared default
+    assert shown(PD.SDefaults(region=PD.AEGYPTUS)) == {str(PD.PROVINCE["Egyptian"])}
+
+
 def test_a_run_time_slot_shows_the_named_characters_picture_else_an_icon_from_the_games_folders(monkeypatch):
     paths = ["data/ui/4k/dlc02/icon_content/hippodrome/icon_3d_hippodrome_phase_05_0.dds",
              "data/ui/4k/base/icon_content/attributes/icon_2d_income_0.dds",

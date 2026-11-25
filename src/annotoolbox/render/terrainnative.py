@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 
 import numpy as np
+import shiboken6
 from PySide6.QtGui import QRhiBuffer, QRhiTexture
 
 from ..infra.dxc import SConstantBuffer
@@ -36,6 +37,9 @@ SHADER_READ = 0x40 | 0x80  # D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | PI
 UNORDERED = 0x8  # D3D12_RESOURCE_STATE_UNORDERED_ACCESS: a storage buffer after QRhi's compute pass wrote it
 CONSTANT_SLOT = 256  # a constant buffer's bytes are rounded up to this (Direct3D 12's constant buffer alignment)
 KEEP_FRAMES = 4  # frames a wrapped resource or a node's data outlives its last use (QRhi's frames in flight) [ours]
+# a node turned out of view keeps its buffers and draw this long: turning back made them anew, three buffers a node
+# (performance.md section 4, item 2) [ours]
+NODE_KEEP_FRAMES = 300
 Format = QRhiTexture.Format
 # QRhi's texture formats by NVRHI's names (sRGB: the RGBA8 one with ``QRhiTexture.Flag.sRGB``)
 FORMATS = {Format.RGBA8: "RGBA8_UNORM", Format.BGRA8: "BGRA8_UNORM", Format.R8: "R8_UNORM", Format.RG8: "RG8_UNORM", Format.R16: "R16_UNORM",
@@ -110,39 +114,41 @@ def qrhi_object(resource):
     return resource if isinstance(resource, (QRhiTexture, QRhiBuffer)) else getattr(resource, "native", resource)
 
 
+def _texture_view(qrhi_texture) -> tuple[str, str]:
+    """(the module's format, the view's kind: "cube", "2darray" or "" for 2D) a QRhi texture is wrapped as."""
+    native_format = FORMATS.get(qrhi_texture.format())
+    if native_format is None:
+        raise RuntimeError(f"no native format for QRhi's {qrhi_texture.format()}")
+    flags = qrhi_texture.flags()
+    if native_format == "RGBA8_UNORM" and flags & QRhiTexture.Flag.sRGB:
+        native_format = "SRGBA8_UNORM"
+    kind = "cube" if flags & QRhiTexture.Flag.CubeMap else "2darray" if qrhi_texture.arraySize() else ""
+    return native_format, kind
+
+
 class CBridge:
-    """QRhi's textures and buffers as the module's, wrapped once per resource and let go some frames after their
-    last use; ``reads`` are the transitions a pass needs into shader reads (and back: QRhi tracks their state)."""
+    """QRhi's textures and buffers as the module's, wrapped once per Direct3D resource and view and let go some
+    frames after their last use; ``reads`` are the transitions a pass needs into shader reads (and back: QRhi tracks
+    their state)."""
 
     def __init__(self, device) -> None:
         self.m_device, self.m_module = device, nativegpu.load()
-        self.m_held: dict[tuple, list] = {}  # (id, resource) -> [wrapped, last frame]
+        # (kind, resource, view) -> [wrapped, last frame]; by the Direct3D resource, which the wrap holds a reference
+        # of (its address stays its own), never by the Python object: PySide hands a new one for the same texture
+        self.m_held: dict[tuple, list] = {}
         self.m_frame = 0
         self.m_reads: dict[int, int] = {}  # this pass's QRhi resources read -> their state now
         self.m_writes: dict[int, int] = {}  # and written (``target``; its user clears them with ``reads``)
 
     def texture(self, qrhi_resource):
         """(wrapped texture, its resource) of a QRhi texture, read in this pass."""
-        import shiboken6
-
         qrhi_texture = qrhi_object(qrhi_resource)
         resource, state = self.m_module.qrhi_texture(int(shiboken6.getCppPointer(qrhi_texture)[0]))
         self.m_reads[resource] = state
-        key = (id(qrhi_texture), resource)
+        native_format, kind = _texture_view(qrhi_texture)
+        key = ("texture", resource, native_format, kind)
         held = self.m_held.get(key)
         if held is None:
-            native_format = FORMATS.get(qrhi_texture.format())
-            if native_format is None:
-                raise RuntimeError(f"no native format for QRhi's {qrhi_texture.format()}")
-            if native_format == "RGBA8_UNORM" and qrhi_texture.flags() & QRhiTexture.Flag.sRGB:
-                native_format = "SRGBA8_UNORM"
-            kind = (
-                "cube"
-                if qrhi_texture.flags() & QRhiTexture.Flag.CubeMap
-                else "2darray"
-                if qrhi_texture.arraySize()
-                else ""
-            )
             held = self.m_held[key] = [self.m_device.wrap_texture(resource, native_format, kind, ""), 0]
         held[1] = self.m_frame
         return held[0], resource
@@ -150,12 +156,10 @@ class CBridge:
     def buffer(self, qrhi_resource, stride: int, state: int = UNORDERED, usage: str = ""):
         """(wrapped buffer, its resource) of a QRhi storage buffer, in ``state`` when the pass reads it (``usage``:
         "raw" for a raw view)."""
-        import shiboken6
-
         storage_buffer = qrhi_object(qrhi_resource)
         resource = self.m_module.qrhi_buffer(int(shiboken6.getCppPointer(storage_buffer)[0]))
         self.m_reads[resource] = state
-        key = (id(storage_buffer), resource, usage)
+        key = ("buffer", resource, stride, usage)
         held = self.m_held.get(key)
         if held is None:
             held = self.m_held[key] = [self.m_device.wrap_buffer(resource, stride, usage, ""), 0]
@@ -181,10 +185,12 @@ class CBridge:
         ] + writes
 
     def send(self, module_list, command_buffer, record, sent=None) -> None:
-        """The module's list ``lst`` to the queue (then ``sent()``), and ``record(list)`` on QRhi's (inside
-        ``beginExternal``) between the moves of the QRhi resources this pass reads and writes and back to the
-        states QRhi tracks: back also when ``record`` raises (QRhi records the rest of its frame from them)."""
-        module_list.execute()
+        """The module's list ``module_list`` to the queue (None: its owner submits it once after its passes), then
+        ``sent()``, and ``record(list)`` on QRhi's (inside ``beginExternal``) between the moves of the QRhi resources
+        this pass reads and writes and back to the states QRhi tracks: back also when ``record`` raises (QRhi records
+        the rest of its frame from them)."""
+        if module_list is not None:
+            module_list.execute()
         if sent is not None:
             sent()
         qrhi_list = nativegpu.command_list(command_buffer)
@@ -195,10 +201,17 @@ class CBridge:
             self.m_module.transitions(qrhi_list, self.after())
             self.m_reads, self.m_writes = {}, {}
 
-    def end_frame(self) -> None:
+    def end_frame(self) -> list:
+        """The wraps not used for ``KEEP_FRAMES`` let go (late); returned, so the sets made with them go too."""
         self.m_frame += 1
-        for key in [held_key for held_key, (_w, last) in self.m_held.items() if self.m_frame - last > KEEP_FRAMES]:
-            self.m_held.pop(key)[0].release()
+        gone = [
+            self.m_held.pop(key)[0]
+            for key, (_w, last) in list(self.m_held.items())
+            if self.m_frame - last > KEEP_FRAMES
+        ]
+        for wrapped in gone:
+            wrapped.release()
+        return gone
 
     def release(self) -> None:
         for wrapped, _last in self.m_held.values():
@@ -248,25 +261,33 @@ def camera_buffer(element: SConstantBuffer) -> SConstantBuffer:
     return nativecompute.records(element, CAMERAS)
 
 
+def _maps_of(model, maps: dict) -> dict:
+    """Return the maps that a node's sets read by name. The ground's maps come last, as the current path's
+    ``CTerrainModel.prepare`` lays its grit over the stand-in."""
+    return {**model.m_textures, **model.m_own, **maps}
+
+
 @dataclass
 class SNodeData:
-    """A node's (or caster's) vertices, indices and ``cbTerrainNode`` on the device, and its sets by technique."""
+    """A node's (or caster's) vertices, indices and ``cbTerrainNode`` on the device (pieces of ``pool``), and its sets
+    by technique."""
 
-    vertices: object
-    indices: object
+    vertices: nativegpu.SPlaced
+    indices: nativegpu.SPlaced
     count: int
-    node: object
+    node: nativegpu.SPlaced
+    pool: nativegpu.CBufferPool
     sets: dict = field(default_factory=dict)  # technique -> (key, set of the node's space)
     last: int = 0
+    # technique -> (what it binds, the module's draw, QRhi's textures it wraps, the objects of its key held)
+    items: dict = field(default_factory=dict)
 
     def release(self) -> None:
-        for resource in (
-            self.vertices,
-            self.indices,
-            self.node,
-            *(binding_set for _k, binding_set in self.sets.values()),
-        ):
-            resource.release()
+        self.items = {}
+        for piece in (self.vertices, self.indices, self.node):
+            self.pool.free(piece)
+        for _key, binding_set in self.sets.values():
+            binding_set.release()
 
 
 class CNativeTerrain:
@@ -282,10 +303,14 @@ class CNativeTerrain:
         self.m_techniques = {name: technique(device, natives, name, shadow if "Shadow" in name else gbuffer)
                            for name in TECHNIQUES}  # fmt: skip
         self.m_list = device.command_list()
+        self.m_is_deferred = False  # True: its owner submits the list once a frame after the passes (``submit``)
         self.m_list.open()
         self.m_nodes: dict[int, tuple] = {}  # id(model) -> (model, SNodeData)
         self.m_buffers = nativegpu.CKeptBuffers(device, CONSTANT_SLOT)  # the frame's constant and structured buffers
+        # every node's vertices, indices and cbTerrainNode, a pooled piece each (performance.md section 4, item 8)
+        self.m_pool = nativegpu.CBufferPool(device, "vertex,index,constant", "terrain nodes")
         self.m_sets: dict[tuple, tuple] = {}  # (technique, space) -> (key, set)
+        self.m_declared: dict[int, tuple] = {}  # id of a program -> (program, its declared texture kinds)
         self.m_white = device.texture(4, 4, "RGBA8_UNORM", name="white")
         self.m_stand_ins: dict = {}  # zeros by kind (``_zeros``)
         self.m_list.write_texture(self.m_white, bytes([255]) * 64, 16)
@@ -326,8 +351,9 @@ class CNativeTerrain:
         node_constants = gameshader.CConstants(self.m_techniques["TerrainDeferred"].cbuffers[terraindraw.NODE_BUFFER])
         for name, value in model.m_node_values.items():
             node_constants.set(name, value)  # the island's values go to the frame's buffers: only the node's land here
-        data = SNodeData(self._static("vertices", mesh.m_data, "vertex"), self._static("indices", indices, "index"),
-                        len(mesh.m_indices), self._static("cbTerrainNode", bytes(node_constants.m_data), "constant"))  # fmt: skip
+        pool, command_list = self.m_pool, self.m_list
+        data = SNodeData(pool.place(command_list, mesh.m_data), pool.place(command_list, indices), len(mesh.m_indices),
+                         pool.place(command_list, bytes(node_constants.m_data)), pool)  # fmt: skip
         data.last = self.m_frame
         self.m_nodes[id(model)] = (model, data)  # pattern: ok (the model is kept in the entry)
         return data
@@ -336,14 +362,15 @@ class CNativeTerrain:
         """The set of a technique's layout ``index`` for ``named`` (shader name -> the module's resource), made when
         what it binds changed."""
         spec = tech.plan.layouts[index]
-        key = tuple(id(named.get(item.name)) for item in spec.items)
+        # The key holds the resources themselves: a key of ids matched a new wrap that took a let-go wrap's address.
+        key = tuple(named.get(item.name) for item in spec.items)
         return key, (lambda: nativegpu.binding_set(self.m_device, tech.layouts[index], spec, named,
                                                    self.m_samplers[tech.name]))  # fmt: skip
 
-    def _textures(self, names: dict, spec, declared: dict) -> dict:
-        """The module's textures for a layout's items: QRhi's wrapped, white for a plain map none hands and zeros of
-        another declared kind, as the current path's ``CGameModel._texture`` stands in (every item bound: NVRHI's
-        validation refuses a set that leaves one out)."""
+    def _textures(self, names: dict, spec, declared: dict, bridged: list) -> dict:
+        """The module's textures for a layout's items: QRhi's wrapped (each into ``bridged``), white for a plain map
+        none hands and zeros of another declared kind, as the current path's ``CGameModel._texture`` stands in (every
+        item bound: NVRHI's validation refuses a set that leaves one out)."""
         out = {}
         for item in spec.items:
             if item.kind != "texture":
@@ -351,6 +378,7 @@ class CNativeTerrain:
             found, kind = names.get(item.name), declared.get(item.name, "Texture2D")
             if found is not None:
                 out[item.name] = self.m_bridge.texture(found)[0]
+                bridged.append((found, out[item.name]))
             elif kind in ("Texture2D", "Texture2D<float4>"):
                 out[item.name] = self.m_white
             else:
@@ -378,40 +406,69 @@ class CNativeTerrain:
             held = self.m_sets[(tech.name, index)] = (key, make())
         return held[1]
 
-    def _bindings(self, tech: STechnique, model, frame: dict, maps: dict, data: SNodeData, made: dict) -> list:
-        """The sets of a draw in its pipeline's layout order: the frame's spaces shared (made once a pass: ``made``),
-        the node's own."""
-        out = []
-        program = model.m_program  # the current path's: its shaders' declared texture kinds (the stand-ins)
-        declared = {
-            name: kind
-            for stage in (program.m_vertex_stage, program.m_hull_stage, program.m_domain_stage, program.m_pixel_stage)
-            if stage is not None
-            for name, kind in stage.types.items()
-        }
+    def _declared(self, program) -> dict:
+        """The texture kinds a program's shaders declare (the current path's: the stand-ins), worked out once."""
+        held = self.m_declared.get(id(program))  # pattern: ok (the entry holds the program: its id stays its own)
+        if held is None or held[0] is not program:
+            stages = (program.m_vertex_stage, program.m_hull_stage, program.m_domain_stage, program.m_pixel_stage)
+            kinds = {name: kind for stage in stages if stage is not None for name, kind in stage.types.items()}
+            held = self.m_declared[id(program)] = (program, kinds)  # pattern: ok (as above)
+        return held[1]
+
+    def _bindings(self, tech: STechnique, model, frame: dict, maps: dict, data: SNodeData, shared: list,
+                  bridged: list) -> list:  # fmt: skip
+        """The sets of a draw in its pipeline's layout order: the frame's spaces' ``shared`` (``_shared_sets``), the
+        node's own (the QRhi textures it wraps into ``bridged``)."""
+        out, frame_sets = [], iter(shared)
         for index, spec in enumerate(tech.plan.layouts):
-            mine = spec.space == 2
-            if not mine and (tech.name, index) in made:
-                out.append(made[(tech.name, index)])
+            if spec.space != 2:
+                out.append(next(frame_sets))
                 continue
-            # the ground's maps last, as the current path's ``CTerrainModel.prepare``: its grit over the stand-in
-            named = {**frame, **self._textures({**model.m_textures, **model.m_own, **maps}, spec, declared)}
-            if mine:
-                named[terraindraw.NODE_BUFFER] = data.node
-                key, make = self._set(tech, index, named)
-                held = data.sets.get(tech.name)
-                if held is None or held[0] != key:
-                    if held is not None:
-                        held[1].release()
-                    held = data.sets[tech.name] = (key, make())
-                out.append(held[1])
-            else:
-                out.append(made.setdefault((tech.name, index), self._shared_set(tech, index, named)))
+            textures = self._textures(_maps_of(model, maps), spec, self._declared(model.m_program), bridged)
+            key, make = self._set(tech, index, {**frame, **textures, terraindraw.NODE_BUFFER: data.node})
+            held = data.sets.get(tech.name)
+            if held is None or held[0] != key:
+                if held is not None:
+                    held[1].release()
+                held = data.sets[tech.name] = (key, make())
+            out.append(held[1])
         return out
 
-    def _record(self, command_buffer, draws: list, size_px: tuple[int, int]) -> None:
-        """The draws on QRhi's list (inside ``beginExternal``), the QRhi resources they read moved into shader reads
-        and back; the module's list (the uploads, the frame's constants) goes to the queue first."""
+    def _item(self, tech: STechnique, model, frame: dict, maps: dict, data: SNodeData, made: dict, push: bytes = b""):
+        """A node's draw in ``tech``, made once and kept while what it binds stays the same objects: the pass's
+        shared sets and constant buffers, the node's and the ground's maps (QRhi's textures wrapped again here, as the
+        pass reads them: ``CBridge``); performance.md section 4, item 2."""
+        shared = self._shared_sets(tech, model, frame, maps, made)
+        key = (tuple(map(id, shared)), tuple(map(id, frame.values())), tuple(map(id, model.m_textures.values())),
+               tuple(map(id, model.m_own.values())), tuple(map(id, maps.values())))  # fmt: skip
+        held = data.items.get(tech.name)
+        if held is not None and held[0] == key:
+            if all(self.m_bridge.texture(found)[0] is wrapped for found, wrapped in held[2]):
+                return held[1]
+        bridged: list = []
+        sets = self._bindings(tech, model, frame, maps, data, shared, bridged)
+        item = self.m_module.draw_item(tech.pipeline, sets, data.count, [data.vertices[:2]], data.indices.buffer, True, push,
+                                       index_offset=data.indices.offset)  # fmt: skip
+        kept = (shared, dict(frame), dict(model.m_textures), dict(model.m_own), dict(maps))  # the key's objects
+        data.items[tech.name] = (key, item, bridged, kept)
+        return item
+
+    def _shared_sets(self, tech: STechnique, model, frame: dict, maps: dict, made: dict) -> list:
+        """The sets of a technique's frame spaces this pass (made with its first node: ``made``)."""
+        out = []
+        for index, spec in enumerate(tech.plan.layouts):
+            if spec.space == 2:
+                continue
+            if (tech.name, index) not in made:
+                textures = self._textures(_maps_of(model, maps), spec, self._declared(model.m_program), [])
+                made[(tech.name, index)] = self._shared_set(tech, index, {**frame, **textures})
+            out.append(made[(tech.name, index)])
+        return out
+
+    def _record(self, command_buffer, items: list, instances: list, size_px: tuple[int, int]) -> None:
+        """The draws (each node's kept ``SDrawItem``, its instance count) on QRhi's list in one call (inside
+        ``beginExternal``), the QRhi resources they read moved into shader reads and back; the module's list (the
+        uploads, the frame's constants) goes to the queue first."""
         viewport = (0.0, 0.0, float(size_px[0]), float(size_px[1]))
 
         def sent() -> None:  # the debug layer checks bindings as they are recorded: what comes now is ours
@@ -419,11 +476,9 @@ class CNativeTerrain:
                 self.m_foreign += self.m_device.messages()
 
         def record(list_ptr) -> None:
-            for tech, sets, data, instances, push in draws:
-                self.m_module.record_external(self.m_device, list_ptr, tech.pipeline, sets, data.count, viewport,
-                                            [data.vertices], data.indices, True, instances, 0, push)  # fmt: skip
+            self.m_module.record_draws(self.m_device, list_ptr, items, instances, [0] * len(items), viewport)
 
-        self.m_bridge.send(self.m_list, command_buffer, record, sent)
+        self.m_bridge.send(None if self.m_is_deferred else self.m_list, command_buffer, record, sent)
         if self.m_device.debug:
             self.m_messages += self.m_device.messages()
 
@@ -452,7 +507,7 @@ class CNativeTerrain:
         tells a model's technique); ``ground``: ``gameframe.SGround`` (its maps and frame values)."""
         maps = dict(ground.maps) if ground is not None else {}
         writes = self._writes(models, ground)
-        draws, frames, made = [], {}, {}
+        items, frames, made = [], {}, {}
         for model in models:
             name = (
                 "TerrainDeferredDetailed" if model.m_program is detailed and detailed is not None else "TerrainDeferred"
@@ -461,8 +516,8 @@ class CNativeTerrain:
             data = self._node(model)
             if name not in frames:
                 frames[name] = self._frame_buffers(tech, camera, writes, "gbuffer:")
-            draws.append((tech, self._bindings(tech, model, frames[name], maps, data, made), data, 1, b""))
-        self._record(command_buffer, draws, size_px)
+            items.append(self._item(tech, model, frames[name], maps, data, made))
+        self._record(command_buffer, items, [1] * len(items), size_px)
 
     def shadow(
         self,
@@ -475,7 +530,7 @@ class CNativeTerrain:
         size_px: tuple[int, int],
         detailed,
     ) -> None:
-        """The casters into the cascades of the shadow map QRhi has bound, four instances each (one per cascade);
+        """The casters into the cascades of the shadow map QRhi has bound, an instance per cascade used;
         ``info``: (QRhi's ``cShadowInformation``, whether QRhi read it back this frame): written by the game's analysis
         on the GPU, else by the CPU's fit, written here."""
         maps = dict(ground.maps) if ground is not None else {}
@@ -489,7 +544,7 @@ class CNativeTerrain:
         else:
             information = self._constant("cShadowInformation", gameshadow.info_bytes(cascades), "structured",
                                           gameshadow.INFO_BYTES)  # fmt: skip
-        draws, frames, made = [], {}, {}
+        items, frames, made = [], {}, {}
         for caster in casters:
             node = caster.m_share if caster.m_share is not None else caster
             name = "TerrainShadowDetailed" if node.m_program is detailed and detailed is not None else "TerrainShadow"
@@ -499,9 +554,9 @@ class CNativeTerrain:
                 frames[name] = {**self._frame_buffers(tech, camera, writes, "shadow:"),
                                 "cShadowInformation": information, "cTerrainShadowCullResultBuffer": self.m_cull}  # fmt: skip
             push = bytes(tech.plan.push.count) if tech.plan.push is not None else b""
-            sets = self._bindings(tech, node, frames[name], maps, data, made)
-            draws.append((tech, sets, data, gameshadow.COUNT, push))
-        self._record(command_buffer, draws, size_px)
+            items.append(self._item(tech, node, frames[name], maps, data, made, push))
+        used = max(1, min(gameshadow.COUNT, cascades.used))  # instance k into cascade k: none into a cascade not read
+        self._record(command_buffer, items, [used] * len(items), size_px)
 
     @staticmethod
     def _writes(models: list, ground) -> list:
@@ -524,12 +579,17 @@ class CNativeTerrain:
 
         return [values, fill] if fill is not None else [values]
 
+    def submit(self) -> None:
+        """The module's list to the queue: once a frame after both passes when ``is_deferred`` (QRhi's list is
+        submitted at the frame's end, so each pass submitting its own put nothing earlier on the GPU)."""
+        self.m_list.execute()
+
     def end_frame(self) -> None:
-        """One frame done: the nodes not drawn for a few frames let go, the wrapped QRhi resources likewise (the
-        device's own frame is its owner's to end, once for all its native parts)."""
+        """One frame done: the nodes not drawn for ``NODE_KEEP_FRAMES`` let go, the wrapped QRhi resources after a few
+        (the device's own frame is its owner's to end, once for all its native parts)."""
         self.m_frame += 1
         for key in [
-            node_key for node_key, (_model, data) in self.m_nodes.items() if self.m_frame - data.last > KEEP_FRAMES
+            node_key for node_key, (_model, data) in self.m_nodes.items() if self.m_frame - data.last > NODE_KEEP_FRAMES
         ]:
             self.m_nodes.pop(key)[1].release()
         self.m_bridge.end_frame()
@@ -542,6 +602,7 @@ class CNativeTerrain:
         for resource in (*self.m_stand_ins.values(), self.m_white, self.m_cull):
             resource.release()
         self.m_buffers.release()
+        self.m_pool.release()
         self.m_bridge.release()
         self.m_list.close()
         self.m_nodes, self.m_sets = {}, {}

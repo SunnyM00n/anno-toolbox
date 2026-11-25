@@ -22,6 +22,14 @@ SKY = "sky"
 ENVIRONMENT = "environment"
 CALLS = {**{key: (SKY, fn) for key, (_e, _t, fn) in gamesky.STAGES.items()}, "clouds": (SKY, "csAddReflectedClouds"),
          "cache": (ENVIRONMENT, "csUpdateSelfShadowCache")}  # fmt: skip
+# the self-shadow cache kept between frames (performance.md 4, item 6): scrolled with the camera; a variant without it
+# makes the cache anew every frame
+KEPT_CACHE = {"shift": (ENVIRONMENT, "csShiftSelfShadowCache")}
+SHIFT_GROUP = (8, 8, 1)  # csShiftSelfShadowCache's numthreads
+# cSSCUpdateFactor of a kept cache: the largest the shader blends by (above 0.05 it makes every cell anew); the
+# engine's own value is not known [I] (performance.md 5)
+CACHE_BLEND = 0.05
+CACHE_JUMP_S = 1.0  # the clouds' clock moved further than this since the last frame: the cache is made anew [I]
 BINDLESS = "cBindlessTextures"  # csAddReflectedClouds' regional weather maps: none (cNumRegionalWeatherMaps 0)
 TextureFormat = QRhiTexture.Format
 QRHI_FORMATS = {"R8_UNORM": TextureFormat.R8, "RG8_UNORM": TextureFormat.RG8, "R16_UNORM": TextureFormat.R16, "RGBA16_FLOAT": TextureFormat.RGBA16F,
@@ -34,6 +42,12 @@ def shaders(natives) -> dict:
     out = {}
     for key, (stem, function) in CALLS.items():
         out[key] = natives.call(natives.variant(stem), function)
+        natives.reflection(out[key])
+    for key, (stem, function) in KEPT_CACHE.items():
+        try:
+            out[key] = natives.call(natives.variant(stem), function)
+        except KeyError:  # the cache is made anew every frame
+            continue
         natives.reflection(out[key])
     return out
 
@@ -88,6 +102,8 @@ class CNativeSky:
         self.m_qrhi_clouds: dict = {}  # QRhi's wrappers of them, for the passes still on QRhi
         self.m_table = None  # csAddReflectedClouds' bindless table of stand-ins
         self._m_done: tuple = ()
+        self.m_cache_frames = 0  # the self-shadow cache's updates (its cFrameCounter)
+        self._m_cache_at: tuple | None = None  # the last update's (centre, sun and wind, the clouds' seconds)
 
     def _upload_maps(self, command_list) -> None:
         """The engine's volumes and profiles, the ambient's weather map and the self-shadow cache, once; QRhi's
@@ -193,7 +209,9 @@ class CNativeSky:
         return ran
 
     def _cache(self, camera, sky, shared: dict) -> None:
-        """``csUpdateSelfShadowCache``: the cache made anew around the camera (``cSSCUpdateFactor`` 1)."""
+        """``csUpdateSelfShadowCache`` around the camera: made anew (``cSSCUpdateFactor`` 1), or, where the clouds
+        keep it (``gameclouds.CClouds.m_is_cache_kept``), scrolled with the camera by ``csShiftSelfShadowCache`` and
+        blended by ``CACHE_BLEND``, the cells it scrolled in made anew."""
         cache = self.m_clouds["cSelfShadowCacheRO"]
         self.m_handover.take_back(self.m_list, [self.m_qrhi_clouds["cSelfShadowCacheRO"]])  # QRhi's passes read it
         named = {**shared, **{k: value for k, value in self.m_clouds.items() if k != "cSelfShadowCacheRO"},
@@ -202,13 +220,42 @@ class CNativeSky:
             groups(count, group_size)
             for count, group_size in zip(gameclouds.CACHE, gameclouds.CACHE_GROUP, strict=True)
         )
+        factor = self._shift(camera, sky, named)
+        self.m_cache_frames += 1
 
         def fill(constants: gs.CConstants) -> None:
             gs.fill_frame(constants, camera)
             gs.fill_sun(constants, sky.sun, sky.night)
             self.fill_clouds(constants, camera)
+            constants.set("cSSCUpdateFactor", factor)
+            constants.set("cFrameCounter", self.m_cache_frames)  # the kept cache's sample along the sun turns
 
         self.m_kernels["cache"].dispatch(self.m_list, self._named("cache", named), fill, grid)
+
+    def _shift(self, camera, sky, named: dict) -> float:
+        """The kept cache scrolled from the last frame's centre to this one's; the update factor this frame blends by
+        (1: no cache to keep, a new sun or a jump of the clouds' clock)."""
+        description = self.m_description
+        centre = np.array([camera.eye[0], camera.eye[2]], float)
+        moment = (tuple(np.round(np.asarray(sky.sun, float), 4)), sky.night, description.m_wind)
+        last, self._m_cache_at = self._m_cache_at, (centre, moment, description.m_seconds)
+        if (
+            not description.m_is_cache_kept
+            or "shift" not in self.m_kernels
+            or last is None
+            or last[1] != moment
+            or abs(description.m_seconds - last[2]) > CACHE_JUMP_S
+        ):
+            return 1.0
+
+        def fill(constants: gs.CConstants) -> None:
+            constants.set("cFrustumPosU", centre)
+            constants.set("cFrustumVelU", centre - last[0])
+
+        grid = tuple(groups(count, size) for count, size in zip(gameclouds.CACHE, SHIFT_GROUP, strict=True))
+        self.m_kernels["shift"].dispatch(self.m_list, self._named("shift", named), fill, grid)
+        self.m_list.uav_barrier()  # the update reads what the shift marked
+        return CACHE_BLEND
 
     def _sky(self, sky) -> bool:
         """``gamesky.CSkyPasses.run``'s chain on the module's list (its order, sizes and slots)."""

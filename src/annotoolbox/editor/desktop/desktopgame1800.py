@@ -450,6 +450,9 @@ class CGameIsland1800(CGameIsland):
         self.m_renderer.m_stats["terrain_stored"] = sum(model.m_kind[0] == "stored" for model in models)
         self.m_renderer.m_stats["terrain_detailed"] = sum(model.m_kind[0] == "detailed" for model in models)
         self.m_animated = self._moving(options)
+        self.m_settling = bool(
+            self.m_animated and (self.m_pages is not None and self.m_pages.busy() or self._m_unbaked)
+        )
         return True
 
     def _moving(self, options) -> bool:

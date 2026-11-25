@@ -29,7 +29,7 @@ from ..editsession import CEditSession, SEntry
 from .desktopbatches import PASSES, CBatch, CInstanceSets, level_meshes
 from .desktopdecals import CDecalLayer
 from .desktopframe import CFramePasses, SFrame
-from .desktopgeometry import pin_mesh, terrain_vertices
+from .desktopgeometry import pin_mesh, pin_scale, terrain_vertices
 from .desktopground import CGroundDraw
 from .desktoppick import CPicking
 from .desktopuniforms import CUniformMemory
@@ -68,6 +68,18 @@ class SViewOptions:
     sky_haze: bool = True  # False: the game look leaves out its visible sky and haze (and the clouds on it)
     clouds: bool = True  # False: the game look leaves out its cloud pass
     ambient_occlusion: bool = True  # False: the 1800 and 2205 game look makes no ambient occlusion
+    still_frame: bool = True  # False: the game look draws every pass each frame, no still frame kept (``gamestill``)
+    idle_rate: bool = True  # False: the view redraws at its full rate with no input too (``desktopview``)
+    gpu_culling: bool = True  # False: the game look's shadow casters culled on the CPU (``shadowcullnative``)
+    # False: a native model's pipelines are made in the frame that first draws it, not by the module's workers
+    background_pipelines: bool = True
+    # the game look draws far objects merged per region (off by default: they add far objects the view leaves out
+    # as too small, and gained nothing on the measured islands: performance.md 4, item 10)
+    distance_clusters: bool = False
+    temporal_scattering: bool = True  # the game look's clouds and fog accumulated over frames, as the game's
+    # the game look's clouds keep their self-shadow cache between frames (off: its blend changes the clouds' light,
+    # and the game's own blend is not known: performance.md 5)
+    cloud_cache: bool = False
 
     @property
     def is_clock_held(self) -> bool:
@@ -76,9 +88,12 @@ class SViewOptions:
         return self.particle_time is not None or not self.waves
 
     @property
-    def sky_parts(self) -> tuple[bool, bool]:
-        """(the game look's visible sky and haze, its clouds) as the switches leave them: no sky, no clouds on it."""
-        return self.sky_haze, self.sky_haze and self.clouds
+    def sky_parts(self):
+        """The game look's visible sky and haze, its clouds and how they are made (``gameextras.SSkyParts``), as the
+        switches leave them: no sky, no clouds on it."""
+        from ...render.gameextras import SSkyParts  # Qt's QRhi: only for the game look
+
+        return SSkyParts(self.sky_haze, self.sky_haze and self.clouds, self.temporal_scattering, self.cloud_cache)
 
 
 def shrink(raw: bytes, size_px: tuple[int, int], component_count: int, max_side: int) -> tuple[tuple[int, int], bytes]:
@@ -232,6 +247,14 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
             count += 1  # the ground's materials
         return count + self.m_particles.pending() + (self.m_game.busy() if self.m_game is not None else 0)
 
+    @property
+    def m_working(self) -> bool:
+        """Whether parts, nodes or pages still come in (the view keeps its full rate then, ``desktopview``)."""
+        game = self.m_game
+        return self._m_sync_left > 0 or (
+            game is not None and bool(game.m_objects.m_ahead_left or self.m_ctx.m_make_left or game.m_settling)
+        )
+
     def changed(self) -> bool:
         """Something new arrived from the background since the last frame."""
         out = False
@@ -349,12 +372,13 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
     def _batch_parts(self, batch: CBatch) -> list | None:
         layer, name = batch.m_key
         if layer == "markers":
+            size = pin_scale(self.m_size_tiles)
             if "pin" not in self.m_meshes:
-                self.m_meshes["pin"] = self._vaos(*pin_mesh(), banner=False)
+                self.m_meshes["pin"] = self._vaos(*pin_mesh(size), banner=False)
             color = viewcolors.MARKER_COLORS.get(name, 0xFFFFFF)
             part = {"shader": 8, "color": srgb_hex(color), "diffuse": "", "normal": "", "matrix": np.identity(4, "f4"),
                     "emissive": 0.35, "marker": True}  # fmt: skip
-            batch.m_box = (np.array([-0.55, 0, -0.55], "f4"), np.array([0.55, 2.45, 0.55], "f4"))
+            batch.m_box = (np.array([-0.55, 0, -0.55], "f4") * size, np.array([0.55, 2.45, 0.55], "f4") * size)
             batch.m_reach = reach(batch.m_box)
             return [(part, self.m_meshes["pin"])]
         if self.m_library is None or not name or not self.m_library.ready(name):
@@ -452,6 +476,8 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         )
         batch.m_mats, batch.m_version = matrices, batch.m_version + 1
         self._m_scene_serial += 1
+        if batch.m_key[0] == "markers" and count:  # a pin is the pin's size, not its object's (a decal's) scale
+            matrices = instance_matrices(positions, rotations, (scales != 0).astype("f4"), self.m_size_tiles)
         data = np.ascontiguousarray(matrices.transpose(0, 2, 1)).tobytes()
         batch.m_cells = CInstanceCells(matrices) if count else None
         if batch.m_inst is None or batch.m_count != count:
@@ -527,7 +553,12 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
             # entry each time a model came took seconds on a continental island's 48,000
             rows = []
             for batch in self.m_batches.values():
-                if (batch.m_parts is None or not batch.m_parts) and batch.m_mats is not None and len(batch.m_mats):
+                if (
+                    (batch.m_parts is None or not batch.m_parts)
+                    and batch.m_mats is not None
+                    and len(batch.m_mats)
+                    and not (batch.m_parts == [] and self.m_library.decals(batch.m_key[1]))  # the ground decals show
+                ):
                     shown = np.abs(batch.m_mats[:, :3, :3]).sum(axis=(1, 2)) > 0
                     rows.append(batch.m_mats[shown, :3, 3] + np.array([0.0, 0.3, 0.0], "f4"))
             positions = np.concatenate(rows) if rows else np.zeros((0, 3), "f4")
@@ -586,7 +617,8 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
 
     # frames
     def _targets(self, width_px: int, height_px: int, single: bool = False):
-        """The frame's targets, multisampled unless ``single`` (the game's 2070 sea reads the frame's depth)."""
+        """The frame's targets, multisampled unless ``single`` (the game's 2070 sea reads the frame's depth, the game
+        look composites its own frame)."""
         samples = 1 if single else min(4, self.m_ctx.max_samples)
         if (
             self.m_targets is None
@@ -726,7 +758,9 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         self._m_max_texture = quality.max_texture if quality is not None else 0  # maps uploaded from now on
         width_px, height_px = max(1, int(size_px[0] * scale_factor)), max(1, int(size_px[1] * scale_factor))
         game_sea = self._game_sea(options)
-        targets = self._targets(width_px, height_px, single=game_sea is not None)
+        # one sample when the game's 2070 sea reads the depth or the game look draws (its frame is single-sampled and
+        # composited whole: multisampling there only cost the composite; performance.md 4, item 7)
+        targets = self._targets(width_px, height_px, single=game_sea is not None or game)
         view, eye = camera.view(), camera.eye()
         proj = camera.proj(size_px[0] / max(1, size_px[1]))
         view_proj = proj @ view
@@ -759,8 +793,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         frame.now = time.monotonic() - self._m_start
         streets, models, translucent = self._visible_parts(frame, options)
         self.m_drawn_opaque = streets + models  # the game's sea mirrors them (``desktopsea``)
-        if not self.m_game_decals:  # the game's decal shader laid them itself: the view's own are not drawn
-            self._lay_decals(frame, options)
+        self._lay_decals(frame, options)
         if not self.m_game_decals:  # the game's decal shader drew them into its G-buffer
             # the game's ground stage (render.decalmesh); 2070's stored streets, laid as decals, after the decals
             self.m_decals.draw(self, frame, decalmesh.BEFORE_STREETS, decalmesh.STREET_CELLS)

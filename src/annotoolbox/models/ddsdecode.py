@@ -164,6 +164,21 @@ def read_dds(data: bytes) -> np.ndarray:
     return _uncompressed(data, width_px, height_px, pf_flags, pixel_format)
 
 
+def without_text_copy(data: bytes) -> bytes | None:
+    """``data`` with the line breaks a text-mode copy added (every ``\\r\\n`` back to ``\\n``) when that turns a DDS the
+    readers refuse into a whole one; None when it does not. 2070 ships one such file (``default_norm_0``:
+    a 4x4 DXT5 with 145 bytes, its flags' 0x0a doubled; texture-pipeline "Damaged files")."""
+    if data[:4] != b"DDS " or b"\r\n" not in data:
+        return None
+    mended = data.replace(b"\r\n", b"\n")
+    try:
+        if CDdsFile(mended).cut_short():
+            return None
+    except CUnsupportedDds:
+        return None
+    return mended
+
+
 # Any level and face, the DX10 header included
 
 DDSD_MIPMAPCOUNT, DX10_CUBE, DXGI_BC6H_SF16 = 0x20000, 0x4, 96

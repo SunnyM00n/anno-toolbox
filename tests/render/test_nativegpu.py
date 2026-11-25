@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 import struct
 import sys
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -89,12 +91,14 @@ def test_without_the_module_the_view_keeps_its_own_look(monkeypatch):
 
 def test_a_view_that_lets_its_device_go_lets_the_native_hold_on_it_go(monkeypatch):
     """``CRhiView.releaseResources`` detaches NVRHI from a Direct3D 12 device (it would keep the device alive after
-    QRhi's goes, with everything released late on it); another backend's handles are not read."""
+    QRhi's goes, with everything released late on it), its pipeline library written first; another backend's
+    handles are not read."""
     pytest.importorskip("PySide6")
     from annotoolbox.render import rhiview
 
     waited = []
-    gpu = type("G", (), {"wait_idle": lambda self: waited.append(True)})()
+    gpu = type("G", (), {"wait_idle": lambda self: waited.append(True), "adapter_id": "1002-73bf-00000000-c1",
+                         "pipeline_stats": {"changed": True}, "pipeline_library": lambda self: b"NGPL"})()  # fmt: skip
     monkeypatch.setattr(nativegpu, "_g_state", {"attached": {7: gpu}, "samplers": {(id(gpu), "linear"): object()}})
     monkeypatch.setattr(nativegpu, "qrhi_handles", lambda rhi: (7, 8))
     released = []
@@ -105,6 +109,7 @@ def test_a_view_that_lets_its_device_go_lets_the_native_hold_on_it_go(monkeypatc
         rhiview.CRhiView.releaseResources(view)
         assert bool(waited) == (backend == "D3D12") and len(released) == 1 + (backend == "D3D12")
     assert nativegpu._g_state["attached"] == {} and nativegpu._g_state["samplers"] == {}
+    assert nativegpu.library_path(gpu).read_bytes() == b"NGPL"  # what the device made, for the next start
 
 
 def test_the_layer_runs_on_the_software_rasteriser():
@@ -205,10 +210,30 @@ def test_the_kept_sets_and_buffers_hold_what_they_were_made_with():
     assert one.size == 256 and kept.get(lst, "k", bytes(16), frame=2) is one and len(written) == 1
     two = kept.get(lst, "k", bytes(300), frame=3)
     assert two is not one and two.size == 512 and one in released and len(written) == 2
-    kept.let_go(before=3)
-    assert two not in released
-    kept.let_go(before=4)
-    assert two in released and not kept.m_held
+    assert kept.let_go(before=3) == [] and two not in released
+    assert kept.let_go(before=4) == [two] and two in released and not kept.m_held
+
+
+def test_a_set_kept_with_a_resource_its_owner_let_go_goes_with_it():
+    """``CSetCache.let_go``: the sets made with a resource let go (a bridge's wrap unused for some frames, a kept
+    buffer) are let go at once. Kept, they were never asked for again (the next wrap has another id) and held their
+    sampler descriptors until the device's 2048 were used up and the island view crashed in a binding set."""
+    released = []
+
+    class FakeSet:
+        def release(self):
+            released.append(self)
+
+    sets = nativegpu.CSetCache(512)
+    layout, wrap, other = object(), object(), object()
+    with_wrap, without = sets.get(layout, (wrap, None), FakeSet), sets.get(layout, (other, None), FakeSet)
+    sets.let_go([])
+    assert released == [] and len(sets) == 2
+    sets.let_go([wrap])
+    assert released == [with_wrap] and len(sets) == 1 and sets.get(layout, (other, None), FakeSet) is without
+    keys = []
+    sets.get(layout, (object(),), FakeSet, keys)
+    assert not sets.touch([*keys, (id(layout), id(wrap), id(None))])  # a kept list naming the gone set makes anew
 
 
 TONEMAP = """
@@ -270,6 +295,19 @@ def test_released_resources_and_bad_arguments_raise_instead_of_crashing_the_proc
         cl.write_buffer(buf, bytes(4))
     with pytest.raises(RuntimeError, match="released"):
         gpu.framebuffer([tex])
+    layout = gpu.layout([("texture", 0, 1), ("structured", 1, 1), ("cbuffer", 0, 1), ("sampler", 0, 1)])
+    sampler, cb = gpu.sampler(), gpu.buffer(256, "constant")
+    rest = [("cbuffer", 0, cb), ("sampler", 0, sampler)]
+    for texture, structured in ((tex, None), (None, buf)):  # NVRHI would write the view through a null handle
+        with pytest.raises(RuntimeError, match="released resource"):
+            gpu.binding_set(layout, [("texture", 0, texture), ("structured", 1, structured), *rest])
+    assert gpu.binding_set(layout, [("texture", 0, None), ("structured", 1, None), *rest]) is not None
+    cb.release()
+    with pytest.raises(RuntimeError, match="released resource"):
+        gpu.binding_set(layout, [("texture", 0, None), ("structured", 1, None), *rest])
+    layout.release()
+    with pytest.raises(RuntimeError, match="released layout"):
+        gpu.binding_set(layout, [])
     with pytest.raises(RuntimeError, match="needs a colour or a depth"):
         gpu.framebuffer([])
     with pytest.raises(RuntimeError, match="unknown address mode"):
@@ -277,3 +315,168 @@ def test_released_resources_and_bad_arguments_raise_instead_of_crashing_the_proc
     cl.close()
     with pytest.raises(RuntimeError, match="no adapter"):
         module.Device.create(False, 99)
+
+
+def test_a_binding_set_the_full_sampler_heap_cannot_hold_raises_and_one_fits_again_once_sets_are_let_go():
+    """The shader-visible sampler heap holds 2048 descriptors at most: a set past them is refused (NVRHI wrote its
+    samplers through an invalid index and the driver crashed the island view), and the descriptors of sets let go
+    come back after the frames that may still read them."""
+    native_module()
+    gpu = nativegpu.own_device(adapter=-2)
+    sampler = gpu.sampler()
+    layout = gpu.layout([("sampler", slot, 1) for slot in range(16)])
+    items = [("sampler", slot, sampler) for slot in range(16)]
+    made = []
+    with pytest.raises(RuntimeError, match="sampler descriptor heap is full"):
+        for _ in range(2048 // 16 + 1):
+            made.append(gpu.binding_set(layout, items))
+    assert 0 < len(made) <= 2048 // 16
+    for kept in made:
+        kept.release()
+    for _ in range(gpu.keep_frames + 1):
+        gpu.end_frame()
+    assert gpu.binding_set(layout, items) is not None
+
+
+class FakePoolDevice:
+    """A device of ``CBufferPool``: its buffers by number, the frames ``end_frame`` counted."""
+
+    keep_frames = 3
+
+    def __init__(self) -> None:
+        self.frame, self.made, self.released = 0, [], []
+
+    def buffer(self, size, usage, stride=0, name=""):
+        made = SimpleNamespace(size=size, usage=usage, release=lambda: self.released.append(made))
+        self.made.append(made)
+        return made
+
+
+class FakeWrites:
+    def __init__(self) -> None:
+        self.writes = []
+
+    def write_buffer(self, buffer, data, offset=0):
+        self.writes.append((buffer, len(data), offset))
+
+
+def test_a_pool_places_pieces_in_one_buffer_and_reuses_a_freed_one_after_the_frames_in_flight():
+    """``CBufferPool``: pieces 256-byte aligned in one block, a freed piece reused only once the frames that may still
+    read it are done, joined to its free neighbours; a piece over a quarter of a block gets a buffer of its own,
+    let go late."""
+    device, writes = FakePoolDevice(), FakeWrites()
+    pool = nativegpu.CBufferPool(device, "vertex,index", "meshes", block_bytes=4096)
+    a, b, c = (pool.place(writes, bytes(size)) for size in (100, 300, 16))
+    assert len(device.made) == 1 and [a.offset, b.offset, c.offset] == [0, 256, 768]
+    assert writes.writes == [(device.made[0], 100, 0), (device.made[0], 300, 256), (device.made[0], 16, 768)]
+    pool.free(a)
+    pool.free(b)
+    assert pool.place(writes, bytes(16)).offset == 1024  # freed this frame: a frame in flight may read them
+    device.frame = 4
+    reused = pool.place(writes, bytes(500))
+    assert reused.offset == 0 and reused.buffer is device.made[0]  # both freed pieces joined into one range
+    large = pool.place(writes, bytes(2000))
+    assert large.offset == 0 and large.buffer is device.made[1] and large.block < 0
+    pool.free(large)
+    assert device.released == [device.made[1]]
+    for _ in range(4):
+        pool.place(writes, bytes(1024))  # the block is full: a second one
+    assert len(device.made) == 3
+    pool.release()
+    assert device.made[0] in device.released and device.made[2] in device.released
+
+
+def test_a_piece_given_back_after_its_pool_was_released_is_not_handed_out_again():
+    """An owner that lets its pieces go after the pool's own release (the distance clusters after their objects):
+    their ranges named blocks that are gone, and a block made since would have handed them out a second time."""
+    device, writes = FakePoolDevice(), FakeWrites()
+    pool = nativegpu.CBufferPool(device, "vertex,index", "meshes", block_bytes=4096)
+    old, large = pool.place(writes, bytes(256)), pool.place(writes, bytes(2000))
+    pool.release()
+    kept = pool.place(writes, bytes(256))  # a block made after the release: its first range
+    pool.free(old)
+    pool.free(large)  # its buffer released with the pool: not a second time
+    device.frame = 10
+    assert pool.place(writes, bytes(256)).offset != kept.offset
+    assert device.released.count(device.made[1]) == 1
+
+
+def test_a_pooled_constant_piece_is_bound_by_its_offset_and_size():
+    """``binding_set`` hands the module a pool's piece of a constant buffer as its buffer with its offset and size."""
+    piece = nativegpu.SPlaced("buffer", 512, 0, 256)
+    spec = nativelayout.SLayoutSpec(2, [nativelayout.SItem("cbuffer", 0, 1, "cbTerrainNode")])
+    got = []
+    device = SimpleNamespace(binding_set=lambda layout, items: got.append(items))
+    nativegpu.binding_set(device, "layout", spec, {"cbTerrainNode": piece}, {})
+    assert got == [[("cbuffer", 0, "buffer", {"offset": 512, "range": 256})]]
+
+
+class FakeLibraryDevice:
+    """A device's pipeline library as the module keeps it: its bytes, what was opened, whether it changed."""
+
+    adapter_id = "10de-2702-00000000-a1"
+
+    def __init__(self, changed: bool = True, pending: int = 0) -> None:
+        self.opened, self.changed, self.pending = [], changed, pending
+
+    @property
+    def pipeline_stats(self):
+        return {"changed": self.changed, "pending": self.pending}
+
+    def pipeline_library(self):
+        self.changed = False
+        return b"NGPL library"
+
+    def open_pipeline_library(self, data):
+        self.opened.append(data)
+        return True
+
+
+def test_the_pipeline_library_is_kept_per_adapter_and_written_once_the_workers_rest(monkeypatch):
+    """The library's file is one per adapter in the cache; it is written only when pipelines were stored since and no
+    worker has been busy, at most every ``SAVE_AFTER_S``; a later device opens it from there."""
+    monkeypatch.setattr(nativegpu, "_g_state", {})
+    device = FakeLibraryDevice()
+    assert not nativegpu.open_pipelines(device)  # none yet
+    assert nativegpu.library_path(device).parent.name == nativegpu.PIPELINES_DIR
+    busy = FakeLibraryDevice(pending=2)
+    nativegpu.keep_pipelines(busy, 100.0)
+    assert busy.changed and not nativegpu.library_path(busy).exists()  # its workers still make pipelines
+    nativegpu.keep_pipelines(device, 100.0)
+    for thread in threading.enumerate():
+        if thread.name == "pipeline-library":
+            thread.join(10)
+    assert nativegpu.library_path(device).read_bytes() == b"NGPL library" and not device.changed
+    device.changed = True
+    nativegpu.keep_pipelines(device, 100.0 + nativegpu.SAVE_AFTER_S / 2)
+    assert device.changed  # not again so soon
+    later = FakeLibraryDevice(changed=False)
+    assert nativegpu.open_pipelines(later) and later.opened == [b"NGPL library"]
+    assert not nativegpu.save_pipelines(later)  # nothing stored since: the file stays as it is
+
+
+def test_a_pipeline_made_in_the_background_is_drawn_once_in_and_a_later_start_loads_it_from_the_library():
+    """A pipeline asked for in the background is ready once a worker made it and is stored in the device's library;
+    the library's bytes open on a new device (not those of another file format or driver: it starts empty), whose
+    same pipeline is then loaded, not made."""
+    native_module()
+    gpu = nativegpu.own_device(adapter=-2)
+    cs = gpu.shader("cs", _compute_dxil(), "main")
+    layout = gpu.layout([("rwstructured", 0, 1)])
+    pipe = gpu.compute_pipeline(cs, [layout], background=True)
+    for _ in range(5000):
+        if pipe.ready or pipe.error:
+            break
+        time.sleep(0.002)
+    assert pipe.ready and not pipe.error
+    stats = gpu.pipeline_stats
+    assert stats["made"] == 1 and stats["stored"] == 1 and stats["changed"] and not stats["pending"]
+    data = gpu.pipeline_library()
+    assert data[:4] == b"NGPL" and not gpu.pipeline_stats["changed"]
+    again = nativegpu.own_device(adapter=-2)
+    assert not again.open_pipeline_library(data[:4] + b"\x02" + data[5:])  # another format of the file
+    assert not again.open_pipeline_library(data.replace(gpu.driver_version.encode(), b"0.0.0.0"))  # another driver
+    assert again.open_pipeline_library(data) and not again.open_pipeline_library(data)  # once, before any pipeline
+    made = again.compute_pipeline(again.shader("cs", _compute_dxil(), "main"), [again.layout([("rwstructured", 0, 1)])])
+    stats = again.pipeline_stats
+    assert made.ready and stats["loaded"] == 1 and stats["made"] == 0 and stats["opened"]

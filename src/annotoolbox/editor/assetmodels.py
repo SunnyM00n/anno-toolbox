@@ -28,6 +28,7 @@ class CReason:
     PLACEHOLDER = "its asset only names an editor placeholder"
     UNREADABLE = "its model config cannot be read"
     EMPTY = "its model config draws nothing (a decal or an effect the view does not show)"
+    VARIATION = "the island names a variation past its asset's list"
 
 
 SHOWN = {
@@ -36,6 +37,7 @@ SHOWN = {
     CReason.PLACEHOLDER: N_("islands.asset_only_names_editor_placeholder"),
     CReason.UNREADABLE: N_("islands.model_config_cannot_read"),
     CReason.EMPTY: N_("islands.model_config_draws_nothing_decal"),
+    CReason.VARIATION: N_("islands.variation_past_asset_list"),
 }
 
 
@@ -47,7 +49,12 @@ def describe(why: str) -> str:
     return why
 
 
-NO_PICTURE = (CReason.NO_MODEL, CReason.PLACEHOLDER, CReason.EMPTY)  # genuinely nothing to draw: a pin stands
+NO_PICTURE = (
+    CReason.NO_MODEL,
+    CReason.PLACEHOLDER,
+    CReason.EMPTY,
+    CReason.VARIATION,
+)  # genuinely nothing to draw: a pin stands
 VARIATIONS = re.compile(rb"<Object>(?:(?!</Object>).)*?<Variations>(.*?)</Variations>", re.S)
 ITEM = re.compile(rb"<Item>(.*?)</Item>", re.S)
 FILENAME = re.compile(rb"<Filename>([^<]*)</Filename>")
@@ -55,6 +62,7 @@ BASE = re.compile(rb"<BaseAssetGUID>(\d+)</BaseAssetGUID>")
 TEMPLATE = re.compile(rb"<Template>([^<]*)</Template>")
 NAME = re.compile(rb"<Name>([^<]*)</Name>")
 PLACEHOLDERS = ("constraint_dummy.cfg", "empty_render_object")  # configs the game uses for objects with no look
+PLACEHOLDER_FILE = "placeholder/placeholder.cfg"  # the editor's placeholder model: drawn where the game ships it
 MAX_BASES = 8  # a base asset's own base, and so on
 
 
@@ -99,6 +107,18 @@ class SAssetInfo:
 
 def _text(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
+
+
+def is_placeholder(cfg: str) -> bool:
+    """Whether the config is one the game uses for an object with no look (``PLACEHOLDERS``)."""
+    lowered = cfg.lower()
+    return any(placeholder in lowered for placeholder in PLACEHOLDERS)
+
+
+def is_missing_placeholder(cfg: str) -> bool:
+    """Whether ``cfg``, a config that is not in the game's files, is a placeholder (``PLACEHOLDERS``, or the editor's
+    ``PLACEHOLDER_FILE``, which some builds do not ship): the object has no model, it is no defect."""
+    return is_placeholder(cfg) or cfg.lower().endswith(PLACEHOLDER_FILE)
 
 
 def definition_start(assets: bytes, guid: int) -> int:
@@ -205,7 +225,8 @@ class CAssetModels:
             asset_info = SAssetInfo(
                 guid, _text(name.group(1)) if name else "", _text(template.group(1)) if template else ""
             )
-            asset_info.variations = variations_of(body) or self._loose_model(body)
+            whole = data[first : end if end > 0 else None]  # the blocks may stand before ``Standard`` (2205's)
+            asset_info.variations = variations_of(whole) or self._loose_model(whole)
             base = BASE.search(head)
             if base and depth < MAX_BASES:
                 parent = self.asset(int(base.group(1)), depth + 1)
@@ -226,7 +247,7 @@ class CAssetModels:
         data, start = found
         first = data.rfind(b"<Asset>", 0, start)
         end = data.find(b"</Asset>", start)
-        hit = re.search(rb"<%b>([^<]*)</%b>" % (tag.encode(), tag.encode()), data[start : end if end > 0 else None])
+        hit = re.search(rb"<%b>([^<]*)</%b>" % (tag.encode(), tag.encode()), data[first : end if end > 0 else None])
         if hit:
             return _text(hit.group(1))
         base = BASE.search(data[first : data.find(b"<Values>", first, start)])
@@ -260,6 +281,19 @@ class CAssetModels:
             return SResolved(why=CReason.NO_MODEL, name=asset_info.name, template=asset_info.template)
         cfg = asset_info.variations[variation] if 0 <= variation < len(asset_info.variations) else ""
         cfg = cfg or files[0]
-        if any(placeholder in cfg.lower() for placeholder in PLACEHOLDERS):
+        if is_placeholder(cfg):
             return SResolved(why=CReason.PLACEHOLDER, name=asset_info.name, template=asset_info.template)
         return SResolved(cfg, "", asset_info.name, asset_info.template)
+
+    def why_none(self, guid: int, variation: int = 0) -> str:
+        """Why the variation ``variation`` of the asset draws nothing, for a game that takes the island's variation as it
+        stands (2205: one past the list draws the game's placeholder); the file's presence is the caller's to ask."""
+        asset_info = self.asset(guid)
+        if asset_info is None:
+            return CReason.NO_ASSET
+        if not any(asset_info.variations):
+            return CReason.NO_MODEL
+        if not 0 <= variation < len(asset_info.variations):
+            return CReason.VARIATION
+        cfg = asset_info.variations[variation]
+        return CReason.PLACEHOLDER if is_missing_placeholder(cfg) else CReason.NO_MODEL if not cfg else ""

@@ -122,8 +122,22 @@ def triangulate(polygon) -> list[tuple[int, int, int]]:
     return out
 
 
-def pin_mesh() -> tuple[np.ndarray, np.ndarray]:
-    """An editor-only object's marker: a cone pointing down with a ball on top (vertices [n, 8])."""
+PIN_BASE_TILES = 208.0  # [I] the island size up to which a pin keeps its size: 2.45 units a tile-sized thing (a tree)
+PIN_MAX_SCALE = (
+    4.0  # [I] the cap: a pin as tall as a large building, still about 10 px on the whole view of 1,000 tiles
+)
+
+
+def pin_scale(size_tiles: float) -> float:
+    """How much larger than its base size a pin is drawn on an island of ``size_tiles`` a side: a pin of a fixed size
+    would shrink to 5 px on a 512-tile island's whole view and be 17% of the screen on a 16-tile one (island-editor
+    "What stays a pin")."""
+    return min(PIN_MAX_SCALE, max(1.0, size_tiles / PIN_BASE_TILES))
+
+
+def pin_mesh(scale: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """An editor-only object's marker: a cone pointing down with a ball on top (vertices [n, 8]), ``scale`` times its
+    base size (``pin_scale``)."""
     vertices, indices = [], []
     segments = 12
     for k in range(segments):  # cone: tip at 0, rim of radius 0.45 at 1.6
@@ -156,4 +170,6 @@ def pin_mesh() -> tuple[np.ndarray, np.ndarray]:
                 corner + segments + 1,
                 corner + segments + 2,
             ]
-    return np.asarray(vertices, "f4"), np.asarray(indices, "u4")
+    out = np.asarray(vertices, "f4")
+    out[:, :3] *= scale  # the places only: the normals stay unit length
+    return out, np.asarray(indices, "u4")

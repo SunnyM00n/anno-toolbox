@@ -152,14 +152,28 @@ class SPlacedEffect:
     started: bool
 
 
+@dataclass(frozen=True)
+class SPlacedDecal:
+    """A ``TERRAINDECAL`` of the config: its half sizes (x, z), the rectangle of its map it shows (u0, v0, u1, v1),
+    the diffuse file ("" where the map is not there), its colour and place."""
+
+    extents: tuple[float, float]
+    texcoords: tuple[float, float, float, float]
+    diffuse: str
+    color: Vec3
+    place: SPlace
+
+
 @dataclass
 class SModelConfig:
-    """What a model config draws: its pieces, the configs it nests (path, place), its leaf clusters and effects."""
+    """What a model config draws: its pieces, the configs it nests (path, place), its leaf clusters, effects and
+    ground decals."""
 
     pieces: list[SPiece]
     files: list[tuple[str, SPlace]] = field(default_factory=list)
     leaves: list[SLeaves] = field(default_factory=list)
     effects: list[SPlacedEffect] = field(default_factory=list)
+    decals: list[SPlacedDecal] = field(default_factory=list)
 
 
 # Textures and materials
@@ -243,6 +257,12 @@ def read_config(text: str, texture: Callable[[str], str], path: str = "") -> SMo
         for effect in cfg.effects
         if effect.filename and not effect.visible_when and not effect.damage and effect.bone is None
     ]
+    for decal in cfg.decals:
+        found = surfaces(decal.materials[:1], texture)
+        if found and min(decal.extent) > 0:
+            out.decals.append(
+                SPlacedDecal(decal.extent, decal.texcoords, found[0].diffuse, found[0].color, place_of(decal.transform))
+            )
     for k, cluster in enumerate(cfg.billboard_clusters):
         diffuse = next(iter(surfaces(cluster.materials, texture)), SSurface("", "", "")).diffuse
         colors = cluster.colors or [(1.0, 1.0, 1.0, 1.0)]

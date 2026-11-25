@@ -35,15 +35,28 @@ LOOKS = (
 )  # fmt: skip
 LOOKS_2070 = ("look2070", "underwater", "caustics")  # the looks of islands edited for 2070
 # The Home tab's Performance switches: ``SViewOptions`` fields, ribbon ids ``perf_<key>``, kept in the settings
-# (``Settings.view_switches``); all on unless the person turned one off (island-editor "Performance switches").
-PERFORMANCE = ("shadows", "waves", "reflections", "sky_haze", "clouds", "ambient_occlusion")
+# (``Settings.view_switches``); all on unless the person turned one off (island-editor "Performance switches"), but
+# those of ``PERFORMANCE_OFF``: their picture differs from the view's until the game's own values are known, or
+# they change it and gained nothing where measured (the distance clusters: performance.md 4, item 10).
+PERFORMANCE_OFF = frozenset({"cloud_cache", "distance_clusters"})
+PERFORMANCE = (
+    "shadows", "waves", "reflections", "sky_haze", "clouds", "temporal_scattering", "cloud_cache", "ambient_occlusion",
+    "still_frame", "idle_rate", "gpu_culling", "background_pipelines", "distance_clusters",
+)  # fmt: skip
 PERFORMANCE_TEXTS = {  # (label id, hint id) of each switch, for the settings window
     "shadows": (N_("islands.perf_shadows"), N_("islands.tip.perf_shadows")),
     "waves": (N_("islands.perf_waves"), N_("islands.tip.perf_waves")),
     "reflections": (N_("islands.perf_reflections"), N_("islands.tip.perf_reflections")),
     "sky_haze": (N_("islands.perf_sky_haze"), N_("islands.tip.perf_sky_haze")),
     "clouds": (N_("islands.perf_clouds"), N_("islands.tip.perf_clouds")),
+    "temporal_scattering": (N_("islands.perf_temporal_scattering"), N_("islands.tip.perf_temporal_scattering")),
+    "cloud_cache": (N_("islands.perf_cloud_cache"), N_("islands.tip.perf_cloud_cache"), False),
     "ambient_occlusion": (N_("islands.perf_ambient_occlusion"), N_("islands.tip.perf_ambient_occlusion")),
+    "still_frame": (N_("islands.perf_still_frame"), N_("islands.tip.perf_still_frame")),
+    "idle_rate": (N_("islands.perf_idle_rate"), N_("islands.tip.perf_idle_rate")),
+    "gpu_culling": (N_("islands.perf_gpu_culling"), N_("islands.tip.perf_gpu_culling")),
+    "background_pipelines": (N_("islands.perf_background_pipelines"), N_("islands.tip.perf_background_pipelines")),
+    "distance_clusters": (N_("islands.perf_distance_clusters"), N_("islands.tip.perf_distance_clusters"), False),
 }
 SEA_MIRROR_GAMES = ("anno2070", "anno1404", "anno1701")  # the seas that draw a mirror of the scene
 GAME_SKY_GAMES = ("anno117",)  # the game look draws a visible sky, haze and clouds
@@ -340,10 +353,11 @@ class CIslandDoc(QObject):
         }
 
     def apply_performance(self) -> None:
-        """The view's Performance switches as the settings keep them (all on for a person who never turned one off)."""
+        """The view's Performance switches as the settings keep them (for a person who never turned one: all on but
+        ``PERFORMANCE_OFF``)."""
         stored = getattr(self.m_shell.m_app.m_settings, "view_switches", {})
         for key in PERFORMANCE:
-            setattr(self.m_view.m_opts, key, bool(stored.get(key, True)))
+            setattr(self.m_view.m_opts, key, bool(stored.get(key, key not in PERFORMANCE_OFF)))
         self.m_view.update()
 
     def set_performance(self, key: str, is_on: bool) -> None:

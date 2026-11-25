@@ -91,7 +91,8 @@ class SModelImport:
 class SSettingsRows:
     """What an app adds to the settings window's page of its own (``SAppSpec.settings``): ``choices`` are drop-downs
     (settings key, label id, {value: shown text}), ``switches`` the dict-valued settings shown as tick boxes
-    (settings key, {switch: (label id, hint id)}); a switch the dict does not hold is on."""
+    (settings key, {switch: (label id, hint id[, state when not set])}); a switch the dict does not hold is on, or
+    as its third entry says."""
 
     choices: tuple = ()
     switches: tuple = ()

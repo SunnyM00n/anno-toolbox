@@ -5,6 +5,8 @@ the step bound into a pipeline on Windows' software rasteriser, and an island li
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -79,6 +81,88 @@ def test_the_upsample_blends_as_its_technique_says():
     assert atmospherenative.blends({}, 1) == [(False, "one", "zero", "add", "one", "zero", "add", 15)]
 
 
+def test_a_whole_texture_is_copied_from_and_into_the_copy_states_and_given_back():
+    rec = _recording()
+    copied = []
+    rec.m_module.copy_texture = lambda _list, destination, source: copied.append((destination, source))
+    history, target = FakeResource(5), FakeResource(6)
+    rec.dispatch(None, [], [(target, nativeforeign.UNORDERED)], (1, 1, 1))
+    rec.copy_texture(history, target)
+    rec.finish()
+    read = nativeforeign.SHADER_READ
+    assert copied == [(5, 6)]
+    assert rec.m_module.calls[2] == (
+        "transitions", [(5, read, nativeforeign.COPY_DEST), (6, nativeforeign.UNORDERED, nativeforeign.COPY_SOURCE)]
+    )  # fmt: skip
+    assert rec.m_module.calls[-1] == (
+        "transitions", [(6, nativeforeign.COPY_SOURCE, read), (5, nativeforeign.COPY_DEST, read)]
+    )  # fmt: skip
+
+
+class FakeHistoryOwner:
+    """What the scattering's history reads of the native shading: the camera record, the device, the module's list."""
+
+    def __init__(self) -> None:
+        from annotoolbox.infra.dxc import SConstantBuffer, SVariable
+
+        members = [
+            SVariable("MtxViewPrev", 0, 64, "float4x4", 4, 4),
+            SVariable("MtxProjPrev", 64, 64, "float4x4", 4, 4),
+        ]
+        self.m_element = SConstantBuffer("cCameraBuffer", 128, [SVariable("$Element", 0, 128, "CameraData",
+                                                                          members=members)])  # fmt: skip
+        self.written: list[bytes] = []
+        self.m_device = SimpleNamespace(buffer=lambda *_args, **_kwargs: "cameras")
+        self.m_common = SimpleNamespace(m_list=SimpleNamespace(write_buffer=lambda _b, data: self.written.append(data)))
+
+
+def test_the_clouds_and_fog_history_reprojects_from_last_frames_camera_and_settles_in_four_still_frames():
+    import numpy as np
+
+    from annotoolbox.render import gameshader as gs
+
+    owner = FakeHistoryOwner()
+    history = atmospherenative.CScatteringHistory(owner)
+    turned = np.identity(4)
+    turned[3, 0] = 5.0
+    first = gs.SCamera(np.zeros(3), np.identity(4), np.identity(4), 0.1, 100.0, (8, 8))
+    second = gs.SCamera(np.zeros(3), turned, np.identity(4), 0.1, 100.0, (8, 8))
+    left = []
+    for camera in (first, second, second, second, second, second, second):
+        history.step(camera, (4, 4))
+        left.append(history.m_settle_left)
+    assert left == [4, 4, 3, 2, 1, 0, 0]  # a moved camera starts the count again
+    assert history.m_frame_counter == 7  # cFrameCounter turns the marched pixel of each quad
+    prev_view = np.frombuffer(owner.written[1][:64], "<f4").reshape(4, 4)
+    assert np.allclose(prev_view, np.identity(4))  # the second frame reprojects from the first one's view
+    assert history.m_has_stepped
+    history.forget()
+    assert history.m_settle_left == 0
+
+
+def test_the_kept_cloud_cache_scrolls_with_the_camera_and_is_made_anew_for_a_new_sun_or_a_jump_in_time():
+    import numpy as np
+
+    from annotoolbox.render import skynative
+
+    shifted = []
+    sky = object.__new__(skynative.CNativeSky)
+    sky.m_kernels = {"shift": SimpleNamespace(dispatch=lambda _list, _named, fill, grid: shifted.append(grid))}
+    sky.m_list = SimpleNamespace(uav_barrier=lambda: None)
+    sky.m_description = SimpleNamespace(m_is_cache_kept=True, m_seconds=1.0, m_wind="calm")
+    sky._m_cache_at = None
+    sky._named = lambda _key, named: named
+    camera, sun = SimpleNamespace(eye=np.array([1.0, 2.0, 3.0])), SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False)
+    assert sky._shift(camera, sun, {}) == 1.0  # nothing kept yet
+    assert sky._shift(camera, sun, {}) == skynative.CACHE_BLEND and shifted == [(16, 16, 16)]
+    assert sky._shift(camera, SimpleNamespace(sun=(1.0, 0.0, 0.0), night=False), {}) == 1.0  # a new sun
+    sky.m_description.m_seconds = 9.0
+    assert sky._shift(camera, SimpleNamespace(sun=(1.0, 0.0, 0.0), night=False), {}) == 1.0  # the clock jumped
+    sky.m_description.m_is_cache_kept = False
+    assert sky._shift(camera, SimpleNamespace(sun=(1.0, 0.0, 0.0), night=False), {}) == 1.0  # the switch is off
+    assert len(shifted) == 1
+
+
 def test_the_transparent_pass_reads_the_clouds_shadow_only_once_it_was_made():
     seen = shadingnative.SCloudsSeen(None, {"cTransmittanceMap": 1, "cCloudBaseNoise": 2})
     assert seen.inputs() == {"cCloudBaseNoise": 2}
@@ -96,6 +180,7 @@ def test_every_shader_of_the_step_binds_on_the_software_rasteriser():
 
     gpu = nativegpu.own_device(adapter=-2)
     found = shadingnative.shaders(natives)
+    assert {"atm.select", "atm.accumulate", "sky.shift"} <= set(found)  # the shipped variant accumulates over frames
     common = shadingnative.CCommon(gpu, natives)
     draws = ("atm.quad", "atm.down", "atm.up")
     kernels = [common.kernel(s) for key, s in found.items() if key not in draws and not key.startswith("sky.")]

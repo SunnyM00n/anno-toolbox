@@ -417,7 +417,7 @@ class CApp(CIslandCatalogue):
             return heights[::step, ::step], view.size
         island_data = self.m_editor.m_isl
         scale = 1 / isd1701.TILE if key == "anno1701" else 1.0
-        return np.asarray(island_data.heightmap(), np.float64) * scale, island_data.width
+        return np.asarray(island_data.heightmap(), np.float64) * scale, island_data.m_width
 
     # jobs
     def _start(self, name: str, work) -> CJob:

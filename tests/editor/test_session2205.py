@@ -12,7 +12,7 @@ from tests.formats.isdfakes import SESSION2205_SIZE as SIZE
 from tests.formats.isdfakes import session2205_data as _session
 
 from annotoolbox.editor import a7mviewer, editsession
-from annotoolbox.editor.assetmodels import ASSETS_2205, CAssetModels
+from annotoolbox.editor.assetmodels import ASSETS_2205, CAssetModels, CReason
 from annotoolbox.editor.formats.a7m import session as a7m_session
 from annotoolbox.formats import rda
 from annotoolbox.islands import islandedits
@@ -98,6 +98,16 @@ def test_the_2205_viewer_draws_each_object_with_its_variation(tmp_path: Path):
     assert turned["cfg"] == "data/g/a1.cfg" and turned["marker"] is None
     assert free["cfg"] == "" and free["marker"] == "EditorObject"  # its variation 0, a0.cfg, is not in the archives
     assert river["marker"] == "EditorObject" and river["key"] == islandedits.key("guid:1608", [0.0, 0.0, 0.0])
+
+
+def test_the_2205_viewer_says_why_each_pin_is_one(tmp_path: Path):
+    turned, free, river, past, _own = _viewer(tmp_path).objects()
+    assert "unresolved" not in turned
+    assert (
+        free["unresolved"].startswith(CReason.UNREADABLE) and "data/g/a0.cfg" in free["unresolved"]
+    )  # not in the game
+    assert river["unresolved"] == CReason.NO_ASSET  # it was "names no model" for an asset the game does not have
+    assert past["unresolved"] == CReason.VARIATION
 
 
 def test_a_2205_session_reads_rivers_props_and_object_folders():

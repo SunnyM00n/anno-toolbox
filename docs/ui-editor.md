@@ -68,10 +68,10 @@ It handles these parts:
 - anchors (nine points of the parent's computed size);
 - pivots (also as a fraction of the size through the `ProportionalPivotPoint` component);
 - scale as a multiplier of the natural size (a picture's size, a label's text, a container's content; a size a binding
-  writes is the size itself);
+  writes is the size itself, and a size a binding reads is the box times the scale);
 - the modes that cancel the ancestors' scale and the aspect ratio;
-- the containers' sizes (their fixed size, `SizeOverride`, else the union of the visible children that count for it; a
-  group is as large as what it holds);
+- the containers' sizes (their fixed size, `SizeOverride`, else the union of the children that count for it, hidden
+  ones too, from its smallest corner; a group is as large as what it holds, by the same rule);
 - stacks (`StackLayout` with its spacing, margin and inverted order, the children's `PaddingUtility`);
 - nine-slice pictures;
 - colour tints with palette entries;
@@ -197,11 +197,21 @@ Note: the fonts were added on 2026-11-17.
 
 - A stack puts its children one after another and aligns each across its axis.
   The group's `ChildrenAlignment` gives begin, middle or end, and a child's `AlignmentUtility` overrides it.
-- A background layout stretches the group's first layer round the others plus its margin.
+- A background layout stretches the group's first layer round the others that count (hidden ones too) plus its
+  margin.
+- A stack gives a hidden child that counts its room.
+- A group's box holds its background, and a pivot fraction is a point of that box from its smallest corner.
+- An info tip widget stands at its `ReferenceWidget`'s rectangle, as large as it, and counts for no size.
+- A list of tabs opens on its first entry, and in the design view what that starts runs: the construction menu's
+  first category shows its building row.
+- A video is as large as its video asset's `Resolution` times its scale.
 - An enum loader places the children whose `EnumEntry` is its current value (and those with none).
 - A game object loader places the child made for its object's data class where the game's data says the class (the
   options scene's page: `ui/117/game-data.md`, "Object loaders"), else its first.
 - A radial list or wheel puts its items on an arc.
+
+Note: the group background, info tip and first-entry rules were added on 2026-11-24, checked against the newest dump of
+152 scenes (`ui/117/layout.md`, "Round 2").
 
 A layer the author hid in the editor (`IsHidden`) starts hidden unless a binding shows it.
 View > Show layers hidden in the editor draws it.
@@ -393,6 +403,8 @@ How a value reaches the preview:
   `Platform.IsGamepadModeActive` and `Platform` get the input (mouse: false, PC).
   `PortraitResolver.PortraitImage` gets the portrait of its `PortraitGuid`, else the player's (the
   UI reference, its components page).
+  This holds for a component on a widget file's own root as well: the hairlines and deco borders of 117's panels read
+  their region there, so they are Roman in Latium and Egyptian in Aegyptus.
 - **Placeholders by name**: a made-up value whose source or target names a value of the player's game takes it.
   This covers a character's name (`PlayerName`, `EmperorName`, `RivalName`), money, a stock, the emperor's reputation,
   and a gamepad, multiplayer or DLC flag.
@@ -461,8 +473,12 @@ run time, the preview takes it from the installed game instead of a placeholder.
 - The religion scene shows the patrons (Ceres, Neptune, Mars ...) with their icons, artwork, devotion effects and the
   "Exalted Patron" texts.
 - The options scene shows one tab per options page and the entries of the open page.
-- The construction menu shows the buildings of the first category.
-- An object menu shows the name and icon of the residence or production building the Preview settings name.
+- The construction menu shows the region's categories: infrastructure first (the crane), then one per tier with its
+  residents' portrait and tier number, each with its buildings.
+- The residence menu and the production menu show the name, icon and category of the residence or production building
+  the Preview settings name.
+  The other object menus name no object in the game's data, so they keep placeholders rather than another building's
+  name.
 
 A list shows as many entries as the data holds, up to what the list shows.
 
@@ -494,14 +510,19 @@ The **baseline** (`uiedit/baseline.py`, the shipped file `uiedit/data/ui-baselin
 typical values**, on by default, 117 only) replaces such a value by the one the game itself held most often.
 
 **Where it comes from.**
-The source is recordings of the widgets of the running game: 4,283 of them, mostly in German.
+The source is recordings of the widgets of the running game: 4,606 of them, mostly in German.
 They are per widget file and widget (its name CRC, as live values match).
 They are also per placing context (the container that places the file) where the context changes the value.
 For each, the value held most often across the recordings is kept with its share.
 Several widgets of one file in one recording (a list's items) share that recording's one vote.
 So a widget that shows a different text per item is not given one of them.
+Two game builds are among the recordings: update 3.0 (3,821 recordings) and update 3.0.1 (785).
+A game update changes texts, pictures and visibilities, so where at least two recordings of the newest build hold a
+value, that build alone decides it, and the older recordings count only where the newest has too few.
 
-Note: the recordings were made from 2026-11-16 to 19, on update 3.0.
+Note: the recordings were made from 2026-11-16 to 23. The newest build was added on 2026-11-23.
+Held out against the newest recordings, the build rule raised the texts the baseline gets right from 106 to 156 of 295
+and its wrong pictures fell from 619 to 482 of 10,421 (see "Measured on 2026-11-23" below).
 
 **What it holds** (references and plain values, no game content: a text id is not its text, a picture is a path, no
 picture is stored).
@@ -526,8 +547,8 @@ Left out on purpose:
 
 A widget's own property values are not kept: the label or image inside the placed file holds the value the placing file
 hands it.
-The counts of the shipped file are 1,895 widget files, 10,891 widgets with 14,899 values, and 572 context entries.
-The values are 9,434 visibilities, 5,031 pictures, 418 texts, 140 plain texts and 16 characters.
+The counts of the shipped file are 1,949 widget files, 11,173 widgets with 15,294 values, and 623 context entries.
+The values are 9,652 visibilities, 5,180 pictures, 297 texts, 151 plain texts and 14 characters.
 
 **How the preview uses it.**
 The order of sources is:
@@ -577,6 +598,24 @@ It differs a little from the table below it, which also counts empty texts.
 
 The Preview settings' part alone takes 2 more fillers off (1,057 to 1,055).
 
+**Measured on 2026-11-23**, against the newest recordings (update 3.0.1, 21 scenes), with the baseline made from the
+recordings before them, so it did not see them.
+The table counts the values the recordings hold for a widget and what the baseline holds for it.
+
+| Value | version | right | wrong | no entry |
+|---|---|---|---|---|
+| texts | all recordings together | 106 | 8 | 181 |
+| | newest build decides | 156 | 24 | 115 |
+| pictures | all recordings together | 9,477 | 619 | 325 |
+| | newest build decides | 9,621 | 482 | 318 |
+| visibilities | all recordings together | 5,854 | 100 | 125 |
+| | newest build decides | 5,851 | 81 | 147 |
+
+What is still wrong is mostly a widget one placing styles differently: the construction menu's button backgrounds
+(a round or a square shape) and the region's hairlines (Roman or Egyptian).
+Their placing context does not name the style.
+The preview's own bindings give these where the file's own properties are filled.
+
 **What is left.**
 875 fillers and 811 slots stay.
 They are where no recording holds a value the game showed in at least half of its sessions:
@@ -617,8 +656,9 @@ What changed, each rule read from the game's files (`labels.py`, `scope.py`, `pl
 - **A label with a text id shows its line.**
   The game shows the line a `LocalizationId` names, and the label's stored `Text` is only what the editor showed.
   The preview used to show the stored text first (`!Pyramid Restored` for the line "Pyramid Restored").
-  A binding's filler gives way to the label's own line as well.
-  A value a binding really gives (a name, a number) wins as before.
+  The line wins over any text a binding writes as well, a filler or a designers' text such as `!Game is paused`.
+  Every label of the game's recordings that held both a text id and a text showed the line (202 labels).
+  A binding that writes an empty text id clears it, and the label shows its text then.
 - **1800's text ids resolve.**
   1800 numbers its texts (`<GUID>5998</GUID>` in `data/config/gui/texts_<language>.xml`, the id a decimal number).
   The preview used to read 117's tables only, and drew 576 labels as `[5998]`.
@@ -675,6 +715,56 @@ Its fields stay unnamed, so a filler there takes its kind from the target alone.
 
 Note: counted on 2026-11-19; "before" is the state of 2026-11-18.
 The rule about text ids was seen in the game on 2026-09-21.
+
+**Held against the game, 2026-11-23.**
+18 of the most seen scenes were placed in German (the HUD bars, the construction menu, six object menus, the
+notifications, the minimap, the info tip, the quick tools, the governors' requests, diplomacy, the trade routes, the
+goods transfer and the options).
+Each was held against the newest recording of the scene in which it was shown.
+Per widget file and widget, the values the recording holds were counted against the values the preview gives the same
+widget, every placing of it counted.
+These are the texts of a game line and the pictures of the widgets the game showed, and every visibility.
+The preview's region was set to the one the recording shows.
+
+| | texts | pictures | visibilities |
+|---|---|---|---|
+| before | 16 of 125 | 4,090 of 7,314 | 10,463 of 18,367 |
+| after | 22 of 125 | 4,140 of 7,314 | 10,464 of 18,367 |
+
+What the preview still gets wrong, by cause (after):
+
+| Cause | texts | pictures | visibilities |
+|---|---|---|---|
+| a list's items the game fills at run time that the preview does not place (markers, goods, routes, a category's buildings) | 47 | 2,969 | 7,526 |
+| a made-up value (a filler, a stand-in picture) | 26 | 99 | - |
+| a style one placing gives (a round or a square button) | - | 59 | - |
+| a style of the region (Roman or Egyptian hairlines) | - | 0 (42 before) | - |
+| a designers' text where the game's line has no id in the files | 13 | - | - |
+| another value (the session's state, another item, another building) | 17 | 47 | 377 |
+
+What changed, each rule read from the game's data or its recordings:
+
+- A component on a widget file's own root takes the player's state as one on an instance does: the region's hairlines
+  and deco borders.
+- A label's text id wins over any text (above).
+- The construction menu holds its categories with their own pictures and tier numbers (game-data.md, the plans).
+  The infrastructure category has no tier number, and the preview shows none there either.
+- A field that names another asset (`InfotipGUID`) is no longer given the node's description.
+- The object menus other than the residence and the production menu no longer show the jeweller's name.
+  The residence and the production menu show the building's category under its name.
+
+What stays a placeholder, and why:
+
+- *Run-time lists*: the minimap's markers, a warehouse's goods, the trade routes, the diplomacy partners.
+  These are the session's state, which no asset lists.
+- *A category's buildings*: the game shows the selected category's buttons by an animation that its list selection
+  starts.
+  The preview's list does not select an item yet, which is the layout's part.
+- *The HUD bars' attribute rows*: their files read paths that start at the file, not at the scene's data object, so no
+  plan reaches them.
+- *The other object menus' objects*: no asset says which building a menu shows.
+
+The measuring driver is scratch and not kept.
 
 ## The language of the game's texts
 

@@ -461,6 +461,17 @@ def _moved(animation: SAnimation, joints: set[str]) -> int:
     return sum(1 for track in animation.tracks if track.joint in joints and track.keys)
 
 
+def _without_jointless(entry: SAnimation, joints: set[str], notes: CNotes) -> SAnimation:
+    """The entry without the tracks that name a joint the mesh lacks. 2070's mesh files leave out the leaf joints
+    that no vertex weighs (toes, fingers, tails) while its animations still key them; no joint of the mesh can sit
+    below such a joint, so the track moves nothing and is dropped, counted (engine-notes "Animations")."""
+    kept = [track for track in entry.tracks if track.joint in joints]
+    for track in entry.tracks:
+        if track.joint not in joints:
+            notes.m_dropped.append(f"track {track.joint!r}: the mesh file has no such joint (an unweighted leaf)")
+    return SAnimation(entry.name, entry.duration_ms, entry.frame_rate, kept) if len(kept) < len(entry.tracks) else entry
+
+
 def pick_animation(animations: list[SAnimation], joints: set[str], models: set[str]) -> SAnimation:
     """The entry of an animation file that moves a mesh: the one with the most tracks on the mesh's joints, then the
     one named for one of its meshes. A 2070 file holds one entry per model it moves (the saw mill's work animation
@@ -487,6 +498,8 @@ def convert_animation(
         keep = [pick]
         if not _moved(pick, joints):
             keep = [SAnimation(pick.name, pick.duration_ms, pick.frame_rate, [])]
+    if joints is not None:
+        keep = [_without_jointless(entry, joints, notes) for entry in keep]
     for entry in keep:
         for track in entry.tracks:
             if not track.keys:

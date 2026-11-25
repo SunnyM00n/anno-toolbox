@@ -1,6 +1,6 @@
 # External tools
 
-The editor runs third-party programs that are not part of the repository. Put them in this folder (any sub-folder
+The editor uses third-party programs that are not part of the repository. Put them in this folder (any sub-folder
 works) or on the `PATH`:
 
 - **texconv** (`texconv.exe`) from https://github.com/microsoft/DirectXTex/releases (MIT). It decodes the games'
@@ -10,4 +10,4 @@ works) or on the `PATH`:
   (https://github.com/hcs64/ww2ogg, BSD-3-Clause). It lets the Sound app play and export Wwise Vorbis sounds. The
   installed Toolbox ships it here with its licence notice (`ww2ogg-COPYING.txt`); in a checkout, put it in this folder.
 
-The environment variables `ANNO_TEXCONV` and `ANNO_WW_CODEBOOKS` override this search.
+Set `ANNO_TEXCONV` or `ANNO_WW_CODEBOOKS` to use a file elsewhere instead.

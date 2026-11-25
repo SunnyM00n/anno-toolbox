@@ -58,8 +58,18 @@ def test_the_sky_haze_and_clouds_switches_leave_their_passes_out():
     extras.passes(passes, sky, 1.0, None, False)
     assert passes.atmosphere is not None and passes.clouds is clouds and extras.far() == 900.0
     passes = _passes()
-    extras.passes(passes, sky, 1.0, None, False, has_clouds=False)
+    extras.passes(passes, sky, 1.0, None, False, gameextras.SSkyParts(has_clouds=False))
     assert passes.atmosphere is not None and passes.clouds is None and extras.far() == 0.0
     passes = _passes()
-    extras.passes(passes, sky, 1.0, None, False, has_sky=False, has_clouds=False)
+    extras.passes(passes, sky, 1.0, None, False, gameextras.SSkyParts(has_sky=False, has_clouds=False))
     assert passes.atmosphere is None and passes.look is None and passes.clouds is None
+
+
+def test_the_over_frames_switches_reach_the_look_and_the_clouds():
+    extras, _ocean, clouds = _extras()
+    passes = _passes()
+    extras.passes(passes, object(), 1.0, None, False, gameextras.SSkyParts(is_temporal=True, is_cache_kept=True))
+    assert passes.look.temporal and clouds.m_is_cache_kept
+    passes = _passes()
+    extras.passes(passes, object(), 1.0, None, False)  # every pixel marched, the cache made anew: the default
+    assert not passes.look.temporal and not clouds.m_is_cache_kept

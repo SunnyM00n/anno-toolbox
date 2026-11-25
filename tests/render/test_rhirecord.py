@@ -166,7 +166,7 @@ def test_a_deferred_frame_releases_every_target_it_made_when_the_size_changes():
 
 
 def test_the_game_and_forward_frames_release_their_depth_and_framebuffers_too():
-    from annotoolbox.render import frameforward, gameframe
+    from annotoolbox.render import frameforward, gameframe, gamestill
 
     ctx = FakeCtx()
     forward = frameforward.CForwardFrame.__new__(frameforward.CForwardFrame)
@@ -194,7 +194,7 @@ def test_the_game_and_forward_frames_release_their_depth_and_framebuffers_too():
         None,
     )
     game.m_lit_fbo, game.m_info, game.m_has_stencil = None, None, False
-    game.m_composite = ctx.program()
+    game.m_composite, game.m_still = ctx.program(), gamestill.CStill()
     game._gbuffer((8, 8))
     first = list(ctx.made)
     game._gbuffer((9, 8))

@@ -15,7 +15,14 @@ from annotoolbox.infra.i18n import tr
 from annotoolbox.suite import settingsdialog
 from annotoolbox.suite.settings import CSettings
 
-RIBBON_TABS = ["islands.home", "common.object", "islands.terrain", "islands.grid", "islands.path"]  # the tabs' ids
+RIBBON_TABS = [
+    "islands.home",
+    "common.object",
+    "islands.terrain",
+    "islands.grid",
+    "islands.path",
+    "islands.performance",
+]  # the tabs' ids
 
 
 def test_the_window_lists_every_game_and_setup_only_without_a_workspace(tmp_path):
@@ -234,6 +241,53 @@ def test_the_renderer_draws_and_picks_offscreen():
         assert img.std() > 2  # ground, sea and sky, not one flat colour
     assert r.pick(cam, (w, h), w / 2, h / 2 - 20, desktoprender.SViewOptions()) is marker
     assert r.pick(cam, (w, h), 2, 2, desktoprender.SViewOptions()) is None  # the sky
+    r.release()
+
+
+def test_a_pin_grows_with_the_island_to_a_cap_and_keeps_its_normals():
+    import math
+
+    import numpy as np
+
+    from annotoolbox.editor.desktop import desktopgeometry as geometry
+
+    assert geometry.pin_scale(16) == 1.0 and geometry.pin_scale(208) == 1.0  # small islands: the base size
+    assert geometry.pin_scale(416) == pytest.approx(2.0)
+    assert geometry.pin_scale(4096) == geometry.PIN_MAX_SCALE
+    base, grown = geometry.pin_mesh()[0], geometry.pin_mesh(2.0)[0]
+    np.testing.assert_allclose(grown[:, :3], base[:, :3] * 2)
+    np.testing.assert_allclose(grown[:, 3:6], base[:, 3:6])  # the normals stay unit length
+    height = float(base[:, 1].max())
+    for size_tiles in (208, 320, 512, 800):  # the whole view's pin, 45 degrees, 1,000 px high: 12 to 14 px
+        pixels = height * geometry.pin_scale(size_tiles) / (2 * 1.1 * size_tiles * math.tan(math.radians(22.5))) * 1000
+        assert 12 < pixels < 14
+
+
+def test_a_pin_is_drawn_at_its_own_size_whatever_its_objects_scale():
+    """A decal's scale (0.2 to 4.4 in the islands) is its picture's, not its pin's; the decals keep it in ``m_mats``."""
+    moderngl = pytest.importorskip("moderngl")
+    try:
+        ctx = moderngl.create_standalone_context(require=330)
+    except Exception as exc:  # no OpenGL 3.3 driver here (a CI runner)
+        pytest.skip(f"no OpenGL context: {exc}")
+    import numpy as np
+    from tests.editor.editorfakes import edit_island as island
+
+    from annotoolbox.editor.desktop import desktoprender
+    from annotoolbox.editor.editsession import CEditSession
+    from annotoolbox.render import camera
+
+    s = CEditSession(island())
+    s.finish_loading()
+    marker = next(e for e in s.m_entries if e.marker == "Herd")
+    s.set_transform(marker, scale=5.0)
+    r = desktoprender.CRenderer(ctx, s, None)
+    fbo = ctx.framebuffer([ctx.renderbuffer((64, 64), 4)], ctx.depth_renderbuffer((64, 64)))
+    r.render(fbo, (64, 64), camera.COrbitCamera((8, 1.5, 7), 12), desktoprender.SViewOptions())
+    batch = r.m_batches[marker.batch]
+    drawn = np.frombuffer(batch.m_inst.read(), "f4").reshape(-1, 4, 4)
+    assert np.linalg.norm(drawn[0][0, :3]) == pytest.approx(1.0)  # the pin's own size
+    assert np.linalg.norm(batch.m_mats[0][:3, 0]) == pytest.approx(5.0)  # where its decals lie keeps the scale
     r.release()
 
 

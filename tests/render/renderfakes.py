@@ -1,19 +1,24 @@
-"""Stand-ins for the renderer: shader variables and buffers, the native module and a child process that draws."""
+"""Stand-ins for the renderer: shader variables and buffers, the native module, a child process that draws and a
+far-view model's baked data file."""
 
 from __future__ import annotations
 
 import json
 import os
+import struct
 import subprocess
 import sys
 from dataclasses import dataclass, field
 
+import numpy as np
 import pytest
 from tests import childguard, hangguard
 
+from annotoolbox.formats import filedb
+from annotoolbox.formats.filedb import SAttrib, STag
 from annotoolbox.models import shadernative
 from annotoolbox.paths import REPO_ROOT
-from annotoolbox.render import nativegpu, shaderbake
+from annotoolbox.render import distanceclusters, nativegpu, shaderbake
 
 
 @dataclass
@@ -124,3 +129,26 @@ def native_modules():
     except Exception as exc:
         pytest.skip(f"the game's compiler: {exc}")
     return shadernative.CNativeShaders(CAnno117Files(root), compiler)
+
+
+FAR_TILE = bytes(range(256)) * 5 + bytes(80)  # 1360 bytes: a BC3 tile of 85 blocks
+FAR_GLOSS = bytes(distanceclusters.TILE_BLOCKS * distanceclusters.BC1_BYTES)
+
+
+def far_view_bfg(flags: int = distanceclusters.HAS_MODELS, materials: list | None = None, vertex_material: int = 0,
+                 tile: bytes = FAR_TILE, extra_index: int = 0) -> bytes:  # fmt: skip
+    """A ``.bfg`` of one triangle's far-view model: positions (0, 0, 0), (1, 0, 0), (0, 2, 1), one texture set."""
+    rows = np.zeros(3, distanceclusters.VERTEX)
+    rows["position"] = [(0, 0, 0), (1, 0, 0), (0, 2, 1)]
+    rows["uv"] = [(0, 0), (65535, 0), (0, 65535)]
+    rows["material"] = vertex_material
+    indices = np.array([0, 1, 2 + extra_index], "<u2")
+    texture_set = STag("#1", [SAttrib("MaxUV", struct.pack("<2f", 1, 1)), SAttrib("DiffAlphaData", tile),
+                              SAttrib("GlossMetalData", FAR_GLOSS)])  # fmt: skip
+    if materials is None:
+        materials = [STag("#1", [SAttrib("Type", bytes([1])), SAttrib("Color", struct.pack("<4f", 1, 0.5, 2, 1)),
+                                 SAttrib("TexSetIdx", struct.pack("<I", 0))])]  # fmt: skip
+    low = STag("LowPolyData", [SAttrib("Vertices", rows.tobytes()), SAttrib("Indices", indices.tobytes()),
+                               STag("TextureSets", [texture_set]), STag("Materials", materials),
+                               SAttrib("Flags", struct.pack("<I", flags))])  # fmt: skip
+    return filedb.write(STag("", [STag("Config", [SAttrib("ConfigType", struct.pack("<I", 9)), low])]))

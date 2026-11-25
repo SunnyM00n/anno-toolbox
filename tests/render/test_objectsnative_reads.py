@@ -9,7 +9,7 @@ import pytest
 
 
 def test_the_native_instance_buffers_read_the_frames_serial():
-    from annotoolbox.render.objectsnative import CInstanceBuffers
+    from annotoolbox.render.nativedraws import CInstanceBuffers
 
     buffers = CInstanceBuffers(device=None)
     buffers.m_serial, buffers.m_buffers = 7, {"instances": object()}

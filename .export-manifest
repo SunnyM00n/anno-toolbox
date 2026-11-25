@@ -56,6 +56,7 @@ native/d3d12/src/device.cpp
 native/d3d12/src/gpu.h
 native/d3d12/src/interop.cpp
 native/d3d12/src/module.cpp
+native/d3d12/src/pipelines.cpp
 native/d3d12/src/resources.cpp
 native/d3d12/tests/layer_test.cpp
 pyproject.toml
@@ -134,10 +135,14 @@ src/annotoolbox/editor/desktop/desktopgame.py
 src/annotoolbox/editor/desktop/desktopgame1800.py
 src/annotoolbox/editor/desktop/desktopgame2205.py
 src/annotoolbox/editor/desktop/desktopgamebake.py
+src/annotoolbox/editor/desktop/desktopgameclusters.py
 src/annotoolbox/editor/desktop/desktopgamedecals.py
+src/annotoolbox/editor/desktop/desktopgameend.py
 src/annotoolbox/editor/desktop/desktopgameground.py
 src/annotoolbox/editor/desktop/desktopgameobjects.py
 src/annotoolbox/editor/desktop/desktopgameparts.py
+src/annotoolbox/editor/desktop/desktopgameshadow.py
+src/annotoolbox/editor/desktop/desktopgamestill.py
 src/annotoolbox/editor/desktop/desktopgametables.py
 src/annotoolbox/editor/desktop/desktopgeometry.py
 src/annotoolbox/editor/desktop/desktopgizmo.py
@@ -575,12 +580,14 @@ src/annotoolbox/render/clothforward.py
 src/annotoolbox/render/clothlogo.py
 src/annotoolbox/render/clothmesh.py
 src/annotoolbox/render/clothsim.py
+src/annotoolbox/render/clustersnative.py
 src/annotoolbox/render/coast1701.py
 src/annotoolbox/render/coast2070.py
 src/annotoolbox/render/copiesnative.py
 src/annotoolbox/render/cull.py
 src/annotoolbox/render/decalforward.py
 src/annotoolbox/render/decalmesh.py
+src/annotoolbox/render/distanceclusters.py
 src/annotoolbox/render/eyeadapt.py
 src/annotoolbox/render/eyeforward.py
 src/annotoolbox/render/frame1404.py
@@ -608,11 +615,13 @@ src/annotoolbox/render/gamesea.py
 src/annotoolbox/render/gameshader.py
 src/annotoolbox/render/gameshadow.py
 src/annotoolbox/render/gamesky.py
+src/annotoolbox/render/gamestill.py
 src/annotoolbox/render/gamewater.py
 src/annotoolbox/render/glformat.py
 src/annotoolbox/render/glslport.py
 src/annotoolbox/render/inland1800.py
 src/annotoolbox/render/inlandnative.py
+src/annotoolbox/render/instancestore.py
 src/annotoolbox/render/light.py
 src/annotoolbox/render/lightclusters.py
 src/annotoolbox/render/lights2070.py
@@ -621,6 +630,7 @@ src/annotoolbox/render/loader.py
 src/annotoolbox/render/mipchain.py
 src/annotoolbox/render/modellibrary.py
 src/annotoolbox/render/nativecompute.py
+src/annotoolbox/render/nativedraws.py
 src/annotoolbox/render/nativeforeign.py
 src/annotoolbox/render/nativegpu.py
 src/annotoolbox/render/nativelayout.py
@@ -657,6 +667,7 @@ src/annotoolbox/render/shaderclean.py
 src/annotoolbox/render/shaders.py
 src/annotoolbox/render/shaderstart.py
 src/annotoolbox/render/shadingnative.py
+src/annotoolbox/render/shadowcullnative.py
 src/annotoolbox/render/shadowfit.py
 src/annotoolbox/render/shadowforward.py
 src/annotoolbox/render/sky1701.py
@@ -960,7 +971,10 @@ tests/editor/desktop/test_desktopfinish1800.py
 tests/editor/desktop/test_desktopforms.py
 tests/editor/desktop/test_desktopframe.py
 tests/editor/desktop/test_desktopgamebake.py
+tests/editor/desktop/test_desktopgameclusters.py
 tests/editor/desktop/test_desktopgameground.py
+tests/editor/desktop/test_desktopgameobjects.py
+tests/editor/desktop/test_desktopgameshadow.py
 tests/editor/desktop/test_desktopgizmo.py
 tests/editor/desktop/test_desktopgrids.py
 tests/editor/desktop/test_desktopgroup.py
@@ -984,6 +998,7 @@ tests/editor/formats/isd/test_island2070edit.py
 tests/editor/formats/isd/test_props.py
 tests/editor/formats/isd/test_water.py
 tests/editor/test_activemap.py
+tests/editor/test_assetmodels.py
 tests/editor/test_blankisland.py
 tests/editor/test_brushes.py
 tests/editor/test_editlayers.py
@@ -1145,9 +1160,11 @@ tests/render/test_bake1800.py
 tests/render/test_camera.py
 tests/render/test_clothlogo.py
 tests/render/test_clothsim.py
+tests/render/test_clustersnative.py
 tests/render/test_coast1701.py
 tests/render/test_coast2070.py
 tests/render/test_decalmesh.py
+tests/render/test_distanceclusters.py
 tests/render/test_eyeadapt.py
 tests/render/test_foamview.py
 tests/render/test_frame1404.py
@@ -1168,6 +1185,7 @@ tests/render/test_gamesea.py
 tests/render/test_gamesky.py
 tests/render/test_gamewater.py
 tests/render/test_inland1800.py
+tests/render/test_instancestore.py
 tests/render/test_mipchain.py
 tests/render/test_nativegpu.py
 tests/render/test_nativelayout.py
@@ -1193,6 +1211,7 @@ tests/render/test_rhirecord.py
 tests/render/test_sea2205.py
 tests/render/test_shaderclean.py
 tests/render/test_shadingnative.py
+tests/render/test_shadowcullnative.py
 tests/render/test_shadowforward.py
 tests/render/test_srgbmips.py
 tests/render/test_ssaoforward.py
@@ -1264,6 +1283,7 @@ tests/suite/test_widgets.py
 tests/systems/quest/conftest.py
 tests/systems/quest/questfakes.py
 tests/test_childguard.py
+tests/test_gamestill.py
 tests/test_hangguard.py
 tests/test_memorygate.py
 tests/test_no_console_windows.py

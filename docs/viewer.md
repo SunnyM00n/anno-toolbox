@@ -207,8 +207,8 @@ that find no file (placeholders and switched-off slots aside):
     folder not shipped (143, 89).
   - The other games' lists are of the same kinds (`test_data/`, `testdata/`, a network path of the studio in 2205,
     stale paths).
-  - The one texture that does not decode (2070's `effects/default/default_norm_0.dds`) is a 145-byte header that the
-    game ships without its texels.
+  - The one texture that did not decode (2070's `effects/default/default_norm_0.dds`, 145 bytes) is a 4x4 file that
+    a text-mode copy gave one extra byte; the reader takes it out again.
   - The refused files are the games' empty files (2070: 20, 2205: 1, 1404: 1) and 2070's two such stubs.
 - **Three islands of each game** were opened in the island editor and drawn its way (117: 585 configs, 824 maps; 1800:
   294, 262; 2205: 356, 585; 2070: 96, 114; 1404: 124, 201; 1701: 81, 175).

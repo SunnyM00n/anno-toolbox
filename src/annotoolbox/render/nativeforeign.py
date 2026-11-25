@@ -205,9 +205,10 @@ class CRecording:
     one wrote waits for it."""
 
     def __init__(self, device, command_buffer, bridge) -> None:
+        """``command_buffer``: QRhi's, or the ``ID3D12GraphicsCommandList*`` it records into (an int)."""
         self.m_device, self.m_bridge = device, bridge
         self.m_module = nativegpu.load()
-        self.m_list = nativegpu.command_list(command_buffer)
+        self.m_list = command_buffer if isinstance(command_buffer, int) else nativegpu.command_list(command_buffer)
         self.m_home: dict[int, int] = {}  # resource -> the state it goes back to
         self.m_now: dict[int, int] = {}
         self.m_dirty: set[int] = set()  # written as unordered access since the last barrier
@@ -263,6 +264,11 @@ class CRecording:
     def copy_buffer(self, destination, source, size_bytes: int) -> None:
         self._move([(destination, COPY_DEST), (source, COPY_SOURCE)])
         self.m_module.copy_buffer(self.m_list, destination.native, 0, source.native, 0, size_bytes)
+
+    def copy_texture(self, destination, source) -> None:
+        """A whole texture into a like one (the module raises between unlike ones)."""
+        self._move([(destination, COPY_DEST), (source, COPY_SOURCE)])
+        self.m_module.copy_texture(self.m_list, destination.native, source.native)
 
     def finish(self) -> None:
         """Everything back in the state it was found in."""

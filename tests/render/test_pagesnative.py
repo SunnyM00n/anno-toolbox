@@ -157,7 +157,7 @@ def test_a_bake_job_is_read_by_its_field_names():
     from annotoolbox.render import bakenative, gamedraw
 
     bake = bakenative.CNativeBake.__new__(bakenative.CNativeBake)
-    bake.m_device, bake.m_list, bake.m_draw = MagicMock(), MagicMock(), MagicMock()
+    bake.m_device, bake.m_list, bake.m_draw, bake.m_pool = MagicMock(), MagicMock(), MagicMock(), MagicMock()
     bake.m_draw.pipeline_for.return_value = (object(), b"")
     bake.m_draw.write.return_value = {}
     bake.m_draw.sets.return_value = []

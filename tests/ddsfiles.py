@@ -37,3 +37,10 @@ def header(
 
 def dx10(code: int, array: int = 1, cube: bool = False) -> bytes:
     return struct.pack("<5I", code, 3, 0x4 if cube else 0, array, 0)
+
+
+def dxt5_flat_file() -> bytes:
+    """A 4x4 DXT5 file of one flat colour whose flags (0x000a1007) hold the byte a text-mode copy turns into two."""
+    head = b"DDS " + struct.pack("<7I", 124, 0x000A1007, 4, 4, 16, 0, 0) + bytes(44)
+    head += struct.pack("<II4s5I", 32, 0x4, b"DXT5", 0, 0, 0, 0, 0) + struct.pack("<5I", 0x1000, 0, 0, 0, 0)
+    return head + bytes([255, 255]) + bytes(6) + struct.pack("<HH", 0x8400, 0x7BE0) + b"\xaa" * 4

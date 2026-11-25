@@ -14,7 +14,7 @@ from collections import deque
 from functools import partial
 
 import numpy as np
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QLabel, QMenu
 
@@ -45,6 +45,12 @@ TOOL_KEYS = {
 PAN_KEYS = {Qt.Key.Key_Left: (40, 0), Qt.Key.Key_Right: (-40, 0), Qt.Key.Key_Up: (0, 40), Qt.Key.Key_Down: (0, -40)}
 CLICK = 4  # pixels a press may move and still be a click
 IDLE_MS = 66  # 15 frames a second for flowing water, effects and models arriving
+IDLE_AFTER_S = 3.0  # with no input this long the moving water alone redraws at the slower rate [ours]
+IDLE_REST_MS = 200  # ... 5 frames a second (the window thread is free for the panels); the first input ends it [ours]
+INPUT_EVENTS = frozenset({
+    QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseMove, QEvent.Type.Wheel,
+    QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.TabletPress, QEvent.Type.TouchBegin,
+})  # fmt: skip
 
 
 class CIslandControls(CGizmoControls, COverlayDraw):
@@ -91,6 +97,7 @@ class CIslandControls(CGizmoControls, COverlayDraw):
         self.m_coord_label.hide()
         self._m_frame_times: deque[float] = deque(maxlen=30)
         self._m_last_paint = 0.0
+        self._m_input_at = self._m_drawn_at = time.monotonic()  # the last input, the last redraw the timer asked for
         self._m_painted = False
         self._m_hover: QPoint | None = None
         self._m_hover_done: QPoint | None = None
@@ -212,9 +219,25 @@ class CIslandControls(CGizmoControls, COverlayDraw):
             self.m_fps_label.adjustSize()
             self._m_painted = False
 
+    def event(self, event) -> bool:  # Qt's name: any input ends the view's rest
+        if event.type() in INPUT_EVENTS:
+            self._m_input_at = time.monotonic()
+        return super().event(event)
+
+    def _due(self, renderer, now: float) -> bool:
+        """Whether the moving water, clouds and effects redraw on this tick: every tick while there was input lately,
+        parts still come in or the switch is off, else every ``IDLE_REST_MS``."""
+        rested = now - self._m_input_at > IDLE_AFTER_S and self.m_opts.idle_rate and not renderer.m_working
+        if rested and now - self._m_drawn_at < IDLE_REST_MS / 1000 - IDLE_MS / 2000:
+            return False
+        self._m_drawn_at = now
+        return True
+
     def _tick(self) -> None:
         renderer = self.m_renderer
-        if renderer is not None and (renderer.changed() or renderer.m_animated):
+        if renderer is not None and (
+            renderer.changed() or (renderer.m_animated and self._due(renderer, time.monotonic()))
+        ):
             self.update()
         if self._m_hover is not None and self._m_hover != self._m_hover_done and self.m_session is not None:
             self._m_hover_done = self._m_hover
@@ -342,6 +365,7 @@ class CIslandControls(CGizmoControls, COverlayDraw):
     def _radius_tiles(self, entry: SEntry) -> float:
         batch = self.m_renderer.batch_of(entry) if self.m_renderer is not None else None
         scale_value = entry.scale if not isinstance(entry.scale, list) else max(entry.scale)
+        scale_value = 1.0 if entry.marker else scale_value  # a pin keeps its own size
         return (batch.m_radius_m if batch is not None else 4.0) * float(scale_value or 1.0)
 
     # overlays: brush ring, gizmo, water network, checks, selection box, place ghost

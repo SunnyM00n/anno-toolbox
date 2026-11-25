@@ -61,6 +61,7 @@ class CFrameTable(_COfBatches):
         self.m_mats = rows.reshape(-1, 4, 4).transpose(0, 2, 1)  # column vectors, the view's axes
         counts = [len(cell.m_rows) for cell in cells]
         self.m_batch = np.repeat(np.arange(len(batches)), counts).astype(np.int64)
+        self.m_starts = np.r_[0, np.cumsum(counts)].astype(np.int64)  # batch k's rows: m_starts[k] to m_starts[k + 1]
         self.m_cell_counts = np.concatenate([cell.m_counts for cell in cells]) if cells else np.zeros(0, int)
         self.m_shown = np.abs(self.m_mats[:, :3, :3]).reshape(len(rows), 9).max(axis=1) > 0  # hidden: scale 0
         # each instance its model's sphere, all in one pass (per batch it was a loop on the window's thread)
