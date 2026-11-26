@@ -2,6 +2,7 @@
 reflection, the engine's buffers filled by name, the material's maps in texture arrays as they are stored (BC blocks
 uploaded unchanged), a pipeline per target.
 
+The maps' arrays are in ``gametextures`` and the pipelines (``CPipelineUser``, ``new_pipeline``) in ``gamepipeline``.
 ``CProgram(vertex_stage, pixel_stage, geometry_stage=None)`` takes the compiled ``SStage``s; ``CGameModel(rhi, program, mesh, material)`` is the draw:
 ``prepare(render_pass, signature, batch, camera)`` before a pass, ``draw(command_buffer, size_px)`` inside it (``gameframe`` runs both).
 The rules: docs/tool-suite.md section 21, "The game-shader path".
@@ -16,17 +17,13 @@ import numpy as np
 from PySide6.QtCore import QSize
 from PySide6.QtGui import (
     QRhiBuffer,
-    QRhiGraphicsPipeline,
     QRhiSampler,
     QRhiShaderResourceBinding,
-    QRhiShaderStage,
     QRhiTexture,
     QRhiTextureSubresourceUploadDescription,
     QRhiTextureUploadDescription,
     QRhiTextureUploadEntry,
     QRhiVertexInputAttribute,
-    QRhiVertexInputBinding,
-    QRhiVertexInputLayout,
     QRhiViewport,
     QShader,
     QShaderCode,
@@ -35,22 +32,13 @@ from PySide6.QtGui import (
 )
 
 from ..models.fxstage import SSampler, sampler_named
-from . import gameshader, mipchain
-from .renderstates import GBUFFER_STATE, SPassState, stencil_state
+from . import gamepool, gameshader, mipchain
+from .gamepipeline import CPipelineUser
+from .gametextures import BLOCK_FORMATS, CTextureTable, stored_levels
+from .renderstates import GBUFFER_STATE, SPassState
 
 Binding = QRhiShaderResourceBinding
 TextureFormat = QRhiTexture.Format
-# a DDS's block kind -> the QRhi format it uploads as
-BLOCK_FORMATS = {
-    "DXT1": TextureFormat.BC1,
-    "DXT3": TextureFormat.BC2,
-    "DXT5": TextureFormat.BC3,
-    "ATI1": TextureFormat.BC4,
-    "ATI2": TextureFormat.BC5,
-    "BC6H": TextureFormat.BC6H,
-    "BC7": TextureFormat.BC7,
-}
-SRGB_BLOCKS = ("DXT1", "DXT3", "DXT5", "BC7")
 # an effect's address mode words -> QRhi's (the engine's fixed samplers make the same record: ``sampler_named``)
 _ADDRESS = {"WRAP": QRhiSampler.AddressMode.Repeat, "CLAMP": QRhiSampler.AddressMode.ClampToEdge,
             "MIRROR": QRhiSampler.AddressMode.Mirror, "BORDER": QRhiSampler.AddressMode.ClampToEdge}  # fmt: skip
@@ -261,94 +249,6 @@ class CProgram:
                 maps[k][self.m_numbers[key]] = (0, -1)
 
 
-@dataclass
-class _SClass:
-    """One texture array of the bindless stand-in: maps of one size, format and level count."""
-
-    key: tuple
-    maps: list = field(default_factory=list)  # (dds or rgba array) per layer
-
-
-class CTextureTable:
-    """A material's maps spread over ``gameshader.CLASSES`` texture arrays; ``slots`` gives each parameter its
-    bindless index (0 is the engine's null texture, white), ``words`` the table the stand-in reads."""
-
-    def __init__(self, maps: dict) -> None:
-        self.m_classes: list[_SClass] = [_SClass(("null",), [np.full((4, 4, 4), 255, np.uint8)])]
-        self.m_slots: dict[str, int] = {}
-        self.m_words = np.zeros(gameshader.SLOTS, np.uint32)
-        for name, dds in maps.items():
-            self.add(name, dds)
-
-    def add(self, name: str, dds) -> int:
-        """One more map under ``name``, before the arrays are made (a cloth's player logo, ``render.clothlogo``);
-        its bindless index, 0 (the null texture) when every array is taken."""
-        stored, key = map_kind(dds)
-        found = next((array_class for array_class in self.m_classes if array_class.key == key), None)
-        if found is None:
-            if len(self.m_classes) == gameshader.CLASSES:
-                return 0  # more kinds of map than arrays: the parameter reads the null texture
-            found = _SClass(key)
-            self.m_classes.append(found)
-        found.maps.append(dds if stored else dds.level(0))
-        slot = len(self.m_slots) + 1
-        self.m_slots[name] = slot
-        self.m_words[slot] = (self.m_classes.index(found) << 16) | (len(found.maps) - 1)
-        return slot
-
-    def drop_pixels(self) -> None:
-        """Forget the maps' pixels once their arrays are made (``slots`` and ``words`` stay): an owner that makes
-        the arrays once for all its draws (``gameinstances.CPartPass``) keeps no second copy."""
-        self.m_classes = []
-
-    def create(self, rhi, batch) -> list:
-        """The texture arrays (one per class, a white layer for the unused), uploaded in ``batch``."""
-        if not self.m_classes:
-            raise RuntimeError("the maps' pixels were dropped: their arrays are made already")
-        null = self.m_classes[0].maps
-        return [class_array(rhi, batch, self.m_classes[k].maps if k < len(self.m_classes) else null)
-                for k in range(gameshader.CLASSES)]  # fmt: skip
-
-
-def class_array(rhi, batch, maps: list):
-    """One texture array of maps alike (``models.ddsdecode.CDdsFile``s of one size, format and level count, stored
-    as they are; or RGBA arrays of one size), uploaded in ``batch``."""
-    first = maps[0]
-    if isinstance(first, np.ndarray):
-        height, width = first.shape[:2]
-        texture = rhi.newTextureArray(TextureFormat.RGBA8, len(maps), QSize(width, height))
-        levels = [[np.ascontiguousarray(map_image).tobytes()] for map_image in maps]
-    else:
-        dds_info = first.m_info
-        flags = QRhiTexture.Flag.MipMapped if dds_info.mips > 1 else QRhiTexture.Flag(0)
-        if dds_info.srgb and dds_info.format in SRGB_BLOCKS:
-            flags |= QRhiTexture.Flag.sRGB
-        texture = rhi.newTextureArray(
-            BLOCK_FORMATS[dds_info.format], len(maps), QSize(dds_info.width_px, dds_info.height_px), 1, flags
-        )
-        levels = [stored_levels(map_image) for map_image in maps]
-    texture.create()
-    entries = [QRhiTextureUploadEntry(layer, level, QRhiTextureSubresourceUploadDescription(raw))
-               for layer, layer_levels in enumerate(levels) for level, raw in enumerate(layer_levels)]  # fmt: skip
-    upload = QRhiTextureUploadDescription()
-    upload.setEntries(entries)
-    batch.uploadTexture(texture, upload)
-    return texture
-
-
-def map_kind(dds):
-    """How a map goes into a texture array: as stored (BC blocks, one face) or as its first level decoded to RGBA,
-    and the key of the maps an array of it can hold."""
-    dds_info = dds.m_info
-    stored = dds_info.format in BLOCK_FORMATS and dds_info.faces == 1
-    key = (
-        (dds_info.width_px, dds_info.height_px, dds_info.mips, dds_info.format, dds_info.srgb)
-        if stored
-        else (dds_info.width_px, dds_info.height_px)
-    )
-    return stored, key
-
-
 # a vertex input's semantic -> the mesh element it reads (the rdm's usages PNGBTCWI, docs/formats/rdm.md)
 SEMANTICS = {"SV_POSITION": 0, "POSITION": 0, "NORMAL": 1, "TANGENT": 2, "BINORMAL": 3, "TEXCOORD": 4, "COLOR": 5,
              "BLENDWEIGHT": 6, "BLENDINDICES": 7}  # fmt: skip
@@ -490,13 +390,6 @@ def white_texture(rhi, batch) -> QRhiTexture:
     return white
 
 
-def stored_levels(dds) -> list[bytes]:
-    """A flat map's levels as stored, and those its file stops short of down to 1 x 1 (``mipchain``: a mipmapped
-    QRhi texture has every level, and one never written reads what the memory held, coloured speckles)."""
-    levels = [dds.stored(level) for level in range(dds.m_info.mips)]
-    return mipchain.full_levels(dds.m_info, levels) if dds.m_info.mips > 1 else levels
-
-
 def upload_level(batch, texture, data: bytes, layer: int = 0, level: int = 0) -> None:
     """``data`` into one layer and level of ``tex`` (a map written again in place keeps the binding sets on it)."""
     subresource = QRhiTextureSubresourceUploadDescription(data)
@@ -541,65 +434,6 @@ def immutable_buffer(rhi, batch, usage, data: bytes) -> QRhiBuffer:
     return buffer
 
 
-def vertex_layout(strides: list[int], attributes: list) -> QRhiVertexInputLayout:
-    """A vertex input layout of one binding per stride (a mesh: its stored vertices, the per-vertex constants)."""
-    layout = QRhiVertexInputLayout()
-    layout.setBindings([QRhiVertexInputBinding(stride) for stride in strides])
-    layout.setAttributes(attributes)
-    return layout
-
-
-def target_blends(blends: tuple, targets: int) -> list:
-    """QRhi's blend of each of ``targets`` colour targets: ``blends[i]`` (colour source and destination, alpha source
-    and destination factors; None or missing: off)."""
-    out = []
-    for i in range(targets):
-        target_blend = QRhiGraphicsPipeline.TargetBlend()
-        found = blends[i] if i < len(blends) else None
-        if found is not None:
-            target_blend.enable = True
-            target_blend.srcColor, target_blend.dstColor, target_blend.srcAlpha, target_blend.dstAlpha = found
-        out.append(target_blend)
-    return out
-
-
-CULL_MODES = {"back": QRhiGraphicsPipeline.CullMode.Back, "front": QRhiGraphicsPipeline.CullMode.Front,
-              "none": QRhiGraphicsPipeline.CullMode.None_}  # fmt: skip
-
-
-def _pass_format(render_pass) -> tuple:
-    """What a pipeline made for the pass ``render_pass`` depends on of it (its targets' formats; the object where QRhi says
-    nothing)."""
-    try:
-        return tuple(render_pass.serializedFormat())
-    except (AttributeError, TypeError):
-        return (id(render_pass),)
-
-
-def new_pipeline(rhi, program: CProgram, layout, resource_bindings, render_pass, samples: int, blends: list):
-    """A graphics pipeline of ``program``'s stages (its geometry shader, or its hull and domain shader on patches of
-    four points, too) for the pass ``render_pass``: its vertex layout, binding set, sample count and target blends set; the
-    caller sets depth and culling (and the topology of an untessellated one), then ``create``s."""
-    pipeline = rhi.newGraphicsPipeline()
-    vs_shader, ps_shader = program.m_shaders
-    stages = [QRhiShaderStage(QRhiShaderStage.Type.Vertex, vs_shader)]
-    if program.m_geometry is not None:  # interior mapping: face normals from its geometry shader
-        stages.append(QRhiShaderStage(QRhiShaderStage.Type.Geometry, program.m_geometry))
-    if program.m_patches is not None:  # the terrain's detailed nodes: quad patches
-        hull, domain = program.m_patches
-        stages += [QRhiShaderStage(QRhiShaderStage.Type.TessellationControl, hull),
-                   QRhiShaderStage(QRhiShaderStage.Type.TessellationEvaluation, domain)]  # fmt: skip
-        pipeline.setTopology(QRhiGraphicsPipeline.Topology.Patches)
-        pipeline.setPatchControlPointCount(4)
-    pipeline.setShaderStages([*stages, QRhiShaderStage(QRhiShaderStage.Type.Fragment, ps_shader)])
-    pipeline.setVertexInputLayout(layout)
-    pipeline.setShaderResourceBindings(resource_bindings)
-    pipeline.setRenderPassDescriptor(render_pass)
-    pipeline.setSampleCount(max(1, samples))
-    pipeline.setTargetBlends(blends)
-    return pipeline
-
-
 @dataclass
 class SMaterial:
     """A model config's material as the shaders read it: the structures' values and the maps by parameter."""
@@ -609,7 +443,7 @@ class SMaterial:
     paths: dict = field(default_factory=dict)  # parameter -> the map's file (maps shared by file: ``gamemaps``)
 
 
-class CGameModel:
+class CGameModel(CPipelineUser):
     """One mesh with its material drawn by ``program`` into targets of ``signature`` (``gameframe``); ``world`` is
     its place (4 x 4, column vectors) and ``palette`` a skin's matrices per joint (None: rigid), set per frame.
     ``share``: another pass's model of the same group, whose mesh and maps this one draws with (a shadow caster);
@@ -629,8 +463,14 @@ class CGameModel:
         self._m_pipeline_key: tuple | None = None  # its pipeline's key in ``program.pipelines`` (shared)
         self.m_constants: dict[str, gameshader.CConstants] = {}
         self.m_buffers: dict[str, object] = {}
+        self.m_ranges: dict[str, tuple[int, int]] = {}  # a constant buffer in the model's pool -> (offset, size)
+        self._m_pool: gamepool.CUniformPool | None = None
+        self._m_tokens: dict[tuple, tuple | None] = {}  # the device's shared stand-ins this model uses
         self.m_error = ""
         self._m_sent: dict[str, bytes] = {}  # the bytes each constant buffer was last sent
+        self._m_filled: dict[str, tuple] = {}  # a constant buffer -> (its constants, the stamp it was filled for)
+        self._m_layouts: dict[str, tuple] = {}  # a constant buffer -> (its layout, which inputs it reads: ``_stamp``)
+        self._m_inputs: tuple | None = None  # this prepare's inputs (``_inputs_of``; None: every buffer is filled)
         self._m_uploaded: int | None = None  # the mesh version its own vertex buffer holds (None: a shared one)
         self.m_values: dict[str, object] = {}  # member path -> value its owner sets each frame (a cloth's cbCloth)
         self.m_raw: dict[str, bytes] = {}  # constant buffer -> the bytes it starts with (a cloth's simulated vertices)
@@ -647,7 +487,8 @@ class CGameModel:
 
     def _resources(self, batch, shared: dict) -> None:
         rhi = self.m_rhi
-        self._m_sent, self.m_constants, self.m_buffers = {}, {}, {}
+        self._m_sent, self.m_constants, self.m_buffers, self._m_filled = {}, {}, {}, {}
+        self.m_ranges, self._m_pool = {}, None
         fill, self.m_attrs = vertex_input(self.m_mesh, self.m_program.m_vertex_stage.inputs)
         self.m_fill_stride = len(fill) // max(1, self.m_mesh.m_count)
         vertex = QRhiBuffer.UsageFlag.VertexBuffer
@@ -711,23 +552,40 @@ class CGameModel:
             gameshader.fill_material(constants, self.m_material.fields, self.m_table.m_slots)
             constants.set("cBindlessSlots", self.m_table.m_words.reshape(-1, 4))
             self.m_buffers[name] = self._uniform(name, len(constants.m_data))
+        if name in self.m_ranges:
+            return Binding.uniformBuffer(number, stages, self.m_buffers[name], *self.m_ranges[name])
         return Binding.uniformBuffer(number, stages, self.m_buffers[name])
 
+    def _shared(self, key: tuple, make):
+        """The device's stand-in for ``key`` (``gamepool.shared``), counted once for this model."""
+        resource, token = gamepool.shared(self.m_rhi, key, make)
+        if key in self._m_tokens:
+            gamepool.give_back(token)  # this model counts already
+        else:
+            self._m_tokens[key] = token
+        return resource
+
     def _inputs(self, batch, fill: bytes) -> tuple:
-        """The vertex buffer of the inputs the mesh lacks (``fill``) and the white texture of the plain 2D textures
-        no pass hands: the model's own, released with it."""
-        return self._buffer(batch, QRhiBuffer.UsageFlag.VertexBuffer, fill), self._white(batch)
+        """The vertex buffer of the inputs the mesh lacks (``fill``: the device's empty one when it lacks none)
+        and the white texture of the plain 2D textures no pass hands."""
+        if fill:
+            return self._buffer(batch, QRhiBuffer.UsageFlag.VertexBuffer, fill), self._white(batch)
+        vertex = QRhiBuffer.UsageFlag.VertexBuffer
+        empty = self._shared(("model", "empty"), lambda: immutable_buffer(self.m_rhi, batch, vertex, b""))
+        return empty, self._white(batch)
 
     def _white(self, batch):
-        """A white 4 x 4 texture (the model's own, released with it), uploaded in ``batch``."""
-        white = white_texture(self.m_rhi, batch)
-        self.m_keep.append(white)
-        return white
+        """A white 4 x 4 texture, the device's (uploaded in ``batch`` by the first model that asks)."""
+        return self._shared(("model", "white"), lambda: white_texture(self.m_rhi, batch))
 
     def _uniform(self, name: str, size_bytes: int):
-        """The uniform buffer of the constant buffer ``name`` (the model's own, released with it)."""
-        buffer = uniform_buffer(self.m_rhi, size_bytes)
-        self.m_keep.append(buffer)
+        """The uniform buffer of the constant buffer ``name``: a range of the model's one buffer (``m_ranges``)."""
+        if self._m_pool is None:
+            rhi = self.m_rhi
+            room = sum(rhi.ubufAligned(max(16, layout.size)) for layout in self.m_program.m_cbuffers.values())
+            self._m_pool = gamepool.CUniformPool(rhi, self.m_keep, room)
+        buffer, offset, size = self._m_pool.take(size_bytes)
+        self.m_ranges[name] = (offset, size)
         return buffer
 
     def _texture(self, name: str, shared: dict, white):
@@ -751,88 +609,14 @@ class CGameModel:
         )
         if declared in ("Texture2D", "Texture2D<float4>"):
             return white
-        texture = stand_in(self.m_rhi, "texture", declared)
-        self.m_keep.append(texture)
-        return texture
+        return self._shared(("model", "texture", declared), lambda: stand_in(self.m_rhi, "texture", declared))
 
     def _sampler(self, name: str):
-        sampler = fixed_sampler(self.m_rhi, name)
-        self.m_keep.append(sampler)
-        return sampler
+        return self._shared(("model", "sampler", name), lambda: fixed_sampler(self.m_rhi, name))
 
     def _scratch(self, name: str):
-        """A raw buffer no pass fills (the model's own, released with it)."""
-        buffer = stand_in(self.m_rhi, "uav_rwbyteaddress")
-        self.m_keep.append(buffer)
-        return buffer
-
-    def _make_pipeline(self, render_pass, signature) -> None:
-        """The model's pipeline: one per program, pass and vertex layout, shared by every model that draws alike (its
-        own binding set is layout-compatible): a pipeline of the game's shaders holds megabytes of the driver's
-        memory, and a continental island's nodes and parts made thousands of them (island-117-view.md "Speed")."""
-        self.m_pipeline, self._m_pipeline_key = self._shared_pipeline(render_pass, signature, self.m_attrs, self.m_mesh.m_stride,
-                                                                  self.m_fill_stride)  # fmt: skip
-
-    def _shared_pipeline(self, render_pass, signature, attributes: list, stride: int, fill_stride: int) -> tuple:
-        """(pipeline, its key in ``program.pipelines``) for a vertex layout: the program's shared one, made when
-        new (None and no key when the backend refused it: ``error`` says so)."""
-        targets, samples = signature
-        layout_key = tuple((a.binding(), a.location(), a.format(), a.offset()) for a in attributes)
-        key = (_pass_format(render_pass), targets, samples, stride, max(4, fill_stride), layout_key, self.m_state)
-        shared = self.m_program.m_pipelines.get(key)
-        if shared is not None:
-            shared[1] += 1
-            return shared[0], key
-        pipeline = self._new_pipeline(render_pass, signature, vertex_layout([stride, max(4, fill_stride)], attributes))
-        if pipeline is None:
-            return None, None
-        self.m_program.m_pipelines[key] = [pipeline, 1]  # the program's: destroyed with its last user
-        return pipeline, key
-
-    def _new_pipeline(self, render_pass, signature, layout):
-        targets, samples = signature
-        blends = target_blends(self.m_state.blends, targets)
-        for target_index, target_blend in enumerate(blends):
-            mask = self.m_state.writes[target_index] if target_index < len(self.m_state.writes) else None
-            if not self.m_state.colour or mask is not None:  # QRhi's mask bits are D3D's
-                target_blend.colorWrite = QRhiGraphicsPipeline.ColorMaskComponent(
-                    0 if not self.m_state.colour else mask
-                )
-        pipeline = new_pipeline(self.m_rhi, self.m_program, layout, self.m_srb, render_pass, samples, blends)
-        pipeline.setDepthTest(self.m_state.depth_test)
-        pipeline.setDepthWrite(self.m_state.depth_write)
-        compare_op = QRhiGraphicsPipeline.CompareOp
-        depth_op = (
-            compare_op.Always
-            if self.m_state.depth_always
-            else compare_op.Equal
-            if self.m_state.depth_equal
-            else compare_op.GreaterOrEqual
-        )
-        pipeline.setDepthOp(depth_op)  # the engine's depth: 1 near, 0 far
-        pipeline.setCullMode(CULL_MODES[self.m_state.cull])
-        stencil = self.m_state.stencil
-        if stencil is not None:  # the reference is set per draw (``CMesh.draw``)
-            pipeline.setStencilTest(True)
-            pipeline.setStencilFront(stencil_state(stencil))
-            pipeline.setStencilBack(stencil_state(stencil))
-            pipeline.setStencilReadMask(stencil.mask)
-            pipeline.setStencilWriteMask(stencil.write_mask)
-            pipeline.setFlags(pipeline.flags() | QRhiGraphicsPipeline.Flag.UsesStencilRef)
-        if not pipeline.create():
-            self.m_error = "the backend refused the game shader's pipeline"
-            pipeline.destroy()
-            return None
-        return pipeline
-
-    def _give_back(self, key) -> None:
-        """One user fewer of the program's pipeline ``key``; the last destroys it."""
-        shared = self.m_program.m_pipelines.get(key) if key is not None else None
-        if shared is not None:
-            shared[1] -= 1
-            if shared[1] <= 0:
-                shared[0].destroy()
-                del self.m_program.m_pipelines[key]
+        """A raw buffer no pass fills (the device's, shared by the models)."""
+        return self._shared(("model", "scratch"), lambda: stand_in(self.m_rhi, "uav_rwbyteaddress"))
 
     def prepare(
         self, render_pass, signature, batch, camera: gameshader.SCamera, fill=None, shared: dict | None = None
@@ -847,11 +631,51 @@ class CGameModel:
             self._m_uploaded = self.m_mesh.m_version
         if self.m_pipeline is None and not self.m_error:
             self._make_pipeline(render_pass, signature)
+        self._m_inputs = self._inputs_of(camera, fill)
         for name, constants in self.m_constants.items():
             self._write(batch, name, constants, camera, fill)
 
+    def _inputs_of(self, camera: gameshader.SCamera, fill) -> tuple | None:
+        """What this prepare fills the buffers from: the camera, the place and pose, the pass's fill (its ``key``,
+        and ``names``, the members it writes: None for any), the owner's values; None for a fill without a key."""
+        fill_key, fill_names = None, frozenset()
+        if fill is not None:
+            fill_key = getattr(fill, "key", None)
+            if fill_key is None:
+                return None
+            fill_names = getattr(fill, "names", None)
+        key = gameshader.value_key
+        place = (key(np.asarray(self.m_world)), None if self.m_palette is None else key(np.asarray(self.m_palette)))
+        values = tuple((path, key(value)) for path, value in self.m_values.items())
+        value_names = frozenset(path.partition(".")[0].partition("[")[0] for path in self.m_values)
+        return gameshader.camera_key(camera), place, fill_key, fill_names, values, value_names
+
+    def _stamp(self, name: str, constants: gameshader.CConstants) -> tuple | None:
+        """What the buffer ``name`` is filled from this frame, as far as its members read it: the camera where it
+        holds frame members, the place where it holds instance members, the fill and the values where they write a
+        member of it, its raw bytes (None: filled every time)."""
+        if self._m_inputs is None:
+            return None
+        reflection = constants.m_reflection
+        layout = self._m_layouts.get(name)
+        if layout is None or layout[0] is not reflection:
+            names = frozenset(variable.name for variable in reflection.variables)
+            layout = self._m_layouts[name] = (reflection, names, not names.isdisjoint(gameshader.FRAME_NAMES),
+                                              not names.isdisjoint(gameshader.INSTANCE_NAMES))  # fmt: skip
+        _reflection, names, has_frame, has_instance = layout
+        camera_key, place, fill_key, fill_names, values, value_names = self._m_inputs
+        raw = self.m_raw.get(name)
+        return (camera_key if has_frame else None, place if has_instance else None,
+                fill_key if fill_names is None or not names.isdisjoint(fill_names) else None,
+                values if not names.isdisjoint(value_names) else None, None if raw is None else bytes(raw))  # fmt: skip
+
     def _write(self, batch, name: str, constants: gameshader.CConstants, camera: gameshader.SCamera, fill) -> None:
-        """This frame's values of the constant buffer ``name`` (the camera, the place, the pass's, the owner's), sent."""
+        """This frame's values of the constant buffer ``name`` (the camera, the place, the pass's, the owner's), sent;
+        nothing when the inputs it reads stand as it was last filled (``_stamp``)."""
+        stamp = self._stamp(name, constants)
+        filled = self._m_filled.get(name)
+        if stamp is not None and filled is not None and filled[0] is constants and filled[1] == stamp:
+            return
         gameshader.fill_frame(constants, camera)
         gameshader.fill_instance(constants, self.m_world, self.m_palette)
         if fill is not None:
@@ -863,11 +687,12 @@ class CGameModel:
             length = min(len(raw), len(constants.m_data))
             constants.m_data[:length] = raw[:length]
         self._send(batch, name, bytes(constants.m_data))
+        self._m_filled[name] = (constants, stamp)
 
     def _send(self, batch, name: str, data: bytes) -> None:
         """``data`` into the buffer of ``name`` when the bytes this model last sent there differ."""
         if self._m_sent.get(name) != data:
-            batch.updateDynamicBuffer(self.m_buffers[name], 0, data)
+            batch.updateDynamicBuffer(self.m_buffers[name], self.m_ranges.get(name, (0, 0))[0], data)
             self._m_sent[name] = data
 
     def draw(self, command_buffer, size_px: tuple[int, int], instances: int = 1) -> None:
@@ -887,7 +712,10 @@ class CGameModel:
             if resource is not None:
                 resource.destroy()
         self._give_back(self._m_pipeline_key)
+        for token in self._m_tokens.values():
+            gamepool.give_back(token)
         self.m_keep, self.m_pipeline, self._m_pipeline_key = [], None, None
+        self.m_ranges, self._m_pool, self._m_tokens = {}, None, {}
 
     def box(self) -> tuple[np.ndarray, np.ndarray]:
         return self.m_mesh.box()

@@ -2,14 +2,16 @@
 
 ``begin(release)`` is what "Download and install" starts, after the main window closed the usual way: the launcher
 window shows the step, the download's percent and, on a failure, the error with the log's path and a button that starts
-the Toolbox again. The work runs on a thread of its own (``updates.stage``, then ``updates.apply``, which restarts the
-program into the new version, whose own start-up screen is the normal one). The wording of each state is ``lines``,
+the Toolbox again. The work runs on a thread of its own (``updates.stage``, then ``updates.apply``, which starts the
+installer's updater silently; this program then ends so the updater can swap the files and start the new version,
+whose own start-up screen says the update is done). The wording of each state is ``lines``,
 a plain function. ``docs/installer.md`` "Updates".
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -79,6 +81,12 @@ def keep_log(exc: BaseException) -> str:
     return str(path) if path else ""
 
 
+def leave_program() -> None:
+    """End the program at once, as the updater waits for it to exit before it swaps the files."""
+    logging.shutdown()
+    os._exit(0)
+
+
 def start_again(command: list[str] | None = None) -> None:
     """Start a normal run of the program, apart from this one (a failed update leaves the person without a window)."""
     command = command or relaunch_command(sys.argv, sys.executable, install.appimage())
@@ -93,6 +101,7 @@ class CUpdateRun(QObject):
     """One update: the thread's steps come to the main thread as ``stepped`` and are drawn on the launcher window."""
 
     stepped = Signal(object)
+    left = Signal()
 
     def __init__(
         self,
@@ -100,12 +109,14 @@ class CUpdateRun(QObject):
         net: updates.SNet = updates.NET,
         mgr=None,
         keep: Callable[[BaseException], str] = keep_log,
+        leave: Callable[[], None] = leave_program,
     ) -> None:
         super().__init__()
-        self.m_release, self.m_net, self.m_mgr, self.m_keep = release, net, mgr, keep
+        self.m_release, self.m_net, self.m_mgr, self.m_keep, self.m_leave = release, net, mgr, keep, leave
         self.m_step = SStep(CHECK)
         self.m_thread: threading.Thread | None = None  # a test waits for it
         self.stepped.connect(self._show)
+        self.left.connect(self._leave)
 
     def start(self) -> None:
         splash.show()
@@ -129,11 +140,15 @@ class CUpdateRun(QObject):
             )
             applying = True
             self._tell(SStep(APPLY))
-            updates.apply(staged, mgr)  # the program is replaced and restarted here; it only returns on a refusal
+            updates.apply(staged, mgr)  # the silent updater now waits for this program to exit
+            self.left.emit()
         except Exception as exc:  # the launcher window always hears back
             log.exception("the update failed")
             error = str(exc) or type(exc).__name__
             self._tell(SStep(FAILED, error=error, applying=applying, log=self.m_keep(exc)))
+
+    def _leave(self) -> None:
+        self.m_leave()  # the launcher window stays up until the program is gone
 
     def _show(self, step: SStep) -> None:
         self.m_step = step

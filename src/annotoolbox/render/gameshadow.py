@@ -26,6 +26,11 @@ DIVISIONS = ((0.0, 0.0, 0.5, 0.5), (0.5, 0.0, 0.5, 0.5), (0.0, 0.5, 0.5, 0.5), (
 INFO = {"ShadowMatrix": 0, "ShadowMatrixInv": 64, "DepthTransform": 128, "MinLS": 144, "SplitDistance": 156,
         "MaxLS": 160, "DepthRange": 176, "PartitionSize": 192, "PartitionOffset": 200}  # fmt: skip
 INFO_BYTES = 208
+# the members ``fill`` writes, and with them those ``fill_casters`` writes: a buffer with none of them reads no
+# cascade (``gamedraw.CGameModel`` fills it again only for its other inputs)
+SHADOW_NAMES = frozenset({"cUsedShadowPartitions", "cLastFrameBlend", "cShadowMapSize", "cShadowMaxDistance",
+                          "cShadowVolumetricCascade", "cShadowSampleOffsets", "cShadowPartitionDivision"})  # fmt: skip
+CASTER_NAMES = SHADOW_NAMES | {"cLgtDirection", "cModelPerFrameDataOffset", "cModelGPUCulledInstanceData"}
 
 
 def poisson_disc(count: int = 16, seed: int = 117) -> np.ndarray:
@@ -151,6 +156,11 @@ def fill(constants: gs.CConstants, cascades: SCascades | None) -> None:
     constants.set("cShadowVolumetricCascade", 0)
     constants.set_rows("cShadowSampleOffsets", [[x, y, 0, 0] for x, y in SAMPLES])
     constants.set_rows("cShadowPartitionDivision", DIVISIONS)
+
+
+def fill_key(cascades: SCascades | None) -> tuple:
+    """What ``fill`` writes of ``cascades``, comparable by content (a keyed fill's part: ``gamebind.keyed``)."""
+    return () if cascades is None else (cascades.used, cascades.size, float(cascades.max_distance_m))
 
 
 def info_bytes(cascades: SCascades) -> bytes:
@@ -281,10 +291,8 @@ class CShadowMap:
         seen = cascade_key(cascades)
 
         def prepare(model, render_pass, signature, batch) -> None:
-            instance_count, joints = (
-                getattr(model, "m_instances", 1),
-                getattr(model, "joints", 0),
-            )  # an instanced caster: many a draw
+            instance_count = getattr(model, "m_instances", 1)  # an instanced caster: many a draw
+            joints = getattr(model, "joints", 0)
             words = getattr(model, "m_words", None)  # culled per cascade: its own words
 
             def fill(constants) -> None:
@@ -292,14 +300,12 @@ class CShadowMap:
                 if terrain is not None:
                     terrain(constants)
 
-            fill.key = (
-                seen,
-                instance_count,
-                joints,
-                id(words),
-                terrain and terrain.key,
-            )  # what it writes (a still frame skips it)
-            fill.common_key = (seen, terrain and terrain.key)  # what it writes into the buffers without instance data
+            # what it writes, by content (a still frame skips it); the words by their bytes, not an id that a new
+            # array can take over
+            terrain_key = terrain and terrain.key
+            fill.key = (seen, instance_count, joints, gs.value_key(words), terrain_key)
+            fill.common_key = (seen, terrain_key)  # what it writes into the buffers without instance data
+            fill.names = CASTER_NAMES | terrain.names if terrain is not None else CASTER_NAMES  # the members it writes
             model.prepare(render_pass, signature, batch, camera, fill, shared)
 
         def draw(model, command_buffer) -> None:

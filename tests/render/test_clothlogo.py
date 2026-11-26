@@ -68,10 +68,10 @@ def test_the_cloth_constant_carries_the_logos_atlas_index():
 
 def _model(buffer: bool = True, keep: bool = False):
     pytest.importorskip("PySide6")
-    from annotoolbox.render import gamedraw
+    from annotoolbox.render import gametextures
 
     cbuffers = {clothlogo.ATLAS_BUFFER: object()} if buffer else {}
-    return SimpleNamespace(m_table=gamedraw.CTextureTable({}), m_program=SimpleNamespace(m_cbuffers=cbuffers),
+    return SimpleNamespace(m_table=gametextures.CTextureTable({}), m_program=SimpleNamespace(m_cbuffers=cbuffers),
                            m_keep=[object()] if keep else [], m_values={})  # fmt: skip
 
 

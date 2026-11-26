@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 
 from . import gameshader as gs
 from . import gameshadow, gamesky, mipchain
-from .gamebind import RAW
+from .gamebind import RAW, keyed
 from .gamecompute import CComputeStage, groups, storage_buffer
 from .gamedraw import stand_in
 
@@ -225,7 +225,15 @@ class CDeferredShading(CComputeStage):
         self.m_cube_log2 = math.log2(inputs["cPrefilteredSpecularCube"].pixelSize().width()) if (
             "cPrefilteredSpecularCube" in inputs) else math.log2(CUBE_SIZE)  # fmt: skip
         self._lights(batch, extras.clusters)
-        super().prepare(batch, inputs, lambda constants: self.fill(constants, camera, sky, extras))
+        fill = keyed(lambda constants: self.fill(constants, camera, sky, extras), self.fill_key(camera, sky, extras))
+        super().prepare(batch, inputs, fill)
+
+    def fill_key(self, camera: gs.SCamera, sky: SSky, extras: SExtras) -> tuple:
+        """What ``fill`` writes, comparable by content (a keyed fill's: ``gamebind.keyed``)."""
+        clouds, clusters = extras.clouds, extras.clusters
+        lights = None if clusters is None else (gs.value_key(clusters.spots), gs.value_key(clusters.areas))
+        return ("shading", gs.camera_key(camera), gs.value_key((sky.sun, sky.night, sky.ambient)), self.m_cube_log2,
+                gameshadow.fill_key(extras.cascades), clouds.moment() if clouds is not None else None, lights)  # fmt: skip
 
     def fill(self, constants: gs.CConstants, camera: gs.SCamera, sky: SSky, extras: SExtras) -> None:
         """This frame's light into a constant buffer by name: the camera, the sun and the sky light, the cascades,

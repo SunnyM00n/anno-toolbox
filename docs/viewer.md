@@ -263,6 +263,9 @@ the device of our looks.
 backend there unless the island view draws on Direct3D too (`island-editor.md`, "The renderer"). The first start on a
 QRhi backend bakes each of our shaders once (a few seconds), then reads it from the build cache.
 
+Where the view spends its time per look, how long a model takes to open and what could make both faster is measured
+in `rendering/viewer-performance.md`.
+
 Note: the switches were once built with a bare menu callback, which did not report their new state, so they could only
 be turned off. They are checkable entries now.
 

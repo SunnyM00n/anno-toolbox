@@ -1,7 +1,7 @@
 """The files a model draws, read from a game's tree and kept: meshes (``.rdm`` and Granny ``.gr2`` as
-``rdmmesh.SMeshFile``), textures as RGBA (``fileresolve.decode``, a smaller mip for a large file), effects
-(``render.particlefx``, their textures found by ``fileresolve``) and animations. Thread-safe; the renderer calls it
-from its loading threads.
+``rdmmesh.SMeshFile``), textures as RGBA (``fileresolve.decode``) or as stored blocks (``render.blocktexture``),
+effects (``render.particlefx``, their textures found by ``fileresolve``) and animations. Thread-safe; the renderer
+calls it from its loading threads.
 
 ``CModelFiles(files)`` is the entry; ``mesh``, ``texture``, ``effect`` and ``animation`` raise for a file that does
 not read, and the caller says so (the Checks panel lists it). A Granny file's skeletons, skins and animations come in
@@ -29,6 +29,7 @@ from ..models.grannyrig import (
     subdivided,
 )
 from ..models.rdmmesh import SMeshData, SMeshFile, read_meshes
+from ..render.blocktexture import SBlockMap, stored_blocks
 
 
 def granny_meshes(data: bytes, cloth_rounds: int = 0) -> tuple[SMeshFile, list[grannyanim.SSkeleton]]:
@@ -126,16 +127,20 @@ class CModelFiles:
 
         return self._once("mesh", path, make)
 
-    def texture(self, path: str, most: int = 0) -> tuple[int, int, int, bytes]:
+    def texture(self, path: str, most: int = 0, blocks: bool = False) -> tuple[int, int, int, bytes] | SBlockMap:
         """(width, height, 4, RGBA bytes) of a texture, its first level at most ``texture_max`` (and ``most``, the
-        rendering quality's largest map, where it is given) texels a side."""
+        rendering quality's largest map, where it is given) texels a side. With ``blocks``, a DDS whose blocks a
+        GPU takes comes as they are stored instead (``blocktexture.stored_blocks``), the rest decoded."""
         limit = min(self.m_max_texture_px, most) if most else self.m_max_texture_px
 
         def make():
-            pixels = fileresolve.decode(self.m_files.read(path), limit)
+            data = self.m_files.read(path)
+            if blocks and (stored := stored_blocks(data, limit)) is not None:
+                return stored
+            pixels = fileresolve.decode(data, limit)
             return pixels.shape[1], pixels.shape[0], 4, np.ascontiguousarray(pixels).tobytes()
 
-        return self._once("texture", f"{limit}:{path}", make)
+        return self._once("blocks" if blocks else "texture", f"{limit}:{path}", make)
 
     def effect(self, path: str) -> list:
         """The effects of a particle file: a 117 ``.rdp``, a 2070 ``.efc`` (its sprite emitters) or a 1701 one (its

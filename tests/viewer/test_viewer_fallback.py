@@ -182,9 +182,10 @@ def test_a_released_renderer_gives_back_what_it_made_for_itself():
         None,
         {"missing": FakeHeld(log, "checker"), "s:gone.dds": None},
     )
-    r.m_game_pass, r.m_loader, r.m_particles = (
+    r.m_game_pass, r.m_loader, r.m_game_loader, r.m_particles = (
         FakeHeld(log, "pass"),
         FakeHeld(log, "loader"),
+        FakeHeld(log, "game loader"),
         FakeHeld(log, "particles"),
     )
     r._m_ground = {"vaos": {"main": FakeHeld(log, "ground vao")}, "vbo": FakeHeld(log, "ground vbo"),

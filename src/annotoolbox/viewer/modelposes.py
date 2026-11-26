@@ -78,6 +78,17 @@ class CModelPoses:
             self._m_frame[key] = rig.world(*self._clip(host.node, state))
         return host_place @ self._m_frame[key][joint]
 
+    def _skin_matrices(self, part: SPart, skeleton: int, joints, anim, seconds: float) -> np.ndarray:
+        """The skin matrices of a part's skeleton this frame, posed once for all the part's groups (a model has a
+        group per material, and every group of a part shares its skeleton and clip)."""
+        key = ("skin", part.node, skeleton)
+        if key not in self._m_frame:
+            rig = self._m_skin_rigs.get((part.node, skeleton))
+            if rig is None:
+                rig = self._m_skin_rigs[(part.node, skeleton)] = skinning.CRig(joints)
+            self._m_frame[key] = rig.pose(anim, seconds)
+        return self._m_frame[key]
+
     def _pose(self, part: SPart, item: dict, state: SViewState) -> None:
         """A skinned group moved to the animation's pose at ``state.time`` (the bind pose without an animation)."""
         anim, seconds = self._clip(part.node, state)
@@ -85,9 +96,7 @@ class CModelPoses:
         key = (id(anim), round(seconds, 3)) if anim is not None else None
         if key == item["pose"] or mesh.skeleton is None or mesh.skeleton >= len(skeletons):
             return
-        if "rig" not in item:
-            item["rig"] = skinning.CRig(skeletons[mesh.skeleton])
-        matrices = item["rig"].pose(anim, seconds)
+        matrices = self._skin_matrices(part, mesh.skeleton, skeletons[mesh.skeleton], anim, seconds)
         item["pose"], item["matrices"] = key, matrices
         if item["gpu"]:
             columns = np.ascontiguousarray(matrices.transpose(0, 2, 1), "f4")  # a texel a column, a row a joint

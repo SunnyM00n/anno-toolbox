@@ -25,7 +25,7 @@ from PySide6.QtGui import (
 
 from ..formats import fxeffect
 from ..models import shaderforward
-from . import cull, frameforward, gamedraw, gamemaps, gameshader, mipchain
+from . import cull, frameforward, gamedraw, gamemaps, gameshader, gametextures, mipchain
 from .fxcdraw import CFxcDraw, CSharedBuffers, layout_key, same_objects
 
 CHUNK = 280  # instance words a draw (constants_model.fxh NUM_MODEL_CONSTANTS)
@@ -798,12 +798,12 @@ def plain_texture(rhi, batch, dds):
     """A map as one 2D texture (the model shaders read ``Texture2D``): its blocks as stored with every level (the
     levels a file stops short of made: ``mipchain``), or its first level as RGBA; never sRGB (the shaders turn colour
     into linear light themselves)."""
-    stored, _key = gamedraw.map_kind(dds)
+    stored, _key = gametextures.map_kind(dds)
     dds_info = dds.m_info
     if stored:
         flags = QRhiTexture.Flag.MipMapped if dds_info.mips > 1 else QRhiTexture.Flag(0)
         texture = rhi.newTexture(
-            gamedraw.BLOCK_FORMATS[dds_info.format], QSize(dds_info.width_px, dds_info.height_px), 1, flags
+            gametextures.BLOCK_FORMATS[dds_info.format], QSize(dds_info.width_px, dds_info.height_px), 1, flags
         )
         levels = [dds.stored(level) for level in range(dds_info.mips)]
         levels = mipchain.full_levels(dds_info, levels) if dds_info.mips > 1 else levels

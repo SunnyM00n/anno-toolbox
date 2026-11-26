@@ -3,7 +3,8 @@ every path (all words, any order), a filter by kind, a "Not referenced" box (the
 the file under the cursor every archive that carries it (the one it is read from first); the paths 117's archive map
 takes away are a kind of their own.
 
-``CFileBrowser(parent)`` is the entry: ``set_tree(tree)`` (a ``sources.gametree.CGameTree``), the signals ``picked``
+``CFileBrowser(parent)`` is the entry: ``set_tree(tree, index)`` (a ``sources.gametree.CGameTree``, and its
+``folder_index`` when it was built on a worker), the signals ``picked``
 (a file selected) and ``opened`` (a file activated). ``KINDS`` names which suffixes each kind holds.
 """
 
@@ -127,15 +128,16 @@ class CFileBrowser(QWidget):
         self.m_found.currentTextChanged.connect(self._pick)
         self.m_found.itemActivated.connect(lambda item: self._open(item.text()))
 
-    def set_tree(self, tree) -> None:
-        """Browse ``tree`` (a ``CGameTree``), from its top folder."""
+    def set_tree(self, tree, index: dict | None = None) -> None:
+        """Browse ``tree`` (a ``CGameTree``), from its top folder. ``index``: its ``folder_index``, built off the
+        window's thread (hundreds of thousands of paths take about a second); made here when missing."""
         self.m_tree = tree
         self.m_unreferenced = []
         self.m_unreferenced_toggle.blockSignals(True)
         self.m_unreferenced_toggle.setChecked(False)
         self.m_unreferenced_toggle.blockSignals(False)
         self.m_unreferenced_toggle.hide()
-        self.m_index = folder_index(tree.m_paths)
+        self.m_index = folder_index(tree.m_paths) if index is None else index
         self.m_kind.blockSignals(True)
         if self.m_kind.findData(DELETED) < 0 and tree.m_deleted:
             self.m_kind.addItem(tr(DELETED), DELETED)

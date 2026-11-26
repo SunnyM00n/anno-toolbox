@@ -23,7 +23,7 @@ from PySide6.QtGui import (
     QRhiTextureUploadEntry,
 )
 
-from . import gamedraw, gamemaps, terraindraw
+from . import gamedraw, gamemaps, gametextures, terraindraw
 from . import gameshader as gs
 from .gamecompute import CComputeChain, CComputeStage, carry, groups
 from .gameinstances import CCommon
@@ -209,7 +209,7 @@ def material_map_textures(rhi, batch, ground: SGroundSource) -> dict:
 
 
 class CMissingMap:
-    """A map a material lacks, as ``gamedraw.CTextureTable`` reads a map: 4 x 4 of its kind's stand-in."""
+    """A map a material lacks, as ``gametextures.CTextureTable`` reads a map: 4 x 4 of its kind's stand-in."""
 
     def __init__(self, kind: int) -> None:
         self.m_info = SimpleNamespace(format="RGBA8", faces=1, width_px=4, height_px=4, mips=1, srgb=False)
@@ -219,13 +219,13 @@ class CMissingMap:
         return self.m_pixels
 
 
-def splat_table(splats: list[SSplat]) -> tuple[gamedraw.CTextureTable, np.ndarray]:
+def splat_table(splats: list[SSplat]) -> tuple[gametextures.CTextureTable, np.ndarray]:
     """The splats' maps as the bindless stand-in holds them (``cTrnBakeSplatTextures`` read through it: the maps
     stored as they are, BC blocks with their mips; the shader turns sRGB to linear itself) and the slot table that
     puts each at its index ``id * 3 + k``."""
     maps = {f"{splat.mat_id * 3 + k}": splat.maps[k] if splat.maps[k] is not None else CMissingMap(k)
             for splat in splats for k in range(3)}  # fmt: skip
-    table = gamedraw.CTextureTable(maps)
+    table = gametextures.CTextureTable(maps)
     words = np.zeros(gs.SLOTS, np.uint32)
     for name, slot in table.m_slots.items():
         words[int(name)] = table.m_words[slot]

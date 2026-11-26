@@ -1,6 +1,7 @@
 """Work off the window's thread for every app of the suite: ``CBackground.run(work, callback)`` runs ``work`` on a
 thread and calls ``callback`` with its result (or the exception it raised) back on the window's thread.
-``long_lived()`` wraps work that builds what the window keeps (an opened island). A job that takes long gets a
+``CLatest(background)`` is the same for work of which only the newest result counts (a file picked while the one before
+is still built). ``long_lived()`` wraps work that builds what the window keeps (an opened island). A job that takes long gets a
 ``CJobTalk``: its progress on the window's thread, and a stop that ends it at its next report (``CStopped``).
 """
 
@@ -71,6 +72,34 @@ class CJobTalk(QObject):
     @property
     def stopped(self) -> bool:
         return self._m_stop.is_set()
+
+
+class CLatest:
+    """Work of which only the newest result counts: a file picked while the one before is still being built. Every
+    ``run`` supersedes the earlier ones, whose callbacks never come; ``cancel`` supersedes all of them. The work of a
+    superseded job still runs to its end (a thread cannot be stopped), its result is dropped."""
+
+    def __init__(self, background: CBackground) -> None:
+        self._m_background = background
+        self._m_serial = 0
+
+    def run(self, work, callback, is_waiting: bool = False) -> None:
+        """``background.run(work, callback)``, unless a newer ``run`` or ``cancel`` came first."""
+        self._m_serial += 1
+        serial = self._m_serial
+        self._m_background.run(work, lambda result: serial == self._m_serial and callback(result), is_waiting)
+
+    def cancel(self) -> None:
+        """Whatever runs now is dropped when it ends."""
+        self._m_serial += 1
+
+    def is_current(self, serial: int) -> bool:
+        """Whether ``serial`` (the ``serial`` property read when a job began) is still the newest job."""
+        return serial == self._m_serial
+
+    @property
+    def serial(self) -> int:
+        return self._m_serial
 
 
 class CBackground(QObject):

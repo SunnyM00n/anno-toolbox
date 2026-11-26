@@ -114,3 +114,151 @@ def test_a_fog_map_cut_short_reads_its_whole_rows_and_one_without_a_texel_is_no_
     air.m_fog = None
     air.set_fog(bytes(5), 64.0)
     assert air._m_fog_layers is None and air.m_fog is None
+
+
+def _camera(x: float = 0.0):
+    import numpy as np
+
+    from annotoolbox.render import gameshader as gs
+
+    view = np.identity(4)
+    view[3, 0] = x
+    return gs.SCamera(np.zeros(3), view, np.identity(4), 0.1, 100.0, (8, 8))
+
+
+def test_the_accumulation_settles_in_four_still_frames_and_starts_again_when_the_camera_moves_or_the_size():
+    """``CAccumulation`` (the native passes' history and ``CAtmosphere``'s): each still frame marches the next pixel
+    of every quad, so four frames after the last move the picture is whole and the view stops drawing."""
+    acc = ga.CAccumulation()
+    left, previous = [], []
+    for camera, half in ((_camera(), (4, 4)), (_camera(5), (4, 4)), *[(_camera(5), (4, 4))] * 5, (_camera(5), (6, 4))):
+        previous.append(acc.advance(camera, half)[0][3, 0])
+        left.append(acc.m_settle_left)
+    assert left == [4, 4, 3, 2, 1, 0, 0, 4]  # a moved camera and a new size start the count again
+    assert previous[:3] == [0.0, 0.0, 5.0]  # each frame reprojects from the last one's view
+    assert acc.m_frame_counter == 8
+    assert acc.settling() is True and acc.settling() is False  # asked once per accumulated frame
+    acc.advance(_camera(5), (6, 4))
+    acc.forget()
+    assert acc.settling() is False  # a frame that marched every pixel has nothing to settle
+
+
+def test_a_frame_of_the_clouds_and_fog_over_frames_picks_marches_reprojects_copies_and_ends_in_that_order():
+    named = {"cScatteringTarget": "target", "cDepthBuffer": "depth"}
+    steps = ga.quad_march((20, 12), named, "packed", "rays", "history", "cameras")
+    assert [key for key, _bound, _grid in steps] == ["select", "clouds", "fog", "accumulate", ga.HISTORY_COPY, "end"]
+    by_key = {key: (bound, grid) for key, bound, grid in steps}
+    assert by_key["select"] == ({"cScatteringTarget": "packed", "cDepthBuffer": "depth", "cQuadRayIDs": "rays"},
+                                (2, 1, 1))  # 10 x 6 quads in groups of 8  # fmt: skip
+    assert by_key["clouds"][1] == (1, 1, 1) and by_key["clouds"][0]["cScatteringTarget"] == "packed"
+    accumulated = by_key["accumulate"][0]
+    assert accumulated["cScatteringAccumulation"] == "target" and accumulated["cScatteringHistory"] == "history"
+    assert accumulated["cCameraBuffer"] == "cameras" and by_key["end"][0] is named
+    assert "cCameraBuffer" not in ga.quad_march((4, 4), named, "p", "r", "h")[3][1]  # the passes' own camera
+
+
+class FakeTexture:
+    def __init__(self, name: str, size=(8, 4)) -> None:
+        self.native, self.size = name, size
+
+    def release(self) -> None:
+        pass
+
+
+def _atmosphere(monkeypatch, temporal_stages: bool):
+    """A ``CAtmosphere`` whose passes are logged (key, its fill's key, whether its pass ends with a copy) instead of
+    recorded, its fill counting the frames it worked out."""
+    from types import SimpleNamespace
+
+    log, worked = [], []
+    stages = ("clouds", "end", "fog", "blur.h", "blur.v", *(("select", "accumulate") if temporal_stages else ()))
+    air = ga.CAtmosphere.__new__(ga.CAtmosphere)
+    air.m_rhi, air.m_atmosphere = None, {}
+    air.m_stages = {key: SimpleNamespace(key=key, m_error="", m_share=None) for key in stages}
+    air.m_down, air.m_up = SimpleNamespace(key="down"), SimpleNamespace(key="up")
+    air.m_target, air.m_blurred, air.m_half = FakeTexture("target"), FakeTexture("blurred"), FakeTexture("half")
+    air.m_history = air.m_rays = air.m_half_fbo = None
+    air.m_fog, air.m_fog_size, air.m_heights, air._m_fog_layers = None, 0.0, None, None
+    air.m_accumulation, air._m_history_blank = ga.CAccumulation(), False
+    air._m_filled = __import__("weakref").WeakKeyDictionary()
+    monkeypatch.setattr(air, "targets", lambda ctx, size: None, raising=False)
+    monkeypatch.setattr(air, "fill", lambda constants, *args: worked.append(constants), raising=False)
+
+    def history(ctx, half) -> None:
+        air.m_history, air.m_rays = FakeTexture("history"), FakeTexture("rays")
+
+    monkeypatch.setattr(air, "_history", history, raising=False)
+
+    def record(ctx, stage, named, fill, grid, after=None, before=None):
+        log.append((stage.key, fill, after is not None))
+
+    monkeypatch.setattr(ga, "record", record)
+    monkeypatch.setattr(
+        ga, "full_screen", lambda ctx, post, fbo, size, named, fill, **_kw: log.append((post.key, fill, False))
+    )
+    return air, log, worked
+
+
+def test_the_viewers_atmosphere_marches_a_quarter_of_the_pixels_and_fills_only_the_counter_while_still(monkeypatch):
+    """With the stages of ``TEMPORAL_STAGES`` the QRhi passes accumulate as the native ones do; the passes that read
+    the frame counter get it, a still frame writes nothing else into them, the others are left as they are."""
+    from types import SimpleNamespace
+
+    from annotoolbox.infra.dxc import SConstantBuffer, SVariable
+    from annotoolbox.render import gameshader as gs
+
+    air, log, worked = _atmosphere(monkeypatch, temporal_stages=True)
+    sky = SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False)
+    lit = SimpleNamespace(color_attachments=[1, 2])
+    air.run(None, lit, (16, 8), _camera(), sky, {}, ga.SLook(temporal=True))
+    assert [(key, copies) for key, _fill, copies in log] == [
+        ("down", False), ("select", False), ("clouds", False), ("fog", False), ("accumulate", True), ("end", False),
+        ("blur.h", False), ("blur.v", False), ("up", False)]  # fmt: skip
+    fills = {key: fill for key, fill, _copies in log}
+    assert fills["down"] is fills["clouds"] and fills["end"] is fills["up"] and fills["end"] is not fills["down"]
+    counter = SConstantBuffer("cb", 16, [SVariable("cFrameCounter", 0, 4, "uint")])
+    marched = gs.CConstants(counter)
+    fills["clouds"](marched)
+    first_keys = {key: fill.key for key, fill in fills.items()}
+    log.clear()
+    air.run(None, lit, (16, 8), _camera(), sky, {}, ga.SLook(temporal=True))  # a still frame
+    fills = {key: fill for key, fill, _copies in log}
+    assert fills["end"].key == first_keys["end"]  # left as it is (gamebind.keyed)
+    assert fills["clouds"].key != first_keys["clouds"]  # the counter moved
+    worked.clear()
+    fills["clouds"](marched)
+    assert worked == [] and int.from_bytes(bytes(marched.m_data[:4]), "little") == 2  # only the counter written
+    assert air.settling()
+
+
+def test_a_frame_that_marched_every_pixel_leaves_the_next_accumulated_frame_to_fill_its_buffers_again(monkeypatch):
+    """A frame without the accumulation fills the counted passes' buffers with its own values (no frame flags), so
+    the next accumulated frame of the same camera must fill them again, not only move the counter."""
+    from types import SimpleNamespace
+
+    from annotoolbox.infra.dxc import SConstantBuffer, SVariable
+    from annotoolbox.render import gameshader as gs
+
+    air, log, worked = _atmosphere(monkeypatch, temporal_stages=True)
+    sky = SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False)
+    lit = SimpleNamespace(color_attachments=[1])
+    marched = gs.CConstants(SConstantBuffer("cb", 16, [SVariable("cFrameCounter", 0, 4, "uint")]))
+    for look in (ga.SLook(temporal=True), ga.SLook(temporal=False), ga.SLook(temporal=True)):
+        log.clear()
+        worked.clear()
+        air.run(None, lit, (16, 8), _camera(), sky, {}, look)
+        {key: fill for key, fill, _copies in log}["clouds"](marched)
+        assert worked == [marched], look  # every frame's values written
+
+
+def test_an_atmosphere_without_the_stages_over_frames_marches_every_pixel_as_before(monkeypatch):
+    """The island view's QRhi passes compile ``STAGES`` alone: its look asks for the frames' accumulation, which
+    only its native passes do, so these march every pixel every frame and nothing settles."""
+    from types import SimpleNamespace
+
+    air, log, _worked = _atmosphere(monkeypatch, temporal_stages=False)
+    sky = SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False)
+    air.run(None, SimpleNamespace(color_attachments=[1]), (16, 8), _camera(), sky, {}, ga.SLook(temporal=True))
+    assert [key for key, _fill, _copies in log] == ["down", "clouds", "end", "fog", "blur.h", "blur.v", "up"]
+    assert len({id(fill) for _key, fill, _copies in log}) == 1 and air.m_history is None
+    assert not air.settling()

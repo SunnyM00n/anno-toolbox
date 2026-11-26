@@ -269,7 +269,10 @@ def run_window(argv: list[str]) -> int:
     from . import splash
 
     if not args.smoke:
-        splash.show()  # before the heavy imports below: the person sees the program start at once
+        from . import installevents
+
+        # before the heavy imports below: the person sees the program start at once
+        splash.show(installevents.take_updated())
     try:
         return start_window(args)
     finally:

@@ -107,15 +107,31 @@ def fill_frame(constants: dict, camera: gs.SCamera, light: dict) -> None:
     space left-handed, as the soft fade and 1800's cascade choice read its depth), the screen (2205's ``cViewPort``,
     1800's ``cBackBufferSize`` and ``cViewport``: its hull's factors, its shadow's fade) and ``light`` (members by
     name: ``ambientforward.light_values``)."""
+    # the values are worked out and packed once per layout while the camera and the light's items stay the same
+    # objects (a frame builds them once, and a draw's buffers all share them), then their bytes are copied
+    token = (camera, *light.keys(), *light.values())
+    values: dict | None = None
+
+    def write(buffer) -> None:
+        nonlocal values
+        if values is None:
+            values = frame_values(camera, light)
+        gs.set_values([buffer], values, ROW_ARRAYS)
+
+    for buffer in constants.values():
+        gs.replay(buffer, "forward frame", token, write)
+
+
+def frame_values(camera: gs.SCamera, light: dict) -> dict:
+    """The members ``fill_frame`` writes, by name."""
     hand = gs.left_handed_values(camera)
     width_px, height_px = (max(1, int(extent)) for extent in camera.size_px)
-    values = {
+    return {
         **gs.camera_values(camera), **hand, "cMtxViewProjUnmirrored": camera.view @ camera.projection, "cMtxViewUnmirrored": hand["cMtxView"],
         "cMtxViewProjTex": camera.view @ camera.projection @ TEXTURE,
         "cViewportCropFactor": [1, 1, 0, 0], **ENGINE_OFF, **light, "cViewPort": [0, 0, width_px, height_px],
         "cBackBufferSize": [width_px, height_px], "cBackBufferSizeRec": [1 / width_px, 1 / height_px], "cViewport": [0, 0, width_px, height_px],
     }  # fmt: skip
-    gs.set_values(constants.values(), values, ROW_ARRAYS)
 
 
 def matrix_rows(matrices: list) -> np.ndarray:

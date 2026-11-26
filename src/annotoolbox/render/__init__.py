@@ -17,5 +17,5 @@ terrain); 2070's: ``fxcdraw`` (an FXC draw), ``frame2070`` with ``sky2070``, ``p
 ``coast1701``; 2205's, 1800's: ``frameforward`` with ``ambientforward``, ``shadowforward``, ``lightsforward``, ``particleforward``,
 ``postforward``, ``skyforward``, ``decalforward``, ``clothforward``, ``eyeforward``, ``ssaoforward``, ``ssrforward``,
 ``waves1800``, ``sea2205``, ``ocean1800``, ``oceanfft1800`` (seas), ``inland1800`` (rivers), ``objects2205``,
-``mipchain`` (short mip chains); ``nativelook`` (which game's shaders draw); ``clothsim``, ``clothcollide``, ``clothmesh``.
+``mipchain``, ``blocktexture`` (a map's levels, as stored); ``nativelook``; ``clothsim``, ``clothcollide``, ``clothmesh``.
 """

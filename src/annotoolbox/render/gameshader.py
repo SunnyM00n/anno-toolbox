@@ -10,6 +10,7 @@ docs/rendering/shader-compile.md section 4.
 from __future__ import annotations
 
 import functools
+import hashlib
 import math
 import re
 import struct
@@ -340,11 +341,11 @@ _UNKNOWN = object()  # a member path not looked up yet (``CConstants.set``)
 KEPT_LAYOUTS = 4096  # layouts each cache below keeps (and keeps alive): a session of many islands would hold them all
 
 
-def _keep(cache: dict, key, value: tuple) -> tuple:
-    """``value`` kept under ``key``; the oldest entries go once the cache holds ``KEPT_LAYOUTS`` (worked out anew
-    when asked for again)."""
+def _keep(cache: dict, key, value: tuple, limit: int | None = None) -> tuple:
+    """``value`` kept under ``key``; the oldest entries go once the cache holds ``limit`` (``KEPT_LAYOUTS`` when none;
+    worked out anew when asked for again)."""
     cache.pop(key, None)  # a replaced entry counts as new
-    while len(cache) >= KEPT_LAYOUTS:
+    while len(cache) >= (KEPT_LAYOUTS if limit is None else limit):
         del cache[next(iter(cache))]
     cache[key] = value
     return value
@@ -432,10 +433,34 @@ class CConstants:
             return False
         offset, variable = found
         stride = _stride(variable)
-        for k, value in enumerate(values[: max(variable.elements, 1)]):
+        values = values[: max(variable.elements, 1)]
+        if self._set_plain_rows(offset, variable, stride, values):
+            return True
+        for k, value in enumerate(values):
             raw = _pack(value, variable.type, getattr(variable, "row_major", False))[: min(stride, size_of(variable))]
             byte_offset = offset + k * stride
             self.m_data[byte_offset : byte_offset + len(raw)] = raw[: max(0, len(self.m_data) - byte_offset)]
+        return True
+
+    def _set_plain_rows(self, offset: int, variable, stride: int, values) -> bool:
+        """Rows of plain numbers (the light arrays: thousands of them) packed in one numpy step, the bytes
+        ``_pack`` gives each; False for anything else, which ``set_rows`` packs one by one."""
+        letter = _letter(variable.type)
+        if letter is None or len(values) < 2 or not isinstance(values[0], list | tuple | np.ndarray):
+            return False
+        try:
+            rows = np.array(values, np.float64 if letter == "f" else np.int64)
+        except (ValueError, TypeError, OverflowError):  # ragged rows, other types, integers past 64 bits
+            return False
+        if rows.ndim != 2:
+            return False
+        rows = np.ascontiguousarray(rows.astype(np.float32 if letter == "f" else np.uint32))
+        width = min(rows.shape[1] * 4, stride, size_of(variable))
+        if offset + (len(rows) - 1) * stride + width > len(self.m_data):  # the last element would be cut: the slow path
+            return False
+        view = np.frombuffer(self.m_data, np.uint8)
+        block = np.lib.stride_tricks.as_strided(view[offset:], (len(rows), width), (stride, 1), writeable=True)
+        block[:] = rows.view(np.uint8).reshape(len(rows), -1)[:, :width]
         return True
 
 
@@ -456,15 +481,32 @@ def replay(constants: CConstants, name: str, token: tuple, write) -> None:
     key = (id(constants.m_reflection), name)
     kept = _replayed.get(key)
     if kept is None or kept[0] is not constants.m_reflection or not _same(kept[1], token):
-        low, high = CConstants(constants.m_reflection), CConstants(constants.m_reflection)
-        high.m_data[:] = b"\xff" * len(high.m_data)
-        write(low)
-        write(high)
-        low_bytes, high_bytes = np.frombuffer(low.m_data, np.uint8), np.frombuffer(high.m_data, np.uint8)
-        places = np.flatnonzero((low_bytes != 0) | (high_bytes != 0xFF))  # what the writer wrote, whatever was there
-        kept = _keep(_replayed, key, (constants.m_reflection, token, places, low_bytes[places].copy()))
-    if len(kept[2]):
+        kept = _keep(_replayed, key, (constants.m_reflection, token, *_captured(constants.m_reflection, write)))
+    if kept[3].size:
         np.frombuffer(constants.m_data, np.uint8)[kept[2]] = kept[3]
+
+
+def _captured(reflection, write) -> tuple:
+    """What ``write(c)`` puts into a buffer of this layout: (where, the bytes), ``where`` a slice when the writer's
+    bytes lie in one run (a copy then is one block), else the byte offsets."""
+    low, high = CConstants(reflection), CConstants(reflection)
+    high.m_data[:] = b"\xff" * len(high.m_data)
+    write(low)
+    write(high)
+    low_bytes, high_bytes = np.frombuffer(low.m_data, np.uint8), np.frombuffer(high.m_data, np.uint8)
+    places = np.flatnonzero((low_bytes != 0) | (high_bytes != 0xFF))  # what the writer wrote, whatever was there
+    if len(places) and places[-1] - places[0] + 1 == len(places):
+        return slice(int(places[0]), int(places[-1]) + 1), low_bytes[places].copy()
+    return places, low_bytes[places].copy()
+
+
+POSES = 1024  # skin packings kept: one per layout and pose (a frame meets dozens of layouts for each skin)
+_g_poses: dict[tuple, tuple] = {}  # (a layout's id, place, pose) -> (its reflection, where, the packed bone bytes)
+
+
+def reset_poses() -> None:
+    """Forget the kept skin packings."""
+    _g_poses.clear()
 
 
 def look_at(eye: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -585,7 +627,40 @@ CAMERAS = 3  # CAMERA_MAIN, CAMERA_REFLECTION, CAMERA_JITTERED
 FRAME_NAMES = frozenset({"cCameraBuffer", "cRenderBufferSize", "cBackBufferSize", "cViewportCropFactor",
                          "cUpscaleFactor", "cExposure", "cGammaAdjust", "cCurrWindDirection", "cLastWindDirection",
                          "cCurrWindStrength", "cLastWindStrength"})  # fmt: skip
-_g_framed: dict[tuple, tuple] = {}  # a frame layout -> (the camera, the filled bytes)
+# what ``fill_instance`` writes: a buffer with none of these members holds no place or pose (``gamedraw``)
+INSTANCE_NAMES = frozenset({"cModelPerFrameDataBuffer", "cModelInstanceDataBuffer", "cCurrBoneMatrixBuffer",
+                            "cLastBoneMatrixBuffer"})  # fmt: skip
+_g_framed: dict[tuple, tuple] = {}  # a frame layout -> (the camera's key, the filled bytes)
+
+
+def camera_key(camera: SCamera) -> tuple:
+    """What a camera's values are made of (its matrices, eye, planes, size, mirror): equal for a still camera's
+    frames, worked out once per camera."""
+    key = camera.__dict__.get("_key")
+    if key is None:
+        key = camera.__dict__["_key"] = (np.asarray(camera.view).tobytes(), np.asarray(camera.projection).tobytes(),
+                                         np.asarray(camera.eye).tobytes(), camera.near, camera.far,
+                                         tuple(camera.size_px), getattr(camera, "shadow_far", 0.0),
+                                         getattr(camera, "mirror", False))  # fmt: skip
+    return key
+
+
+def value_key(value):
+    """A member's value as a snapshot that compares by content (an array by its bytes, a list item by item); an
+    object of another kind gives a new object, equal to nothing (the buffer is filled every time)."""
+    if value is None or type(value) in (int, float, bool, str):
+        return value
+    if isinstance(value, np.ndarray):
+        return value.dtype.str, value.shape, value.tobytes()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return tuple(value_key(item) for item in value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value)
+    return object()
+
+
 _frame_layouts: dict[int, tuple] = {}  # a layout's id -> (its reflection, its frame layout: the spans and members)
 
 
@@ -611,15 +686,16 @@ def _frame_layout(reflection) -> tuple:
 
 def fill_frame(constants: CConstants, camera: SCamera) -> None:
     """The per-frame values and the three cameras (all one camera here): worked out once per frame layout and
-    camera, copied into every buffer of that layout (a frame of many draws shares one)."""
+    camera (by its values: a view makes a new camera each frame), copied into every buffer of that layout."""
     layout = _frame_layout(constants.m_reflection)
     if not layout[0]:
         return
     kept = _g_framed.get(layout)
-    if kept is None or kept[0] is not camera:
+    key = camera_key(camera)
+    if kept is None or kept[0] != key:
         scratch = CConstants(constants.m_reflection)
         _fill_frame(scratch, camera)
-        kept = _g_framed[layout] = (camera, scratch.m_data)
+        kept = _g_framed[layout] = (key, scratch.m_data)
     for start, end in layout[0]:
         constants.m_data[start:end] = kept[1][start:end]
 
@@ -679,10 +755,29 @@ def fill_instance(constants: CConstants, world=None, palette=None, colour: int =
     constants.set("cModelInstanceDataBuffer[0].LastIndex", 0xFFFFFFFF)
     constants.set("cModelInstanceDataBuffer[0].Data", [colour << 4, 0, 0])
     world_matrix = np.identity(4) if world is None else np.asarray(world, float)
+    if palette is None:
+        _set_bones(constants, world_matrix, None)
+        return
+    # a skin's bones packed once per place and pose, then copied (viewer-performance.md section 4, item 4)
+    key = (id(constants.m_reflection), _array_key(world_matrix), _array_key(palette))
+    kept = _g_poses.get(key)
+    if kept is None or kept[0] is not constants.m_reflection:
+        packed = _captured(constants.m_reflection, lambda scratch: _set_bones(scratch, world_matrix, palette))
+        kept = _keep(_g_poses, key, (constants.m_reflection, *packed), POSES)
+    if kept[2].size:
+        np.frombuffer(constants.m_data, np.uint8)[kept[1]] = kept[2]
+
+
+def _set_bones(constants: CConstants, world_matrix: np.ndarray, palette) -> None:
     bones = [world_matrix] if palette is None else [world_matrix @ skin_matrix for skin_matrix in palette]
     rows = [bone.T[:, :3] for bone in bones]  # the engine's row vectors: v' = [v, 1] M
     for key in ("cCurrBoneMatrixBuffer", "cLastBoneMatrixBuffer"):
         constants.set_rows(key, rows)
+
+
+def _array_key(values) -> tuple:
+    array = np.ascontiguousarray(values)
+    return array.shape, array.dtype.str, hashlib.blake2b(array.tobytes(), digest_size=16).digest()
 
 
 def fill_material(constants: CConstants, fields: dict[str, dict[str, float | list]], slots: dict[str, int]) -> None:

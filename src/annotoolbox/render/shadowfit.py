@@ -16,6 +16,7 @@ from PySide6.QtGui import QRhiReadbackResult, QRhiTexture
 
 from . import gameshader as gs
 from . import gameshadow
+from .gamebind import keyed
 from .gamecompute import CComputeChain, CComputeStage, groups, record, storage_buffer
 
 EFFECT = "data/shaders/fx/shadow.fx"
@@ -88,10 +89,11 @@ class CShadowFit(CComputeChain):
         tiles = (groups(size_px[0], TILE), groups(size_px[1], TILE), 1)
         copy = (groups(half.size[0], COPY_GROUP), groups(half.size[1], COPY_GROUP), 1)
         where = {COPY: copy, "csReduceZ": tiles, "csReduceLightBounds": tiles}
+        key = ("fit", gs.camera_key(camera), gs.value_key(sun), tuple(size_px))
+        fitted = keyed(lambda constants: fill(constants, camera, sun, size_px), key)
         for name in FUNCTIONS:
             after = partial(self._readback, shadow_information) if name == FUNCTIONS[-1] and self.m_read_back else None
-            record(ctx, self.m_stages[name], inputs, lambda constants: fill(constants, camera, sun, size_px),
-                   where.get(name, (1, 1, 1)), after, self._zero_last)  # fmt: skip
+            record(ctx, self.m_stages[name], inputs, fitted, where.get(name, (1, 1, 1)), after, self._zero_last)
 
     def _zero_last(self, batch) -> None:
         """Last frame's splits start as zeros (no blend), uploaded once with the first pass."""

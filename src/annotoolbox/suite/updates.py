@@ -2,8 +2,8 @@
 
 ``check(current)`` asks the release page of ``RELEASES`` (a GitHub repository, ``owner/name``) for its latest release.
 In an installed program the installer's own updater does the work (``stage`` downloads the changed parts, ``apply``
-restarts into the new version, ``verify_feed`` ties its checksums to ``SHA256SUMS``); elsewhere the person goes to the
-release page. ``helper_check`` compares the release's link helper with the installed one. ``RELEASES`` is empty in a
+starts the silent swap and restart, ``verify_feed`` ties its checksums to ``SHA256SUMS``); elsewhere the person
+goes to the release page. ``helper_check`` compares the release's link helper with the installed one. ``RELEASES`` is empty in a
 build with no release page: nothing then asks the network. ``docs/installer.md`` "Updates" has the rest.
 """
 
@@ -228,11 +228,13 @@ def stage(release: SRelease, update_manager=None, net: SNet = NET, progress: Cal
 
 
 def apply(update_info, update_manager=None) -> None:
-    """Quit and restart into the downloaded version; the installer's updater swaps the files in between.
-    ``CUpdateError`` when the updater refuses (its own errors are ours, as in ``stage``)."""
+    """Start the installer's updater silently and return: it waits for this program to exit, swaps the files and
+    starts the program again. The caller must end the program now. Silent hides the updater's own "Installing Update"
+    window (the launcher window shows the progress). ``CUpdateError`` when the updater refuses (its own errors are
+    ours, as in ``stage``)."""
     update_manager = update_manager or manager()
     try:
-        update_manager.apply_updates_and_restart(update_info)
+        update_manager.wait_exit_then_apply_updates(update_info, silent=True, restart=True)
     except Exception as exc:  # the updater's own errors: the window says them
         raise CUpdateError(str(exc) or type(exc).__name__) from exc
 

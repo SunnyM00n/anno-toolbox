@@ -24,7 +24,8 @@ from PySide6.QtGui import (
 from . import gameshader as gs
 from .eyeadapt import GCF_EYE_ADAPT
 from .gamebind import CResources
-from .gamedraw import CProgram, immutable_buffer, new_pipeline, target_blends, vertex_layout
+from .gamedraw import CProgram, immutable_buffer
+from .gamepipeline import new_pipeline, target_blends, vertex_layout
 from .nativepass import draw_pass
 from .renderstates import SPassState
 

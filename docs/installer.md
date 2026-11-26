@@ -107,7 +107,7 @@ mark in the data folder records that it did. A shortcut removed after that is ne
 
 ### The start-up calls
 
-The installer starts the program itself at four moments and expects an immediate exit. `suite/installevents.run()` is
+The installer starts the program itself at five moments and expects an immediate exit (a normal start for two of them). `suite/installevents.run()` is
 therefore **the first call of the program** (`suite/toolbox.main`), before Qt and before the arguments are read.
 Velopack's documentation says that the builder runs first in the main process. `AnnoToolbox.com` (the console build)
 goes through the same call. Outside an installed program (not packaged, or no `velopack` module) the call does nothing.
@@ -116,6 +116,7 @@ goes through the same call. Outside an installed program (not packaged, or no `v
 |---|---|---|
 | After the install (`after-install`) | 30 s | Removes the old updater's download folder (`updates` in the data folder). No window |
 | After an update (`after-update`) | 15 s | The same clean-up |
+| After a restart by the updater (`restarted`: every start the updater makes after an update) | none (a normal start) | Leaves the mark `updated` (the new version) in the data folder; the start-up screen shows "Updated to version X." once and deletes it |
 | First run (`first-run`: the first normal start after an install, not after an update) | none (a normal start) | Leaves the mark `first-run` in the data folder. The shell then opens the setup page and deletes the mark when it is answered |
 | Before the uninstall (`before-uninstall`) | 30 s | Removes the program's own shortcuts, and the mark. Removes the settings and caches **only** on a fresh request (see "Uninstall") |
 
@@ -187,8 +188,19 @@ repository. With it empty there is no Help menu entry and nothing asks the netwo
   2. *download* ("Downloading version X... N%", with a bar): only what changed is fetched, as **delta packages** (the
      changed parts of the changed files) when one fits the installed version, else the full package. The updater checks
      each package against the hashes of its own feed;
-  3. *apply* ("Installing version X...", the bar full): the updater swaps `current\` for the new version and
-     **restarts the program**, which then starts with its normal start-up screen. Settings and caches stay;
+  3. *apply* ("Installing version X...", the bar full, "Please wait."): the program starts the installer's updater
+     **silently** (`updates.apply`: `wait_exit_then_apply_updates` with `silent=True`, `restart=True`) and ends itself
+     at once, because the updater waits for the program to exit before it swaps `current\` for the new version. The
+     updater then starts the program again. Settings and caches stay;
+  4. *restarted* ("Updated to version X." in the start-up screen): the installer starts the new program with its
+     restart marker, `installevents` leaves the mark `updated` (the new version) in the data folder, and the normal
+     start-up screen reads and deletes it and says the update is done above its usual start-up lines. A mark older than ten minutes is deleted unread, so a
+     restart that showed no window (the console build) never announces an update later.
+  The installer's own window ("Installing Update", "Updating to version X, please wait...", a green bar and an OK
+  button) comes from the updater's `apply` step when it is **not** silent, which is what `apply_updates_and_restart`
+  starts. Before this flow that window opened over the launcher window. It no longer opens: the silent flag hides it,
+  and the launcher window and the start-up screen carry the progress instead. Between the program's exit and the new
+  start-up screen there is a short time with no window of ours (the files are swapped in it);
   - *failure*, in any step: the launcher window names the step ("The update did not work"), the updater's error and the
     path of the log it wrote (the error logs, `<appdata>/logs`). It has the buttons *Start the Toolbox* (a normal start
     in a new process) and *Close*. The work runs on a thread, so the window never freezes. A failure before step 3
@@ -451,7 +463,8 @@ that was seen: see "What was verified, Linux". The setup page's two boxes are **
   and offers nothing.
 - `updates.verify_feed` ties the packer's feed to that file.
 - The download is the delta when one fits.
-- The packer's updater (`UpdateNix`, inside the AppImage) replaces the AppImage file and restarts it. The launcher
+- The packer's updater (`UpdateNix`, inside the AppImage) replaces the AppImage file and restarts it. It has no window
+  of its own, so the silent flag changes nothing there. The launcher
   window, the steps and the failure page are the same, and the failure page's buttons start the AppImage file again.
 
 The link helper's notice does not exist on Linux. A tarball copy has no updater and says "download the new version".
@@ -612,7 +625,9 @@ machine, as agreed.
    **starts the program, which opens the setup page**. The first-run call must have fired on that start.
 3. **The shortcut target**: that the install root holds a launcher named `AnnoToolbox.exe`. Velopack's documentation
    says the root has a stub of the program's name. The program makes no shortcut when it does not find one.
-4. An **update** from one release to the next: the feed check, the delta download, the restart into the new version,
+4. An **update** from one release to the next: the feed check, the delta download, **that the installer's own
+   "Installing Update" window no longer opens**, that the program's exit lets the silent updater swap the files and
+   restart it, that "Updated to version X." shows on the next start-up screen, the restart into the new version,
    that shortcuts made by the setup page still work, and that the settings stayed.
 5. **Help > Uninstall...**, with and without the box: the updater's `uninstall` entry point (named in Velopack's CLI
    reference), the removal of the shortcuts, the data folder removal after the program has exited, and that an uninstall

@@ -4,7 +4,7 @@
 apps, the game trees), so the person sees something at once. ``status(text)`` names the next step, ``detail(text)``
 fills the line under it, ``close()`` ends it; it also ends when the first main window is shown, and
 ``toolbox.run_window`` closes it on an error. ``updaterun`` uses it for the update: ``hold``, ``progress``, ``note``,
-``offer`` (buttons). Nothing here imports another module of the suite or a game library.
+``offer`` (buttons). ``show(updated=...)`` adds "Updated to version X." after an update. Nothing here imports another module of the suite or a game library.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def _language() -> None:
     i18n.use(code if isinstance(code, str) else None)
 
 
-def _picture() -> QPixmap:
+def _picture(updated: str = "") -> QPixmap:
     pixmap = QPixmap(*SIZE)
     pixmap.fill(QColor(PANEL))
     painter = QPainter(pixmap)
@@ -95,20 +95,25 @@ def _picture() -> QPixmap:
     painter.drawText(
         36, 100, SIZE[0] - 60, 24, int(Qt.AlignmentFlag.AlignVCenter), tr("common.version_number", version=__version__)
     )
+    if updated:
+        painter.setPen(QColor(ACCENT))
+        done = tr("common.update_done", version=updated)
+        painter.drawText(36, 118, SIZE[0] - 60, 24, int(Qt.AlignmentFlag.AlignVCenter), done)
     painter.end()
     return pixmap
 
 
-def show() -> bool:
+def show(updated: str = "") -> bool:
     """Open the splash (and the application object it needs); False, with no splash, where Qt has no screen to show
-    it on. Call once, first, after PySide6 imported."""
+    it on. ``updated`` is the version the program was just updated to, "" for a normal start. Call once, first, after
+    PySide6 imported."""
     global _g_screen, _g_watch
     if _g_screen is not None:
         return True
     try:
         application = QApplication.instance() or QApplication([sys.argv[0]])
         _language()
-        _g_screen = _CScreen(_picture(), Qt.WindowType.WindowStaysOnTopHint)
+        _g_screen = _CScreen(_picture(updated), Qt.WindowType.WindowStaysOnTopHint)
         _g_watch = _CFirstWindow()
         application.installEventFilter(_g_watch)
         _g_screen.show()

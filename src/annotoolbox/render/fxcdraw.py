@@ -29,19 +29,16 @@ from PySide6.QtGui import (
 from ..models.fxstage import SSampler, SState
 from . import gameshader, mipchain
 from .gamedraw import (
-    BLOCK_FORMATS,
-    CULL_MODES,
     CMesh,
     CProgram,
     immutable_buffer,
-    new_pipeline,
     sampler_of,
     screen_triangle,
-    target_blends,
     uniform_buffer,
     vertex_input,
-    vertex_layout,
 )
+from .gamepipeline import CULL_MODES, new_pipeline, target_blends, vertex_layout
+from .gametextures import BLOCK_FORMATS
 from .nativepass import draw_pass
 from .renderstates import blend_factor
 

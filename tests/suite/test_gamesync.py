@@ -160,6 +160,7 @@ def test_the_viewer_and_the_object_builder_let_the_old_games_files_go(qt, object
     specs = [app for app in apps.available() if app.key in ("viewer", "objects")]
     window = suite_of(tmp_path, *specs, anno117=str(tmp_path / "117"), anno1800=str(tmp_path / "1800"))
     viewer, objects = window.show_app("viewer"), window.show_app("objects")
+    viewer.m_is_waiting = True
     viewer.open_game(A, HOUSE, is_waiting=True)
     settle(objects)
     assert objects.m_tree is object_game and window.m_settings.game == A

@@ -20,7 +20,7 @@ from .nativecompute import records
 
 SPACE, REGISTER = 1, 3  # cBindlessTextures: t3 of space 1, unbounded
 CAPACITY = 1 << 14  # the table's descriptors: an island's distinct maps [ours]
-NULL = 0  # the engine's null texture: white (gamedraw.CTextureTable)
+NULL = 0  # the engine's null texture: white (gametextures.CTextureTable)
 KEEP_FRAMES = 4  # frames a slot let go stays unused (QRhi's frames in flight may still read it) [ours]
 INDEX_TABLE = "cMaterialComponentIndices"
 NO_COMPONENT = 0xFFFFFFFF  # a component the material lacks

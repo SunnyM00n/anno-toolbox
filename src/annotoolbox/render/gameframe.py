@@ -125,6 +125,9 @@ class SPasses:
     # the shading, sky, haze and clouds by the native backend (``shadingnative.CNativeShading``; its cascades' fit is
     # ``fit``): ``shade`` and ``atmosphere`` in place of ``_shading`` and the atmosphere's run
     shading: object = None
+    # what the G-buffer's depth is made of besides the camera (the viewer's groups, places and poses), comparable by
+    # content: the clouds' shadow is made only when it or its other inputs change (None: every frame)
+    scene: tuple | None = None
 
 
 @dataclass
@@ -161,6 +164,8 @@ class SGround:
             tuple(id(map_texture) for map_texture in self.maps.values()),  # the fill writes size and values only
             token[1],
         )
+        # the members it writes, by their top-level names (``gamedraw.CGameModel`` reads no other of it)
+        fill.names = frozenset(name.partition(".")[0].partition("[")[0] for name in values)
         return fill
 
 
@@ -329,7 +334,7 @@ class CGameFrame:
             if passes.native_water is not None:
                 passes.native_water.overlay = native.overlay(self)
         else:
-            inputs, extras = self._shading(size_px, camera, *shading, clusters, passes.sky, clouds)
+            inputs, extras = self._shading(size_px, camera, *shading, clusters, passes.sky, clouds, passes.scene)
         sea = passes.sea.model(camera) if passes.sea is not None else None
         inland = passes.inland.models() if passes.inland is not None else []
         if passes.transparent or sea is not None or inland:
@@ -395,10 +400,11 @@ class CGameFrame:
         self.m_shadow.render(passes.casters, camera, self.m_cascades, self.m_info, passes.ground, external, after)
 
     def _shading(self, size_px, camera: gs.SCamera, shading: CDeferredShading, sky: SSky, clusters=None, passes=None,
-                 clouds=None):  # fmt: skip
+                 clouds=None, scene: tuple | None = None):  # fmt: skip
         """The deferred shading's compute pass from the G-buffer into ``lit``, lit by the game's sky passes when
-        ``passes`` (``gamesky.CSkyPasses``) is given, the clouds' shadow over it with ``clouds``; returns its inputs
-        and extras (the transparent pass's)."""
+        ``passes`` (``gamesky.CSkyPasses``) is given, the clouds' shadow over it with ``clouds`` (made again only when
+        its inputs and ``scene``, ``SPasses.scene``, changed); returns its inputs and extras (the transparent
+        pass's)."""
         names = ("cGBuffer0", "cGBuffer1", "cGBuffer2")
         inputs = {**{name: texture.native for name, texture in zip(names, self.m_targets, strict=False)}, "cDepth": self.m_depth.native,
                   "cDstColor": self.m_lit[0].native, "cDstAlpha": self.m_lit[1].native}  # fmt: skip
@@ -411,7 +417,8 @@ class CGameFrame:
         if clouds is not None:
             clouds.m_shadowed = False
             if self.m_cascades is not None:  # the clouds' transmittance along the sun, in the cascades' parts
-                clouds.shadow(self.m_ctx, camera, sky, self.m_cascades, {**shading.shared(inputs), **inputs})
+                shared = {**shading.shared(inputs), **inputs}
+                clouds.shadow(self.m_ctx, camera, sky, self.m_cascades, shared, scene)
             inputs.update(clouds.inputs())
         extras = SExtras(self.m_cascades, clusters, clouds)
 

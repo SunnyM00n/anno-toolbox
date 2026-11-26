@@ -3,7 +3,7 @@ over and over (a continental island's 891 parts held 13 GB of them, 3.2 GB disti
 
 ``CMapPool(rhi)`` holds one single-layer texture array per file, made at its first use and destroyed with its last,
 and until then the levels of the file it will upload, once (``pending``); ``CPooledTable(material, pool)`` stands where a
-``gamedraw.CTextureTable`` stands for a material: each of its files is one of the bindless stand-in's arrays
+``gametextures.CTextureTable`` stands for a material: each of its files is one of the bindless stand-in's arrays
 (``gameshader.CLASSES``, the first the null texture), its slots point at layer 0 of their file's array; it takes the
 material's maps (``material.maps`` is empty after: a part not drawn yet held its own copy of each map).
 """
@@ -15,7 +15,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from . import gamedraw
+from . import gamedraw, gametextures
 from . import gameshader as gs
 
 NULL = "<null>"  # the engine's null texture: white
@@ -84,7 +84,7 @@ class CMapPool:
         """One more table names ``path``; its pixels kept once until its array is made."""
         self.m_users[path] = self.m_users.get(path, 0) + 1
         if path not in self.m_arrays and path != NULL and path not in self.m_pending:
-            stored, _key = gamedraw.map_kind(dds)
+            stored, _key = gametextures.map_kind(dds)
             self.m_pending[path] = _CKept(dds, self.m_max_size) if stored else dds
 
     def take(self, batch, path: str) -> object:
@@ -96,9 +96,9 @@ class CMapPool:
             else:
                 dds = self.m_pending.pop(path)
                 dds = dds if isinstance(dds, _CKept) else smaller(dds, self.m_max_size)
-                stored, _key = gamedraw.map_kind(dds)
+                stored, _key = gametextures.map_kind(dds)
                 pixels = [dds if stored else dds.level(0)]
-            texture_array = self.m_arrays[path] = gamedraw.class_array(self.m_rhi, batch, pixels)
+            texture_array = self.m_arrays[path] = gametextures.class_array(self.m_rhi, batch, pixels)
         return texture_array
 
     def give_back(self, paths) -> None:

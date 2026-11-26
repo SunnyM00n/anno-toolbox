@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 from ..models import ddsdecode, fileresolve
 from . import gameshader as gs
 from . import gameshadow, mipchain
+from .gamebind import keyed
 from .gamecompute import CComputeChain, CComputeStage, groups, record
 from .gamedraw import dds_texture, stand_in
 from .gamesky import block, block_number, block_vector
@@ -216,6 +217,9 @@ class CClouds(CComputeChain):
         self.m_seconds, self.m_wind = 0.0, session_wind(maps.ambient)  # the view's time and the wind (the scroll)
         self.m_is_cache_kept = False  # the native sky keeps the self-shadow cache between frames (``skynative``)
         self._m_white = None
+        self._m_ambient_key = gs.value_key(tuple(sorted(maps.ambient.items())))
+        self._m_cache_made: tuple | None = None  # the key of what the self-shadow cache holds (``update``)
+        self._m_shadow_made: tuple | None = None  # the key of what the cascades' transmittance holds (``shadow``)
 
     def _texture(self, texture_format, size_px: tuple, levels: int = 1, storage: bool = False):
         flags = QRhiTexture.Flag.UsedWithLoadStore if storage else QRhiTexture.Flag(0)
@@ -269,6 +273,15 @@ class CClouds(CComputeChain):
         for key, value in constants(camera, self.m_ambient, self.m_seconds, self.m_wind).items():
             buffer.set(key, value)
 
+    def moment(self) -> tuple:
+        """What ``fill`` writes besides the camera, comparable by content: the ambient's values, the time and the
+        wind."""
+        return self._m_ambient_key, float(self.m_seconds), self.m_wind
+
+    def _key(self, camera: gs.SCamera, sky) -> tuple:
+        """What ``_fill`` writes (a keyed fill's: ``gamebind.keyed``)."""
+        return gs.camera_key(camera), gs.value_key(sky.sun), bool(sky.night), self.moment()
+
     def maps_ready(self) -> bool:
         """Whether the volumes and the weather map are up (the sky passes read them after a frame's clouds)."""
         return not self._m_pending
@@ -279,7 +292,11 @@ class CClouds(CComputeChain):
         self.fill(buffer, camera)
 
     def update(self, ctx, camera: gs.SCamera, sky, inputs: dict) -> None:
-        """The self-shadow cache around the camera, made anew (``cSSCUpdateFactor`` 1: no history to blend)."""
+        """The self-shadow cache around the camera, made anew (``cSSCUpdateFactor`` 1: no history to blend), unless
+        it holds what the same camera, sun and moment make already."""
+        key = ("cache", *self._key(camera, sky))
+        if key == self._m_cache_made and not self._m_pending:
+            return
 
         def before(batch) -> None:
             if self._m_pending:
@@ -287,11 +304,22 @@ class CClouds(CComputeChain):
 
         named = {**inputs, **self.inputs(), "cSelfShadowCacheRW": self.m_cache}
         grid = tuple(groups(count, group) for count, group in zip(CACHE, CACHE_GROUP, strict=True))
-        record(ctx, self.m_stages["cache"], named, lambda buffer: self._fill(buffer, camera, sky), grid, before=before)
+        fill = keyed(lambda buffer: self._fill(buffer, camera, sky), key)
+        record(ctx, self.m_stages["cache"], named, fill, grid, before=before)
+        self._m_cache_made = key
 
-    def shadow(self, ctx, camera: gs.SCamera, sky, cascades, inputs: dict) -> None:
+    def shadow(self, ctx, camera: gs.SCamera, sky, cascades, inputs: dict, scene: tuple | None = None) -> None:
         """The clouds' transmittance along the sun into each used cascade's part of the map (``inputs``: the shadow
-        map and the cascades' information, the blue noise); a cascade the quality leaves out is read by nothing."""
+        map and the cascades' information, the blue noise); a cascade the quality leaves out is read by nothing.
+        ``scene``: what the depth the cascades are fitted to is made of besides the camera; with it the map is made
+        only when the camera, the sun, the moment, the cascades or the scene changed (None: every frame)."""
+        cascade_key = gameshadow.fill_key(cascades)
+        if not cascades.gpu:  # fitted on the CPU: their matrices are known here
+            cascade_key += (gameshadow.info_bytes(cascades),)
+        key = ("shadow", *self._key(camera, sky), cascade_key, scene)
+        if scene is not None and key == self._m_shadow_made and not self._m_pending:
+            self.m_shadowed = True
+            return
         named = {**inputs, **self.inputs(), "cVolumetricShadowTarget": self.m_transmittance}
         part = groups(SHADOW_SIZE // 2, SHADOW_GROUP)  # each cascade a quarter of the map (gameshadow.DIVISIONS)
 
@@ -306,8 +334,10 @@ class CClouds(CComputeChain):
                 gameshadow.fill(buffer, cascades)
                 buffer.set("cCurrentCascade", k)
 
-            record(ctx, self.m_stages[f"shadow{k}"], named, fill, (part, part, 1), before=before if k == 0 else None)
+            record(ctx, self.m_stages[f"shadow{k}"], named, keyed(fill, (*key, k)), (part, part, 1),
+                   before=before if k == 0 else None)  # fmt: skip
         self.m_shadowed = True
+        self._m_shadow_made = key if scene is not None else None
 
     def release(self) -> None:
         super().release()
@@ -317,3 +347,4 @@ class CClouds(CComputeChain):
                 texture.destroy()
                 gone.append(texture)
         self.m_textures, self._m_white, self._m_pending = {}, None, True
+        self._m_cache_made = self._m_shadow_made = None

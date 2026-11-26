@@ -14,6 +14,7 @@ from collections.abc import Callable
 
 from PySide6.QtGui import QRhiShaderResourceBinding
 
+from . import gamepool
 from . import gameshader as gs
 from .gamedraw import fixed_sampler, stand_in, uniform_buffer
 
@@ -21,32 +22,11 @@ Binding = QRhiShaderResourceBinding
 RAW = ("byteaddress", "uav_rwbyteaddress")
 
 
-def shared_stand_in(rhi, kind: str, declared: str, batch) -> tuple:
-    """A sampled stand-in texture of a declared type, made once for every pass of the device (each stage made its own:
-    dozens of one-pixel resources at the first frame, 0.15 s a stage). (resource, its key); ``give_back`` lets go."""
-    if not hasattr(rhi, "__dict__"):
-        return stand_in(rhi, kind, declared, batch), None
-    table = rhi.__dict__.setdefault("_stand_ins", {})
-    key = (kind, declared)
-    entry = table.get(key)
-    if entry is None:
-        entry = table[key] = [stand_in(rhi, kind, declared, batch), 0]
-    entry[1] += 1
-    return entry[0], (table, key)
-
-
-def give_back(owner: tuple) -> None:
-    """One pass is done with a shared stand-in: the last one destroys it."""
-    if owner is None:
-        return
-    table, key = owner
-    entry = table.get(key)
-    if entry is None:
-        return
-    entry[1] -= 1
-    if entry[1] <= 0:
-        entry[0].destroy()
-        del table[key]
+def keyed(fill: Callable[[gs.CConstants], None], key: tuple) -> Callable[[gs.CConstants], None]:
+    """``fill`` with its ``key``: everything it writes, compared by content (``gameshader.camera_key``,
+    ``value_key``). ``CResources.write`` leaves a buffer that a fill of an equal key filled last as it is."""
+    fill.key = key
+    return fill
 
 
 class CResources:
@@ -80,8 +60,9 @@ class CResources:
         )
         self.m_hook, self.m_raw, self.m_address = stand_in, raw, address
         self.m_buffers: dict[str, object] = {}
+        self.m_written: dict[str, object] = {}  # a constant buffer -> the key of the fill that last filled it
         self.m_made: dict[str, object] = {}  # the default stand-ins, made once
-        self.m_shared: list = []  # the device's stand-ins it uses (``give_back`` on release)
+        self.m_shared: list = []  # the device's stand-ins it uses (``gamepool.give_back`` on release)
         self.m_keep: list = []  # everything made here, and what the owner adds (its pipeline): destroyed on release
         self.m_srb = None
         self._m_bound: tuple | None = ()
@@ -105,8 +86,10 @@ class CResources:
             if name not in self.m_made:
                 if kind == "sampler":
                     self.m_made[name] = fixed_sampler(self.m_rhi, name, self.m_address)
-                elif kind == "texture":  # sampled only: one for the device (``shared_stand_in``)
-                    self.m_made[name], owner = shared_stand_in(self.m_rhi, kind, self.m_declared(name), batch)
+                elif kind == "texture":  # sampled only, one for the device: each stage made dozens, 0.15 s a stage
+                    declared = self.m_declared(name)
+                    self.m_made[name], owner = gamepool.shared(self.m_rhi, ("stand-in", kind, declared),
+                                                               lambda: stand_in(self.m_rhi, kind, declared, batch))  # fmt: skip
                     (self.m_shared if owner is not None else self.m_keep).append(owner or self.m_made[name])
                     return self.m_made[name]
                 else:
@@ -153,17 +136,22 @@ class CResources:
         return True
 
     def write(self, batch, fill: Callable[[gs.CConstants], None] | None = None) -> None:
-        """Every constant buffer filled by ``fill(c)`` and uploaded into ``batch``."""
+        """Every constant buffer filled by ``fill(c)`` and uploaded into ``batch``; a buffer last filled by a fill of
+        an equal ``key`` (``keyed``) is left as it is."""
+        key = getattr(fill, "key", None)
         for name, constants in self.m_constants.items():
+            if key is not None and self.m_written.get(name) == key:
+                continue
             if fill is not None:
                 fill(constants)
             batch.updateDynamicBuffer(self.uniform(name), 0, bytes(constants.m_data))
+            self.m_written[name] = key
 
     def release(self) -> None:
         for resource in [*self.m_keep, *self._m_retired, *([self.m_srb] if self.m_srb is not None else [])]:
             resource.destroy()
         for owner in self.m_shared:
-            give_back(owner)
+            gamepool.give_back(owner)
         self.m_shared = []
-        self.m_keep, self._m_retired, self.m_buffers, self.m_made = [], [], {}, {}
+        self.m_keep, self._m_retired, self.m_buffers, self.m_made, self.m_written = [], [], {}, {}, {}
         self.m_srb, self._m_bound, self._m_held = None, (), ()

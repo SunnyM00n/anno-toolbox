@@ -87,11 +87,11 @@ def test_the_bake_lets_its_splat_maps_go_once_they_are_on_the_device(monkeypatch
     materials' values stay (a new bake reads the ground again: ``desktopgame.CGameIsland._game_bake``)."""
     from types import SimpleNamespace
 
-    from annotoolbox.render import gamedraw
+    from annotoolbox.render import gamedraw, gametextures
 
     monkeypatch.setattr(terrainbake, "_texture", lambda *a, **k: object())
     monkeypatch.setattr(gamedraw, "upload_level", lambda *a: None)
-    monkeypatch.setattr(gamedraw, "class_array", lambda rhi, batch, maps: object())
+    monkeypatch.setattr(gametextures, "class_array", lambda rhi, batch, maps: object())
     info = SimpleNamespace(width_px=4, height_px=4, mips=1, format="DXT1", srgb=False, faces=1)
     dds = SimpleNamespace(m_info=info, stored=lambda level=0, face=0: bytes(8))
     ground = _ground()

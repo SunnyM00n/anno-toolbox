@@ -132,6 +132,27 @@ def test_the_constants_are_filled_and_uploaded_into_their_buffer(rhi):
     assert np.frombuffer(batch.dynamic[1][2], np.float32)[0] == 2.5
 
 
+def test_a_keyed_fill_fills_a_buffer_again_only_when_its_key_changed(rhi):
+    """A frame part's fill that names what it writes (``keyed``) leaves the buffer as it is while its key stands;
+    a fill without a key, and the next keyed one after it, fill every time."""
+    res, batch, calls = resources(rhi), FakeUploadBatch(), []
+
+    def fill(value: float):
+        return gamebind.keyed(lambda c: (calls.append(value), c.set("cValue", value)), ("part", value))
+
+    res.write(batch, fill(1.0))
+    res.write(batch, fill(1.0))  # an equal key, made anew as every frame makes it
+    assert calls == [1.0] and len(batch.dynamic) == 1
+    res.write(batch, fill(2.0))
+    assert calls == [1.0, 2.0] and np.frombuffer(batch.dynamic[-1][2], np.float32)[0] == 2.0
+    res.write(batch, lambda c: c.set("cValue", 3.0))  # no key: filled
+    res.write(batch, fill(2.0))  # what the keyless one wrote is not the key's: filled again
+    assert calls == [1.0, 2.0, 2.0] and len(batch.dynamic) == 4
+    res.release()
+    res.write(batch, fill(2.0))  # a new buffer holds nothing yet
+    assert len(batch.dynamic) == 5
+
+
 def test_release_destroys_what_was_made_and_the_next_use_makes_it_again(rhi):
     res = resources(rhi)
     res.rebind(FakeUploadBatch(), {})

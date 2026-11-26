@@ -240,7 +240,7 @@ def quad_mesh() -> CMesh:
 
 class CForwardEffect:
     """One effect file's emitter as the game draws it: ``draws`` (``fxcdraw.CFxcDraw`` per run of ``tracks.runs``),
-    the track textures made once; ``place`` and ``atlas`` (the material texture) are set per frame."""
+    the track textures made once; ``m_place`` and ``m_atlas`` (the material texture) are set per frame."""
 
     m_blended = True
 

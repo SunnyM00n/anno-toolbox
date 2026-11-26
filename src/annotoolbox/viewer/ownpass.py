@@ -35,6 +35,7 @@ class COwnPass:
     NOT_OURS: type[Exception] = Exception
     TITLE = ""
     BACKEND = ""  # the QRhi backend's name it draws on
+    SAMPLES = 4  # the samples of the view's target while it draws: the old engines' forward passes draw into it
     MISSING: type[Exception] = Exception  # the error of a compiler that is not there
     # the view's axes are the game's mirrored in x, and the games look their cubes up by world vectors: the cubes go
     # up mirrored (fxcdraw.cube_faces), unless a pass carries the mirror in a turn (shader-compile.md 11 "Sky cubes")
@@ -89,6 +90,16 @@ class COwnPass:
             return 0
         return self.m_sources.pending() + self.m_waiting
 
+    def changed(self) -> bool:
+        """The install's source or a frame part's compile arrived since the last call (the window draws again)."""
+        arrived = self.m_sources.m_changed.is_set()
+        self.m_sources.m_changed.clear()
+        return arrived
+
+    def again(self) -> bool:
+        """Whether the last frame left work for the next that no arriving file starts (a read-back that moved)."""
+        return False
+
     def _ready(self):
         """The install's source once it is read (None while it is not, or when it failed)."""
         source = self.m_sources.get("source", lambda: None)
@@ -116,7 +127,7 @@ class COwnPass:
         """The result of ``work`` run in the background as the loader's ``job``: None while it runs; an exception is
         kept in ``models`` under ``key`` (our look draws it) and said once with ``what``, unless the game's shaders
         just do not draw it (``NOT_OURS``)."""
-        got = self.m_renderer.m_loader.get(job, work)
+        got = self.m_renderer.m_game_loader.get(job, work)  # workers of its own: the renderer's files never queue ahead
         if isinstance(got, Exception):
             self.m_models[key] = got
             if not isinstance(got, self.NOT_OURS):

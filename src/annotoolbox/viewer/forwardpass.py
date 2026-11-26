@@ -149,6 +149,9 @@ class CForwardPass(COwnPass):
         reflecting = self.m_ssr is not None and self.m_ssr.m_pending  # its trace reads the last frame: once more
         return super().busy() + int(self.m_again) + int(reflecting)
 
+    def again(self) -> bool:
+        return self.m_again or bool(self.m_ssr is not None and self.m_ssr.m_pending)
+
     def _make_source(self, tree) -> _CSource:
         return _CSource(tree, self.GAME)
 
@@ -430,8 +433,8 @@ class CForwardPass(COwnPass):
             if not all(isinstance(effect_model, CForwardEffect) for effect_model in models):
                 continue
             for effect_model in models:
-                effect_model.atlas = self._map(effect_model.effect.texture)
-                effect_model.place = SPlacement(
+                effect_model.m_atlas = self._map(effect_model.m_effect.texture)
+                effect_model.m_place = SPlacement(
                     MIRROR @ np.asarray(place, float),
                     tuple(scene_effect.tint),
                     float(scene_effect.alpha) * state.fade(scene_effect),

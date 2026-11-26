@@ -20,11 +20,12 @@ from ..infra.i18n import tr
 from ..models import skinning
 from ..render import decalmesh, nativelook, picking, viewcolors
 from ..render import shaders as S
+from ..render.blocktexture import SBlockMap, block_texture
 from ..render.camera import MIRROR, COrbitCamera, gl, look_at, ortho, perspective
 from ..render.gameframe import SLight
 from ..render.gamelight import SSky
 from ..render.light import LOOK2070
-from ..render.loader import CLoader
+from ..render.loader import VIEW_WORKERS, CLoader
 from ..render.modellibrary import banner_arrays
 from ..render.particledraw import CParticleDrawer, SPlaced, collect
 from . import motion, plainshading
@@ -37,6 +38,7 @@ from .modelscene import BANNER_SHADER, FOAM_SHADER, WATER_SHADER, CScene, SMater
 from .states import SStates
 
 SHADOW_SIZE = 2048
+MULTISAMPLES = 4  # the samples of the view's target while our plain look draws
 DECAL_SHADER = 6  # a decal laid as a mesh: blended over what is below in the game's-shaders look
 STREET_SHADER = 19  # a street model: between the decals before and after the streets (decalmesh.pass_of)
 # a skin's pose before its first (``_pose``): unlike any pose, so the bind pose (key None) is posed too and the game's
@@ -189,12 +191,14 @@ class CModelRenderer(CModelLights, CModelPoses):
         self.m_fullscreen = {k: ctx.vertex_array(self.m_prog[k], []) for k in ("sky", "final")}
         self.m_inst = ctx.buffer(MIRROR_F4.T.tobytes())  # one instance, the mirror (MODEL_VS takes rows as GLSL does)
         self.m_loader = CLoader()
+        self.m_game_loader = CLoader(VIEW_WORKERS)  # the game's shader work, apart from the files above (ownpass._job)
         self.m_scene: CScene | None = None
         self.m_clock_parts = False
         self.m_longest_fade = 0.0  # the scene's longest time slice fade (seconds): the view draws again while it runs
         self.m_by_node: dict[str, tuple[int, SPart]] = {}
         self._m_rigs: dict = {}
-        self._m_frame: dict = {}  # this frame's places and joints, by part node
+        self._m_skin_rigs: dict = {}  # (part node, skeleton) -> the rig its groups are posed by
+        self._m_frame: dict = {}  # this frame's places, joints and skin matrices, by part node
         self._m_shadow_taken: tuple | None = None  # what the shadow map as it stands is of (``_shadow_key``)
         self._m_lit: dict = {}  # program -> whether this frame's light is in it without the shadow (``_put_light``)
         self._m_names: dict = {}  # program -> its uniform names (``_uniform_names``)
@@ -220,6 +224,12 @@ class CModelRenderer(CModelLights, CModelPoses):
         self.m_game_pass = make_pass(self)
         self.m_cloths = CClothPlayer()
 
+    # a frame of the game's look asks for no plain-look map while it compiles (the stand-in draws untextured) and
+    # none for a group the game draws (viewer-performance.md section 4, item 2); ``render`` sets both
+    _m_lazy_maps = False
+    _m_stand_in = False
+    _m_blocks = True  # maps upload as stored blocks (``blocktexture``) until a device refuses a format
+
     # loading
     def show(self, scene: CScene) -> None:
         """Draw this scene from now on; its files start loading."""
@@ -233,6 +243,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         self.m_longest_fade = max((t[2] for thing in (*scene.m_parts, *scene.m_effects, *scene.m_lights, *scene.m_decals)
                                  for t in thing.times), default=0.0)  # fmt: skip
         self._m_rigs: dict[str, skinning.CRig | None] = {}
+        self._m_skin_rigs: dict[tuple[str, int], skinning.CRig] = {}
         self._m_frame: dict = {}
         self.m_cloths.clear()
         for k, part in enumerate(scene.m_parts):
@@ -257,7 +268,8 @@ class CModelRenderer(CModelLights, CModelPoses):
 
     def busy(self) -> int:
         """Files still loading, and the game's shaders still compiling while their look is shown."""
-        return self.m_loader.pending() + (self.m_game_pass.busy() if self.m_state.look == SHADERS else 0)
+        game = self.m_game_pass.busy() if self.m_state.look == SHADERS else 0
+        return self.m_loader.pending() + self.m_game_loader.pending() + game
 
     def shown_parts_in(self, state: SViewState) -> bool:
         """Whether every part ``state`` shows has its mesh in, or failed to read; a part a condition bit hides (a
@@ -272,22 +284,42 @@ class CModelRenderer(CModelLights, CModelPoses):
 
     def changed(self) -> bool:
         """Something loaded since the last call (the window draws again)."""
-        if self.m_loader.m_changed.is_set():
-            self.m_loader.m_changed.clear()
-            return True
-        return False
+        arrived = False
+        for loader in (self.m_loader, self.m_game_loader):
+            if loader.m_changed.is_set():
+                loader.m_changed.clear()
+                arrived = True
+        return arrived
 
-    def _texture(self, path: str, srgb: bool, missing: bool = False):
+    def wants_frame(self) -> bool:
+        """Whether a frame has something new to draw: a file or a compile arrived, or the last frame left work for
+        the next (new parts past its budget, a read-back that moved). Loading alone does not."""
+        arrived = self.changed()
+        game_arrived = self.m_game_pass.changed()  # polled in every look, so no arrival waits for a later one
+        if self.m_state.look == SHADERS and self.m_game_pass.again():
+            return True
+        return arrived or game_arrived or getattr(self.m_ctx, "m_make_left", 0) > 0
+
+    def _texture_key(self, path: str, srgb: bool) -> str:
+        most = getattr(self.m_state.quality, "max_texture", 0) or 0  # the rendering quality's largest map (117, 1800)
+        return ("s:" if srgb else "l:") + (f"{most}:" if most else "") + path
+
+    def _texture(self, path: str, srgb: bool, missing: bool = False, lazy: bool = False):
         """The GPU texture of a file; None while it loads. One that cannot be read (not there, a format the decoders
-        do not take) is kept in ``failed`` and, with ``missing`` (a colour map), drawn as the missing-file checker."""
+        do not take) is kept in ``failed`` and, with ``missing`` (a colour map), drawn as the missing-file checker.
+        ``lazy``: only one that is in already, no file is asked for."""
         if not path:
             return None
-        most = getattr(self.m_state.quality, "max_texture", 0) or 0  # the rendering quality's largest map (117, 1800)
-        key = ("s:" if srgb else "l:") + (f"{most}:" if most else "") + path
+        key = self._texture_key(path, srgb)
         if key in self.m_textures:
             return self.m_textures[key] if self.m_textures[key] is not None or not missing else self._missing_texture()
-        job = f"tex:{most}:{path}"
-        got = self._ask(job, lambda: self.m_files.texture(path, most))
+        if lazy:
+            return None
+        most = getattr(self.m_state.quality, "max_texture", 0) or 0
+        blocks = self._m_blocks and getattr(self.m_ctx, "m_rhi", None) is not None
+        blocks = blocks and not (srgb and self.m_ctx.m_decode_srgb)  # QRhi's OpenGL samples sRGB blocks undecoded
+        job = f"{'blk' if blocks else 'tex'}:{most}:{path}"
+        got = self._ask(job, lambda: self.m_files.texture(path, most, blocks))
         if got is None:
             future = self.m_loader.m_futures.get(job)
             if future is not None and future.done():
@@ -298,11 +330,19 @@ class CModelRenderer(CModelLights, CModelPoses):
                 )
                 return self._missing_texture() if missing else None
             return None
-        width, height, comps, raw = got
-        texture = self.m_ctx.texture(
-            (width, height), comps, raw, internal_format=0x8C43 if srgb else None
-        )  # SRGB8_ALPHA8
-        texture.build_mipmaps()
+        if isinstance(got, SBlockMap):
+            texture = block_texture(self.m_ctx, got, srgb)
+            if texture is None:  # this device takes no such blocks: every map is decoded from now on
+                self._m_blocks = False
+                self.m_loader.forget(job)
+                self.m_loader.m_changed.set()  # the window draws again, which asks for the decoded map
+                return None
+        else:
+            width, height, comps, raw = got
+            texture = self.m_ctx.texture(
+                (width, height), comps, raw, internal_format=0x8C43 if srgb else None
+            )  # SRGB8_ALPHA8
+            texture.build_mipmaps()
         texture.anisotropy = 8.0
         self.m_textures[key] = texture
         return texture
@@ -374,24 +414,39 @@ class CModelRenderer(CModelLights, CModelPoses):
             )
 
     # frames
-    def _frame_targets(self, width_px: int, height_px: int):
-        if self._m_targets is None or self._m_targets["size"] != (width_px, height_px):
+    def _frame_targets(self, width_px: int, height_px: int, samples: int):
+        """The view's colour and depth target at this size and sample count: one sample while the game's look draws
+        (its frame has no multisampling of its own), else 4 (``MULTISAMPLES``) for our plain look and its overlays.
+        Only a multisampled one needs a texture to resolve into (viewer-performance.md section 4, item 13)."""
+        if self._m_targets is None or (self._m_targets["size"], self._m_targets["samples"]) != (
+            (width_px, height_px),
+            samples,
+        ):
             self._release_targets()
             ctx = self.m_ctx
-            samples = min(4, ctx.max_samples)
-            color = ctx.renderbuffer((width_px, height_px), 4, samples=samples, dtype="f2")
-            depth = ctx.depth_renderbuffer((width_px, height_px), samples=samples)
-            resolved = ctx.texture((width_px, height_px), 4, dtype="f2")
-            self._m_targets = {"size": (width_px, height_px), "color": color, "depth": depth, "resolved": resolved,
-                             "msaa": ctx.framebuffer([color], depth), "resolve": ctx.framebuffer([resolved])}  # fmt: skip
+            size = (width_px, height_px)
+            color = ctx.renderbuffer(size, 4, samples=samples if samples > 1 else 0, dtype="f2")
+            depth = ctx.depth_renderbuffer(size, samples=samples if samples > 1 else 0)
+            resolved = ctx.texture(size, 4, dtype="f2") if samples > 1 else None
+            self._m_targets = {"size": size, "samples": samples, "color": color, "depth": depth, "resolved": resolved,
+                               "msaa": ctx.framebuffer([color], depth),
+                               "resolve": ctx.framebuffer([resolved]) if resolved is not None else None}  # fmt: skip
         return self._m_targets
+
+    def _begin_maps(self, state: SViewState) -> bool:
+        """Whether the game's pass draws this frame (so the plain look asks for no map). The stand-in flag starts
+        every frame off: only ``_game_shaders`` sets it, and a frame of the plain look never runs that."""
+        self._m_stand_in = False
+        self._m_lazy_maps = state.look == SHADERS and not self.m_game_pass.why_not()
+        return self._m_lazy_maps
 
     def render(self, fbo, size_px: tuple[int, int], camera: COrbitCamera, state: SViewState) -> None:
         """One frame of the scene into ``fbo`` (``size_px`` pixels)."""
         ctx = self.m_ctx
         width, height = max(1, size_px[0]), max(1, size_px[1])
         light_values = self._light(state)
-        targets = self._frame_targets(width, height)
+        samples = self.m_game_pass.SAMPLES if self._begin_maps(state) else MULTISAMPLES
+        targets = self._frame_targets(width, height, min(samples, ctx.max_samples))
         view, eye = camera.view(), camera.eye()
         view_proj = camera.proj(width / height) @ view
         self._m_frame, self._m_lit, self.m_state = {}, {}, state
@@ -444,7 +499,7 @@ class CModelRenderer(CModelLights, CModelPoses):
     def _game_shaders(self, opaque: list, target, size_px, camera, light_values: dict) -> list:
         """The groups the game's own shaders draw, drawn (``gamepass``); what is left for our plain look: all of them
         while the shaders compile or when the pass cannot draw, a group that failed, a kind the pass leaves."""
-        self._m_game_drew = False
+        self._m_game_drew = self._m_stand_in = False
         why = self.m_game_pass.why_not()
         if why:
             self.say(why)
@@ -476,6 +531,7 @@ class CModelRenderer(CModelLights, CModelPoses):
         rest = self.m_game_pass.draw(opaque, target, size_px, camera, light, sky, ground)
         if rest is None:
             self.say(tr("viewer.compiling_games_shaders_once_they"))
+            self._m_stand_in = True
             return opaque
         self._m_game_drew = True
         return rest
@@ -601,13 +657,13 @@ class CModelRenderer(CModelLights, CModelPoses):
         self._put_light(prog, frame.lt, frame.eye, frame.shadow)
         maps = (("diffuseTex", "textured", material.diffuse, True), ("normalTex", "hasNormal", material.normal, False))
         for unit, (sampler, flag, path, srgb) in enumerate(maps):
-            texture = self._texture(path, srgb, missing=sampler == "diffuseTex")
+            texture = self._texture(path, srgb, missing=sampler == "diffuseTex", lazy=self._m_stand_in)
             (texture or self._m_dummy).use(unit)
             prog[sampler].value = unit
             prog[flag].value = texture is not None
-        prog["tint"].value = tuple(
-            float(min(c, 1.5)) for c in (material.color if material.diffuse else (0.6, 0.6, 0.6))
-        )
+            if unit == 0:
+                color = material.color if texture is not None else (0.6, 0.6, 0.6)
+        prog["tint"].value = tuple(float(min(c, 1.5)) for c in color)
         prog["opacity"].value = material.opacity
         prog["dayLight"].value = NIGHT if self.m_state.night else 1.0
         prog["kind"].value = 3 if blended else 0
@@ -658,7 +714,7 @@ class CModelRenderer(CModelLights, CModelPoses):
             if "view" in self._uniform_names(prog):
                 prog["view"].write(gl(lview))
             prog["part"].write(gl(place))
-            diffuse = self._texture(material.diffuse, True)
+            diffuse = self._texture(material.diffuse, True, lazy=self._m_lazy_maps)
             if "textured" in self._uniform_names(prog):
                 prog["textured"].value = diffuse is not None
             (diffuse or self._m_dummy).use(0)
@@ -668,8 +724,8 @@ class CModelRenderer(CModelLights, CModelPoses):
 
     def _shadow_key(self, drawn: list, matrix: np.ndarray) -> tuple | None:
         """What the shadow map is a picture of: the sun's matrix, each drawn group with its place, pose and material,
-        and how many maps are in (a cut-out map arriving changes it); None when a cloth is in the scene (it moves
-        every frame)."""
+        and how many of their maps are in (a cut-out map arriving changes it); None when a cloth is in the scene (it
+        moves every frame)."""
         if any(part.cloth is not None for part, _item, _place in drawn):
             return None
         groups = tuple(
@@ -683,7 +739,9 @@ class CModelRenderer(CModelLights, CModelPoses):
             )
             for part, item, place in drawn
         )
-        return matrix.tobytes(), len(self.m_textures), groups
+        maps = {part.material(item["key"]).diffuse for part, item, _place in drawn}
+        arrived = sum(1 for path in maps if self._texture_key(path, True) in self.m_textures)
+        return matrix.tobytes(), arrived, groups
 
     def _draw_ground(self, frame: _SFrame) -> None:
         """A grey plane under the model at its lowest point, wide enough for its shadow."""
@@ -709,8 +767,9 @@ class CModelRenderer(CModelLights, CModelPoses):
 
     def _finish(self, targets: dict, fbo, size_px: tuple[int, int], light_values: dict) -> None:
         ctx = self.m_ctx
-        ctx.copy_framebuffer(targets["resolve"], targets["msaa"])
-        source, finish = targets["resolved"], light_values["finish"]
+        if targets["samples"] > 1:
+            ctx.copy_framebuffer(targets["resolve"], targets["msaa"])
+        source, finish = targets["resolved"] or targets["color"], light_values["finish"]
         if self.m_state.look == SHADERS and hasattr(self.m_game_pass, "finish"):  # the game's grade and tone map
             graded = self.m_game_pass.finish(source, size_px, self._lut())
             source, finish = (
@@ -821,18 +880,21 @@ class CModelRenderer(CModelLights, CModelPoses):
         self.m_items, self._m_decals = {}, {}
         self.m_game_pass.release_scene()
         self.m_loader.close()
-        self.m_loader = CLoader()
+        self.m_game_loader.close()
+        self.m_loader, self.m_game_loader = CLoader(), CLoader(VIEW_WORKERS)
 
     def _release_targets(self) -> None:
         if self._m_targets is not None:
             for k in ("msaa", "resolve", "color", "depth", "resolved"):
-                self._m_targets[k].release()
+                if self._m_targets[k] is not None:
+                    self._m_targets[k].release()
             self._m_targets = None
 
     def release(self) -> None:
         self.release_scene()
         self.m_game_pass.release()
         self.m_loader.close()
+        self.m_game_loader.close()
         self._release_targets()
         self.m_particles.release()
         for texture in self.m_textures.values():

@@ -11,6 +11,7 @@ stand-ins: docs/rendering/frame-117-viewer.md sections 8, 11 and 12.
 from __future__ import annotations
 
 import math
+import weakref
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -19,7 +20,8 @@ from PySide6.QtGui import QRhiTexture
 
 from . import gameclouds
 from . import gameshader as gs
-from .gamecompute import CComputeChain, CComputeStage, groups, record
+from .gamebind import keyed
+from .gamecompute import CComputeChain, CComputeStage, copy_into, groups, record
 from .gamedraw import CProgram, stand_in, upload_level
 from .gamepost import CPostPass, full_screen
 from .renderstates import pass_state
@@ -54,16 +56,84 @@ CLOUD_LAYER = {"cCloudDomeRadius": gameclouds.DOME_RADIUS, "cWeathermapScale": g
                "cCloudLayerHeight": gameclouds.LAYER_HEIGHT}  # fmt: skip
 # cEnvironmentFlags' EF_TEMPORAL_ACCUM_CLOUDS and EF_TEMPORAL_ACCUM_FOG: one pixel of each 2 x 2 quad marched a frame
 TEMPORAL_FLAGS = (1 << 1) | (1 << 2)
+# the clouds and fog over frames: the quads' marched pixel picked, the history reprojected into the other three
+# (performance.md 4, item 5); compiled apart from ``STAGES``, so a view without them marches every pixel
+TEMPORAL_STAGES = {"select": (EFFECT, "SelectRayPosition", "csSelectRayPositions"),
+                   "accumulate": (EFFECT, "ScatteringAccumulate", "csAccumulate")}  # fmt: skip
+QUAD = 2  # a quad's side: one of its four pixels is marched a frame
+PICK_GROUP = 8  # csSelectRayPositions' and csAccumulate's numthreads, over the quads
+SETTLE_FRAMES = 4  # frames until each pixel of a quad was marched once since the camera last moved
+HISTORY_COPY = "copy"  # ``quad_march``'s step that copies the frame's result into the history
 
 
 @dataclass(frozen=True)
 class SLook:
     """Which optional parts of the passes run: the blur, the haze's fade, the clouds and fog accumulated over frames
-    (``temporal``: only the native passes do, ``atmospherenative``; performance.md 4, item 5)."""
+    (``temporal``: where the view compiled ``TEMPORAL_STAGES``, and in the native passes, ``atmospherenative``;
+    performance.md 4, item 5)."""
 
     blur: bool = True
     fade: bool = True
     temporal: bool = False
+
+
+class CAccumulation:
+    """Where the clouds and fog accumulated over frames stand: the frame counter that turns the marched pixel
+    (``cFrameCounter``), the frames left until every pixel was marched again since the camera last moved, and last
+    frame's matrices to reproject from. The native passes' history (``atmospherenative.CScatteringHistory``) and
+    ``CAtmosphere`` keep one each."""
+
+    def __init__(self) -> None:
+        self.m_frame_counter = 0
+        self.m_settle_left = 0
+        self.m_has_stepped = False  # a frame accumulated since ``settling`` last asked
+        self._m_last: tuple = ()  # last frame's (view, projection, half size)
+
+    def advance(self, camera: gs.SCamera, half: tuple[int, int]) -> tuple:
+        """This frame's counter and the frames left to settle (a moved camera or a new size starts them again);
+        returns last frame's (view, projection), this frame's on the first."""
+        view, projection, last_half = self._m_last or (camera.view, camera.projection, half)
+        is_still = (
+            last_half == half and np.array_equal(view, camera.view) and np.array_equal(projection, camera.projection)
+        )
+        self.m_settle_left = max(self.m_settle_left - 1 if is_still and self._m_last else SETTLE_FRAMES, 0)
+        self._m_last = (camera.view, camera.projection, half)
+        self.m_frame_counter += 1
+        self.m_has_stepped = True
+        return view, projection
+
+    def forget(self) -> None:
+        """A frame that marched every pixel: nothing to settle, the next accumulated frame starts the count anew."""
+        self.m_settle_left, self._m_last = 0, ()
+
+    def restart(self) -> None:
+        """The history was made anew: the next frame reprojects from nothing."""
+        self._m_last = ()
+
+    def settling(self) -> bool:
+        """Whether a frame accumulated since the last call and not every pixel was marched since the camera last
+        moved (the view draws on until the picture is whole)."""
+        has_stepped, self.m_has_stepped = self.m_has_stepped, False
+        return has_stepped and self.m_settle_left > 0
+
+
+def quad_march(half: tuple[int, int], named: dict, packed, rays, history, cameras=None) -> list[tuple]:
+    """The dispatches of a frame that marches one pixel of each quad, in order, as (stage key, what it binds by
+    name, its groups): the quads' pixels picked into ``rays``, the clouds and the fog marched into ``packed`` (the
+    blur's second target, free until the blur), the history reprojected into the frame's target (``named``'s
+    ``cScatteringTarget``), ``HISTORY_COPY`` (that target copied into ``history``), and the atmosphere beyond the
+    clouds last: it lies behind both, and the history holds only what the accumulation clamps against.
+    ``cameras``: a camera buffer of last frame's matrices for the accumulation, where the passes bind one."""
+    quads = (groups(half[0], QUAD), groups(half[1], QUAD))
+    picks = (groups(quads[0], PICK_GROUP), groups(quads[1], PICK_GROUP), 1)
+    grid = (groups(quads[0], GROUP), groups(quads[1], GROUP), 1)
+    marched = {**named, "cScatteringTarget": packed, "cQuadRayIDs": rays}
+    accumulated = {**marched, "cScatteringHistory": history, "cScatteringAccumulation": named["cScatteringTarget"]}
+    if cameras is not None:
+        accumulated["cCameraBuffer"] = cameras
+    small = (groups(half[0], BLUR_GROUP), groups(half[1], BLUR_GROUP), 1)
+    return [("select", marched, picks), ("clouds", marched, grid), ("fog", marched, grid),
+            ("accumulate", accumulated, picks), (HISTORY_COPY, {}, ()), ("end", named, small)]  # fmt: skip
 
 
 class CAtmosphere(CComputeChain):
@@ -71,8 +141,8 @@ class CAtmosphere(CComputeChain):
 
     def __init__(self, rhi, stages: dict, atmosphere: dict) -> None:
         self.m_rhi, self.m_atmosphere = rhi, atmosphere
-        self.m_stages = {key: CComputeStage(rhi, stages[key], stand_in=self._white)
-                       for key in ("clouds", "end", "fog", "blur.h", "blur.v")}  # fmt: skip
+        keys = ("clouds", "end", "fog", "blur.h", "blur.v", *(key for key in TEMPORAL_STAGES if key in stages))
+        self.m_stages = {key: CComputeStage(rhi, stages[key], stand_in=self._white) for key in keys}
         self.m_down = CPostPass(rhi, CProgram(stages["quad"], stages["down"]), depth_always=True)
         self.m_up = CPostPass(rhi, CProgram(stages["quad"], stages["up"]), pass_state(stages["up"].state))
         self.m_half = self.m_target = self.m_half_fbo = self.m_blurred = None
@@ -82,6 +152,11 @@ class CAtmosphere(CComputeChain):
         self.m_fog_size = 0.0  # the island's side the fog map covers
         self.m_heights = None  # the session's coarse height texture the fog stands on (None: none)
         self._m_fog_layers: np.ndarray | None = None  # the map's texels to upload
+        self.m_accumulation = CAccumulation()
+        self.m_history = self.m_rays = None  # the last result at half size, the quads' marched pixels
+        self._m_history_blank = False  # the history was just made: zeroed with the next pass
+        # a buffer of the passes that read the frame counter -> the key of the fill it holds besides the counter
+        self._m_filled: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
     def set_fog(self, raw: bytes, size_tiles: float) -> None:
         """The island's fog map (``rd3d`` ``Fog`` bytes, ``fog_layers``) over its ``size_tiles``: the fog from the next run;
@@ -117,6 +192,21 @@ class CAtmosphere(CComputeChain):
         self.m_blurred = ctx.native_texture(half, QRhiTexture.Format.RGBA16F, storage=True)
         self.m_size_px = size_px
 
+    def can_accumulate(self) -> bool:
+        """Whether the view compiled the stages of the clouds and fog over frames (``TEMPORAL_STAGES``)."""
+        return all(key in self.m_stages for key in TEMPORAL_STAGES)
+
+    def settling(self) -> bool:
+        """Whether the clouds and fog accumulated over frames still fill in after the camera moved
+        (``CAccumulation.settling``)."""
+        return self.m_accumulation.settling()
+
+    def fill_key(self, camera: gs.SCamera, sky, look: SLook, clouds=None) -> tuple:
+        """What ``fill`` writes, comparable by content (a keyed fill's: ``gamebind.keyed``)."""
+        fog = (self.m_fog is not None, self.m_fog_size, self.m_heights is not None)
+        moment = clouds.moment() if clouds is not None else None
+        return "atmosphere", gs.camera_key(camera), gs.value_key(sky.sun), bool(sky.night), look, fog, moment
+
     def fill(self, constants: gs.CConstants, camera: gs.SCamera, sky, look: SLook, clouds=None) -> None:
         """The passes' constants by name (the native atmosphere's too: ``atmospherenative``)."""
         gs.fill_frame(constants, camera)
@@ -142,15 +232,32 @@ class CAtmosphere(CComputeChain):
             look: SLook | None = None, clouds=None) -> None:  # fmt: skip
         """The passes over the G-buffer's depth into the lit colour of ``lit_fbo``; ``inputs``: that depth
         (``cDepthBuffer``), the sky passes' tables, the shadow map and the cascades' information, the light buffer,
-        the blue noise, by name; ``look``: which of the optional parts run; ``clouds`` (``gameclouds.CClouds``): the
-        clouds, None for none."""
-        look = replace(look or SLook(), temporal=False)  # these passes march every pixel every frame
+        the blue noise, by name; ``look``: which of the optional parts run (``temporal`` where the view compiled its
+        stages: a quarter of the pixels marched a frame); ``clouds`` (``gameclouds.CClouds``): the clouds, None for
+        none."""
+        look = look or SLook()
+        look = replace(look, temporal=look.temporal and self.can_accumulate())
         self.targets(ctx, size_px)
         half = tuple(self.m_target.size[:2])
+        previous = None
+        if look.temporal:
+            self._history(ctx, half)
+            previous = self.m_accumulation.advance(camera, half)
+        else:
+            self.m_accumulation.forget()
+            self._m_filled.clear()  # this frame's fill writes the counted passes' buffers too: none holds a kept key
+        fill = counted = keyed(lambda constants: self.fill(constants, camera, sky, look, clouds),
+                               self.fill_key(camera, sky, look, clouds))  # fmt: skip
+        if look.temporal:  # the passes that read cFrameCounter: the half-size depth and the march (environment.fx)
+            counter = self.m_accumulation.m_frame_counter
 
-        def fill(constants: gs.CConstants) -> None:
-            self.fill(constants, camera, sky, look, clouds)
+            def write(constants: gs.CConstants) -> None:
+                if self._m_filled.get(constants) != fill.key:  # only the counter moved: the rest stands in it
+                    fill(constants)
+                    self._m_filled[constants] = fill.key
+                constants.set("cFrameCounter", counter)
 
+            counted = keyed(write, (*fill.key, counter))
         named = {**inputs, "cDownsampledDepthBuffer": self.m_half.native, "cScatteringTarget": self.m_target.native,
                  "cScatteringTexture": self.m_target.native}  # fmt: skip
         if self.fog_map(ctx) is not None:
@@ -160,12 +267,16 @@ class CAtmosphere(CComputeChain):
         if clouds is not None:
             clouds.update(ctx, camera, sky, named)  # the self-shadow cache the clouds' march reads
             named.update(clouds.inputs())
-        full_screen(ctx, self.m_down, self.m_half_fbo, half, named, fill, targets=0, clear=False)
-        grid = (groups(half[0], GROUP), groups(half[1], GROUP), 1)
-        record(ctx, self.m_stages["clouds"], named, fill, grid)
-        # the atmosphere beyond the cloud layer, then the fog and the atmosphere before it
-        record(ctx, self.m_stages["end"], named, fill, (groups(half[0], BLUR_GROUP), groups(half[1], BLUR_GROUP), 1))
-        record(ctx, self.m_stages["fog"], named, fill, grid)
+        full_screen(ctx, self.m_down, self.m_half_fbo, half, named, counted, targets=0, clear=False)
+        if look.temporal:
+            self._march_quads(ctx, named, {"end": fill}, counted, half, previous)
+        else:
+            grid = (groups(half[0], GROUP), groups(half[1], GROUP), 1)
+            record(ctx, self.m_stages["clouds"], named, fill, grid)
+            # the atmosphere beyond the cloud layer, then the fog and the atmosphere before it
+            small = (groups(half[0], BLUR_GROUP), groups(half[1], BLUR_GROUP), 1)
+            record(ctx, self.m_stages["end"], named, fill, small)
+            record(ctx, self.m_stages["fog"], named, fill, grid)
         if look.blur:  # across into the second target and back (SCATTER_BLUR_ENABLE)
             blur = (groups(half[0], BLUR_GROUP), groups(half[1], BLUR_GROUP), 1)
             for key, source, destination in (
@@ -176,6 +287,59 @@ class CAtmosphere(CComputeChain):
                                                "cScatteringBlurDst": destination.native}, fill, blur)  # fmt: skip
         targets = len(lit_fbo.color_attachments)
         full_screen(ctx, self.m_up, lit_fbo, size_px, named, fill, targets=targets, clear=False)
+
+    def _march_quads(self, ctx, named: dict, fills: dict, counted, half: tuple[int, int], previous: tuple) -> None:
+        """``quad_march``'s dispatches, each filled by ``counted`` (with the frame counter) or by its own of ``fills``:
+        the accumulation reprojects from last frame's matrices (``previous``) and its pass ends with the copy into the
+        history; a history just made is zeroed with the first pass."""
+        view, projection = previous
+
+        def reprojected(constants: gs.CConstants) -> None:
+            counted(constants)
+            for i in range(gs.CAMERAS):
+                constants.set(f"cCameraBuffer[{i}].MtxViewPrev", view)
+                constants.set(f"cCameraBuffer[{i}].MtxProjPrev", projection)
+
+        fills = {
+            **fills,
+            "accumulate": keyed(reprojected, (*counted.key, gs.value_key(view), gs.value_key(projection))),
+        }
+        history, target = self.m_history.native, self.m_target.native
+        steps = quad_march(half, named, self.m_blurred.native, self.m_rays.native, history)
+        for k, (key, bound, grid) in enumerate(steps):
+            if key == HISTORY_COPY:
+                continue
+            copies = k + 1 < len(steps) and steps[k + 1][0] == HISTORY_COPY
+            after = (lambda: copy_into(self.m_rhi, history, target, half)) if copies else None
+            record(
+                ctx, self.m_stages[key], bound, fills.get(key, counted), grid, after, self._blank if k == 0 else None
+            )
+
+    def _history(self, ctx, half: tuple[int, int]) -> None:
+        """The history and the quads' ray ids for a half-size target of ``half``, made when it changed (the history
+        zeroed with the next pass: no frame yet)."""
+        if self.m_history is not None and tuple(self.m_history.size[:2]) == half:
+            return
+        self._drop_history()
+        self.m_history = ctx.native_texture(half, QRhiTexture.Format.RGBA16F, storage=True)
+        quads = (groups(half[0], QUAD), groups(half[1], QUAD))
+        self.m_rays = ctx.native_texture(quads, QRhiTexture.Format.R8UI, storage=True)
+        self._m_history_blank = True
+        self.m_accumulation.restart()
+
+    def _blank(self, batch) -> None:
+        """The history just made, zeroed (RGBA16F) by an upload with the frame's first pass."""
+        if not self._m_history_blank:
+            return
+        width, height = self.m_history.size[:2]
+        upload_level(batch, self.m_history.native, bytes(width * height * 8))
+        self._m_history_blank = False
+
+    def _drop_history(self) -> None:
+        for resource in (self.m_history, self.m_rays):
+            if resource is not None:
+                resource.release()
+        self.m_history = self.m_rays = None
 
     def fog_map(self, ctx):
         """The island's fog map, uploaded once it was set (None: no fog)."""
@@ -205,6 +369,7 @@ class CAtmosphere(CComputeChain):
                 resource.release()
         self.m_half = self.m_target = self.m_half_fbo = self.m_blurred = None
         self.m_size_px = None
+        self._drop_history()
 
     def release(self) -> None:
         super().release()

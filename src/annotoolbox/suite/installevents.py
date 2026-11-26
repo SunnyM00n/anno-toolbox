@@ -21,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..infra.tools import NO_WINDOW
 from ..paths import local_data_dir
 from . import install, shortcuts
@@ -30,6 +31,7 @@ FIRST_RUN = "first-run"  # in the data folder: the installer's first start has n
 UNINSTALL_REQUEST = "uninstall-request.json"  # in the data folder: "delete my settings and caches", left by the dialog
 REQUEST_LIFETIME = 600.0  # seconds a request is honoured: a cancelled uninstall must not delete data months later
 OLD_DOWNLOADS = "updates"  # the old updater's download folder, in the data folder
+UPDATED = "updated"  # in the data folder: the updater restarted the program after an update (holds the new version)
 SHORTCUTS_MADE = "shortcuts-made"  # in the data folder: the program has made its shortcuts once (0.2.0 never could)
 
 
@@ -45,6 +47,26 @@ def mark_first_run(folder: Path | None = None) -> None:
 
 def clear_first_run(folder: Path | None = None) -> None:
     ((folder or local_data_dir()) / FIRST_RUN).unlink(missing_ok=True)
+
+
+def mark_updated(version: str, folder: Path | None = None) -> None:
+    folder = folder or local_data_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / UPDATED).write_text(version, encoding="utf-8", newline="\n")
+
+
+def take_updated(folder: Path | None = None) -> str:
+    """The version the updater just restarted into, once ("" when this start is not after an update). A mark older
+    than ``REQUEST_LIFETIME`` is dropped unread: a restart that no window showed (the console build, ``--smoke``) must
+    not announce an update weeks later."""
+    path = (folder or local_data_dir()) / UPDATED
+    try:
+        version = path.read_text(encoding="utf-8").strip()
+        age = time.time() - path.stat().st_mtime
+    except (OSError, ValueError):  # a mark that cannot be read is no mark; it must not stop the start-up
+        return ""
+    path.unlink(missing_ok=True)
+    return version if 0 <= age <= REQUEST_LIFETIME else ""
 
 
 def shortcuts_made(folder: Path | None = None) -> bool:
@@ -143,6 +165,15 @@ def _safely(name: str, action: Callable[[], object]) -> Callable[..., None]:
     return event
 
 
+def _restarted(version: object = "") -> None:
+    """The updater's restart: leave the new version for the start-up screen."""
+    try:
+        mark_updated(str(version) or __version__)  # the new program is the one running
+    except Exception:  # an event never stops the installer
+        log.exception("install event restarted failed")
+        _keep_failure()
+
+
 def _keep_failure() -> None:
     """The failure's traceback into the data folder's ``logs``: an event's process has no console and ends at once,
     so a log line alone would be seen by nobody."""
@@ -164,6 +195,7 @@ def run(app_factory: Callable[[], Any] | None = None) -> bool:
         app_factory = velopack.App
     app = app_factory()
     app = app.on_first_run(_safely("first-run", mark_first_run))
+    app = app.on_restarted(_restarted)
     app = app.on_after_install_fast_callback(_safely("after-install", tidy_old_downloads))
     app = app.on_after_update_fast_callback(_safely("after-update", tidy_old_downloads))
     app = app.on_before_uninstall_fast_callback(_safely("before-uninstall", before_uninstall))

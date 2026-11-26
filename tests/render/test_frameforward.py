@@ -191,20 +191,22 @@ def test_the_frame_writes_both_games_screen_values():
     """1800's hull scales its factors by ``cBackBufferSize.y`` and its shadow fades by ``cViewport``; 2205 reads
     ``cViewPort`` (island-1800-2205-view.md 6)."""
     pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
     from annotoolbox.render import frameforward
     from annotoolbox.render import gameshader as gs
 
-    class FakeBuffer(dict):
-        def set(self, name, value):
-            self[name] = value
+    def member(name: str, offset: int, type_name: str):
+        return SimpleNamespace(name=name, offset=offset, size=16, type=type_name, elements=0, members=[])
 
-        def set_rows(self, name, value):
-            self[name] = value
-
-    buffer = FakeBuffer()
+    layout = SimpleNamespace(size=64, variables=[member("cBackBufferSize", 0, "float2"),
+                                                 member("cBackBufferSizeRec", 16, "float2"),
+                                                 member("cViewport", 32, "float4"), member("cViewPort", 48, "float4")])  # fmt: skip
+    buffer = gs.CConstants(layout)
     frameforward.fill_frame({"cb": buffer}, gs.direct_camera((640, 360), (0, 5, 10), (0, 0, 0), 0.8, 0.5, 200), {})
-    assert buffer["cBackBufferSize"] == [640, 360] and buffer["cBackBufferSizeRec"] == [1 / 640, 1 / 360]
-    assert buffer["cViewport"] == buffer["cViewPort"] == [0, 0, 640, 360]
+    stored = np.frombuffer(bytes(buffer.m_data), "<f4")
+    assert stored[0:2].tolist() == [640, 360] and stored[4:6] == pytest.approx([1 / 640, 1 / 360])
+    assert stored[8:12].tolist() == stored[12:16].tolist() == [0, 0, 640, 360]
 
 
 def test_view_rendering_switches_take_the_haze_and_the_cloud_shadows_out_by_the_shaders_own_terms():

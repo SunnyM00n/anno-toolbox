@@ -41,6 +41,13 @@ class CRenderingMenu:
     def game(self) -> str:
         return getattr(self.m_window.m_tree, "m_game", "") if self.m_window.m_tree is not None else ""
 
+    def prefetch(self, game: str, folder) -> None:
+        """Look for the game's compiler and read its build, once per game (about 1.8 s for 117): the thread that
+        opens the game calls it, so the window's first ``options`` finds both."""
+        if game not in self._m_found:
+            self._m_builds[game] = nativelook.exe_version(folder)  # first: ``options`` reads it after ``_m_found``
+            self._m_found[game] = nativelook.find_compiler(game, folder)
+
     def backends(self) -> set[str]:
         """The backends this window can draw with (probed once)."""
         if self._m_backends is None:
@@ -52,9 +59,7 @@ class CRenderingMenu:
     def options(self) -> nativelook.SOptions:
         game = self.game()
         folder = getattr(self.m_window.m_tree, "m_folder", None) if self.m_window.m_tree is not None else None
-        if game not in self._m_found:
-            self._m_found[game] = nativelook.find_compiler(game, folder)
-            self._m_builds[game] = nativelook.exe_version(folder)
+        self.prefetch(game, folder)
         choice = nativelook.SChoice.of(self.m_window.m_settings.rendering, game)
         default = rhiview.chosen(self.m_window.m_settings.renderer)
         return nativelook.options(game, self._m_found[game], self.backends(), choice, default, self._m_builds[game])

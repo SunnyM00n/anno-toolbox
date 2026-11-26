@@ -5,6 +5,7 @@ from __future__ import annotations
 import array
 import json
 import struct
+import time
 
 import pytest
 from tests.ddsfiles import dx10, header
@@ -66,6 +67,34 @@ PROP_CFG = """<Config><ConfigType>MAIN</ConfigType><Models><Config><ConfigType>M
 <Sequences><Config><ConfigType>SEQUENCE</ConfigType><SequenceID>251691777</SequenceID><Looped>1</Looped>
 <Track><TrackElement><Type>0</Type><StartTime>0</StartTime><EndTime>2000</EndTime><ModelID>0</ModelID>
 <AnimationID>0</AnimationID></TrackElement></Track></Config></Sequences></Config>"""
+
+
+def settle_texture_view(view, timeout_s: float = 10.0) -> None:
+    """Run the event loop until the texture view has no decode or picture left to make (they run off the window's
+    thread and land through it)."""
+    from PySide6.QtWidgets import QApplication
+
+    end, idle = time.monotonic() + timeout_s, 0
+    while time.monotonic() < end:
+        QApplication.processEvents()
+        # a finished thread's result may still wait in the queue and start the next one: idle for a few rounds
+        idle = 0 if view.m_background.busy() or view.m_is_drawing or view.m_wanted else idle + 1
+        if idle >= 3:
+            return
+        time.sleep(0.002)
+    raise TimeoutError("the texture view did not settle")
+
+
+def wait_for_pixels(view, timeout_s: float = 10.0) -> None:
+    """Run the event loop until the texture view holds its first pixels (a decode landed)."""
+    from PySide6.QtWidgets import QApplication
+
+    end = time.monotonic() + timeout_s
+    while view.m_pixels is None:
+        if time.monotonic() > end:
+            raise TimeoutError("no pixels landed")
+        QApplication.processEvents()
+        time.sleep(0.002)
 
 
 def wall_texture() -> bytes:

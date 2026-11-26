@@ -126,10 +126,31 @@ def test_the_events_are_armed_before_the_program_goes_on():
     assert installevents.run(lambda: chain) is True and chain.ran
     assert set(chain.events) == {
         "on_first_run",
+        "on_restarted",
         "on_after_install_fast_callback",
         "on_after_update_fast_callback",
         "on_before_uninstall_fast_callback",
     }
+
+
+def test_the_restart_after_an_update_leaves_the_version_for_the_start_up_screen_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(installevents, "local_data_dir", lambda: tmp_path)
+    assert installevents.take_updated(tmp_path) == ""
+    installevents._restarted("0.3.0")
+    assert installevents.take_updated(tmp_path) == "0.3.0"
+    assert installevents.take_updated(tmp_path) == ""  # read once
+    installevents._restarted()  # an updater that passes no version: this program is the new one
+    assert installevents.take_updated(tmp_path) == installevents.__version__
+
+
+def test_an_old_or_unreadable_updated_mark_announces_nothing(tmp_path):
+    old = tmp_path / installevents.UPDATED
+    old.write_text("0.2.0", encoding="utf-8")
+    past = time.time() - installevents.REQUEST_LIFETIME - 60
+    os.utime(old, (past, past))
+    assert installevents.take_updated(tmp_path) == "" and not old.exists()  # a stale mark is dropped
+    old.write_bytes(bytes([0xFF, 0xFE, 0xFA]))
+    assert installevents.take_updated(tmp_path) == ""  # not UTF-8: no crash at start-up
 
 
 def test_nothing_is_armed_outside_the_installed_program():

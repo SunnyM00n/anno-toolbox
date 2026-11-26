@@ -137,7 +137,7 @@ def test_the_sound_view_offers_the_switch_of_an_event_and_plays_the_chosen_branc
     from annotoolbox.viewer.soundview import CSoundView
 
     view = CSoundView(cache=tmp_path)
-    view.show_bank("data/sound/generatedsoundbanks/windows/9.bnk", bank(NEW), FakeFiles())
+    view.show_bank("data/sound/generatedsoundbanks/windows/9.bnk", bank(NEW), FakeFiles(), is_waiting=True)
     row = view.m_event_rows.index(1)
     view.m_tables["Events"].selectRow(row)
     view._show_choices(row, reset=True)

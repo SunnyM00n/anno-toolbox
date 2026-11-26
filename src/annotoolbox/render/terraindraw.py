@@ -22,7 +22,7 @@ from PySide6.QtGui import (
     QRhiTextureUploadEntry,
 )
 
-from . import gamedraw, gameshader, renderstates, terrainnodes, terrainpages
+from . import gamedraw, gameshader, gametextures, renderstates, terrainnodes, terrainpages
 from .gameinstances import CCommon, stamp_of
 from .terrainnodes import SNode
 
@@ -611,10 +611,10 @@ class CTerrain:
                 self.m_tints[key] = None
             else:
                 mip_flag = QRhiTexture.Flag.MipMapped if dds.m_info.mips > 1 else QRhiTexture.Flag(0)
-                texture = self.m_rhi.newTexture(gamedraw.BLOCK_FORMATS.get(dds.m_info.format, TextureFormat.BC1),
+                texture = self.m_rhi.newTexture(gametextures.BLOCK_FORMATS.get(dds.m_info.format, TextureFormat.BC1),
                                           QSize(dds.m_info.width_px, dds.m_info.height_px), 1, mip_flag)  # fmt: skip
                 texture.create()
-                self._m_tint_uploads.append((texture, gamedraw.stored_levels(dds)))
+                self._m_tint_uploads.append((texture, gametextures.stored_levels(dds)))
                 self.m_tints[key] = texture
         texture = self.m_tints[key]
         return (texture, terrainpages.page_params(key, self.m_size_tiles)) if texture is not None else None

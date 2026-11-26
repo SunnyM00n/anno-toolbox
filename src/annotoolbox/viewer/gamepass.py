@@ -10,6 +10,7 @@ look). ``why_not`` says when it cannot draw at all. docs/viewer.md "The renderer
 
 from __future__ import annotations
 
+import functools
 import time
 
 import numpy as np
@@ -60,6 +61,7 @@ class CGamePass(COwnPass):
 
     GAME = GAME
     PREFIX = "gs"
+    SAMPLES = 1  # 117's frame is deferred and has no multisampling of its own (performance.md section 4, item 7)
     SOURCE = shaderview.CShaderSource
     NOT_OURS = shaderview.CNoGBufferPass
 
@@ -81,6 +83,10 @@ class CGamePass(COwnPass):
         self._m_last_frame: float | None = None  # when the eye adaptation last ran (its easing's time step)
         self.m_transparent: set[tuple] = set()  # the keys of groups drawn by their effect's Transparent technique
         self._m_bound: tuple = ()  # the view size and copies the transparent draws were bound with
+        self.m_settling = False  # the last frame's clouds and fog still fill in over frames: one more frame
+
+    def busy(self) -> int:
+        return super().busy() + int(self.m_settling)
 
     def _make_source(self, tree) -> shaderview.CShaderSource:
         return shaderview.CShaderSource(tree, dxc.CDxc.find(anno117=getattr(tree, "m_folder", None)))
@@ -234,8 +240,9 @@ class CGamePass(COwnPass):
         colour (``switches``); the rest of ``drawn`` is returned for the renderer, or None while a shader still
         compiles. ``ground``: the view's ground plane (a part matrix), drawn into the G-buffer by the game's model
         shader (``render.gameground``)."""
+        self.m_settling = False
         ready, rest, waiting = self._split(drawn)
-        found, casters, see_through = [], [], []
+        found, casters, see_through, scene = [], [], [], []
         transparent_on = self.m_switches.get("transparent", True)
         for key, part, item, place, model in ready:
             if key in self.m_transparent and not transparent_on:
@@ -247,11 +254,14 @@ class CGamePass(COwnPass):
                 drawn_model.m_world = MIRROR @ np.asarray(place, float)
                 drawn_model.m_palette = palette
             (see_through if key in self.m_transparent else found).append(model)
-            if caster is not None and self.m_switches.get("shadows", True):
+            casts = caster is not None and self.m_switches.get("shadows", True)
+            if casts:
                 casters.append(caster)
+            scene.append(((key, casts), model))  # a caster stands where its model stands
         plane = self._ground(ground)
         if plane is not None:
             found.append(plane)
+            scene.append(("ground", plane))
         shading = self._shading() if sky is not None else None
         if waiting or (sky is not None and shading is None and self.m_sources.pending()):
             return None
@@ -275,10 +285,12 @@ class CGamePass(COwnPass):
         cam = self.m_frame.camera(size_px, camera.eye(), camera.m_target, camera.m_fov_rad, near, far,
                                 clouds.m_maps.far if clouds is not None else 0.0)  # fmt: skip
         self._rebind_see_through((size_px, water is not None and not water.m_error, waves))
-        look = gameatmosphere.SLook()
+        look = gameatmosphere.SLook(temporal=True)  # a quarter of the pixels marched a frame, as the game does
         passes = SPasses(casters, (box[0], box[1]) if box is not None else None, lights, fit, see_through, sky_passes,
-                        water, atmosphere, look, clouds)  # fmt: skip
+                        water, atmosphere, look, clouds,
+                        scene=_scene_key(self.m_renderer.m_state.time, scene))  # fmt: skip
         self.m_frame.render(target, size_px, found, cam, light, finish=False, shading=both, passes=passes)
+        self.m_settling = atmosphere is not None and atmosphere.settling()
         for part in (shading, fit, sky_passes, water, atmosphere, clouds):
             if part is not None and part.m_error:
                 self.m_renderer.say(part.m_error)
@@ -324,7 +336,10 @@ class CGamePass(COwnPass):
         if self.m_atmosphere is None:
             self.m_atmosphere = self._part(
                 "atmosphere",
-                lambda source: (source.stage_set(gameatmosphere.STAGES), source.sky_passes()[1]),
+                lambda source: (
+                    source.stage_set({**gameatmosphere.STAGES, **gameatmosphere.TEMPORAL_STAGES}),
+                    source.sky_passes()[1],
+                ),  # fmt: skip
                 lambda got: gameatmosphere.CAtmosphere(self.m_renderer.m_ctx.m_rhi, *got),
                 N_("viewer.games_visible_sky_haze"),
                 N_("viewer.our_sky"),
@@ -451,5 +466,28 @@ def _palette(item: dict, model) -> np.ndarray | None:
         return None
     if item.get("matrices") is not None:
         return item["matrices"]
-    joints = max(1, min(gameshader.LENGTHS["float4x3"], model.m_mesh.bone_count(4)))
+    return _rest_pose(max(1, min(gameshader.LENGTHS["float4x3"], model.m_mesh.bone_count(4))))
+
+
+def _scene_key(seconds: float, drawn: list[tuple]) -> tuple:
+    """``SPasses.scene``: the view's clock and the drawn models (key, model) with their places in one block of bytes,
+    and the pose, values and raw bytes of those that have any (``_drawn_key``)."""
+    places = np.stack([np.asarray(model.m_world, float) for _key, model in drawn]).tobytes() if drawn else b""
+    posed = tuple((key, _drawn_key(model)) for key, model in drawn
+                  if model.m_palette is not None or getattr(model, "m_values", None) or getattr(model, "m_raw", None))  # fmt: skip
+    return float(seconds), tuple(key for key, _model in drawn), places, posed
+
+
+def _drawn_key(model) -> tuple:
+    """What a drawn model adds to the frame's depth besides its place, comparable by content: its pose, its owner's
+    values and its raw bytes (a cloth's simulated vertices)."""
+    key = gameshader.value_key
+    values = tuple((path, key(value)) for path, value in getattr(model, "m_values", {}).items())
+    raw = tuple((name, key(data)) for name, data in getattr(model, "m_raw", {}).items())
+    return key(model.m_palette), values, raw
+
+
+@functools.lru_cache(maxsize=8)
+def _rest_pose(joints: int) -> np.ndarray:
+    """The bind pose of ``joints`` joints, made once: ``fill_instance`` keeps the packing of a pose it met."""
     return np.broadcast_to(np.identity(4), (joints, 4, 4))

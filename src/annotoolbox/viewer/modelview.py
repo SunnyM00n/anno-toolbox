@@ -85,7 +85,7 @@ class _CControls:
             self.update()
         self._m_clock = now
         renderer = self.m_renderer
-        if renderer is not None and (renderer.changed() or renderer.busy()):
+        if renderer is not None and renderer.wants_frame():
             self.update()
         elif renderer is not None and (
             self.m_state.fading(renderer.m_longest_fade)

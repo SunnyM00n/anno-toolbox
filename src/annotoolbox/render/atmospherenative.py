@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import numpy as np
 from PySide6.QtGui import QRhiReadbackResult
 
 from . import gameatmosphere, gameshadow, nativecompute, nativeforeign, nativegpu, shadowfit
@@ -27,11 +26,8 @@ ENVIRONMENT, SHADOW = "environment", "shadow"
 ATMOSPHERE = {"quad": "vsCommonFullScreenQuad", "down": "psDownsampleDepth", "clouds": "csVolumetricClouds",
               "end": "csComputeAtmosphereEnd", "fog": "csVolumetricFog", "up": "psUpsampleScatteringVolumes"}  # fmt: skip
 BLURS = {"blur.h": "int2(1,0)", "blur.v": "int2(0,1)"}  # csBlurScattering across, then down
-# the clouds and fog over frames (``gameatmosphere.TEMPORAL_FLAGS``): the quads' marched pixel picked, the history
-# reprojected into the other three (performance.md 4, item 5)
-TEMPORAL = {"select": "csSelectRayPositions", "accumulate": "csAccumulate"}
-QUAD = 2  # a quad's side: one of its four pixels is marched a frame
-SETTLE_FRAMES = 4  # frames until each pixel of a quad was marched once since the camera last moved
+# the clouds and fog over frames (``gameatmosphere.TEMPORAL_STAGES``' functions)
+TEMPORAL = {key: function_name for key, (_effect, _technique, function_name) in gameatmosphere.TEMPORAL_STAGES.items()}
 DOWN_STATE = {
     "topology": "strip",
     "cull": "none",
@@ -160,18 +156,15 @@ class CNativeFit:
                 resource.release()
 
 
-class CScatteringHistory:
+class CScatteringHistory(gameatmosphere.CAccumulation):
     """What the clouds and fog keep between frames when they are accumulated (``TEMPORAL``): the last result at half
-    size, the quads' marched pixels, the camera records with last frame's matrices for the reprojection, the frame
-    counter that turns the marched pixel and how many frames are left until every pixel was marched again."""
+    size, the quads' marched pixels and the camera records with last frame's matrices for the reprojection, beside
+    where the accumulation stands (``gameatmosphere.CAccumulation``)."""
 
     def __init__(self, owner) -> None:
+        super().__init__()
         self.m_owner = owner  # shadingnative.CNativeShading: the device, the module's list, the camera record
         self.m_history = self.m_rays = self.m_cameras = None  # the module's textures and buffer, made at a size
-        self.m_frame_counter = 0  # cFrameCounter
-        self.m_settle_left = 0
-        self.m_has_stepped = False  # a frame accumulated since ``CNativeAtmosphere.settling`` last asked
-        self._m_last: tuple = ()  # last frame's (view, projection, half size)
 
     def targets(self, half: tuple[int, int]) -> None:
         """The history (cleared: no frame yet) and the quads' ray ids for a half-size target of ``half``."""
@@ -181,17 +174,17 @@ class CScatteringHistory:
         device, command_list = self.m_owner.m_device, self.m_owner.m_common.m_list
         self.m_history = device.texture(*half, "RGBA16_FLOAT", usage="uav", name="scattering history")
         command_list.clear_color(self.m_history, 0.0, 0.0, 0.0, 0.0)
-        quads = (groups(half[0], QUAD), groups(half[1], QUAD))
+        quads = (groups(half[0], gameatmosphere.QUAD), groups(half[1], gameatmosphere.QUAD))
         self.m_rays = device.texture(*quads, "R8_UINT", usage="uav", name="quad ray ids")
 
     def step(self, camera, half: tuple[int, int]) -> None:
-        """This frame's counter, its reprojection's camera records (written on the module's list) and the frames
-        left to settle (a moved camera or a new size starts them again)."""
+        """This frame's counter and frames left to settle (``advance``), and its reprojection's camera records,
+        written on the module's list."""
         owner = self.m_owner
         element = owner.m_element
         records = gs.CConstants(nativecompute.records(element, gs.CAMERAS))
         gs.fill_frame(records, camera)
-        view, projection, last_half = self._m_last or (camera.view, camera.projection, half)
+        view, projection = self.advance(camera, half)
         for i in range(gs.CAMERAS):
             records.set(f"cCameraBuffer[{i}].MtxViewPrev", view)
             records.set(f"cCameraBuffer[{i}].MtxProjPrev", projection)
@@ -199,25 +192,13 @@ class CScatteringHistory:
         if self.m_cameras is None:
             self.m_cameras = owner.m_device.buffer(len(data), "structured", stride=element.size, name="history cameras")
         owner.m_common.m_list.write_buffer(self.m_cameras, data)
-        is_still = (
-            last_half == half and np.array_equal(view, camera.view) and np.array_equal(projection, camera.projection)
-        )
-        self.m_settle_left = self.m_settle_left - 1 if is_still and self._m_last else SETTLE_FRAMES
-        self.m_settle_left = max(self.m_settle_left, 0)
-        self._m_last = (camera.view, camera.projection, half)
-        self.m_frame_counter += 1
-        self.m_has_stepped = True
-
-    def forget(self) -> None:
-        """A frame that marched every pixel: nothing to settle, the next accumulated frame starts the count anew."""
-        self.m_settle_left, self._m_last = 0, ()
 
     def _drop(self) -> None:
         for resource in (self.m_history, self.m_rays):
             if resource is not None:
                 resource.release()
         self.m_history = self.m_rays = None
-        self._m_last = ()
+        self.restart()
 
     def release(self) -> None:
         self._drop()
@@ -264,9 +245,7 @@ class CNativeAtmosphere:
     def settling(self) -> bool:
         """Whether the clouds and fog accumulated in the frame since the last call and not every pixel was marched
         since the camera last moved."""
-        history = self.m_history
-        has_stepped, history.m_has_stepped = history.m_has_stepped, False
-        return has_stepped and history.m_settle_left > 0
+        return self.m_history.settling()
 
     def run(self, ctx, frame, size_px, camera, sky, atmosphere, look, clouds) -> None:
         """``gameatmosphere.CAtmosphere.run``'s passes over ``frame``'s depth into its lit colour; with
@@ -354,25 +333,15 @@ class CNativeAtmosphere:
                                   small)  # fmt: skip
 
     def _march_quads(self, rec, named: dict, buffers: dict, half: tuple[int, int], packed) -> None:
-        """The clouds and the fog marched at one pixel of each quad into ``packed`` (the blur's second target, free
-        until the blur), the history reprojected into the frame's target and kept, the atmosphere beyond the clouds
-        last: it lies behind both, and the history holds only what the accumulation clamps against."""
+        """The clouds and the fog marched at one pixel of each quad into ``packed``, the history reprojected and kept
+        (``gameatmosphere.quad_march``'s dispatches, in its order)."""
         history, k = self.m_history, {**self.m_kernels, **self.m_temporal}
-        target = named["cScatteringTarget"]
-        quads = (groups(half[0], QUAD), groups(half[1], QUAD))
-        marched = {**named, "cScatteringTarget": packed, "cQuadRayIDs": history.m_rays}
-        k["select"].record(rec, 0, marched, buffers["select"], (groups(quads[0], 8), groups(quads[1], 8), 1))
-        grid = (groups(quads[0], gameatmosphere.GROUP), groups(quads[1], gameatmosphere.GROUP), 1)
-        k["clouds"].record(rec, 0, marched, buffers["clouds"], grid)
-        k["fog"].record(rec, 0, marched, buffers["fog"], grid)
-        accumulated = {**marched, "cScatteringHistory": history.m_history, "cScatteringAccumulation": target,
-                       "cCameraBuffer": history.m_cameras}  # fmt: skip
-        k["accumulate"].record(
-            rec, 0, accumulated, buffers["accumulate"], (groups(quads[0], 8), groups(quads[1], 8), 1)
-        )
-        rec.copy_texture(history.m_history, target)
-        small = (groups(half[0], gameatmosphere.BLUR_GROUP), groups(half[1], gameatmosphere.BLUR_GROUP), 1)
-        k["end"].record(rec, 0, named, buffers["end"], small)
+        steps = gameatmosphere.quad_march(half, named, packed, history.m_rays, history.m_history, history.m_cameras)
+        for key, bound, grid in steps:
+            if key == gameatmosphere.HISTORY_COPY:
+                rec.copy_texture(history.m_history, named["cScatteringTarget"])
+            else:
+                k[key].record(rec, 0, bound, buffers[key], grid)
 
     def release(self) -> None:
         for kernel in (*self.m_kernels.values(), *self.m_temporal.values(), self.m_down, self.m_up):

@@ -31,7 +31,9 @@ class CLoader:
                 future = self.m_futures[key] = self.m_pool.submit(self._run, work)
             except RuntimeError:  # closed (a view's last frame after its renderer was released): nothing loads
                 return None
-        if not future.done():
+            # set once the future is done: a window that draws on the flag must find the result in
+            future.add_done_callback(lambda _done: self.m_changed.set())
+        if not future.done() or future.cancelled():  # cancelled: closed before it ran, nothing loads
             return None
         return future.result()
 
@@ -40,8 +42,6 @@ class CLoader:
             return work()
         except Exception as exc:  # the switch stays off, the reason is shown
             return exc
-        finally:
-            self.m_changed.set()
 
     def forget(self, key) -> None:
         """Drop what was loaded under ``key``: the next ``get`` loads it again."""

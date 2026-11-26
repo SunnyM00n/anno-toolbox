@@ -17,7 +17,7 @@ from typing import NamedTuple
 import numpy as np
 from PySide6.QtGui import QRhiBuffer
 
-from . import gamedraw
+from . import gamedraw, gametextures
 from . import gameshader as gs
 from .instancestore import ALPHA, CInstanceStore, SPlaces
 
@@ -118,11 +118,7 @@ def stamp_of(camera: gs.SCamera, fill, attribute_name: str = "key") -> tuple | N
     """What a draw's buffers hold besides its instances: the camera (its values, worked out once per camera) and the
     pass's own fill (its ``key``, or ``common_key`` for what it writes into the buffers without instance data; a fill
     without one: None, the buffers are filled every time)."""
-    key = camera.__dict__.get("_stamp")
-    if key is None:
-        key = camera.__dict__["_stamp"] = (np.asarray(camera.view).tobytes(), np.asarray(camera.projection).tobytes(),
-                                           np.asarray(camera.eye).tobytes(), camera.near, camera.far,
-                                           tuple(camera.size_px), camera.shadow_far)  # fmt: skip
+    key = gs.camera_key(camera)
     if fill is None:
         return key, None
     own = (
@@ -380,7 +376,7 @@ class SPartInputs(NamedTuple):
     frame: CFrameInstances
     textures: dict
     maps: list
-    table: gamedraw.CTextureTable
+    table: gametextures.CTextureTable
     meshes: Callable | None = None
 
 

@@ -14,6 +14,7 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QRhiTexture
 
 from . import gameshader as gs
+from .gamebind import keyed
 from .gamecompute import CComputeChain, CComputeStage, copy_into, groups, record
 from .gamedraw import upload_level
 
@@ -78,7 +79,8 @@ class CSceneCopies(CComputeChain):
         def after():
             return copy_into(self.m_rhi, self.m_color.native, lit.native, size_px)
 
-        record(ctx, self.m_stages["depth"], inputs, lambda constants: gs.fill_frame(constants, camera),
+        framed = keyed(lambda constants: gs.fill_frame(constants, camera), ("frame", gs.camera_key(camera)))
+        record(ctx, self.m_stages["depth"], inputs, framed,
                (groups(size_px[0], GROUP), groups(size_px[1], GROUP), 1), after, self._upload)  # fmt: skip
 
     def _upload(self, batch) -> None:

@@ -65,6 +65,9 @@ class SCloudsSeen:
     def fill(self, buffer: gs.CConstants, camera) -> None:
         self.clouds.fill(buffer, camera)
 
+    def moment(self) -> tuple:
+        return self.clouds.moment()
+
 
 class CCommon:
     """What the native parts of step 5 share: the module's list for their constants and uploads, the bridge to

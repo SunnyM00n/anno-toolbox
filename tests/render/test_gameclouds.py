@@ -171,3 +171,68 @@ def test_the_scroll_of_a_long_view_adds_up_only_the_steps_since_its_last_whole_b
     assert sum(asked) <= 2 * 64
     gc._blocks.cache_clear()
     gc.scroll.cache_clear()
+
+
+def _clouds(monkeypatch):
+    """A ``CClouds`` whose passes are logged (the stage's key) instead of recorded."""
+    from types import SimpleNamespace
+
+    log = []
+    clouds = gc.CClouds.__new__(gc.CClouds)
+    clouds.m_stages = {key: SimpleNamespace(key=key) for key in ("cache", "shadow0", "shadow1", "shadow2")}
+    clouds.m_textures, clouds.m_cache, clouds.m_transmittance = {}, "cache", "transmittance"
+    clouds.m_ambient, clouds._m_pending, clouds.m_shadowed = gc.read_ambient(AMBIENT), False, False
+    clouds.m_seconds, clouds.m_wind = 0.0, gc.CALM
+    clouds._m_ambient_key = gs.value_key(tuple(sorted(clouds.m_ambient.items())))
+    clouds._m_cache_made = clouds._m_shadow_made = None
+    monkeypatch.setattr(gc, "record", lambda ctx, stage, named, fill, grid, before=None: log.append(stage.key))
+    return clouds, log
+
+
+def _view(x: float = 0.0) -> gs.SCamera:
+    view = np.identity(4)
+    view[3, 0] = x
+    return gs.SCamera(np.zeros(3), view, np.identity(4), 0.1, 100.0, (8, 8))
+
+
+def test_the_clouds_shadow_is_made_again_only_when_what_it_reads_changed(monkeypatch):
+    """With the scene's key (the viewer's ``SPasses.scene``) the cascades' transmittance is made when the camera,
+    the sun, the clouds' time, the cascades or the scene changed, and kept otherwise; without one, every frame."""
+    from types import SimpleNamespace
+
+    from annotoolbox.render import gameshadow
+
+    clouds, log = _clouds(monkeypatch)
+    sky = SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False)
+    cascades = gameshadow.SCascades((), np.zeros(3), 100.0, gpu=True, used=3)
+
+    def made(camera=None, scene=("model", 1), cascades=cascades) -> int:
+        log.clear()
+        clouds.m_shadowed = False
+        clouds.shadow(None, camera or _view(), sky, cascades, {}, scene)
+        assert clouds.m_shadowed  # the map holds this frame's cascades either way
+        return len(log)
+
+    assert made() == 3  # one dispatch per used cascade
+    assert made() == 0  # a still frame: kept
+    assert made(_view(1.0)) == 3 and made(_view(1.0)) == 0
+    assert made(_view(1.0), ("model", 2)) == 3  # a model moved or posed
+    clouds.m_seconds = 0.5
+    assert made(_view(1.0), ("model", 2)) == 3  # the clouds drifted
+    fewer = gameshadow.SCascades((), np.zeros(3), 100.0, gpu=True, used=2)
+    assert made(_view(1.0), ("model", 2), fewer) == 2
+    assert made(_view(1.0), None, fewer) == 2 and made(_view(1.0), None, fewer) == 2  # no scene key: every frame
+
+
+def test_the_self_shadow_cache_is_made_again_only_for_another_camera_sun_or_moment(monkeypatch):
+    from types import SimpleNamespace
+
+    clouds, log = _clouds(monkeypatch)
+    day, night = SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False), SimpleNamespace(sun=(0.0, 1.0, 0.0), night=True)
+    for camera in (_view(), _view(), _view(2.0)):
+        clouds.update(None, camera, day, {})
+    assert log == ["cache", "cache"]
+    clouds.update(None, _view(2.0), night, {})
+    clouds._m_pending = True  # the maps go up again with the next pass (a released view)
+    clouds.update(None, _view(2.0), night, {})
+    assert log == ["cache", "cache", "cache", "cache"]

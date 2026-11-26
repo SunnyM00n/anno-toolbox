@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from PySide6.QtGui import QRhiTexture
 
-from . import gamedraw, gamemaps, nativegpu, terraindraw
+from . import gamemaps, gametextures, nativegpu, terraindraw
 from . import gameshader as gs
 from .gamecompute import groups
 from .nativecompute import CKernel, CTold, records
@@ -68,7 +68,7 @@ class SBakeJob:
 
 
 class CStored:
-    """A map as ``gamedraw.CTextureTable`` holds it, from the file: the stored levels of a single-face BC map (with the
+    """A map as ``gametextures.CTextureTable`` holds it, from the file: the stored levels of a single-face BC map (with the
     chain's missing small levels), else its first level as RGBA8."""
 
     def __init__(self, dds) -> None:
@@ -82,7 +82,7 @@ class CStored:
             self.m_format, self.m_block = found
             if dds_info.srgb and self.m_format.startswith(("BC1", "BC2", "BC3", "BC7")):
                 self.m_format += "_SRGB"
-            self.m_levels = gamedraw.stored_levels(dds)
+            self.m_levels = gametextures.stored_levels(dds)
 
     def pitch(self, mip: int) -> int:
         mip_width = max(1, self.m_width >> mip)

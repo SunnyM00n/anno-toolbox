@@ -23,10 +23,10 @@ from ..render import nativelook, rhiview
 from ..sources import gametree
 from ..sources.overlay import normalize
 from ..suite import centralmenu, gamesync, links, widgets
-from ..suite.background import CBackground
+from ..suite.background import CBackground, CLatest
 from ..suite.gameopen import open_installed
 from . import modelscene, states
-from .browser import KINDS, CFileBrowser
+from .browser import KINDS, CFileBrowser, folder_index
 from .dataview import CDataView
 from .effectlink import effect_to_edit
 from .exporttools import CExportTools
@@ -43,6 +43,14 @@ from .textureview import CTextureView, describe
 APP = "viewer"  # the key of its remembered state in the settings
 TITLE = N_("common.viewer")
 HISTORY = 30  # files to go back through
+
+
+def with_index(tree, game: str | None = None) -> tuple:
+    """``(tree, its folder index)``, the work of the thread that opens a game: the browser's index of hundreds of
+    thousands of paths takes about a second. ``game`` names a loose folder's game."""
+    if game is not None:
+        tree.m_game = game
+    return tree, folder_index(tree.m_paths)
 
 
 def game_file(tree, name: str) -> str:
@@ -66,6 +74,9 @@ class CViewerWindow(QMainWindow):
         self.m_history: list[str] = []
         self.m_held = 0  # the condition bits held by hand (View > Condition bits), kept from model to model
         self.m_background = CBackground(self)
+        self.m_latest = CLatest(self.m_background)  # the scene of the file shown last: an older one is dropped
+        self.m_opening = CLatest(self.m_background)  # the game, folder or mod opened last: an older one is dropped
+        self.m_is_waiting = False  # a test: build the scene here, so the window shows it when the call returns
         self.m_cache = Path(settings.workspace) / "viewer-cache" if settings.workspace else None
         self.m_browser = CFileBrowser()
         self.m_model = make_view(self._backend(rhiview.chosen(settings.renderer)))
@@ -225,24 +236,39 @@ class CViewerWindow(QMainWindow):
             self,
             self.m_settings,
             key,
-            self.m_background,
-            then=lambda tree: self._opened(tree, key, then),
+            self.m_opening,
+            then=lambda opened: self._opened(opened, key, then),
+            prepare=self._prepared,
             is_waiting=is_waiting,
         )
 
-    def _opened(self, tree, key: str, then: str) -> None:
-        if isinstance(tree, Exception):
+    def _prepared(self, tree) -> tuple:
+        """What the thread that opens a game works out for the window: the browser's index and the game's compiler."""
+        self.m_rendering.prefetch(tree.m_game, getattr(tree, "m_folder", None))
+        return with_index(tree)
+
+    def _opened(self, opened, key: str, then: str) -> None:
+        if isinstance(opened, Exception):
             self.statusBar().showMessage(
-                tr("common.game_not_open_error", game=gametree.GAMES.get(key, key), error=tree)
+                tr("common.game_not_open_error", game=gametree.GAMES.get(key, key), error=opened)
             )
             return
-        self.set_tree(tree)
+        self.set_tree(*opened)
+        self._warm_origins(opened[0])
         self.m_settings.apps.setdefault(APP, {})["game"] = key
         if then:
             self.open_path(then)
 
-    def set_tree(self, tree) -> None:
-        """Browse and show the files of ``tree`` (a ``sources.gametree.CGameTree``)."""
+    def _warm_origins(self, tree) -> None:
+        """The first ``tree.origins`` reads every archive's entries (up to 13 s on 1800's): ask once off the window's
+        thread, so the first file picked in the browser does not wait for it."""
+        if tree.m_paths:
+            self.m_background.run(lambda: tree.origins(tree.m_paths[0]), lambda _result: None, self.m_is_waiting)
+
+    def set_tree(self, tree, index: dict | None = None) -> None:
+        """Browse and show the files of ``tree`` (a ``sources.gametree.CGameTree``); ``index``: its folder index when
+        it was built off the window's thread (``with_index``)."""
+        self.m_latest.cancel()  # a scene still being built belongs to the tree before
         if self.m_tree is None or tree.m_game != self.m_tree.m_game:
             self.m_history = []  # another game's paths: Back would look them up in this one
         self.m_tree, self.m_files = tree, CModelFiles(tree)
@@ -253,7 +279,7 @@ class CViewerWindow(QMainWindow):
         self.m_checks.show_checks(None, {})
         self.m_exports.file_shown("")
         self.m_users.note(tr("viewer.file_gt_uses_ctrl_plus"))
-        self.m_browser.set_tree(tree)
+        self.m_browser.set_tree(tree, index)
         self.m_references.tree_changed()
         self.m_rendering.apply()
         self.m_model.clear()
@@ -271,16 +297,18 @@ class CViewerWindow(QMainWindow):
         """Browse a folder of loose files as files of the open game; the folder is listed off the window's thread
         (an unpacked game holds hundreds of thousands of files)."""
         self.statusBar().showMessage(tr("viewer.reading_every_file_folder", folder=folder))
-        self.m_background.run(
-            lambda: gametree.loose_tree(folder), lambda tree: self._folder_read(tree, folder), is_waiting
+        game = self.m_tree.m_game if self.m_tree else ""
+        self.m_opening.run(
+            lambda: with_index(gametree.loose_tree(folder), game),
+            lambda read: self._folder_read(read, folder),
+            is_waiting,
         )
 
-    def _folder_read(self, tree, folder: Path) -> None:
-        if isinstance(tree, Exception):
-            self.statusBar().showMessage(tr("common.game_not_open_error", game=folder, error=tree))
+    def _folder_read(self, read, folder: Path) -> None:
+        if isinstance(read, Exception):
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=folder, error=read))
             return
-        tree.m_game = self.m_tree.m_game if self.m_tree else ""
-        self.set_tree(tree)
+        self.set_tree(*read)
 
     def _lay_mod(self) -> None:
         if self.m_tree is None:
@@ -288,7 +316,18 @@ class CViewerWindow(QMainWindow):
             return
         folder = QFileDialog.getExistingDirectory(self, tr("viewer.mod_folder_files_win_over"))
         if folder:
-            self.set_tree(self.m_tree.over(Path(folder)))
+            tree = self.m_tree
+            self.m_opening.run(
+                lambda: with_index(tree.over(Path(folder))),
+                lambda laid: self._mod_laid(laid, folder),
+                self.m_is_waiting,
+            )
+
+    def _mod_laid(self, laid, folder: str) -> None:
+        if isinstance(laid, Exception):
+            self.statusBar().showMessage(tr("common.game_not_open_error", game=folder, error=laid))
+            return
+        self.set_tree(*laid)
 
     def open_file(self, game: str, path: str) -> None:
         """Show a file of a game, opening that game first when another is open (the suite's ``view_file``)."""
@@ -320,9 +359,8 @@ class CViewerWindow(QMainWindow):
         self.m_browser.reveal(path)
         try:
             self._show(path)
-        except Exception as exc:  # a file the views do not take: say so, keep the window usable
-            self.m_pages.setCurrentWidget(self.m_message)
-            self.m_message.setText(tr("viewer.could_not_shown", path=path, kind=type(exc).__name__, error=exc))
+        except Exception as exc:
+            self._could_not_show(path, exc)
         self.m_exports.file_shown(path)
         self.m_references.file_shown(path)
         self.m_settings.apps.setdefault(APP, {})["file"] = path
@@ -366,11 +404,12 @@ class CViewerWindow(QMainWindow):
     def _show(self, path: str) -> None:
         data_kinds = {k: value for k, value in KINDS.items() if value}
         self._file_facts(path)
+        self.m_latest.cancel()  # a model still being built is not the file shown any more
         self.m_scene = None
         self.m_parts.clear()
         self.m_sequences.show_scene(CScene(path, self.m_tree.m_game))
         if path.endswith(data_kinds["Models"]):
-            self._show_model(modelscene.build(self.m_tree, path, self.m_tree.m_game, self._options()))
+            self._build_model(path, self._options())
         elif path.endswith(data_kinds["Effects"]):
             scene = CScene(path, self.m_tree.m_game, path, m_effects=[SPlacedEffect("", path, np.identity(4))])
             self._show_model(scene)
@@ -384,7 +423,7 @@ class CViewerWindow(QMainWindow):
             show(path, self.m_tree.read(path), self.m_tree)
             self.m_pages.setCurrentWidget(self.m_sounddb)
         elif path.endswith(".bnk"):
-            self.m_sound.show_bank(path, self.m_tree.read(path), self.m_tree)
+            self.m_sound.show_bank(path, self.m_tree.read(path), self.m_tree, self.m_is_waiting)
             self.m_pages.setCurrentWidget(self.m_sound)
         elif path.endswith(data_kinds["Sounds"]):
             self.m_sound.show_clip(path, self.m_tree.read(path))
@@ -392,6 +431,29 @@ class CViewerWindow(QMainWindow):
         else:
             self.m_data.show_file(path, self.m_tree.read(path))
             self.m_pages.setCurrentWidget(self.m_data)
+
+    def _build_model(self, path: str, options: modelscene.SOptions) -> None:
+        """Build the scene of a model off the window's thread; it is shown when it is ready, unless a newer file or
+        reload came first."""
+        tree = self.m_tree
+        self.m_latest.run(
+            lambda: modelscene.build(tree, path, tree.m_game, options),
+            lambda built: self._model_built(path, built),
+            self.m_is_waiting,
+        )
+
+    def _model_built(self, path: str, built) -> None:
+        try:
+            if isinstance(built, Exception):
+                raise built
+            self._show_model(built)
+        except Exception as exc:  # the callback has no caller to say it: the window says why
+            self._could_not_show(path, exc)
+
+    def _could_not_show(self, path: str, exc: Exception) -> None:
+        """A file the views do not take: say so, keep the window usable."""
+        self.m_pages.setCurrentWidget(self.m_message)
+        self.m_message.setText(tr("viewer.could_not_shown", path=path, kind=type(exc).__name__, error=exc))
 
     def _options(self, **change) -> modelscene.SOptions:
         lod = next((index for index, action in enumerate(self.m_lod_actions) if action.isChecked()), 0)
@@ -410,8 +472,8 @@ class CViewerWindow(QMainWindow):
             self.statusBar().showMessage(note, 8000)
 
     def _reload_model(self, **change) -> None:
-        if self.m_scene is not None and self.m_current and modelscene.is_model(self.m_current):
-            self._show_model(modelscene.build(self.m_tree, self.m_current, self.m_tree.m_game, self._options(**change)))
+        if self.m_current and modelscene.is_model(self.m_current):  # also while its first build still runs
+            self._build_model(self.m_current, self._options(**change))
 
     def back(self) -> None:
         if self.m_history:
