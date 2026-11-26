@@ -46,21 +46,22 @@ class CLevelDraws:
     words' slot they share), the roles among them; per pass the module's draws (``m_items``), kept while the pass's
     sets for those roles are the same objects."""
 
-    __slots__ = ("m_pairs", "m_joints", "m_roles", "m_is_uniform", "m_items", "m_culled")
+    __slots__ = ("m_pairs", "m_joints", "m_skins", "m_roles", "m_is_uniform", "m_items", "m_culled")
 
     def __init__(self, pairs: list[tuple[str, object]], joints: list[int]) -> None:
         self.m_pairs, self.m_joints = tuple(pairs), tuple(joints)
+        self.m_skins = tuple(dict.fromkeys(joints))  # the joints of its draws, each once: a slot each
         self.m_roles = tuple(dict.fromkeys(role for role, _mesh in pairs))
-        self.m_is_uniform = len(set(joints)) <= 1  # one slot for every draw
+        self.m_is_uniform = len(self.m_skins) <= 1  # one slot for every draw
         self.m_items: dict[str, tuple] = {}  # pass -> (the roles' sets, the module's draws)
         self.m_culled: tuple | None = None  # per draw (mesh, joints, box, index count): ``culled``, made once
 
     def culled(self) -> tuple | None:
-        """Per draw what the GPU's caster culling takes of it (its mesh, joints, box in its own space and index
-        count), made once; None while a mesh's box is not known (``CMesh.box``, kept on the mesh before its bytes go
-        to the device): its casters are then culled on the CPU."""
+        """Per draw what the GPU's caster culling takes of it (its mesh, joints, box in its own space as six float32,
+        min then max, and index count), made once; None while a mesh's box is not known (``CMesh.box``, kept on the
+        mesh before its bytes go to the device): its casters are then culled on the CPU."""
         if self.m_culled is None and all(mesh.m_box is not None or mesh.m_data for _role, mesh in self.m_pairs):
-            self.m_culled = tuple((mesh, joints, mesh.box(), len(mesh.m_indices))
+            self.m_culled = tuple((mesh, joints, np.concatenate(mesh.box()).astype(np.float32), len(mesh.m_indices))
                                   for (_role, mesh), joints in zip(self.m_pairs, self.m_joints, strict=True))  # fmt: skip
         return self.m_culled
 
@@ -110,11 +111,7 @@ class CCulledGroup:
         culled = draws.culled()
         if culled is None:
             return None
-        places, local = drawn.places, drawn.local
-        placed = [
-            frame.place_culled(places, local, joints, mesh, box, indices) for mesh, joints, box, indices in culled
-        ]
-        return CCulledGroup(part, draws, [slot for slot, _arg in placed], [arg for _slot, arg in placed])
+        return CCulledGroup(part, draws, *frame.place_culled_level(drawn.places, drawn.local, culled))
 
 
 class CInstanceBuffers:

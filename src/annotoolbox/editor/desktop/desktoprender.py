@@ -26,7 +26,7 @@ from ...render.particledraw import CParticleLayer
 from ...render.quality import SQuality, lod_rules, remakes
 from ..editchange import SChange, union_box
 from ..editsession import CEditSession, SEntry
-from .desktopbatches import PASSES, CBatch, CInstanceSets, level_meshes
+from .desktopbatches import PASSES, CBatch, CInstanceSets, dot_positions, level_meshes
 from .desktopdecals import CDecalLayer
 from .desktopframe import CFramePasses, SFrame
 from .desktopgeometry import pin_mesh, pin_scale, terrain_vertices
@@ -177,7 +177,7 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
         self._m_weights_tex = None
         self._m_weights_dirty = None
         self._m_water_meshes = None
-        self._m_dots = None
+        self._m_dots, self._m_dot_rows = None, {}  # the dots' vertex array, and per batch its dots (``dot_positions``)
         self._m_sync_left = 0  # the batches the last ``_sync_batches`` left for the next frame (``FRAME_BUDGET_S``)
         self.m_game = None  # desktopgame.CGameIsland, made when the look first asks for it
         self.m_remake = False  # the game look made anew at the next frame (``remake_game``)
@@ -431,8 +431,8 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
                 batch = self.m_batches.get(key)
                 if batch is None:
                     self.m_batches[key] = CBatch(key, rows)
-                else:
-                    batch.m_entries, batch.m_dirty = rows, True
+                elif batch.m_entries is not rows or len(rows) != batch.m_count:  # the change's own come below
+                    batch.m_entries, batch.m_dirty = rows, True  # every batch made again took 0.14 s a placement
             self._m_dots = None
         for entry in change.entries:
             batch = self.m_batches.get(entry.batch)
@@ -550,18 +550,16 @@ class CRenderer(CGroundDraw, CFramePasses, CPicking):
     def _dots_vao(self):
         if self._m_dots is None:
             # from the instance matrices (the view's x mirrored already; a scale of 0 hides one): a loop over every
-            # entry each time a model came took seconds on a continental island's 48,000
-            rows = []
-            for batch in self.m_batches.values():
-                if (
-                    (batch.m_parts is None or not batch.m_parts)
-                    and batch.m_mats is not None
-                    and len(batch.m_mats)
-                    and not (batch.m_parts == [] and self.m_library.decals(batch.m_key[1]))  # the ground decals show
-                ):
-                    shown = np.abs(batch.m_mats[:, :3, :3]).sum(axis=(1, 2)) > 0
-                    rows.append(batch.m_mats[shown, :3, 3] + np.array([0.0, 0.3, 0.0], "f4"))
-            positions = np.concatenate(rows) if rows else np.zeros((0, 3), "f4")
+            # entry each time a model came took seconds on a continental island's 48,000; each batch's are kept
+            dotted = [
+                (key, batch)
+                for key, batch in self.m_batches.items()
+                if (batch.m_parts is None or not batch.m_parts)
+                and batch.m_mats is not None
+                and len(batch.m_mats)
+                and not (batch.m_parts == [] and self.m_library.decals(batch.m_key[1]))  # the ground decals show
+            ]
+            positions = dot_positions(dotted, self._m_dot_rows)
             points = np.hstack([positions, np.full((len(positions), 3), 0.95, "f4")]).astype("f4")
             self._m_dots = (
                 self.m_ctx.vertex_array(

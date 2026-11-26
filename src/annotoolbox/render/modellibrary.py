@@ -209,6 +209,7 @@ class CModelLibrary:
         self._m_users: dict[str, set[str]] = {}  # mesh key or map key -> the configs whose parts name it
         self._m_decal_maps: set[str] = set()  # the decals' map keys: the view lays the decals in every look
         self._m_parts: dict[str, list | None] = {}
+        self._m_ready: set[str] = set()  # the configs ``ready`` found ready (until ``set_full`` changes)
         self._m_placed: dict[str, list[SPlaced]] = {}  # cfg -> the effects it places, in the model's space
         self._m_decals: dict[str, list[dict]] = {}  # cfg -> the decals it lays, in the model's space
         self._m_effects: dict[str, list | None] = {}  # effect file -> its effects; None loading, [] failed
@@ -264,6 +265,7 @@ class CModelLibrary:
         if cfgs == self._m_full:
             return False
         before, self._m_full = self._m_full, cfgs
+        self._m_ready = set()  # a model loaded in full now waits for its meshes again
         with self._m_lock:
             resolved = [config for config, parts in self._m_parts.items() if parts is not None]
         for cfg in resolved:
@@ -362,10 +364,18 @@ class CModelLibrary:
                 self._m_textures[key] = (*got[:3], None)
 
     def ready(self, cfg: str) -> bool:
-        """Resolved, and every part's mesh loaded (or failed); for a model not loaded in full its boxes."""
-        parts = self.parts(cfg)
+        """Resolved, and every part's mesh loaded (or failed); for a model not loaded in full its boxes. Kept once
+        true until ``set_full`` changes what loads in full: asked for every batch, it took a continental island's
+        window 0.3 s at each look of the status bar (performance.md 6, item 2)."""
+        if cfg in self._m_ready:
+            return True
+        with self._m_lock:
+            parts = self._m_parts.get(cfg)
         found = self._m_meshes if self.full(cfg) else self._m_boxes
-        return parts is not None and all(found.get(part["mesh_key"]) is not None for part in parts)
+        is_ready = parts is not None and all(found.get(part["mesh_key"]) is not None for part in parts)
+        if is_ready:
+            self._m_ready.add(cfg)
+        return is_ready
 
     def close(self) -> None:
         self._m_closed = True

@@ -180,3 +180,10 @@ def test_a_switch_is_greyed_where_the_island_has_nothing_to_skip(tmp_path):
     assert needs == {"sea_mirror": False, "game_sky": False, "game_occlusion": False}  # an island of no such game
     assert main.m_actions["perf_shadows"].isEnabled() and not main.m_actions["perf_reflections"].isEnabled()
     main.close()
+
+
+def test_the_view_in_its_own_window_is_a_settings_switch_off_by_default_and_no_view_option():
+    assert not desktopeditor.is_own_window(SimpleNamespace(view_switches={}))
+    assert desktopeditor.is_own_window(SimpleNamespace(view_switches={desktopeditor.OWN_WINDOW: True}))
+    assert desktopeditor.OWN_WINDOW in desktopeditor.PERFORMANCE_TEXTS  # the settings window lists it
+    assert desktopeditor.OWN_WINDOW not in SWITCHES and not hasattr(SViewOptions(), desktopeditor.OWN_WINDOW)

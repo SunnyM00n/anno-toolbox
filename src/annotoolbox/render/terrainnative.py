@@ -137,6 +137,7 @@ class CBridge:
         # of (its address stays its own), never by the Python object: PySide hands a new one for the same texture
         self.m_held: dict[tuple, list] = {}
         self.m_frame = 0
+        self.m_is_used = False  # a wrap was asked for since the last ``end_frame``
         self.m_reads: dict[int, int] = {}  # this pass's QRhi resources read -> their state now
         self.m_writes: dict[int, int] = {}  # and written (``target``; its user clears them with ``reads``)
 
@@ -150,7 +151,7 @@ class CBridge:
         held = self.m_held.get(key)
         if held is None:
             held = self.m_held[key] = [self.m_device.wrap_texture(resource, native_format, kind, ""), 0]
-        held[1] = self.m_frame
+        held[1], self.m_is_used = self.m_frame, True
         return held[0], resource
 
     def buffer(self, qrhi_resource, stride: int, state: int = UNORDERED, usage: str = ""):
@@ -163,7 +164,7 @@ class CBridge:
         held = self.m_held.get(key)
         if held is None:
             held = self.m_held[key] = [self.m_device.wrap_buffer(resource, stride, usage, ""), 0]
-        held[1] = self.m_frame
+        held[1], self.m_is_used = self.m_frame, True
         return held[0], resource
 
     def target(self, qrhi_resource):
@@ -202,8 +203,12 @@ class CBridge:
             self.m_reads, self.m_writes = {}, {}
 
     def end_frame(self) -> list:
-        """The wraps not used for ``KEEP_FRAMES`` let go (late); returned, so the sets made with them go too."""
-        self.m_frame += 1
+        """The wraps not used for ``KEEP_FRAMES`` let go (late); returned, so the sets made with them go too. Only a
+        frame that asked for a wrap counts: a kept frame skips the passes, and its wraps and their sets stay while the
+        view stands (each holds its resource, so its key stays its own; performance.md 4, "What is left")."""
+        if not self.m_is_used:
+            return []
+        self.m_frame, self.m_is_used = self.m_frame + 1, False
         gone = [
             self.m_held.pop(key)[0]
             for key, (_w, last) in list(self.m_held.items())

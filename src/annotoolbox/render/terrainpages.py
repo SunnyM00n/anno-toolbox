@@ -78,12 +78,24 @@ def upload_heights(heights: np.ndarray, step_tiles: float, mirror: bool = True) 
     if step_tiles != 0.5:  # a large island's grid: onto the half-tile grid of the texture, linearly
         sample_count = int(round((samples.shape[0] - 1) * step_tiles * 2)) + 1
         at = np.arange(sample_count) * 0.5 / step_tiles
-        samples = np.array([np.interp(at, np.arange(samples.shape[1]), row) for row in samples])
-        samples = np.array([np.interp(at, np.arange(samples.shape[0]), col) for col in samples.T]).T
+        samples = _resampled(_resampled(samples, at, 1), at, 0)
     width = (samples.shape[0] - 1 + 3) // 4 * 4
     samples = np.pad(samples, ((0, width + 1 - samples.shape[0]), (0, width + 1 - samples.shape[1])), mode="edge")
     samples = samples[:width, width:0:-1] if mirror else samples[:width, :width]
     return np.clip(np.rint(samples * 256), -32768, 32767).astype("<i2").tobytes(), width
+
+
+def _resampled(samples: np.ndarray, at: np.ndarray, axis: int) -> np.ndarray:
+    """``samples`` read at the places ``at`` along ``axis`` (samples 1 apart) linearly, as ``np.interp`` does it for
+    each row in turn (a continental island's rows one by one took half a second on the window's thread)."""
+    last = samples.shape[axis] - 1
+    at = np.clip(at, 0, last)
+    first = np.minimum(np.floor(at).astype(np.int64), last)
+    after = np.minimum(first + 1, last)
+    shape = [1, 1]
+    shape[axis] = len(at)
+    lower, upper = np.take(samples, first, axis), np.take(samples, after, axis)
+    return (upper - lower) * (at - first).reshape(shape) + lower
 
 
 @dataclass

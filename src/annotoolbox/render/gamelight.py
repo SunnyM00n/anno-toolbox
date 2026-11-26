@@ -258,6 +258,12 @@ class CDeferredShading(CComputeStage):
 
     def _fill(self, constants: gs.CConstants, camera: gs.SCamera, sky: SSky) -> None:
         gs.fill_frame(constants, camera)
+        # packed once per layout while the sun, the sky light and the size stand: a frame fills some 20 buffers
+        token = (gs.value_key(sky.sun), bool(sky.night), gs.value_key(sky.ambient), self.m_cube_log2,
+                 tuple(camera.size_px))  # fmt: skip
+        gs.replay(constants, "shading light", token, lambda buffer: self._fill_light(buffer, camera, sky))
+
+    def _fill_light(self, constants: gs.CConstants, camera: gs.SCamera, sky: SSky) -> None:
         width, height = camera.size_px
         gs.fill_sun(constants, sky.sun, sky.night)
         for key, value in (("cAmbientLightFactor", sky.ambient), ("cAmbientLightFactorOcean", sky.ambient),

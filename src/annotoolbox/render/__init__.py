@@ -5,8 +5,8 @@ island as the games do, on one of two devices. docs/tool-suite.md sections 19 ("
 ``camera``, ``picking``, ``cull``, ``loader``; ``modellibrary`` (a config's parts for instancing); ``particlefx``,
 ``particledraw`` (particle effects). The devices: moderngl on OpenGL (``glformat``), or Qt's QRhi on Direct3D 12, 11, Vulkan or
 OpenGL with ``rhidevice`` (the same calls, recorded by ``rhipass``; sRGB levels by ``srgbmips``) in ``rhiview``'s
-widget, our GLSL ported (``glslport``) and baked (``shaderbake``). The games' own shaders on QRhi share
-``gameshader`` (bindings, inputs by name) with ``rawbuffers``, ``gamedraw`` (a mesh, the pipeline's parts),
+widget (or ``rhiwindow``'s own window), our GLSL ported (``glslport``) and baked (``shaderbake``). The games' own
+shaders on QRhi share ``gameshader`` (bindings, inputs by name) with ``rawbuffers``, ``gamedraw`` (a mesh, the pipeline's parts),
 ``nativepass`` (a pass of draws, a frame's composite); 117's: ``gamebind`` (what a shader binds), ``gamecompute``
 (compute chains), ``gameframe`` (the frame), ``gamelight``, ``gameshadow`` with ``shadowfit``, ``lightclusters``,
 ``gamesky``, ``gamepost`` with ``eyeadapt``, ``gamewater``, ``gameground``, ``gameatmosphere``, ``gameclouds``,

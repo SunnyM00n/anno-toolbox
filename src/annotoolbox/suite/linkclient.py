@@ -274,7 +274,8 @@ class CPipeLink(livelink.CLiveLink):
             self._forget(request_id)
             self._lost(str(error))
             return SReply(livelink.NOT_CONNECTED, tr("common.game_link_not_connected_lower"))
-        limit_s = RELOAD_TIMEOUT if request.name.startswith("reload.") else REQUEST_TIMEOUT
+        is_long = request.name.startswith("reload.") or request.name in proto.LONG_REQUESTS
+        limit_s = RELOAD_TIMEOUT if is_long else REQUEST_TIMEOUT
         limit_s += request.args.get("delay_ms", 0) / 1000  # a request with a delay answers after it
         if not slot.done.wait(limit_s):
             self._forget(request_id)

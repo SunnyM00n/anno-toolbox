@@ -6,7 +6,6 @@ layers, check results and history - and what the ribbon's buttons do to it. Plan
 
 from __future__ import annotations
 
-import io
 import math
 
 from PySide6.QtCore import QObject, Qt
@@ -43,6 +42,9 @@ PERFORMANCE = (
     "shadows", "waves", "reflections", "sky_haze", "clouds", "temporal_scattering", "cloud_cache", "ambient_occlusion",
     "still_frame", "idle_rate", "gpu_culling", "background_pipelines", "distance_clusters",
 )  # fmt: skip
+# A switch of the settings alone, no view option: the view in a window of its own, chosen when the island editor's
+# window is made (``desktoprhiview.make_island_view``; performance.md section 6.7); off until seen in the real app
+OWN_WINDOW = "own_window"
 PERFORMANCE_TEXTS = {  # (label id, hint id) of each switch, for the settings window
     "shadows": (N_("islands.perf_shadows"), N_("islands.tip.perf_shadows")),
     "waves": (N_("islands.perf_waves"), N_("islands.tip.perf_waves")),
@@ -57,6 +59,7 @@ PERFORMANCE_TEXTS = {  # (label id, hint id) of each switch, for the settings wi
     "gpu_culling": (N_("islands.perf_gpu_culling"), N_("islands.tip.perf_gpu_culling")),
     "background_pipelines": (N_("islands.perf_background_pipelines"), N_("islands.tip.perf_background_pipelines")),
     "distance_clusters": (N_("islands.perf_distance_clusters"), N_("islands.tip.perf_distance_clusters"), False),
+    OWN_WINDOW: (N_("islands.perf_own_window"), N_("islands.tip.perf_own_window"), False),
 }
 SEA_MIRROR_GAMES = ("anno2070", "anno1404", "anno1701")  # the seas that draw a mirror of the scene
 GAME_SKY_GAMES = ("anno117",)  # the game look draws a visible sky, haze and clouds
@@ -81,6 +84,11 @@ CHECK_NAMES = {
     "falls": N_("islands.falls"),
 }  # the checks of the Grid tab
 OTHER_NO_TOOLS = {"water", "forest", "place", "blocker", "spray", "active", "surf"}  # an island of another game
+
+
+def is_own_window(settings) -> bool:
+    """Whether the island view draws in a window of its own (the switch ``OWN_WINDOW``, off unless turned on)."""
+    return bool(getattr(settings, "view_switches", {}).get(OWN_WINDOW, False))
 
 
 def settings_rows() -> SSettingsRows:
@@ -683,19 +691,14 @@ class CIslandDoc(QObject):
 
     def _swatches(self, materials: list[dict]) -> None:
         """The gallery's pictures, handed over in batches as they are read: the first opening of an island converts
-        each texture once, which takes a while for a game's whole set."""
+        each texture once (``swatch_rgb`` keeps the pictures), which takes a while for a game's whole set."""
         editor, batch = self.m_editor, 12
 
         def load():
-            from PIL import Image
-
             out = {}
             for number, material in enumerate(materials, 1):
                 try:
-                    image = Image.open(io.BytesIO(editor.texture_png(material["diffuse"], is_opaque=True))).convert(
-                        "RGB"
-                    )
-                    out[material["diffuse"]] = image.resize((44, 44)).tobytes()
+                    out[material["diffuse"]] = editor.swatch_rgb(material["diffuse"], 44)
                 except Exception:  # a texture that does not load keeps the plain entry (the Checks tab says why)
                     pass
                 if number % batch == 0 and out:

@@ -83,21 +83,21 @@ def cull_objects(culled: list) -> tuple[np.ndarray, np.ndarray]:
     its mesh's box, its draw and where its draw's words start; one entity, no volumetric cascade."""
     if not culled:
         return np.zeros((0, CULL_WORDS), np.uint32), np.zeros((0, CULL_ARGS_WORDS), np.uint32)
-    sizes = [len(entry[3]) for entry in culled]
+    # per draw (joints, record, bone, index count, words' start) and its corners: one pass over the entries
+    heads = np.array([(entry[0], entry[1], entry[2], entry[5], entry[6]) for entry in culled], np.uint32)
+    boxes = np.array([entry[4] for entry in culled], np.float32).reshape(len(culled), 6).view(np.uint32)
+    sizes = np.array([len(entry[3]) for entry in culled])
     local = np.concatenate([entry[3] for entry in culled]).astype(np.uint32)
-    record = np.repeat(np.array([entry[1] for entry in culled], np.uint32), sizes) + local
-    stride = np.repeat(np.array([max(1, entry[0]) for entry in culled], np.uint32), sizes)
-    rows = np.zeros((len(local), CULL_WORDS), np.uint32)
-    rows[:, 0] = ALPHA | record
-    rows[:, 2] = np.repeat(np.array([entry[2] for entry in culled], np.uint32), sizes) + local * stride
-    boxes = np.array([np.concatenate(entry[4]) for entry in culled], np.float32).view(np.uint32)
     each = np.repeat(np.arange(len(culled)), sizes)
+    rows = np.zeros((len(local), CULL_WORDS), np.uint32)
+    rows[:, 0] = ALPHA | (heads[each, 1] + local)
+    rows[:, 2] = heads[each, 2] + local * np.maximum(heads[each, 0], 1)
     rows[:, 4:7], rows[:, 8:11] = boxes[each, :3], boxes[each, 3:]
     rows[:, 7] = each
-    rows[:, 11] = np.repeat(np.array([entry[6] for entry in culled], np.uint32), sizes)
+    rows[:, 11] = heads[each, 4]
     rows[:, 12] = 1
     arguments = np.zeros((len(culled), CULL_ARGS_WORDS), np.uint32)
-    arguments[:, 0] = [entry[5] for entry in culled]
+    arguments[:, 0] = heads[:, 3]
     return rows, arguments
 
 
@@ -195,9 +195,10 @@ class CFrameInstances:
         self._m_cast: dict[tuple, tuple] = {}
         # per kind of words ("words", "culled") the draws' (mask, joints, record, bone, drawn ones): made at the upload
         self._m_later: dict[str, list] = {"words": [], "culled": []}
-        # the draws whose casters the GPU culls (``place_culled``): (joints, record, bone, drawn ones, box, indices)
+        # the draws whose casters the GPU culls (``place_culled``): (joints, record, bone, drawn ones, corners, indices)
         self._m_culled: list[tuple] = []
         self._m_cull_keys: dict[tuple, tuple] = {}
+        self._m_locals: dict[tuple, tuple] = {}  # (``_local``) the store's slabs asked this frame
         self.m_cull_outputs = 0  # the culled words those draws may write, ``cascades`` an instance
         self._m_sent = False
         self._m_gathered: dict | None = None
@@ -215,9 +216,15 @@ class CFrameInstances:
         return (len(self._m_slots) - 1) * SLOT
 
     def _local(self, places: SPlaces, joints: int, local) -> tuple[tuple, np.ndarray]:
-        self.m_store.adapt(self.m_is_terrain_adapted)
-        slab = self.m_store.slab(places, joints)
-        return slab, np.arange(slab[2]) if local is None else local
+        """(the store's slab of ``places`` with ``joints``, the instances drawn), asked of the store once a frame for a
+        draw's words and its casters alike."""
+        key = (id(places), id(local), joints)  # pattern: ok (the entry holds both: their ids stay theirs this frame)
+        got = self._m_locals.get(key)
+        if got is None:
+            self.m_store.adapt(self.m_is_terrain_adapted)
+            slab = self.m_store.slab(places, joints)
+            got = self._m_locals[key] = (slab, np.arange(slab[2]) if local is None else local, places, local)
+        return got[0], got[1]
 
     def place(self, places: SPlaces, local: np.ndarray | None = None, joints: int = 0) -> int:
         """A draw of the instances ``local`` (indices into ``places``' instances; None: all of them; ``joints``: a
@@ -268,11 +275,39 @@ class CFrameInstances:
         got = self._m_cull_keys.get(key)
         if got is None:
             slab, drawn = self._local(places, joints, local)
-            start = self.m_cull_outputs
-            self.m_cull_outputs += len(drawn) * CULL_CASCADES
-            self._m_culled.append((joints, slab[0], slab[1], drawn, box, index_count, start))
-            got = self._m_cull_keys[key] = (self._slot(start), len(self._m_culled) - 1, places, local, mesh)
+            corners = np.concatenate(box).astype(np.float32)
+            got = self._m_cull_keys[key] = (
+                *self._culled(slab, drawn, joints, corners, index_count),
+                places,
+                local,
+                mesh,
+            )
         return got[0], got[1]
+
+    def place_culled_level(self, places: SPlaces, local, culled: tuple) -> tuple[list[int], list[int]]:
+        """``place_culled`` for every draw of a level at once (``nativedraws.CLevelDraws.culled``: per draw its mesh,
+        joints, corners as six float32 and index count): their slots and arguments' indices, the store asked once per
+        skin (performance.md section 6.7)."""
+        key = (id(places), id(local), id(culled))
+        got = self._m_cull_keys.get(key)
+        if got is None:
+            slabs: dict[int, tuple] = {}
+            placed = []
+            for _mesh, joints, corners, index_count in culled:
+                if joints not in slabs:
+                    slabs[joints] = self._local(places, joints, local)
+                placed.append(self._culled(*slabs[joints], joints, corners, index_count))
+            got = self._m_cull_keys[key] = ([slot for slot, _arg in placed], [arg for _slot, arg in placed], places,
+                                            local, culled)  # fmt: skip
+        return got[0], got[1]
+
+    def _culled(self, slab: tuple, drawn: np.ndarray, joints: int, corners: np.ndarray, index_count: int):
+        """One culled draw's entry (its words written by the GPU from the frame's next ``cascades`` per instance on):
+        (its slot's byte offset, its arguments' index)."""
+        start = self.m_cull_outputs
+        self.m_cull_outputs += len(drawn) * CULL_CASCADES
+        self._m_culled.append((joints, slab[0], slab[1], drawn, corners, index_count, start))
+        return self._slot(start), len(self._m_culled) - 1
 
     def drawn_set(self, places: SPlaces, local: np.ndarray | None = None) -> SDrawnSet:
         """The instances ``local`` of ``places`` (None: all) as a draw names them."""

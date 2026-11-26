@@ -80,3 +80,24 @@ def test_scan_of_a_cut_document_raises_value_error_like_read():
         filedb.read(bytes(b))
     with pytest.raises(ValueError):
         filedb.scan(bytes(b))
+
+
+def test_a_spliced_out_tag_and_a_replaced_attribute_read_back_as_the_rewritten_tree():
+    b = filedb.write(_doc())
+    root = filedb.scan(b)
+    alpha, size = root.find("Alpha"), root.path("Beta/Size")
+    nid = struct.unpack_from("<I", b, size.m_header + 4)[0]
+    assert filedb.end_of(size) == size.m_start + 8 and filedb.end_of(alpha) == root.find("Beta").m_header
+    spliced = filedb.splice(b, [(alpha.m_header, filedb.end_of(alpha), b""),
+                                (size.m_header, filedb.end_of(size), filedb.attribute_bytes(nid, b"0123456789"))])  # fmt: skip
+    want = STag("", [STag("Beta", [SAttrib("Size", b"0123456789")])])
+    assert filedb.read(spliced) == want and filedb.scan(spliced).path("Beta/Size").value(spliced) == b"0123456789"
+
+
+def test_a_splice_of_overlapping_or_partial_ranges_is_refused():
+    b = filedb.write(_doc())
+    alpha = filedb.scan(b).find("Alpha")
+    with pytest.raises(filedb.CFileDBError):
+        filedb.splice(b, [(alpha.m_header, filedb.end_of(alpha), b""), (alpha.m_header + 8, alpha.m_header + 16, b"")])
+    with pytest.raises(filedb.CFileDBError):
+        filedb.splice(b, [(alpha.m_header, alpha.m_header + 4, b"")])

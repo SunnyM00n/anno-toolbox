@@ -660,6 +660,7 @@ out the switches of the others.
 - **Still frame:** with it on, the game look keeps its lit scene while camera, sun and island stand still and draws only the water, sky and post chain over it. Off: every pass is drawn every frame (Anno 117).
 - **Idle rate:** with it on, moving water and clouds redraw 5 times a second instead of 15 after 3 seconds without input, and the first input brings the full rate back (every game).
 - **Models in background:** with it on, a model's pipelines are made on background threads as the game makes them, and a model seen for the first time appears once they are in. Off: they are made in the frame that first draws the model, which then takes longer (Anno 117).
+- **View in its own window** (in the settings window only, off by default): with it on, the view draws in a window of its own, and the next frame is prepared while the graphics card still draws the last one. Off: each frame waits for the graphics card, as before. It takes effect when the island editor opens next (Direct3D 12).
 
 The view has no moving sun or time of day, so there is no switch for one.
 What each switch skips, and the looks it applies to, is in [island-editor-view.md](island-editor-view.md#performance-switches).

@@ -154,6 +154,12 @@ def _private_user_folders(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_player_graphics_settings(monkeypatch):
+    """The rendering quality never follows this machine's own Anno 117 graphics settings (``render.quality``)."""
+    monkeypatch.setenv("ANNO_ENGINE_INI", "")
+
+
+@pytest.fixture(autouse=True)
 def _no_gpu_encoder(monkeypatch):
     """No test probes this machine's graphics card: BC7 is the CPU encoder's unless a test hands ``bc7gpu`` one."""
     monkeypatch.setenv("ANNO_BC7_GPU", "none")

@@ -47,6 +47,8 @@ CLICK = 4  # pixels a press may move and still be a click
 IDLE_MS = 66  # 15 frames a second for flowing water, effects and models arriving
 IDLE_AFTER_S = 3.0  # with no input this long the moving water alone redraws at the slower rate [ours]
 IDLE_REST_MS = 200  # ... 5 frames a second (the window thread is free for the panels); the first input ends it [ours]
+SLOW_FRAME_S = 0.1  # a paint this long without input is followed by a rest as long (``_resting``) [I]
+INPUT_HOLD_S = 0.5  # ... unless there was input this lately: the person's own moves draw at once [I]
 INPUT_EVENTS = frozenset({
     QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseMove, QEvent.Type.Wheel,
     QEvent.Type.KeyPress, QEvent.Type.KeyRelease, QEvent.Type.TabletPress, QEvent.Type.TouchBegin,
@@ -99,6 +101,7 @@ class CIslandControls(CGizmoControls, COverlayDraw):
         self._m_last_paint = 0.0
         self._m_input_at = self._m_drawn_at = time.monotonic()  # the last input, the last redraw the timer asked for
         self._m_painted = False
+        self._m_paint_end, self._m_paint_s = 0.0, 0.0  # when the last paint ended and what it took (``_resting``)
         self._m_hover: QPoint | None = None
         self._m_hover_done: QPoint | None = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -220,9 +223,30 @@ class CIslandControls(CGizmoControls, COverlayDraw):
             self._m_painted = False
 
     def event(self, event) -> bool:  # Qt's name: any input ends the view's rest
-        if event.type() in INPUT_EVENTS:
+        kind = event.type()
+        if kind in INPUT_EVENTS:
             self._m_input_at = time.monotonic()
-        return super().event(event)
+        if kind != QEvent.Type.Paint:
+            return super().event(event)
+        start = time.monotonic()
+        handled = super().event(event)
+        self._frame_took(start)
+        return handled
+
+    def _frame_took(self, start: float) -> None:
+        """A paint (a frame) that began at ``start`` ended now: what it took, for ``_resting``."""
+        self._m_paint_end = time.monotonic()
+        self._m_paint_s = self._m_paint_end - start
+
+    def _resting(self, now: float) -> bool:
+        """After a slow frame and no input lately: a rest as long as that frame before the timer asks for the next.
+        An island that loads drew frames of a few hundred ms back to back, and the window answered in a tenth of the
+        open (performance.md 6, item 2)."""
+        return (
+            self._m_paint_s > SLOW_FRAME_S
+            and now - self._m_input_at > INPUT_HOLD_S
+            and now - self._m_paint_end < self._m_paint_s
+        )
 
     def _due(self, renderer, now: float) -> bool:
         """Whether the moving water, clouds and effects redraw on this tick: every tick while there was input lately,
@@ -234,9 +258,11 @@ class CIslandControls(CGizmoControls, COverlayDraw):
         return True
 
     def _tick(self) -> None:
-        renderer = self.m_renderer
-        if renderer is not None and (
-            renderer.changed() or (renderer.m_animated and self._due(renderer, time.monotonic()))
+        renderer, now = self.m_renderer, time.monotonic()
+        if (
+            renderer is not None
+            and not self._resting(now)
+            and (renderer.changed() or (renderer.m_animated and self._due(renderer, now)))
         ):
             self.update()
         if self._m_hover is not None and self._m_hover != self._m_hover_done and self.m_session is not None:
@@ -655,6 +681,7 @@ class CIslandControls(CGizmoControls, COverlayDraw):
             )
         if not menu.isEmpty():
             menu.exec(global_position)
+        menu.deleteLater()  # a child of the view: kept, each menu would hold a closed island's entries
 
     # brushes
     def _start_brush(self, hit) -> None:

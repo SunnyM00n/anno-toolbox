@@ -346,6 +346,37 @@ def patch(data: bytes, edits: list[tuple[CSpan, bytes]]) -> bytes:
     return bytes(out)
 
 
+def end_of(node: CSpan) -> int:
+    """Where a node's bytes end: after an attribute's padding, after a tag's closing node."""
+    if not node.m_is_tag:
+        return node.m_start + _pad(node.m_size_bytes)
+    return (end_of(node.m_children[-1]) if node.m_children else node.m_header + 8) + 8
+
+
+def splice(data: bytes, edits: list[tuple[int, int, bytes]]) -> bytes:
+    """Byte ranges of a version 3 document replaced by whole nodes (an empty range inserts, empty bytes remove), in
+    one pass; the two name-table offsets of the tail move by the change. Tags carry no size, so nothing else does."""
+    if version(data) != 3:
+        raise CFileDBError("not a FileDB version 3 document")
+    out = bytearray()
+    position = delta = 0
+    for start, stop, new in sorted(edits, key=lambda edit: (edit[0], edit[1])):
+        if start < position or stop < start or (stop - start) % ALIGN or len(new) % ALIGN:
+            raise CFileDBError(f"cannot splice {start}..{stop}: overlapping or not whole nodes")
+        out += data[position:start] + new
+        position = stop
+        delta += len(new) - (stop - start)
+    out += data[position:]
+    tags_off, attrs_off = struct.unpack_from("<II", out, len(out) - 16)  # pattern: ok (version 3: a 16-byte tail)
+    struct.pack_into("<II", out, len(out) - 16, tags_off + delta, attrs_off + delta)
+    return bytes(out)
+
+
+def attribute_bytes(nid: int, content: bytes) -> bytes:
+    """One version 3 attribute node: its 8-byte head (size, name id) and its content padded to 8."""
+    return struct.pack("<iI", len(content), nid) + content + bytes(_pad(len(content)) - len(content))
+
+
 def dump(node, depth: int = 0, max_bytes: int = 32, limit: int | None = None, out: list | None = None) -> list[str]:
     """Readable outline (tags indented, attributes with size and leading bytes)."""
     out = [] if out is None else out

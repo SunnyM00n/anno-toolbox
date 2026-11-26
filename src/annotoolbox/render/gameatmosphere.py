@@ -210,6 +210,14 @@ class CAtmosphere(CComputeChain):
     def fill(self, constants: gs.CConstants, camera: gs.SCamera, sky, look: SLook, clouds=None) -> None:
         """The passes' constants by name (the native atmosphere's too: ``atmospherenative``)."""
         gs.fill_frame(constants, camera)
+        # packed once per layout while the sun and the look stand (``m_atmosphere`` is never changed in place)
+        token = (gs.value_key(sky.sun), bool(sky.night), self.m_atmosphere, bool(look.fade), bool(look.temporal),
+                 self.m_fog is not None, self.m_fog_size, self.m_heights is not None)  # fmt: skip
+        gs.replay(constants, "atmosphere", token, lambda buffer: self._fill_still(buffer, sky, look))
+        if clouds is not None:
+            clouds.fill(constants, camera)
+
+    def _fill_still(self, constants: gs.CConstants, sky, look: SLook) -> None:
         gs.fill_sun(constants, sky.sun, sky.night)
         for key, value in {**self.m_atmosphere, **ENVIRONMENT, **(FADE if look.fade else NO_FADE)}.items():
             constants.set(key, value)
@@ -225,8 +233,6 @@ class CAtmosphere(CComputeChain):
                 "cTerrainHeightTexIsValid": valid,
             }.items():
                 constants.set(key, value)
-        if clouds is not None:
-            clouds.fill(constants, camera)
 
     def run(self, ctx, lit_fbo, size_px: tuple[int, int], camera: gs.SCamera, sky, inputs: dict,
             look: SLook | None = None, clouds=None) -> None:  # fmt: skip

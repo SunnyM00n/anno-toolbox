@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from PySide6.QtGui import QAction, QActionGroup
 
-from ..infra.i18n import N_, tr
+from ..infra.i18n import tr
 from ..render import nativelook, quality, rhiview
-from ..suite import widgets
+from ..suite import qualitydialog
 
 
 def toggle_action(menu, text: str, checked: bool, on_toggled) -> QAction:
@@ -84,31 +84,26 @@ class CRenderingMenu:
             return None
         return quality.resolve(game, (getattr(self.m_window.m_settings, "quality", None) or {}).get(game))
 
-    def set_quality(self, name: str) -> None:
-        """The open game drawn at preset ``name`` from now on, kept per game in the settings (as the island
-        editor's Rendering > Rendering quality)."""
+    def set_quality(self, key: str) -> None:
+        """The open game drawn as the menu's entry ``key`` sets it from now on (Custom: as its window sets it), kept
+        per game in the settings (as the island editor's Rendering > Rendering quality)."""
         game = self.game()
         if game not in quality.GAMES:
             return
-        kept = dict(getattr(self.m_window.m_settings, "quality", None) or {})
-        kept[game] = name
-        self.m_window.m_settings.quality = kept
-        self.apply()
+        is_set, stored = qualitydialog.choose(self.m_window, game, key, self.quality())
+        if is_set:
+            stored_by_game = getattr(self.m_window.m_settings, "quality", None)
+            self.m_window.m_settings.quality = qualitydialog.replace_game(stored_by_game, game, stored)
+            self.apply()
 
     def _quality_menu(self, parent_menu) -> None:
-        """View > Rendering > Rendering quality for 117 and 1800 (Custom only as the settings file sets it)."""
+        """View > Rendering > Rendering quality for 117 and 1800: the game's own settings, the presets and Custom."""
         current_quality = self.quality()
         if current_quality is None:
             return
         menu = parent_menu.addMenu(tr("islands.menu.rendering_quality"))
         menu.setToolTip(tr("islands.tip.how_much_view_draws_117"))
-        group = QActionGroup(menu, exclusive=True)
-        for key, label in (*quality.PRESETS.items(), (quality.CUSTOM, N_("islands.custom"))):
-            action = menu.addAction(tr(label), lambda k=key: self.set_quality(k))
-            action.setCheckable(True)
-            action.setChecked(current_quality.preset == key)
-            widgets.enable_unless(action, tr("islands.tip.quality_custom") if key == quality.CUSTOM else "")
-            group.addAction(action)
+        qualitydialog.check_actions(qualitydialog.add_actions(menu, self.set_quality), current_quality)
 
     def _choose(self, **change) -> None:
         game = self.game()

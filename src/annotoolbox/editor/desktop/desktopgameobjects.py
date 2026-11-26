@@ -244,6 +244,7 @@ class CGameObjects:
         self.m_instances: CFrameInstances | None = None  # the frame's instance data of every draw
         self.m_failures = 0  # parts sent back to the view's look (a frame's draws are made again)
         self.m_ahead_left = 0  # compiled parts within reach not yet made on the device (``_ahead``)
+        self.m_maps_left = 0  # this frame's draws of native parts left out while their maps go up (``_draws``)
         self._m_made = 0.0  # this frame's time on the device side of new parts (``MAKE_BUDGET``)
         self.m_is_terrain_adapted = (
             False  # the frame hands the session's terrain: the models adapt to it (``CFrameInstances``)
@@ -259,7 +260,12 @@ class CGameObjects:
         self.m_qrhi_drawn = False  # the last frame drew a part by the current path: its QRhi buffers take the rows
         self.m_is_background = True  # native parts' pipelines made by the module's workers (``background_pipelines``)
         self._m_reach: CReach | None = None  # every shown batch's cells against the camera (``_near``)
+        # per batch key its part of the frame table and its model's sphere, kept while the batch stays
+        self._m_rows: dict = {}
+        self._m_spheres: dict = {}
         self.m_clusters = CGameClusters(island)  # the far objects merged per region, as the game's distance clusters
+        self.m_parts_changed = 0  # counts parts let go or replaced: a batch's kept parts (``_batch_parts``) go then
+        self._m_batch_parts: dict[int, tuple] = {}  # id of a batch -> (it, its view parts, the count, its parts)
 
     def _key(self, part: dict) -> tuple:
         got = self.m_keys.get(id(part))
@@ -360,34 +366,23 @@ class CGameObjects:
         self._let_go(self._m_kept if still else ())  # a still camera keeps what is near it: the last frame drew it
         if still:  # the camera stands and nothing changed: the last frame's draws and instances
             return self._m_last[1]
-        out, self.m_drawn, self.m_waiting = SDrawn(), set(), 0
+        out, self.m_drawn, self.m_waiting, self.m_maps_left = SDrawn(), set(), 0, 0
         self._m_made = 0.0
         if self.m_instances is not None:
             self.m_instances.begin()
             self.m_instances.m_is_terrain_adapted = self.m_is_terrain_adapted
         for part in self.m_parts.values():
-            if _on_device(part):
+            if isinstance(part, _CPart):  # a native part keeps nothing between frames
                 part.begin()
         drawing, fallback, near_parts = [], set(), {}
         cold = getattr(self.m_island, "m_cold", False)
         near = self._near(batches, view_frame, projection, size_px, rules)
+        if len(self._m_batch_parts) > 2 * len(batches) + 64:  # batches made anew by edits leave theirs behind
+            self._m_batch_parts = {}
         for batch in near:
-            built, seen = [], {}
-            for k, (view_part, _vaos) in enumerate(batch.m_vaos):
-                if id(view_part) not in seen:
-                    self.m_users.setdefault(self._key(view_part), set()).add(batch.m_key[1])
-                part = seen[id(view_part)] if id(view_part) in seen else self._part(view_part, source)
-                if _on_device(part):
-                    self.m_drawn.add((batch.m_key, k))
-                    near_parts[id(part)] = part
-                    if id(view_part) not in seen:  # a part of several meshes is one game part: drawn once
-                        built.append((view_part, part))
-                elif part is not None or cold or batch.m_key[1] in self.m_fallback:
-                    fallback.add(
-                        batch.m_key[1]
-                    )  # the view's look draws it; also while it compiles on a first start or anew
-                self.m_waiting += part is None and id(view_part) not in seen
-                seen[id(view_part)] = part
+            built, drawn_keys, parts = self._batch_parts(batch, source, cold, fallback)
+            self.m_drawn.update(drawn_keys)
+            near_parts.update(parts)
             if built:
                 drawing.append((batch, built))
         # a model not looked at this frame keeps its look: its batch's parts are made again for a frame when it
@@ -399,12 +394,46 @@ class CGameObjects:
         out.native += out.clusters.gbuffer
         out.native_casters += out.clusters.casters
         self._ahead(out, has_shadows, list(near_parts.values()))
-        self.m_ahead_left += self.m_clusters.m_waiting  # the view draws on while regions are read or built
+        # the view draws on while regions are read or built and while maps go up
+        self.m_ahead_left += self.m_clusters.m_waiting + self.m_maps_left
         if not self.m_waiting and self.m_files is not None:  # every part near compiled: the shared reads are done with
             self.m_files.clear()
         # while parts compile or are made ahead the next frame asks again: a still camera would never take them in
         self._m_last = (key if not self.m_waiting and not self.m_ahead_left else None, out)
         return out
+
+    def _batch_parts(self, batch, source, cold: bool, fallback: set) -> tuple[list, list, dict]:
+        """(the parts to draw as (view part, part), the drawn keys, the parts by id) of a batch near; a batch whose parts
+        are all on the device keeps them between frames while no part was let go or replaced (``m_parts_changed``):
+        a frame looked them up one by one, some 660 on Egypt's quadrant (performance.md section 4, "What is left")."""
+        kept = self._m_batch_parts.get(id(batch))  # pattern: ok (the entry holds the batch: its id stays its own)
+        if kept is not None and kept[0] is batch and kept[1] is batch.m_vaos and kept[2] == self.m_parts_changed:
+            return kept[3]
+        built, seen, drawn_keys, parts = [], {}, [], {}
+        is_whole = True  # every part on the device: kept for the next frames
+        for k, (view_part, _vaos) in enumerate(batch.m_vaos):
+            if id(view_part) not in seen:
+                self.m_users.setdefault(self._key(view_part), set()).add(batch.m_key[1])
+            part = seen[id(view_part)] if id(view_part) in seen else self._part(view_part, source)
+            if _on_device(part):
+                drawn_keys.append((batch.m_key, k))
+                parts[id(part)] = part
+                if id(view_part) not in seen:  # a part of several meshes is one game part: drawn once
+                    built.append((view_part, part))
+            else:
+                is_whole = False
+                if part is not None or cold or batch.m_key[1] in self.m_fallback:
+                    fallback.add(batch.m_key[1])  # the view's look draws it; also while it compiles on a first start
+            self.m_waiting += part is None and id(view_part) not in seen
+            seen[id(view_part)] = part
+        got = (built, drawn_keys, parts)
+        if is_whole:
+            self._m_batch_parts[id(batch)] = (batch, batch.m_vaos, self.m_parts_changed, got)  # pattern: ok (as above)
+        return got
+
+    def _parts_changed(self) -> None:
+        self.m_parts_changed += 1
+        self._m_batch_parts = {}
 
     def _near(
         self, batches: list, view_frame, projection: np.ndarray, size_px: tuple[int, int], rules: cull.SLodRules
@@ -412,7 +441,7 @@ class CGameObjects:
         """The batches within ``AHEAD_REACH`` of the camera (their parts compiled, made and drawn); the models of
         those within ``KEEP_REACH`` marked as near now (``_let_go``)."""
         if self._m_reach is None or not self._m_reach.same(batches):
-            self._m_reach = CReach(batches)
+            self._m_reach = CReach(batches, self._m_spheres)
         ratios = self._m_reach.ratios(view_frame.eye, projection, size_px, rules).tolist()
         self._m_kept = [batch.m_key[1] for batch, ratio in zip(batches, ratios, strict=True) if ratio <= KEEP_REACH]
         self.m_near_at.update(dict.fromkeys(self._m_kept, time.monotonic()))
@@ -441,6 +470,7 @@ class CGameObjects:
             if _on_device(part):
                 part.release()
                 del self.m_parts[key]
+                self._parts_changed()
             job = self.m_jobs.get(key)
             if key not in self.m_parts and job is not None and not self.m_renderer.m_loader.forget_done(job):
                 continue  # still compiling: let go once it is in
@@ -515,10 +545,31 @@ class CGameObjects:
             else batch.m_cells.visible(view_frame.planes, batch.m_reach)
         )
 
+    def _cells_in_view(self, batches: list, view_frame) -> np.ndarray:
+        """``_in_view`` of every batch of ``batches``, one after the other: one gather of the frame's codes for all
+        (a call per batch was some 190 a frame on Egypt's quadrant)."""
+        if not batches:
+            return np.zeros(0, bool)
+        if view_frame.planes is not None:
+            table, index, every = self.m_renderer._pass_codes("model", view_frame.planes, view_frame.lod)
+            numbers = [index.get(id(batch)) for batch in batches]  # pattern: ok (the frame's table holds its batches)
+            if None not in numbers:  # else a batch with no codes of the view's: each its own culling
+                return table.of_many(every, numbers) >= 0
+        return np.concatenate([self._in_view(batch, view_frame) for batch in batches])
+
     def _table(self, batches: list) -> CFrameTable:
         if self._m_frame_table is None or not self._m_frame_table.same(batches):
-            self._m_frame_table = CFrameTable(batches)
-            self._m_places = {}  # the store finds a batch's rows again by the batch and its instances
+            # only the batches that changed are made again; the kept parts of batches gone let go
+            known = self.m_renderer.m_batches
+            for kept in (self._m_rows, self._m_spheres):
+                for key in [key for key, got in kept.items() if known.get(key) is not got[0]]:
+                    del kept[key]
+            self._m_frame_table = CFrameTable(batches, self._m_rows)
+            self._m_places = {  # the store finds a batch's rows again by the batch and its instances
+                key: found
+                for key, found in self._m_places.items()
+                if found[1].version is found[1].owner.m_cells and known.get(found[1].owner.m_key) is found[1].owner
+            }
         return self._m_frame_table
 
     def _draws(self, out: SDrawn, drawing: list, view_frame, camera: tuple, has_shadows: bool, cascades) -> None:
@@ -527,7 +578,7 @@ class CGameObjects:
         picks it (its bounding sphere: all its parts switch together; rendering/camera.md 3), each part drawn at it (at
         its own coarsest where it has fewer levels), its casters into the cascades the model reaches."""
         table = self._table([batch for batch, _built in drawing])
-        index = table.visible(np.concatenate([self._in_view(batch, view_frame) for batch, _built in drawing]))
+        index = table.visible(self._cells_in_view([batch for batch, _built in drawing], view_frame))
         levels = cull.lod_levels(table.m_centres[index], table.m_radii[index], *camera, 5)
         if len(out.clusters.full):  # a distance cluster drawn in full stands for them
             levels[self.m_clusters.hidden(table, out.clusters)[index]] = -1
@@ -554,13 +605,16 @@ class CGameObjects:
             if not got:
                 continue
             for view_part, part in built:
-                places = self._places(table, k, batch, view_part)
+                places = self._places(batch, view_part)
                 self.m_qrhi_drawn |= isinstance(part, _CPart)
                 for level, run_start, run_stop in got:
                     masked = masks[run_start:run_stop] if masks is not None else None
                     drawn = SDrawnSet(self.m_instances, places, local[run_start:run_stop], run_stop - run_start)
                     draws, cast = part.models(level, drawn, has_shadows, masked)
                     native = getattr(part, "m_native", False)  # objectsnative.CNativePart: recorded by the backend
+                    if native and not part.m_filled:  # its maps go up over frames (``CBindlessMaps.fill``)
+                        self.m_maps_left += 1
+                        continue
                     into = out.transparent if part.m_is_transparent else out.cutouts if part.m_cutout else out.gbuffer
                     if native and part.m_cutout:  # after the native terrain in both passes
                         out.native_cutouts.extend(draws)
@@ -570,7 +624,7 @@ class CGameObjects:
                     (cut if part.m_cutout else out.native_casters if native else out.casters).extend(cast)
         out.casters[:0] = cut  # the terrain's shadow cleared inside the volumes before any model casts into it
 
-    def _places(self, table: CFrameTable, k: int, batch, view_part: dict) -> SPlaces:
+    def _places(self, batch, view_part: dict) -> SPlaces:
         """A batch's part as the instance store keeps it: one record set for every frame while the batch's instances
         stay (``SPlaces.version``), made again in place when they change (an edit: only the rows that differ go out)."""
         key = (id(batch), id(view_part))  # the entry holds both: their ids stay their own
@@ -581,11 +635,11 @@ class CGameObjects:
             or found[1].owner is not batch
             or (found[1].version is not batch.m_cells)
         ):
-            start, stop = int(table.m_starts[k]), int(table.m_starts[k + 1])
-            mats, matrix = table.m_mats, np.asarray(view_part["matrix"], np.float32)
+            # the batch's own places (its rows of the table), so that the records outlive the table
+            cells, matrix = batch.m_cells, np.asarray(view_part["matrix"], np.float32)
             # the records depend on the part's place in its model alone: parts at one place share them
-            places = SPlaces(batch, batch.m_cells, matrix.tobytes(), bool(view_part.get("deform")),
-                             lambda: part_worlds(mats[start:stop], matrix))  # fmt: skip
+            places = SPlaces(batch, cells, matrix.tobytes(), bool(view_part.get("deform")),
+                             lambda: part_worlds(cells.m_rows.reshape(-1, 4, 4).transpose(0, 2, 1), matrix))  # fmt: skip
             found = self._m_places[key] = (view_part, places)
         return found[1]
 
@@ -627,6 +681,7 @@ class CGameObjects:
             if key is not None:
                 part.release()
                 del self.m_parts[key]
+                self._parts_changed()
                 self.m_native_off.add(key)
                 self.m_renderer.m_loader.forget(self.m_jobs.get(key, ""))  # its meshes and maps went to the device
                 self.m_renderer._message(
@@ -649,6 +704,7 @@ class CGameObjects:
             if isinstance(part, _CPart):
                 part.release()
                 self.m_parts[key] = RuntimeError(error)
+                self._parts_changed()
                 self.m_failures += 1
                 self.m_renderer._message(tr("islands.mesh_games_shader_reason", mesh=key[0], reason=error[:300]))
 
@@ -663,6 +719,7 @@ class CGameObjects:
             part.release()
             del self.m_parts[key]
             self.m_renderer.m_loader.forget(self.m_jobs.get(key, ""))
+        self._parts_changed()
         self.m_clusters.release()  # made again with the next native objects
         self._m_last = (None, SDrawn())
 
@@ -680,7 +737,8 @@ class CGameObjects:
         for job in self.m_jobs.values():  # compiled again when asked: the pool took their maps
             self.m_renderer.m_loader.forget(job)
         self.m_parts, self.m_keys, self.m_drawn, self.m_jobs, self.m_files = {}, {}, set(), {}, None
+        self._parts_changed()
         self.m_native_off = set()
         self._m_frame_table, self._m_reach, self.m_near_at, self.m_users, self._m_kept = None, None, {}, {}, []
-        self._m_places = {}
+        self._m_places, self._m_rows, self._m_spheres = {}, {}, {}
         self._m_last = (None, SDrawn())

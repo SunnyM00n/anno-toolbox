@@ -38,39 +38,25 @@ class _SLock:
 
 
 def _attr(nid: int, data: bytes) -> bytes:
-    return struct.pack("<iI", len(data), nid) + data + bytes(emperor117.padded(len(data)) - len(data))
+    return filedb.attribute_bytes(nid, data)
 
 
 def _tag(nid: int, *children: bytes) -> bytes:
     return struct.pack("<iI", 0, nid) + b"".join(children) + bytes(8)
 
 
-def _end(node: filedb.CSpan) -> int:
-    """Where the node's bytes end (after an attribute's padding, after a tag's closing node)."""
-    return emperor117.close_of(node) + 8 if node.m_is_tag else node.m_start + emperor117.padded(node.m_size_bytes)
-
-
 def _replace(node: filedb.CSpan, document: bytes, data: bytes) -> tuple[int, int, bytes]:
     """An attribute with new content (the size may change), as a splice."""
     nid = struct.unpack_from("<I", document, node.m_header + 4)[0]
-    return node.m_header, _end(node), _attr(nid, data)
+    return node.m_header, filedb.end_of(node), _attr(nid, data)
 
 
 def _splice(document: bytes, edits: list[tuple[int, int, bytes]]) -> bytes:
-    """Byte ranges replaced (an insertion is an empty range); the tail's two name-table offsets move by the change.
-    FileDB tags carry no size, so nothing else does."""
-    out = bytearray()
-    position = delta = 0
-    for start, stop, new in sorted(edits, key=lambda edit: (edit[0], edit[1])):
-        if start < position:
-            raise CEmperorError("two changes of the zone overlap in the document")
-        out += document[position:start] + new
-        position = stop
-        delta += len(new) - (stop - start)
-    out += document[position:]
-    tags_off, attrs_off = struct.unpack_from("<II", out, len(out) - 16)
-    struct.pack_into("<II", out, len(out) - 16, tags_off + delta, attrs_off + delta)
-    return bytes(out)
+    """Byte ranges replaced (``filedb.splice``), a splice that does not fit said as the zone change's error."""
+    try:
+        return filedb.splice(document, edits)
+    except filedb.CFileDBError as error:
+        raise CEmperorError(f"the zone change does not fit the document: {error}") from None
 
 
 def _u32s(data: bytes) -> list[int]:
@@ -186,7 +172,7 @@ def _zone_edit(record: filedb.CSpan, document: bytes, attrs: dict, zone: int) ->
         raise CEmperorError("the record has no ActiveZone")
     ident = tag.find("id")
     if zone == emperor117.CASUAL:
-        return [(ident.m_header, _end(ident), b"")] if ident is not None else []
+        return [(ident.m_header, filedb.end_of(ident), b"")] if ident is not None else []
     value = struct.pack("<H", zone)
     return (
         [_replace(ident, document, value)]
@@ -226,10 +212,10 @@ def _change_zone(document: bytes, root: filedb.CSpan, emperor: int, standing: SS
         _replace(index, document, struct.pack("<Q", first + len(new_ids))),
         *_zone_edit(record, document, attrs, zone),
     ]
-    edits += [(effects[i].span.m_header, _end(effects[i].span), b"") for i in started]
+    edits += [(effects[i].span.m_header, filedb.end_of(effects[i].span), b"") for i in started]
     entries = [_effect_entry(tags, attrs, guid, i, participant, SCOPES[rules.scopes[guid]]) for guid, i in zip(new.effects, new_ids, strict=True)]  # fmt: skip
     edits.append((emperor117.close_of(effects_tag), emperor117.close_of(effects_tag), b"".join(entries)))
-    edits += [(locks[guid].key.m_header, _end(locks[guid].entry), b"") for guid in gained if guid in locks]
+    edits += [(locks[guid].key.m_header, filedb.end_of(locks[guid].entry), b"") for guid in gained if guid in locks]
     relocked = b"".join(_lock_entry(tags, attrs, guid) for guid in old.unlocks if guid not in new.unlocks)
     edits.append((emperor117.close_of(lock_tag), emperor117.close_of(lock_tag), relocked))
     out = _splice(document, edits)

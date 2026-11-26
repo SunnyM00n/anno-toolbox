@@ -164,7 +164,8 @@ class CSettings:
     language: str = "en"  # the interface language, a language of ``i18n.languages()``; read at the start of an app
     renderer: str = ""  # the 3D views' device (``render.rhiview.BACKENDS``); empty: the default
     rendering: dict = field(default_factory=dict)  # per game: its look, backend and frame switches (render.nativelook)
-    quality: dict = field(default_factory=dict)  # per game (render.quality.GAMES): its preset, or a Custom record
+    # per game (render.quality.GAMES): a preset or a Custom record; none: 117 follows the player's engine.ini
+    quality: dict = field(default_factory=dict)
     view_switches: dict = field(default_factory=dict)  # the island editor's Performance switches turned off or on
     hardware: bool = True  # hardware acceleration; off: a software adapter from the next start (render.nativelook)
     native_shaders: bool = True  # 117's game look binds the game's shipped shaders; off: the earlier way (nativegpu)

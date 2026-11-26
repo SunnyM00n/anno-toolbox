@@ -107,7 +107,7 @@ for every app. The settings are kept under `%LOCALAPPDATA%/anno-toolbox`.
 - **A greyed control says why** in its tool tip or status text. The cases are:
   - an install while a job runs;
   - a Write button without an editable save;
-  - the Custom rendering quality;
+  - the rendering quality without an island of 117 or 1800;
   - an island property that is only shown;
   - an island build target without a route.
 

@@ -10,6 +10,9 @@ results, ``qrhi_cube`` and ``qrhi_clouds`` QRhi's wrappers of them. docs/renderi
 
 from __future__ import annotations
 
+import itertools
+import time
+
 import numpy as np
 from PySide6.QtGui import QRhiTexture
 
@@ -29,6 +32,9 @@ SHIFT_GROUP = (8, 8, 1)  # csShiftSelfShadowCache's numthreads
 # cSSCUpdateFactor of a kept cache: the largest the shader blends by (above 0.05 it makes every cell anew); the
 # engine's own value is not known [I] (performance.md 5)
 CACHE_BLEND = 0.05
+_g_runs = itertools.count()  # numbers the chain's runs of every view (``CNativeSky.m_run``)
+# what a frame spends on the sky's chain (at least one step): the whole chain took up to a second in one frame [I]
+STEP_BUDGET_S = 0.008
 CACHE_JUMP_S = 1.0  # the clouds' clock moved further than this since the last frame: the cache is made anew [I]
 BINDLESS = "cBindlessTextures"  # csAddReflectedClouds' regional weather maps: none (cNumRegionalWeatherMaps 0)
 TextureFormat = QRhiTexture.Format
@@ -102,8 +108,15 @@ class CNativeSky:
         self.m_qrhi_clouds: dict = {}  # QRhi's wrappers of them, for the passes still on QRhi
         self.m_table = None  # csAddReflectedClouds' bindless table of stand-ins
         self._m_done: tuple = ()
+        self.m_run = -1  # the chain's run under way, unique across views (``_fill``'s replayed constants)
+        self._m_steps = None  # the rest of the chain under way (``_sky``), None: none
         self.m_cache_frames = 0  # the self-shadow cache's updates (its cFrameCounter)
         self._m_cache_at: tuple | None = None  # the last update's (centre, sun and wind, the clouds' seconds)
+
+    @property
+    def is_running(self) -> bool:
+        """Whether a chain of the sky still has steps to run in the next frames (``_sky``)."""
+        return self._m_steps is not None
 
     def _upload_maps(self, command_list) -> None:
         """The engine's volumes and profiles, the ambient's weather map and the self-shadow cache, once; QRhi's
@@ -153,16 +166,23 @@ class CNativeSky:
         self.m_description.fill(constants, camera)
 
     def _fill(self, constants: gs.CConstants, sky, slot: gamesky.SSlot) -> None:
-        if slot.key == "clouds":  # their constants first: the sky's own win where both name one (as CSkyPasses)
-            self.fill_clouds(constants, None)
-        for key, value in {**self.m_atmosphere, **gamesky.SKY_GEN}.items():
-            constants.set(key, value)
-        gs.fill_sun(constants, sky.sun, sky.night)
+        # what every dispatch of a run shares, worked out once per layout and copied: set by name per dispatch it
+        # was most of the chain's second on the window's thread (performance.md 6, item 2)
+        is_clouds = slot.key == "clouds"
+        gs.replay(constants, "sky-run", (self.m_run, is_clouds), lambda shared: self._fill_run(shared, sky, is_clouds))
         direction, right, up = gamesky.FACES[slot.face]
         for key, value in (("cSkyFaceDir", direction), ("cSkyFaceX", right), ("cSkyFaceY", up),
                            ("cSkyFaceID", slot.face), ("cSkyRoughness", slot.level / (gamesky.LEVELS - 1)),
                            ("cSkyConvolveClearSky", int(slot.clear))):  # fmt: skip
             constants.set(key, value)
+
+    def _fill_run(self, constants: gs.CConstants, sky, is_clouds: bool) -> None:
+        """The constants of one run of the chain: the clouds' (``is_clouds``), the atmosphere's and the sun's."""
+        if is_clouds:  # their constants first: the sky's own win where both name one (as CSkyPasses)
+            self.fill_clouds(constants, None)
+        for key, value in {**self.m_atmosphere, **gamesky.SKY_GEN}.items():
+            constants.set(key, value)
+        gs.fill_sun(constants, sky.sun, sky.night)
 
     def _named(self, key: str, named: dict) -> dict:
         """``named`` with stand-ins for what kernel ``key`` reads that nothing hands (zeros of the declared kind)."""
@@ -258,16 +278,35 @@ class CNativeSky:
         return CACHE_BLEND
 
     def _sky(self, sky) -> bool:
-        """``gamesky.CSkyPasses.run``'s chain on the module's list (its order, sizes and slots)."""
-        clouds = self.m_description is not None and bool(self.m_clouds)
-        description = self.m_description
-        moment = (int(description.m_seconds // gamesky.CLOUD_STEP), description.m_wind) if clouds else None
-        key = (tuple(np.round(np.asarray(sky.sun, float), 4)), sky.night, moment)
-        if key == self._m_done:
-            return False
-        clouds_only = clouds and self._m_done[:2] == key[:2]
-        self._m_done = key
-        self.m_handover.take_back(self.m_list, [self.m_qrhi_cube])  # QRhi's passes read it since the last run
+        """The next steps of the sky's chain (``_steps``) for about ``STEP_BUDGET_S``, a new chain begun when the light
+        or the clouds moved: run whole in one frame it held the window for up to a second (performance.md 6, item 2);
+        True when a step ran."""
+        if self._m_steps is None:
+            clouds = self.m_description is not None and bool(self.m_clouds)
+            description = self.m_description
+            moment = (int(description.m_seconds // gamesky.CLOUD_STEP), description.m_wind) if clouds else None
+            key = (tuple(np.round(np.asarray(sky.sun, float), 4)), sky.night, moment)
+            if key == self._m_done:
+                return False
+            clouds_only = clouds and self._m_done[:2] == key[:2]
+            self._m_done, self.m_run = key, next(_g_runs)
+            self._m_steps = self._steps(sky, clouds, clouds_only)
+        elif self.m_description is None and self._m_done[2] is not None:  # the clouds went off mid-chain
+            self._m_steps, self._m_done = None, ()
+            return self._sky(sky)
+        start = time.perf_counter()
+        while time.perf_counter() - start < STEP_BUDGET_S:
+            self.m_handover.take_back(self.m_list, [self.m_qrhi_cube])  # QRhi's passes read it since the last step
+            try:
+                next(self._m_steps)
+            except StopIteration:
+                self._m_steps = None
+                break
+        return True
+
+    def _steps(self, sky, clouds: bool, clouds_only: bool):
+        """``gamesky.CSkyPasses.run``'s chain on the module's list (its order, sizes and slots), a step at each of the
+        list's ends: the cube's levels and the harmonics of a sky each whole within a step."""
         tables = {"cAtmosphereTransmittanceTarget": self.m_transmittance, "cAtmosphereMultiscatTarget": self.m_multiscat,
                   "cAtmosphereTransmittanceLUT": self.m_transmittance, "cAtmosphereMultiscatLUT": self.m_multiscat,
                   "cLightDataUAV": self.m_light}  # fmt: skip
@@ -284,24 +323,28 @@ class CNativeSky:
             self._pass("multiscat", SSlot("multiscat"), tables, sky, (*multiscat_size, 1))
             self._pass("light", SSlot("light"), tables, sky, (1, 1, 1))
             self.m_list.execute()
+            yield
         for clear in (False,) if clouds_only else (True, False):  # the clear sky's coefficients, then the cloudy
             if clear or clouds:
-                self._sky_cube(tables, sky, clouds and not clear)
+                yield from self._sky_cube(tables, sky, clouds and not clear)
             for face in range(6):
                 self._pass("sh", SSlot("sh", face, 0, clear), {**tables, "cSkyTexture": self.m_sky}, sky, (1, 1, 1))
             self.m_list.execute()
+            yield
         for level in range(gamesky.LEVELS):
             for face in range(6):
                 self._face(SSlot("filter", face, level), {**tables, "cSkyTexture": self.m_sky}, sky, self.m_cube)
-        return True
+            self.m_list.execute()
+            yield
 
-    def _sky_cube(self, tables: dict, sky, clouds: bool) -> None:
-        """The sky cube, every level integrated at its own size; with ``clouds`` each face's clouds added before it
-        goes into the cube."""
+    def _sky_cube(self, tables: dict, sky, clouds: bool):
+        """The sky cube, every level integrated at its own size, a step each; with ``clouds`` each face's clouds added
+        before it goes into the cube."""
         for level in range(gamesky.LEVELS):
             for face in range(6):
                 self._face(gamesky.SSlot("sky", face, level), tables, sky, self.m_sky, clouds)
             self.m_list.execute()  # a volatile buffer's versions per list are bounded (NVRHI)
+            yield
 
     def _face(self, slot: gamesky.SSlot, named: dict, sky, cube, clouds: bool = False) -> None:
         size = gamesky.CUBE >> slot.level

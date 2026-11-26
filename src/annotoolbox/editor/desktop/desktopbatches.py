@@ -93,6 +93,23 @@ class CBatch:
         self.m_sets, self.m_vaos = {}, []
 
 
+def dot_positions(batches: list, kept: dict) -> np.ndarray:
+    """The dots ([n, 3]) of ``batches`` ((key, batch) pairs of the models drawn as dots): each batch's shown instances
+    a little above their places, kept in ``kept`` (key -> (matrices, dots)) while its matrices stay, so a model that
+    came no longer makes every batch's dots again (seconds of a continental island's open: performance.md 6)."""
+    rows, now = [], {}
+    for key, batch in batches:
+        got = kept.get(key)
+        if got is None or got[0] is not batch.m_mats:
+            shown = np.abs(batch.m_mats[:, :3, :3]).sum(axis=(1, 2)) > 0
+            got = (batch.m_mats, batch.m_mats[shown, :3, 3] + np.array([0.0, 0.3, 0.0], "f4"))
+        now[key] = got
+        rows.append(got[1])
+    kept.clear()
+    kept.update(now)
+    return np.concatenate(rows) if rows else np.zeros((0, 3), "f4")
+
+
 def _each_vao(vaos: dict):
     """The VAOs of one mesh's ``CBatch.vaos`` entry: picking's and per pass and level."""
     for name, got in vaos.items():

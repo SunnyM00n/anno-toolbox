@@ -214,7 +214,7 @@ bytes and nothing else. Everything else is shown and stays read-only.
 
 | Game | Editable | Written as | Tried in the game |
 |---|---|---|---|
-| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant; the emperor who reigns and each reputation with him ([`save-emperor.md`](save-emperor.md): `saveedit/emperoredit.py`, `emperor117.py`, `emperorzones.py`) | `formats/savegame117.py` (`set_save_name`, `set_participant`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
+| 117 | the save's own name; the player's company name, profile name, colour, logo and portrait (all three places at once); the money of any participant; the emperor who reigns and each reputation with him ([`save-emperor.md`](save-emperor.md): `saveedit/emperoredit.py`, `emperor117.py`, `emperorzones.py`); one ship deleted ("Ships (117)" below: `saveedit/shipdelete117.py`) | `formats/savegame117.py` (`set_save_name`, `set_participant`, `set_money`): a splice of the FileDB attribute, the tail offsets moved, every part with its 12-byte tail, unchanged parts' stored bytes kept, the written file read back before it is renamed into place | with the `save` command: yes (2026-10-24, 2026-11-06); a save written by the app: no |
 | 2070 | the human player's money | `formats/savegame2070.py`: the text value of `Credits` (credits times 1,024) and `stats.xml` `GoldAmount` re-encoded in the binary tag tree, the two parts packed afresh, the other three parts' bytes and the preamble's 24 bytes kept | no |
 | 1800, 2205, 1404, 1701 | nothing | - | - |
 
@@ -250,6 +250,87 @@ bytes and nothing else. Everything else is shown and stays read-only.
 - **The game must not be running** when you load the written file. It saves over its own files only, but a running
   117 rescans the folder only when the load screen opens.
 
+### Ships (117): the list and the delete of one ship
+
+The **Ships** tab lists every ship of a 117 save, per session. The layout and the evidence are in
+[`formats/save-format.md`](formats/save-format.md), "Ships".
+
+- **What a row shows:** the session, the name and its number, the type (the ship's asset), the owner, the position,
+  the health, the installed modules, the cargo (goods with their amounts, the slots used of all), the items it holds
+  and the trade route it serves.
+  - The name is the game's text for `VehicleTextGuid`. The number is `VehicleTextIterator`, shown when it is above 1
+    ("Eloper (2)"). How the game writes that number is not checked.
+  - The health is "undamaged" without `CurrentHitPoints`, else that many hit points.
+- **A ship that travels** between two sessions is in no session's document. It is not listed until it has arrived.
+- `saveedit/ships117.py` reads the list. It needs no installed game: the names come from the game's texts
+  ("Names for GUIDs and options") when they are open.
+
+**Delete this ship...** removes one chosen ship. The window first shows what will be removed and what is left, and
+asks. The file is written as every other edit is: `<name> (edited).a8s` beside the original, read back before it is
+renamed into place. `saveedit/shipdelete117.py` plans and makes the change.
+
+The delete does what the game does when a ship is destroyed (save-format "What the game does when a ship leaves a
+session"):
+
+| Removed | Where |
+|---|---|
+| the ship's object | the sea area's `GameObject/objects` of its session |
+| its unit | `SessionUnitManager/UnitSystem/Units` |
+| its group behaviour | `GroupBehaviorHandler/Behaviors`, when the ship is its only member |
+| its module effects | `data.a7s` `MetaEffectManager/LocalEffects` (the entry keyed by its ObjectID) |
+| its meta object | `data.a7s` `MetaGameObjectManager/MetaObjectMap` |
+| its place on its trade route | `data.a7s` the MetaID in the route's `Ships`; the route and its stations stay |
+| the items it holds | the session's `ItemSessionManager/ItemMap`, for an item with no effect running and no quest |
+
+- **Set to none:** another object's `Health/LastAttackerID` that names the ship. "None" is 0, which every object
+  without an attacker holds. The game's own saves hold no `LastAttackerID` of a missing object.
+- **Left as they are:** the places where the game itself keeps references to objects that are gone.
+  - These are `AttackLocationHandler/UnitData` keys, other units' `Actor/Elements` targets, other ships'
+    `TradeDescription/TargetShipID` and the messages of `NotificationSystem`.
+  - The window lists them.
+- **Refused, with the reason:** every other reference, so a delete never leaves one the game does not leave itself.
+  - The window says what to do in the game first. The cases are:
+    - the ship sails in a group (give it its own order);
+    - it is at a harbor (loading or waiting);
+    - it is in a fight or escorted;
+    - it is about to sail to another session;
+    - it carries land units;
+    - a quest uses it;
+    - it is an AI's ship;
+    - it holds an item with a running effect.
+  - A reference in any other place is refused with its path in the document.
+- **How the references are found:** the ship's ObjectID is searched as bytes in its session's document and in
+  `data.a7s`, so a place no sample showed is found too. A whole 8-byte value or an aligned word of a list counts; the
+  storages (`StrgLrg`, `StrgSmll`) are not searched, as their words are amounts. The MetaID is a small number, so it
+  is looked up only in the fields that hold MetaIDs.
+  - The ids of the items it removes and of the ship's module effects are searched the same way. A match outside what
+    is removed is refused with its path.
+  - The id of the group behaviour it removes is looked up in the transfers' `GroupID`. A match there is refused as a
+    ship about to sail to another session.
+  - Note: checked on 2026-11-26 against a copy of the author's newest save. The item and effect ids were nowhere
+    else, and each of the 19 transfers' `GroupID` was the group behaviour of the ship that transfer carries.
+- **The write** removes the byte ranges from the session's document and from `data.a7s`, and moves the two name-table
+  offsets in each tail by the change (`filedb.splice`; tags carry no size). The changed session document is spliced
+  into `data.a7s` as its new `BinaryData`, and `data.a7s` is packed afresh. The written file is read back and the
+  ship is checked to be gone before the file is renamed into place. The node count in each tail stays as it was: it
+  is only a capacity hint (save-format "Container").
+
+What stays unknown:
+
+- whether the game accepts the result (not loaded yet; the in-game list below);
+- what the game does when a ship is **sold** (no sample sold one). The delete treats it as a ship that is gone, without
+  a `LostShips` entry on its route;
+- whether the counters (`GameObjectIDCounter`, `NextMetaGameObjectID`) must change. They are left: the game leaves gaps
+  in both when ships are destroyed.
+
+A read-only run over a copy of the author's newest save listed 242 ships in three sessions in about 10 seconds; 37 are
+the human's. Planning a delete takes 7 to 15 seconds per ship. Of the human's 37 ships, 27 would be deleted. The 10
+refused ones are 5 ships at a harbor, 2 about to sail to another session, 2 that a quest uses, and 1 that holds an
+item with a running effect. A delete of one ship written from that copy read back with 241 ships, its meta object
+gone and only `data.a7s` changed.
+
+Note: researched and built on 2026-11-26, from the author's autosaves of that day (117 build of November 2026).
+
 ### What stays read-only, and why
 
 - **Anything the game derives from something else.** Examples are a good in a 117 storage without the economy that
@@ -281,6 +362,9 @@ bytes and nothing else. Everything else is shown and stays read-only.
   readings. A filter finds nodes by name in what is read.
 - **Edit** tab: the editable values of the game in a form, with the original next to each field. **Write a new save**
   writes the file next to the original (see above) and says where.
+- **Ships** tab (117): every ship of the save in a table ("Ships (117)" above). The ships are read the first time the
+  tab is shown for a save, which takes a few seconds per session. **Delete this ship...** asks first and lists every
+  place it changes or leaves. A ship it refuses is said with the reason.
 - **Mods** tab: the mods this save needs (117, 1800). It shows each mod's ID and version, and whether the installed
   mods have it: installed in the same version, in another version, or missing. The installed mods are the mod loader's
   folders of the game, as the Mods app finds them. **Show in the Mods app** opens the Mods app on that game. The app
@@ -305,6 +389,11 @@ Every read and write runs off the window's thread (`suite.background`). The wind
 - [ ] 117: the Islands table's **Stock** of an island you know (your capital's goods) matches the in-game stock. If it
   does not, "AreaEconomy/StrgLrg is the stock" is wrong for that save.
 - [ ] 117: the **Trade storage** column: what are those goods in the game (the role is only inferred)?
+- [ ] 117: a save with one ship deleted by the Ships tab loads, and the ship is gone.
+  - Its trade route is still there with its other ships and its stations.
+  - The other ships of its session and their groups sail on as before, and no message or harbor waits for the ship.
+  - Saving that game again and loading it works too.
+  - The ship's name in the table is the one the game shows; a second ship of a name shows its number ("Eloper (2)").
 
 ## Status
 
@@ -313,7 +402,9 @@ Every read and write runs off the window's thread (`suite.background`). The wind
 - Also built:
   - names for GUIDs, options and text ids ("Names for GUIDs and options"), in the interface language;
   - the decoded 117 storages and the goods of every island (`formats/storage117.py`, `tests/saveedit/test_saveedit_names.py`);
-  - the summaries of the other games ("The other games", synthetic only).
+  - the summaries of the other games ("The other games", synthetic only);
+  - the 117 ships and the delete of one (`saveedit/ships117.py`, `shipdelete117.py`, the Ships tab `shipspanel.py`;
+    `tests/saveedit/test_ships117.py`, `test_shipdelete117.py`).
 - The three archive readers are one read (`CRdaArchive.read_all`), each with its own checks. The fixes of an audit are
   recorded in `audit-2026-11.md`, "The Saves app".
 - Tests: synthetic saves (`tests/saveedit/test_saveedit.py`), the window offscreen (`tests/saveedit/test_saveedit_window.py`), and

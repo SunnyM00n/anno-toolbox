@@ -63,26 +63,83 @@ def select(size_tiles: float, eye, budget: int = 128, split: float = SPLIT, visi
     """The nodes that cover the island (``size_tiles`` tiles) for an eye at ``eye`` (island tiles), at most ``budget``:
     the node nearest for its size split first while it is nearer than ``split`` sizes; ``visible(node)`` (None: all)
     leaves out what the camera cannot see. Nearest first."""
-    top = root(size_tiles)
-    heap = [(-_need(top, eye), 0, top)]
-    done: list[SNode] = []
-    count, serial = 1, 1
-    while heap:
-        need, _, node = heapq.heappop(heap)
-        kids = node.children(size_tiles) if node.level > MIN_LEVEL and -need > 1.0 / split else []
-        if not kids or count + len(kids) - 1 > budget:
-            done.append(node)
-            continue
-        count += len(kids) - 1
-        for kid in kids:
-            heapq.heappush(heap, (-_need(kid, eye), serial, kid))
-            serial += 1
+    tree = _tree(size_tiles, eye, split)
+    leaves = _pick(tree, budget)
+    # nearest first, equal ones in the walk's order: the slices and the bake follow the order (a tie broken
+    # otherwise changed the picture)
+    leaves = leaves[np.argsort(tree.distances[leaves], kind="stable")]
+    done = [SNode(level, x, z) for level, x, z in zip(tree.levels[leaves].tolist(), tree.xs[leaves].tolist(),
+                                                       tree.zs[leaves].tolist(), strict=True)]  # fmt: skip
     many = getattr(visible, "many", None)  # all of them at once (``CNodeBoxes.view``)
     if many is not None:
-        shown = [candidate for candidate, is_shown in zip(done, many(done), strict=True) if is_shown]
-    else:
-        shown = [candidate for candidate in done if visible is None or visible(candidate)]
-    return sorted(shown, key=lambda candidate: candidate.distance(eye))
+        return [candidate for candidate, is_shown in zip(done, many(done), strict=True) if is_shown]
+    return [candidate for candidate in done if visible is None or visible(candidate)]
+
+
+class _SQuadTree(NamedTuple):
+    """Every node of the quadtree ``_tree`` made, by number (the root 0), one array per field."""
+
+    levels: np.ndarray
+    xs: np.ndarray  # the corner in tiles
+    zs: np.ndarray
+    distances: np.ndarray  # ``SNode.distance`` from the eye
+    needs: np.ndarray  # how much it wants splitting: its size over that distance
+    wants: np.ndarray  # whether it wants splitting
+    first_kids: np.ndarray  # the number of its first kid
+    kid_counts: np.ndarray  # its kids on the island (0: none made)
+
+
+def _tree(size_tiles: float, eye, split: float) -> _SQuadTree:
+    """Every node down to where none wants splitting, a level at a time in array operations (one node at a time a
+    turning frame's pick took 0.7 to 1 ms: performance.md section 4, "What is left")."""
+    top = root(size_tiles)
+    levels, xs, zs = np.array([top.level]), np.array([top.x]), np.array([top.z])
+    # in the eye's own precision, as ``SNode.distance`` works it out (the view's eye is float32): the same nodes
+    kind = np.float32 if np.asarray(eye).dtype == np.float32 else np.float64
+    eye_x, eye_y, eye_z = (kind(eye[k]) for k in range(3))
+    height = max(eye_y, kind(0.0)) ** 2 * kind(0.25)
+    parts: list[tuple] = []
+    count = 1
+    while len(levels):
+        tiles = np.exp2(levels.astype(float))
+        own_xs, own_zs, own_tiles = xs.astype(kind), zs.astype(kind), tiles.astype(kind)
+        delta_x = np.maximum(np.maximum(own_xs - eye_x, kind(0.0)), eye_x - own_xs - own_tiles)
+        delta_z = np.maximum(np.maximum(own_zs - eye_z, kind(0.0)), eye_z - own_zs - own_tiles)
+        distance = np.sqrt((delta_x * delta_x + delta_z * delta_z + height).astype(np.float64))
+        need = tiles / np.maximum(distance, 1e-6)
+        wants = (levels > MIN_LEVEL) & (need > 1.0 / split)
+        half = tiles[wants][:, None] / 2  # the quarters in ``SNode.children``'s order
+        kid_xs = (xs[wants][:, None] + half * np.array([0, 1, 0, 1])).ravel()
+        kid_zs = (zs[wants][:, None] + half * np.array([0, 0, 1, 1])).ravel()
+        on_island = (kid_xs < size_tiles) & (kid_zs < size_tiles)
+        kid_counts = np.zeros(len(levels), np.int64)
+        kid_counts[wants] = on_island.reshape(-1, 4).sum(axis=1)
+        first_kids = count + np.cumsum(kid_counts) - kid_counts
+        parts.append((levels, xs, zs, distance, need, wants, first_kids, kid_counts))
+        count += int(kid_counts.sum())
+        levels, xs, zs = np.repeat(levels[wants] - 1, 4)[on_island], kid_xs[on_island], kid_zs[on_island]
+    return _SQuadTree(*(np.concatenate(column) for column in zip(*parts, strict=True)))
+
+
+def _pick(tree: _SQuadTree, budget: int) -> np.ndarray:
+    """The leaves within ``budget`` nodes: the node that wants it most split first while its kids fit, as the
+    quadtree's walk orders them (a kid wants it at most half as much as its node: the order holds level to level)."""
+    need, wants = tree.needs.tolist(), tree.wants.tolist()
+    first_kids, kid_counts = tree.first_kids.tolist(), tree.kid_counts.tolist()
+    heap = [(-need[0], 0, 0)]
+    leaves: list[int] = []
+    count, serial = 1, 1
+    while heap:
+        _need_now, _serial, node = heapq.heappop(heap)
+        kids = kid_counts[node]
+        if not wants[node] or count + kids - 1 > budget:
+            leaves.append(node)
+            continue
+        count += kids - 1
+        for kid in range(first_kids[node], first_kids[node] + kids):
+            heapq.heappush(heap, (-need[kid], serial, kid))
+            serial += 1
+    return np.asarray(leaves, np.int64)
 
 
 class CNodeBoxes:
@@ -100,12 +157,19 @@ class CNodeBoxes:
             below, above = self.m_levels[-1]
             self.m_levels.append((_halved(below, np.min, np.inf), _halved(above, np.max, -np.inf)))
 
-    def bounds(self, node: SNode) -> tuple[float, float]:
-        """The lowest and highest height under ``node``, with the box's play."""
-        low, high = self.m_levels[min(node.level - MIN_LEVEL, len(self.m_levels) - 1)]
-        side = 2.0**node.level
-        row, column = min(int(node.z // side), low.shape[0] - 1), min(int(node.x // side), low.shape[1] - 1)
-        return float(low[row, column]) - self.BELOW, float(high[row, column]) + self.ABOVE
+    def bounds(self, nodes: np.ndarray) -> np.ndarray:
+        """The lowest and highest height under each of ``nodes`` ([n, 3] of level, x, z), with the box's play: [n, 2],
+        one lookup per level for all of them."""
+        out = np.empty((len(nodes), 2))
+        levels = nodes[:, 0].astype(np.int64)
+        for level in np.unique(levels).tolist():
+            low, high = self.m_levels[min(level - MIN_LEVEL, len(self.m_levels) - 1)]
+            at = levels == level
+            side = 2.0**level
+            rows = np.minimum((nodes[at, 2] // side).astype(np.int64), low.shape[0] - 1)
+            columns = np.minimum((nodes[at, 1] // side).astype(np.int64), low.shape[1] - 1)
+            out[at, 0], out[at, 1] = low[rows, columns] - self.BELOW, high[rows, columns] + self.ABOVE
+        return out
 
     def view(self, planes):
         """Whether a node is in view of ``planes`` (None: cull off, every node is): a test of one node, with
@@ -126,10 +190,11 @@ class _CNodeView:
         new = [node for node in nodes if node not in self._m_seen]
         if new:
             size = self.m_boxes.m_size_tiles
-            ranges = np.array([self.m_boxes.bounds(node) for node in new])
-            corners = np.array([(node.x, node.z, node.tiles) for node in new])
-            box_lo = np.stack([size - corners[:, 0] - corners[:, 2], ranges[:, 0], corners[:, 1]], axis=1)
-            box_hi = np.stack([size - corners[:, 0], ranges[:, 1], corners[:, 1] + corners[:, 2]], axis=1)
+            rows = np.array(new, float)  # level, x, z
+            ranges = self.m_boxes.bounds(rows)
+            xs, zs, tiles = rows[:, 1], rows[:, 2], np.exp2(rows[:, 0])
+            box_lo = np.stack([size - xs - tiles, ranges[:, 0], zs], axis=1)
+            box_hi = np.stack([size - xs, ranges[:, 1], zs + tiles], axis=1)
             self._m_seen.update(zip(new, boxes_in_view(self.m_planes, box_lo, box_hi).tolist(), strict=True))
         return [self._m_seen[node] for node in nodes]
 
@@ -197,11 +262,6 @@ def _covered(node: SNode, among: set[SNode], size_tiles: float, visible) -> bool
     if node.level <= MIN_LEVEL:
         return False
     return all(_covered(kid, among, size_tiles, visible) for kid in node.children(size_tiles))
-
-
-def _need(node: SNode, eye) -> float:
-    """How much a node wants splitting: its size over its distance (larger first)."""
-    return node.tiles / max(node.distance(eye), 1e-6)
 
 
 class CSliceCache:

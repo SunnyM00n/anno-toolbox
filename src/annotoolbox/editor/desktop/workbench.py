@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 from ...infra.i18n import N_, tr
 from ...islands.donor117 import GRID_SIZES
 from ...render import quality, rhiview
-from ...suite import centralmenu, features, gamesync, icons, theme, widgets
+from ...suite import centralmenu, features, gamesync, icons, qualitydialog, theme, widgets
 from ...suite.background import CBackground, long_lived, release_long_lived
 from ...suite.settingsdialog import CSettingsDialog, applied
 from .. import archivedelivery, editorapp
@@ -50,6 +50,7 @@ from .desktopeditor import (
     LOOKS_2070,
     CIslandDoc,
     game_tools,
+    is_own_window,
     look_blocker,
     open_session,
     set_shipped,
@@ -180,7 +181,8 @@ class CMainWindow(CJobRunner, QMainWindow):
         self.m_needs = {item.id: item.requirement for item in items(tabs)}
         self.m_icon_names = {item.id: item.icon for item in items(tabs)}
         # The one 3D view lives from the start: a second one added to the shown window made Qt recreate it.
-        self.m_view = make_island_view(rhiview.chosen(self.m_app.m_settings.renderer), self)
+        settings = self.m_app.m_settings
+        self.m_view = make_island_view(rhiview.chosen(settings.renderer), self, is_own_window(settings))
         self.m_view.status.connect(self.say)
         self.m_view.m_group.m_settings = self.m_app.m_settings  # the start values of a new island
         self.m_actions = make_actions(self, tabs)
@@ -478,27 +480,24 @@ class CMainWindow(CJobRunner, QMainWindow):
             self.m_actions[id].setShortcuts(keys)
 
     def _quality_menu(self, rendering) -> None:
-        """Rendering > Rendering quality: the presets of ``render.quality`` for the open island's game (117 and
-        1800; the older games draw at their best), kept per game in the settings."""
+        """Rendering > Rendering quality: the game's own settings, the presets and Custom of ``render.quality`` for
+        the open island's game (117 and 1800; the older games draw at their best), kept per game in the settings."""
         menu = rendering.addMenu(tr("islands.menu.rendering_quality"))
         menu.setToolTip(tr("islands.tip.how_much_view_draws_117"))
-        self.m_quality_actions: dict[str, QAction] = {}
-        for key, label in (*quality.PRESETS.items(), (quality.CUSTOM, N_("islands.custom"))):
-            action = menu.addAction(tr(label))
-            action.setCheckable(True)
-            widgets.enable_unless(action, tr("islands.tip.quality_custom") if key == quality.CUSTOM else "")
-            action.triggered.connect(lambda _on, key=key: self.set_quality(key))
-            self.m_quality_actions[key] = action
+        self.m_quality_actions = qualitydialog.add_actions(menu, self.set_quality)
 
-    def set_quality(self, name: str) -> None:
-        """The open island's game drawn at preset ``name`` from now on, kept in the settings."""
+    def set_quality(self, key: str) -> None:
+        """The open island's game drawn as the menu's entry ``key`` sets it from now on (Custom: as its window
+        sets it), kept in the settings."""
         doc = self.m_doc
         if doc is None or doc.game_key() not in quality.GAMES:
             return
-        kept = dict(getattr(self.m_app.m_settings, "quality", {}))
-        kept[doc.game_key()] = name
-        self.m_app.set_settings({"quality": kept})
-        doc.apply_quality()
+        game = doc.game_key()
+        is_set, stored = qualitydialog.choose(self, game, key, doc.m_view.m_opts.quality)
+        if is_set:
+            kept = qualitydialog.replace_game(getattr(self.m_app.m_settings, "quality", {}), game, stored)
+            self.m_app.set_settings({"quality": kept})
+            doc.apply_quality()
         self.sync()
 
     def _field(self, id: str, value) -> None:
@@ -554,10 +553,7 @@ class CMainWindow(CJobRunner, QMainWindow):
         self.m_shipped_action.setEnabled(is_enabled)
         self.m_shipped_action.setChecked(is_on)
         self.m_shipped_action.setToolTip(why or tr("islands.tip.shipped_shaders"))
-        view_quality = doc.m_view.m_opts.quality if doc else None
-        for key, action in getattr(self, "m_quality_actions", {}).items():
-            action.setEnabled(view_quality is not None and key != quality.CUSTOM)
-            action.setChecked(view_quality is not None and view_quality.preset == key)
+        qualitydialog.check_actions(getattr(self, "m_quality_actions", {}), doc.m_view.m_opts.quality if doc else None)
         self.m_ribbon.apply_state(state)
         self.m_close_island_action.setEnabled(doc is not None)
         mode = mode_of(view.m_tool if doc else None, bool(doc) and doc.m_session.m_readonly)

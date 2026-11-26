@@ -2,7 +2,8 @@
 opaque passes read and asks the frame's ``CStill``. Everything that can change the G-buffer, the shadow atlas or the
 lit colour is in the key or ends the reuse by its own flag: the camera and size, the light, the options, the nodes and
 decals drawn, the objects' draws (``desktopgameobjects.CGameObjects.frame`` hands out the same ones while nothing in
-them changed), the edits, and the bake, the pages and the cascades still settling. docs/rendering/performance.md.
+them changed), the edits, and the bake, the pages, the cascades and the sky's chain still settling.
+docs/rendering/performance.md.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ def reuse_of(island, view_frame, size_px: tuple[int, int], options, models: list
     still = island.m_frame.m_still
     pages = island.m_pages
     settling = island._m_unbaked or (pages is not None and pages.busy()) or (shadows and island._m_late)
+    # a kept frame dispatches no shading, and the sky's chain steps with the shading (``skynative.CNativeSky._sky``)
+    shading = getattr(island, "m_native_shading", None)
+    settling = settling or (shading is not None and shading.m_sky.is_running)
     if not getattr(options, "still_frame", True) or not can_keep or settling:
         still.forget()
         return None

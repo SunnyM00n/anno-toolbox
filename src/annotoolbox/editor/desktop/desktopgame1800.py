@@ -288,10 +288,11 @@ class CGameIsland1800(CGameIsland):
         renderer, bake = self.m_renderer, self.m_bake
         if "decal" not in getattr(bake, "m_extra", {}) or renderer.m_library is None or renderer.m_editor is None:
             return
-        # a config of decals alone has no parts (the island's rock cracks): shown all the same
+        # a config of decals alone has no parts (the island's rock cracks): shown all the same; the placement ghost
+        # is not baked (each cursor move baked nodes again: performance.md 6, item 3)
         shown = [
             batch
-            for batch in renderer._all_batches()
+            for batch in renderer.m_batches.values()
             if batch.m_count and renderer._layer_on(batch, options) and batch.m_mats is not None
         ]
         placed = [(batch.m_mats, batch.m_key[1]) for batch in shown if batch.m_key[0] != "markers"] + _decal_objects(

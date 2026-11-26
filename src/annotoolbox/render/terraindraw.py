@@ -10,11 +10,13 @@ and 5; what is ours: docs/rendering/island-117-view.md.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import numpy as np
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QPoint, QSize
 from PySide6.QtGui import (
     QRhiTexture,
     QRhiTextureSubresourceUploadDescription,
@@ -141,16 +143,37 @@ def with_skirts(vertices: bytes, cols: int, rows: int, drop_tiles: float = 0.0) 
     engine's skirt flag: ``PushSkirtVertex`` hangs a tessellated one below the page surface) and ``drop_tiles`` world units
     lower, a quad between each edge pair and its copies; the grid's quad patches first (terrain-geometry.md 2.2)."""
     grid_vertices = np.frombuffer(vertices, np.uint8).reshape(rows * cols, STRIDE)
-    grid = np.arange(rows * cols).reshape(rows, cols)
-    edges = [grid[0], grid[:, -1], grid[-1, ::-1], grid[::-1, 0]]  # around, each edge corner to corner
-    ring = np.concatenate([edge[:-1] for edge in edges] + [grid[:1, 0]])
-    skirt = grid_vertices[ring].copy()
+    layout = skirt_layout(cols, rows)
+    skirt = grid_vertices[layout.ring].copy()
     skirt[:, 9] = 255 - skirt[:, 9]  # -y: the skirt flag
     skirt_y = skirt[:, 2:4].copy().view("<u2").astype(np.int64) - round(drop_tiles * 256)
     skirt[:, 2:4] = np.clip(skirt_y, 0, 65535).astype("<u2").view(np.uint8)
+    return np.concatenate([grid_vertices, skirt]).tobytes(), layout.quads
+
+
+class SSkirtLayout(NamedTuple):
+    """A grid's indices with its skirt (``skirt_layout``), read only: shared by every node of the grid's size."""
+
+    ring: np.ndarray  # the edge vertices the skirt copies, around the grid
+    quads: np.ndarray  # the grid's quad patches, then the skirt's
+    patches: np.ndarray  # the quads in the tessellator's corner order (``PATCH_CORNERS``)
+    triangles: np.ndarray  # the quads as two triangles each
+
+
+@functools.lru_cache(maxsize=64)
+def skirt_layout(cols: int, rows: int) -> SSkirtLayout:
+    """A ``cols`` x ``rows`` grid with its skirt (``with_skirts``). One grid size serves every node, so it is made
+    once: a continental island's first nodes made it for 0.8 s (performance.md 6)."""
+    grid = np.arange(rows * cols).reshape(rows, cols)
+    edges = [grid[0], grid[:, -1], grid[-1, ::-1], grid[::-1, 0]]  # around, each edge corner to corner
+    ring = np.concatenate([edge[:-1] for edge in edges] + [grid[:1, 0]])
     first = rows * cols + np.arange(len(ring))
-    quads = np.stack([ring[:-1], first[:-1], first[1:], ring[1:]], -1).astype(np.uint32).ravel()
-    return np.concatenate([grid_vertices, skirt]).tobytes(), np.concatenate([patch_indices(cols, rows), quads])
+    skirt = np.stack([ring[:-1], first[:-1], first[1:], ring[1:]], -1).astype(np.uint32).ravel()
+    quads = np.concatenate([patch_indices(cols, rows), skirt])
+    out = SSkirtLayout(ring, quads, quads.reshape(-1, 4)[:, PATCH_CORNERS].ravel(), quad_triangles(quads))
+    for array in out:
+        array.flags.writeable = False
+    return out
 
 
 def quad_triangles(quads: np.ndarray) -> np.ndarray:
@@ -388,11 +411,76 @@ class SIslandSource:
     read: Callable | None = None
 
 
+def sample_span(min_tile: float, max_tile: float, step_tiles: float, count: int) -> tuple[int, int]:
+    """The height samples (first, past the last) a box's side of tiles ``lo`` .. ``hi`` reaches."""
+    return max(0, int(np.floor(min_tile / step_tiles))), min(count, int(np.ceil(max_tile / step_tiles)) + 1)
+
+
+class CRegional:
+    """An array made from the heights by ``make(heights, step)`` - per sample (``cells`` False: a value reads its
+    neighbours, as central differences) or per cell (True: a cell reads its four corners) - kept between edits and
+    made again only over the samples an edit reached: a continental island's whole page took half a second, on the
+    window's thread at every stroke. ``region`` is what the last ``get`` changed ((rows, cols) of values; None: all)."""
+
+    def __init__(self, make, cells: bool) -> None:
+        self.m_make, self.m_cells = make, cells
+        self.m_value: np.ndarray | None = None
+        self.m_is_whole = True  # the next ``get`` makes the whole array
+        self.m_pending: tuple[int, int, int, int] | None = None  # the samples (r0, r1, c0, c1) the edits changed
+        self.m_region: tuple | None = None
+
+    def spoil(self, samples: tuple[int, int, int, int] | None) -> None:
+        """The samples (r0, r1, c0, c1) changed; None: all of them (new heights, another grid)."""
+        if samples is None:
+            self.m_is_whole = True
+            return
+        if samples[0] >= samples[1] or samples[2] >= samples[3]:  # a box past the heights: no sample changed
+            return
+        if self.m_pending is not None:  # one box over every edit since the last ``get``
+            old = self.m_pending
+            samples = (
+                min(old[0], samples[0]),
+                max(old[1], samples[1]),
+                min(old[2], samples[2]),
+                max(old[3], samples[3]),
+            )
+        self.m_pending = samples
+
+    def _span(self, first: int, last: int, count: int) -> tuple[slice, slice]:
+        """Along one axis, for the changed samples ``first`` to ``last`` (past it): the samples to make from and the
+        values that change."""
+        if self.m_cells:  # cell j reads samples j and j + 1: the slice's cells are exactly those changed
+            start, stop = max(0, first - 1), min(count, last + 1)
+            return slice(start, stop), slice(start, stop - 1)
+        # a value reads the samples beside it: those beside the change change too
+        return slice(max(0, first - 2), min(count, last + 2)), slice(max(0, first - 1), min(count, last + 1))
+
+    def get(self, heights: np.ndarray, step_tiles: float) -> np.ndarray:
+        """The array for ``heights``: made whole the first time and after ``spoil(None)``, else in the spoilt part."""
+        if self.m_value is None or self.m_is_whole:
+            self.m_value, self.m_region = self.m_make(heights, step_tiles), None
+            self.m_is_whole, self.m_pending = False, None
+            return self.m_value
+        if self.m_pending is not None:
+            row_start, row_end, col_start, col_end = self.m_pending
+            source_rows, rows = self._span(row_start, row_end, heights.shape[0])
+            source_cols, cols = self._span(col_start, col_end, heights.shape[1])
+            part = self.m_make(heights[source_rows, source_cols], step_tiles)
+            self.m_value[rows, cols] = part[rows.start - source_rows.start : rows.stop - source_rows.start,
+                                            cols.start - source_cols.start : cols.stop - source_cols.start]  # fmt: skip
+            self.m_region, self.m_pending = ((rows.start, rows.stop), (cols.start, cols.stop)), None
+        return self.m_value
+
+
 class CTerrain:
     """The island's nodes on the device (module docstring): ``nodes(eye, visible)`` picks them for a camera
     (``terrainnodes``) and gives each its slice; ``textures`` are the shader's inputs by name, the baked colour and
     normal arrays (``cBakedDiffTexArray``, ``cBakedNormalTexArray``, ``SLICES`` of ``SLICE_SIZE``) its owner's to fill
     for the nodes in ``cache.fresh``."""
+
+    PAGE = "cNodeNormalMap"  # the texture the normal page goes into
+    PAGE_FORMAT = TextureFormat.RG8  # ... and its format (``normal_page``'s x and z)
+    ELEMENTS = ELEMENTS  # the vertex's inputs as the node's shader names them
 
     def __init__(self, rhi, program: gamedraw.CProgram, size_tiles: float, step_tiles: float, width_samples: int,
                  detailed: gamedraw.CProgram | None = None) -> None:  # fmt: skip
@@ -425,13 +513,23 @@ class CTerrain:
         self._m_tint_uploads: list = []
         self.m_island = island_values(size_tiles)
         self.m_heights: np.ndarray | None = None
-        self._m_normals: np.ndarray | None = None
+        # the vertex normals and the normal page, made again only where an edit reached: the whole island's at
+        # each frame of a stroke took 24 to 58 ms (performance.md 6, item 4)
+        self._m_vertex_normals = CRegional(vertex_normals, cells=False)
+        self._m_page = CRegional(normal_page, cells=True)
         self._m_page_dirty = True
 
     def set_heights(self, heights: np.ndarray, box=None) -> None:
         """New heights (world units, [row][column] over the island); ``box`` (tiles x0, z0, x1, z1): only the nodes
-        it touches are made and baked again, None: all of them."""
-        self.m_heights, self._m_normals, self._m_page_dirty = heights, None, True
+        it touches are made and baked again, and the normals and the page where it reaches; None: all of them."""
+        samples = None
+        if self.m_heights is not None and box is not None and heights.shape == self.m_heights.shape:
+            rows = sample_span(box[1], box[3], self.m_step_tiles, heights.shape[0])
+            cols = sample_span(box[0], box[2], self.m_step_tiles, heights.shape[1])
+            samples = (*rows, *cols)
+        for part in (self._m_vertex_normals, self._m_page):
+            part.spoil(samples)
+        self.m_heights, self._m_page_dirty = heights, True
         hit = self.m_cache.spoil(box if box is not None else (0.0, 0.0, self.m_size_tiles, self.m_size_tiles))
         for node in list(self.m_models) if box is None else hit:
             model = self.m_models.pop(node, None)
@@ -552,31 +650,33 @@ class CTerrain:
         return ("grid", None, 0)
 
     def normals(self) -> np.ndarray:
-        """The vertex normals of the heights (``vertex_normals``), made once per height change."""
-        if self._m_normals is None:
-            self._m_normals = vertex_normals(self.m_heights, self.m_step_tiles)
-        return self._m_normals
+        """The vertex normals of the heights (``vertex_normals``), made again where the heights changed."""
+        return self._m_vertex_normals.get(self.m_heights, self.m_step_tiles)
+
+    def _mesh(self, node: SNode, kind: tuple) -> gamedraw.CMesh:
+        """A node's vertices: as the island stores them ("stored"), else from the heights with a skirt hung by the
+        domain shader below the page's surface ("detailed": quad patches in the corner order that makes the
+        tessellator's triangles face up), or a skirt that covers the steps to the tessellated and stored nodes beside
+        it [ours]."""
+        if kind[0] == "stored":
+            tiles = 2**node.level
+            vertices, indices = self.m_source.meshes[node.level][(int(node.x // tiles), int(node.z // tiles))]
+            return gamedraw.CMesh(vertices, STRIDE, self.ELEMENTS, indices, len(vertices) // STRIDE)
+        _col, _row, cols, rows = node.samples(self.m_step_tiles, self.m_width_samples)
+        data = encode_vertices(self.m_heights, self.m_step_tiles, node, self.m_width_samples, self.normals())
+        if kind[0] == "detailed":
+            data, _quads = with_skirts(data, cols, rows)
+            indices = skirt_layout(cols, rows).patches
+        else:
+            data, _quads = with_skirts(data, cols, rows, GRID_SKIRT)
+            indices = skirt_layout(cols, rows).triangles
+        return gamedraw.CMesh(data, STRIDE, self.ELEMENTS, indices, len(data) // STRIDE)
 
     def _make(self, node: SNode, layer: int, kind: tuple) -> CTerrainModel:
         how, page, _ = kind
-        normals = self.normals()
-        program, own = self.m_program, {}
-        rect = (node.x, node.z, node.tiles, node.tiles)
-        if how == "stored":
-            tiles = 2**node.level
-            vertices, indices = self.m_source.meshes[node.level][(int(node.x // tiles), int(node.z // tiles))]
-            mesh = gamedraw.CMesh(vertices, STRIDE, ELEMENTS, indices, len(vertices) // STRIDE)
-            rect = mesh_rect(vertices)
-        else:
-            _col, _row, cols, rows = node.samples(self.m_step_tiles, self.m_width_samples)
-            data = encode_vertices(self.m_heights, self.m_step_tiles, node, self.m_width_samples, normals)
-            if how == "detailed":
-                data, indices = with_skirts(data, cols, rows)
-                indices = indices.reshape(-1, 4)[:, PATCH_CORNERS].ravel()  # the tessellator's triangles face up
-                mesh, program = gamedraw.CMesh(data, STRIDE, ELEMENTS, indices, len(data) // STRIDE), self.m_detailed
-            else:  # a skirt that covers the steps to the tessellated and stored nodes beside it [ours]
-                data, quads = with_skirts(data, cols, rows, GRID_SKIRT)
-                mesh = gamedraw.CMesh(data, STRIDE, ELEMENTS, quad_triangles(quads), len(data) // STRIDE)
+        mesh, own = self._mesh(node, kind), {}
+        program = self.m_detailed if how == "detailed" else self.m_program
+        rect = mesh_rect(mesh.m_data) if how == "stored" else (node.x, node.z, node.tiles, node.tiles)
         if page is not None:
             height, normal = self.m_pages.m_ready[page]
             own = {"cNodeHeightMap": height, "cNodeNormalMap": normal, "cTerrainHeightTex": self.m_pages.m_coarse}
@@ -641,15 +741,26 @@ class CTerrain:
         self._m_tint_uploads.clear()
         if self.m_heights is None or not self._m_page_dirty:
             return
-        page = normal_page(self.m_heights, self.m_step_tiles)
-        if self.m_page is None:
-            self.m_page = upload(
-                self.m_rhi, batch, TextureFormat.RG8, (page.shape[1], page.shape[0]), [page.tobytes()], False
-            )
-            self.m_textures["cNodeNormalMap"] = self.m_page
-        else:
-            gamedraw.upload_level(batch, self.m_page, page.tobytes())
         self._m_page_dirty = False
+        texels, (x, y) = self.page_region()
+        raw = np.ascontiguousarray(texels).tobytes()
+        if self.m_page is None:
+            self.m_page = upload(self.m_rhi, batch, self.PAGE_FORMAT, (texels.shape[1], texels.shape[0]), [raw], False)
+            self.m_textures[self.PAGE] = self.m_page
+            return
+        part = QRhiTextureSubresourceUploadDescription(raw)
+        part.setDestinationTopLeft(QPoint(x, y))
+        part.setSourceSize(QSize(texels.shape[1], texels.shape[0]))
+        batch.uploadTexture(self.m_page, QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, part)))
+
+    def page_region(self) -> tuple[np.ndarray, tuple[int, int]]:
+        """The normal page's texels to upload and where they go (column, row): the whole page, or the part the
+        edits since the last upload changed."""
+        page = self._m_page.get(self.m_heights, self.m_step_tiles)
+        if self._m_page.m_region is None:
+            return page, (0, 0)
+        (row_start, row_end), (col_start, col_end) = self._m_page.m_region
+        return page[row_start:row_end, col_start:col_end], (col_start, row_start)
 
     def release(self) -> None:
         for model in (*self._m_casters.values(), *self.m_models.values()):
@@ -665,3 +776,5 @@ class CTerrain:
         self.m_cache.clear()
         self.m_cache.m_dropped.clear()
         self._m_page_dirty = True
+        for part in (self._m_vertex_normals, self._m_page):
+            part.spoil(None)

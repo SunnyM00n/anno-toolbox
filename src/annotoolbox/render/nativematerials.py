@@ -11,6 +11,7 @@ sections 1 and 11.
 from __future__ import annotations
 
 import itertools
+import time
 from dataclasses import dataclass, field
 
 from . import gamemaps
@@ -22,6 +23,9 @@ SPACE, REGISTER = 1, 3  # cBindlessTextures: t3 of space 1, unbounded
 CAPACITY = 1 << 14  # the table's descriptors: an island's distinct maps [ours]
 NULL = 0  # the engine's null texture: white (gametextures.CTextureTable)
 KEEP_FRAMES = 4  # frames a slot let go stays unused (QRhi's frames in flight may still read it) [ours]
+# a frame's map uploads stop past this (one always goes up): a first visit's maps came in one frame, up to 80 ms on
+# the medium island (performance.md section 4, "What is left") [ours]
+MAPS_BUDGET_S = 0.004
 INDEX_TABLE = "cMaterialComponentIndices"
 NO_COMPONENT = 0xFFFFFFFF  # a component the material lacks
 # D3D_SRV_DIMENSION -> the module's texture kind of a zeroed stand-in (a plain float 2D texture stands in white)
@@ -50,6 +54,7 @@ class CBindlessMaps:
         self.m_free: list[int] = []
         self.m_cooling: list[tuple[int, int]] = []  # (frame let go, slot)
         self.m_frame = 0
+        self.m_spent_s = 0.0  # this frame's time in ``fill``
         self.m_next = 1
         for slot in range(CAPACITY):  # every descriptor valid: the shaders index the whole range
             device.write_table(self.m_table, ("texture", slot, self.m_white))
@@ -70,18 +75,24 @@ class CBindlessMaps:
         self.m_held[path] = [at, None, 1, gamemaps.smaller(dds, self.m_max_size)]
         return at
 
-    def fill(self, paths) -> None:
-        """The files of ``paths`` not up yet uploaded and put at their slots: when a part that names them first draws,
-        as the current path's pool makes a file's array at its first draw (a part made ahead and never drawn holds
-        no map: 300 MB on Egypt's quadrant, native-backend.md 16.9). No frame read those slots before."""
+    def fill(self, paths) -> bool:
+        """Upload the files of ``paths`` not up yet and put them at their slots; True once every one is up. It runs
+        when a part that names them first draws, as the current path's pool makes a file's array at its first draw (a
+        part made ahead and never drawn holds no map: 300 MB on Egypt's quadrant, native-backend.md 16.9). No frame
+        read those slots before. A frame uploads for ``MAPS_BUDGET_S``: the rest go up in the next frames."""
         for path in paths:
             held = self.m_held.get(path)
             if held is None or held[1] is not None:
                 continue
+            if self.m_spent_s >= MAPS_BUDGET_S:
+                return False
+            started_s = time.perf_counter()
             texture = CStored(held[3]).upload(self.m_device, self.m_list, path)
             self.m_list.set_state(texture, "shader_resource")  # a table's maps are tracked by no binding set
             self.m_device.write_table(self.m_table, ("texture", held[0], texture))
             held[1], held[3] = texture, None
+            self.m_spent_s += time.perf_counter() - started_s
+        return True
 
     def slots(self, material, read: set | frozenset | None = None) -> tuple[dict[str, int], list[str]]:
         """(a material's maps by parameter as their slots, the files taken: what ``give_back`` lets go), only those
@@ -114,7 +125,7 @@ class CBindlessMaps:
             self.m_cooling.append((self.m_frame, held[0]))
 
     def end_frame(self) -> None:
-        self.m_frame += 1
+        self.m_frame, self.m_spent_s = self.m_frame + 1, 0.0
         while self.m_cooling and self.m_frame - self.m_cooling[0][0] > KEEP_FRAMES:
             self.m_free.append(self.m_cooling.pop(0)[1])
 

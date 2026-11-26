@@ -13,12 +13,8 @@ import re
 from dataclasses import replace
 
 import numpy as np
-from PySide6.QtCore import QPoint, QSize
 from PySide6.QtGui import (
     QRhiTexture,
-    QRhiTextureSubresourceUploadDescription,
-    QRhiTextureUploadDescription,
-    QRhiTextureUploadEntry,
     QRhiViewport,
 )
 
@@ -158,66 +154,6 @@ def node_values(level: int, layer: int, tint=None, page=(0.0, 0.0, 1.0)) -> dict
     return {**terraindraw.node_values(level, layer, page, tint=tint), "cTrnChunkLevelParams": level}
 
 
-def sample_span(min_tile: float, max_tile: float, step_tiles: float, count: int) -> tuple[int, int]:
-    """The height samples (first, past the last) a box's side of tiles ``lo`` .. ``hi`` reaches."""
-    return max(0, int(np.floor(min_tile / step_tiles))), min(count, int(np.ceil(max_tile / step_tiles)) + 1)
-
-
-class CRegional:
-    """An array made from the heights by ``make(heights, step)`` - per sample (``cells`` False: a value reads its
-    neighbours, as central differences) or per cell (True: a cell reads its four corners) - kept between edits and
-    made again only over the samples an edit reached: a continental island's whole page took half a second, on the
-    window's thread at every stroke. ``region`` is what the last ``get`` changed ((rows, cols) of values; None: all)."""
-
-    def __init__(self, make, cells: bool) -> None:
-        self.m_make, self.m_cells = make, cells
-        self.m_value: np.ndarray | None = None
-        self.m_pending: list | None = None  # sample boxes (r0, r1, c0, c1) to remake; None: all
-        self.m_region: tuple | None = None
-
-    def spoil(self, samples: tuple[int, int, int, int] | None) -> None:
-        """The samples (r0, r1, c0, c1) changed; None: all of them (new heights, another grid)."""
-        if samples is None or self.m_pending is None:  # a whole remake asked for, or already due
-            self.m_pending = None
-            return
-        box = self.m_pending[0] if self.m_pending else samples
-        self.m_pending = [
-            tuple(pick(old, new) for pick, old, new in zip((min, max, min, max), box, samples, strict=True))
-        ]
-
-    def _span(self, first: int, last: int, count: int) -> tuple[int, int, int, int]:
-        """(slice of samples to make from, values it changes) along one axis for changed samples a .. b."""
-        if self.m_cells:  # cell j reads samples j and j + 1: the slice's cells are exactly those changed
-            start, stop = max(0, first - 1), min(count, last + 1)
-            return start, stop, start, stop - 1
-        start, stop = (
-            max(0, first - 2),
-            min(count, last + 2),
-        )  # a value reads one beyond: those beside the change change too
-        return start, stop, max(0, first - 1), min(count, last + 1)
-
-    def get(self, heights: np.ndarray, step_tiles: float) -> np.ndarray:
-        """The array for ``heights``: made whole the first time and after ``spoil(None)``, else in the spoilt part."""
-        if self.m_value is None or self.m_pending is None:
-            self.m_value, self.m_region, self.m_pending = self.m_make(heights, step_tiles), None, []
-            return self.m_value
-        for row_start, row_end, col_start, col_end in self.m_pending:
-            source_row_start, source_row_end, value_row_start, value_row_end = self._span(
-                row_start, row_end, heights.shape[0]
-            )
-            source_col_start, source_col_end, value_col_start, value_col_end = self._span(
-                col_start, col_end, heights.shape[1]
-            )
-            part = self.m_make(heights[source_row_start:source_row_end, source_col_start:source_col_end], step_tiles)
-            self.m_value[value_row_start:value_row_end, value_col_start:value_col_end] = part[
-                value_row_start - source_row_start : value_row_end - source_row_start,
-                value_col_start - source_col_start : value_col_end - source_col_start,
-            ]
-            self.m_region = ((value_row_start, value_row_end), (value_col_start, value_col_end))
-        self.m_pending = []
-        return self.m_value
-
-
 class _CInPartition:
     """A command buffer whose viewport is one cascade's part of the shadow map (``gameshadow.DIVISIONS``: its
     offset and size in the map's texture space, top down; QRhi's viewport counts from the bottom)."""
@@ -346,11 +282,10 @@ class CTerrainNode:
 
 class CTerrain1800(terraindraw.CTerrain):
     """117's node set (``terraindraw.CTerrain``: the nodes, the slices, the stored meshes' choice, the tint pages, the
-    heights' changes) with each node a forward model of 1800's shader, its normal page in three channels; the vertex
-    normals and the page made again only where an edit reached (``CRegional``)."""
+    heights' changes, the normals and the page made again only where an edit reached) with each node a forward model
+    of 1800's shader, its normal page in three channels."""
 
-    PAGE = "cNodeNormalMap"  # the texture the normal page goes into
-    ELEMENTS = terraindraw.ELEMENTS  # the vertex's three inputs as the shader names them (COLOR0..2)
+    PAGE_FORMAT = Format.RGBA8  # ``normal_page_xzy``'s four bytes
     CASCADED = True  # the sun's shadow in cascades (2205: one map)
 
     def __init__(self, ctx, program: gamedraw.CProgram, state, size_tiles: float, step_tiles: float, width_samples: int,
@@ -366,23 +301,7 @@ class CTerrain1800(terraindraw.CTerrain):
         self.m_shared: tuple | None = None  # the frame's buffers of the colour pass and the casters' (the owner's)
         self.m_island = {**terraindraw.island_values(size_tiles), "cTrnRenderParams": RENDER_PARAMS,
                        "cTerrainSize": [size_tiles, size_tiles, 1 / size_tiles, 1 / size_tiles]}  # fmt: skip
-        self._m_vertex_normals = CRegional(terraindraw.vertex_normals, cells=False)
-        self._m_page = CRegional(normal_page_xzy, cells=True)
-
-    def set_heights(self, heights: np.ndarray, box=None) -> None:
-        """117's rule (the nodes ``box`` touches made again), the normals and the page remade where it reaches."""
-        same = self.m_heights is not None and box is not None and heights.shape == self.m_heights.shape
-        samples = None
-        if same:
-            rows = sample_span(box[1], box[3], self.m_step_tiles, heights.shape[0])
-            cols = sample_span(box[0], box[2], self.m_step_tiles, heights.shape[1])
-            samples = (*rows, *cols)
-        for part in (self._m_vertex_normals, self._m_page):
-            part.spoil(samples)
-        super().set_heights(heights, box)
-
-    def normals(self) -> np.ndarray:
-        return self._m_vertex_normals.get(self.m_heights, self.m_step_tiles)
+        self._m_page = terraindraw.CRegional(normal_page_xzy, cells=True)
 
     def _values(self, node: SNode, layer: int, kind: tuple, tint) -> dict:
         page = kind[1]
@@ -408,26 +327,6 @@ class CTerrain1800(terraindraw.CTerrain):
         for model in self.m_models.values():
             model.release()
         self.m_models = {}
-
-    def _mesh(self, node: SNode, kind: tuple) -> gamedraw.CMesh:
-        """A node's vertices: as the island stores them ("stored"), else from the heights with a skirt that covers
-        the steps to the stored nodes beside it (117's rule)."""
-        if kind[0] == "stored":
-            tiles = 2**node.level
-            vertices, indices = self.m_source.meshes[node.level][(int(node.x // tiles), int(node.z // tiles))]
-            return gamedraw.CMesh(vertices, terraindraw.STRIDE, self.ELEMENTS, indices,
-                                 len(vertices) // terraindraw.STRIDE)  # fmt: skip
-        _col, _row, cols, rows = node.samples(self.m_step_tiles, self.m_width_samples)
-        data = terraindraw.encode_vertices(
-            self.m_heights, self.m_step_tiles, node, self.m_width_samples, self.normals()
-        )
-        if kind[0] == "detailed":  # quad patches, the skirt hung by the domain shader below the page's surface
-            data, patches = terraindraw.with_skirts(data, cols, rows)
-            patches = patches.reshape(-1, 4)[:, PATCH_CORNERS].ravel()
-            return gamedraw.CMesh(data, terraindraw.STRIDE, self.ELEMENTS, patches, len(data) // terraindraw.STRIDE)
-        data, quads = terraindraw.with_skirts(data, cols, rows, terraindraw.GRID_SKIRT)
-        return gamedraw.CMesh(data, terraindraw.STRIDE, self.ELEMENTS, terraindraw.quad_triangles(quads),
-                             len(data) // terraindraw.STRIDE)  # fmt: skip
 
     def _make(self, node: SNode, layer: int, kind: tuple) -> CTerrainNode:
         tint = self._tint(node)
@@ -478,40 +377,9 @@ class CTerrain1800(terraindraw.CTerrain):
         own = (NODE_OWN, CASTER_OWN)[pass_index]
         return CObjectDraw(self.m_ctx, program, mesh, state, self.m_dummies, SBinding(self.m_shared[pass_index], own))
 
-    def page_region(self) -> tuple[np.ndarray, tuple[int, int]] | None:
-        """The normal page's texels to upload and where they go (column, row): the whole page, or the part the last
-        edit changed; None when nothing changed."""
-        page = self._m_page.get(self.m_heights, self.m_step_tiles)
-        if self._m_page.m_region is None:
-            return page, (0, 0)
-        (row_start, row_end), (col_start, col_end) = self._m_page.m_region
-        return page[row_start:row_end, col_start:col_end], (col_start, row_start)
-
-    def uploads(self, batch) -> None:
-        """117's uploads (the stand-ins of what no bake hands, the tint pages) with this game's normal page in place
-        of 117's, written into the same texture while its size stays (only the part an edit changed)."""
-        dirty, self._m_page_dirty = self._m_page_dirty, False
-        super().uploads(batch)
-        if not dirty or self.m_heights is None:
-            return
-        texels, (x, y) = self.page_region()
-        raw = np.ascontiguousarray(texels).tobytes()
-        if self.m_page is None:
-            self.m_page = terraindraw.upload(
-                self.m_rhi, batch, Format.RGBA8, (texels.shape[1], texels.shape[0]), [raw], False
-            )
-            self.m_textures[self.PAGE] = self.m_page
-            return
-        part = QRhiTextureSubresourceUploadDescription(raw)
-        part.setDestinationTopLeft(QPoint(x, y))
-        part.setSourceSize(QSize(texels.shape[1], texels.shape[0]))
-        batch.uploadTexture(self.m_page, QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, part)))
-
     def casters(self, models: list) -> list:
         return []
 
     def release(self) -> None:
         super().release()
         self.m_dummies.release(self.m_ctx)
-        for part in (self._m_vertex_normals, self._m_page):
-            part.spoil(None)

@@ -163,6 +163,37 @@ def test_the_kept_cloud_cache_scrolls_with_the_camera_and_is_made_anew_for_a_new
     assert len(shifted) == 1
 
 
+def test_the_skys_chain_runs_over_frames_in_steps_and_a_new_one_waits_for_the_last(monkeypatch):
+    """The whole chain ran in one frame, up to a second on the window's thread (performance.md 6, item 2): a frame
+    runs its steps for about ``STEP_BUDGET_S``, the rest in the next frames, and a new chain begins after it."""
+    from annotoolbox.render import skynative
+
+    made, ran = [], []
+
+    def steps(sky, clouds, clouds_only):
+        made.append(sky)
+        for k in range(4):
+            ran.append((sky, k))
+            yield
+
+    clock = iter(range(100))
+    ticks = SimpleNamespace(perf_counter=lambda: next(clock) * skynative.STEP_BUDGET_S / 3)
+    monkeypatch.setattr(skynative, "time", ticks)
+    sky = object.__new__(skynative.CNativeSky)
+    sky.m_description, sky.m_clouds, sky._m_done, sky._m_steps = None, {}, (), None
+    sky.m_handover, sky.m_list, sky.m_qrhi_cube = SimpleNamespace(take_back=lambda *_: None), None, None
+    sky._steps = steps
+    first, second = (
+        SimpleNamespace(sun=(0.0, 1.0, 0.0), night=False),
+        SimpleNamespace(sun=(1.0, 0.0, 0.0), night=False),
+    )
+    assert sky._sky(first) and ran == [(first, 0), (first, 1)]  # two steps fit the budget
+    assert sky._sky(second) and made == [first] and len(ran) == 4  # the first chain goes on
+    assert sky._sky(second) and sky._m_steps is None and len(ran) == 4  # its end
+    assert sky._sky(second) and made == [first, second]
+    assert sky._sky(second) and sky._sky(second) and not sky._sky(second)  # done: nothing new to run
+
+
 def test_the_transparent_pass_reads_the_clouds_shadow_only_once_it_was_made():
     seen = shadingnative.SCloudsSeen(None, {"cTransmittanceMap": 1, "cCloudBaseNoise": 2})
     assert seen.inputs() == {"cCloudBaseNoise": 2}

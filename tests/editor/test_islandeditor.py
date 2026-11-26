@@ -246,6 +246,35 @@ def test_a_cached_file_appears_whole_or_not_at_all(tmp_path):
     assert out.read_bytes() == b"whole" and [p.name for p in tmp_path.iterdir()] == ["a.png"]
 
 
+def test_a_gallery_swatch_is_made_once_and_read_back_from_the_cache(tmp_path):
+    """The Material Gallery decoded every texture again at each open, for a minute after it (performance.md 6, item
+    5): a swatch is made once, then read from the cache without the texture."""
+    import io
+    import threading
+
+    import pytest
+
+    image = pytest.importorskip("PIL.Image")
+    asked = []
+
+    class FakeAssets(islandassets.CIslandAssets):
+        def _cached(self, key, suffix):
+            return tmp_path / (str(abs(hash(key))) + suffix)
+
+        def _lock(self, path):
+            return threading.Lock()
+
+        def texture_png(self, psd, is_normal=False, is_opaque=False, use_alpha=False):
+            asked.append((psd, is_opaque))
+            out = io.BytesIO()
+            image.new("RGBA", (8, 8), (10, 200, 30, 0)).save(out, "PNG")
+            return out.getvalue()
+
+    first = FakeAssets().swatch_rgb("data/a/ground_diff.psd", 4)
+    again = FakeAssets().swatch_rgb("data/a/ground_diff.psd", 4)
+    assert first == again == bytes([10, 200, 30]) * 16 and asked == [("data/a/ground_diff.psd", True)]
+
+
 def test_an_assets_generator_values_come_from_itself_or_its_base_asset():
     assets = b"""<ModOps>
 <ModOp Type="addNextSibling" GUID="1"><Asset><Template>Slot</Template><Values><Standard><GUID>11</GUID><Name>slot a</Name></Standard>

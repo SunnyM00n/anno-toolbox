@@ -346,15 +346,21 @@ class CNativePart:
     def begin(self) -> None:
         """A new frame: a native part keeps none of its runs (the frame's lists hold them)."""
 
+    def fill_maps(self) -> bool:
+        """Upload its maps with its first draws, within a frame's budget (``CBindlessMaps.fill``); whether all are on
+        the device (``m_filled``): it draws once they are."""
+        if not self.m_filled:
+            self.m_filled = self.m_objects.m_maps.fill(self.m_maps)
+        return self.m_filled
+
     def models(self, level: int, drawn: SDrawnSet, shadows: bool, mask=None) -> tuple:
         """This frame's draws of the instances ``drawn`` at ``level`` (the prepass first where there is one) and
         their casters into the cascades ``mask`` marks (None: all): one ``CNativeGroup`` each, of the level's draws
         made once (``_level_draws``); a transparent part's one run per draw (the transparent pass orders them)."""
-        if not self.m_filled:  # its maps go up with its first draw (``CBindlessMaps.fill``)
-            self.m_objects.m_maps.fill(self.m_maps)
-            self.m_filled = True
+        if not self.fill_maps():
+            return [], []
         main, shadow = self._level_draws(level)
-        slots = {joints: self.m_frame.place(drawn.places, drawn.local, joints) for joints in set(main.m_joints)}
+        slots = {joints: self.m_frame.place(drawn.places, drawn.local, joints) for joints in main.m_skins}
         if self.m_is_transparent:
             out = [CNativeRun(self, role, mesh, slots[joints], drawn)
                    for (role, mesh), joints in zip(main.m_pairs, main.m_joints, strict=True)]  # fmt: skip
@@ -484,9 +490,8 @@ class CNativeCutOut(CNativePart):
         """This frame's count and clear of the instances ``drawn`` and their casters per cascade ``mask`` marks (None:
         all)."""
         out, cast = [], []
-        if not self.m_filled:
-            self.m_objects.m_maps.fill(self.m_maps)
-            self.m_filled = True
+        if not self.fill_maps():
+            return out, cast
         part_level = self.m_levels[min(level, len(self.m_levels) - 1)]
         reach = mask if mask is not None else np.ones((drawn.count, gameshadow.COUNT), bool)
         for mesh, joints in zip(part_level.meshes, part_level.joints, strict=True):
@@ -512,7 +517,7 @@ class _CPassSets:
         self.m_kept = objects._pass_sets(name, frame_named)
         self.m_checked: dict[tuple, list] = {}
         self.m_frames: dict[int, dict] = {}
-        objects._m_values = {}
+        objects._m_values, objects._m_bridged = {}, {}
 
     def get(self, tech: STechnique, group: int) -> list:
         key = (id(tech), group)  # the technique is the device's for good: its id stays its own
@@ -550,6 +555,7 @@ class CNativeObjects(CTold):
         self._m_tables: dict[tuple, object] = {}  # the stand-in tables of unbounded arrays (``_open``)
         self._m_techniques: dict[tuple, STechnique] = {}
         self._m_values: dict[tuple, bytes] = {}  # a pass's constants by layout, this pass (``_frame``)
+        self._m_bridged: dict[tuple, object] = {}  # QRhi's resources wrapped, this pass (``_bridged``)
         self._m_layout_keys: dict[tuple, int] = {}  # an element layout -> its number, the key in ``_m_values``
         self.m_buffers = nativegpu.CKeptBuffers(device)  # the frame's constant and camera buffers by (pass, layout)
         # per pass: [what the frame hands it by name, its ids, (technique, material group) -> (what its sets bind, sets)]
@@ -670,10 +676,17 @@ class CNativeObjects(CTold):
         return out
 
     def _bridged(self, found, stride: int | None, usage: str = ""):
-        """QRhi's texture (``stride`` None) or storage buffer wrapped, read in this pass."""
-        if stride is None:
-            return self.m_bridge.texture(found)[0]
-        return self.m_bridge.buffer(found, stride, UNORDERED, usage)[0]
+        """QRhi's texture (``stride`` None) or storage buffer wrapped, read in this pass: once a pass, however many
+        sets bind it (each wrap reads the texture's format and flags from Qt)."""
+        key = (id(found), stride, usage)  # pattern: ok (one pass: its frame holds the resources, their ids stay)
+        wrapped = self._m_bridged.get(key)
+        if wrapped is None:
+            if stride is None:
+                wrapped = self.m_bridge.texture(found)[0]
+            else:
+                wrapped = self.m_bridge.buffer(found, stride, UNORDERED, usage)[0]
+            self._m_bridged[key] = wrapped
+        return wrapped
 
     def _resource(self, item: nativelayout.SItem, technique: STechnique, named: dict, bridged: list):
         """What a set item binds: the frame's by name (QRhi's wrapped, each into ``bridged``: a kept set wraps them

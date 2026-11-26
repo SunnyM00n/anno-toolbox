@@ -1,5 +1,6 @@
 """The Saves app's window (Qt): the saves found for a game on the left, the open save on the right as a summary, a
-tree, a form of the values that may be changed and the mods it needs; a change is written as a new file next to it.
+tree, a form of the values that may be changed, its ships (``shipspanel``) and the mods it needs; a change is written
+as a new file next to it.
 
 ``CSavesWindow(settings, settings_path)`` is the suite's Saves app. Every read and write is off
 the window's thread. The logic is in ``container``, ``summary``, ``edits`` and ``needed``; ``docs/save-editor.md``.
@@ -45,6 +46,7 @@ from ..suite.background import CBackground, CJobTalk, CStopped
 from . import container, edits, locations, names, needed, nodes, summary
 from .records import CSummary, SSection, shown
 from .savetree import CSaveTreeModel
+from .shipspanel import CShipsPanel
 
 APP = "saves"  # the key of its remembered state in the settings
 TITLE = N_("saves.saves")
@@ -122,9 +124,11 @@ class CSavesWindow(QMainWindow):
         lay.addWidget(self.m_where)
         lay.addWidget(self.m_list)
         self.m_tabs = QTabWidget()
+        self.m_ships_panel = CShipsPanel(self)  # before the Edit tab: the write state covers its button
         self.m_tabs.addTab(self._summary_tab(), tr("saves.summary"))
         self.m_tabs.addTab(self._tree_tab(), tr("saves.tree"))
         self.m_tabs.addTab(self._edit_tab(), tr("common.edit"))
+        self.m_tabs.addTab(self.m_ships_panel, tr("saves.ships"))
         self.m_tabs.addTab(self._mods_tab(), tr("common.mods"))
         split = QSplitter(Qt.Orientation.Horizontal)
         split.addWidget(left)
@@ -307,12 +311,13 @@ class CSavesWindow(QMainWindow):
         self.m_value_view.clear()
         self._fill_form()
         self._check_mods()
+        self.m_ships_panel.set_save(self.m_save)
         self.statusBar().showMessage(tr("saves.name_read", name=self.m_save.path.name))
         self._open_names(self.m_save)
         if self.m_save.game == "anno117":
             save = self.m_save
             self.m_background.run(
-                lambda: summary.sessions(save, self._say),
+                lambda: summary.sessions(save, self.say),
                 lambda sessions: self._islands(save, sessions),
                 self.m_is_synchronous,
             )
@@ -336,6 +341,7 @@ class CSavesWindow(QMainWindow):
             self.m_names = result
             self._apply_names()
             self._name_form()
+            self.m_ships_panel.show_names()
 
     def _apply_names(self) -> None:
         """Name every id of the summary as it is now (off the window's thread), then show it."""
@@ -350,7 +356,8 @@ class CSavesWindow(QMainWindow):
         if save is self.m_save:
             self.show_summary()
 
-    def _say(self, text: str, **places) -> None:
+    def say(self, text: str, **places) -> None:
+        """A job's progress on the status line (a string id and its places; any thread)."""
         self.progress_text.emit(tr(text, **places))
 
     def _islands(self, save: container.SSaveFile, section: SSection | Exception | None) -> None:
@@ -432,6 +439,7 @@ class CSavesWindow(QMainWindow):
         else:
             why = tr("saves.saves_game_read_only_here")
         widgets.enable_unless(self.m_write_button, why, tr("saves.tip.write_new_save"))
+        self.m_ships_panel.update_button()
 
     def _choice_box(self, field: edits.SField) -> QComboBox:
         box = QComboBox()
@@ -467,12 +475,21 @@ class CSavesWindow(QMainWindow):
         except ValueError as e:
             QMessageBox.warning(self, tr(TITLE), tr("saves.not_number_error", error=str(e)))
             return
+        save = self.m_save
+        settings = self.m_settings
+        self.run_write(lambda: edits.write_beside(save, change, settings))
+
+    def run_write(self, work) -> None:
+        """Write a new file off the window's thread (``work`` returns its path), the window busy until it is done;
+        the result is said and the saves are listed again. Refused (said) while a save is read or written: a ship's
+        delete is asked for after its plan, and another job may have started in the meantime."""
+        if self.m_busy:
+            self.statusBar().showMessage(tr("saves.tip.write_busy"))
+            return
         self.m_busy = True
         self._write_state()
         self.statusBar().showMessage(tr("saves.writing"))
-        save = self.m_save
-        settings = self.m_settings
-        self.m_background.run(lambda: edits.write_beside(save, change, settings), self._written, self.m_is_synchronous)
+        self.m_background.run(work, self._written, self.m_is_synchronous)
 
     def _written(self, result) -> None:
         self.m_busy = False

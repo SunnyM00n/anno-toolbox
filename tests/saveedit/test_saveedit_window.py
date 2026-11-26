@@ -13,11 +13,11 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QMessageBox
-from tests.saveedit.saveeditfakes import damaged_117, fake_save117, fake_save2070
+from tests.saveedit.saveeditfakes import damaged_117, fake_save117, fake_save2070, ships_save
 from tests.sources.sourcesfakes import fake_mod
 
 from annotoolbox.formats import savegame117
-from annotoolbox.saveedit import locations
+from annotoolbox.saveedit import locations, shipdelete117
 from annotoolbox.saveedit.savewindow import CSavesWindow
 from annotoolbox.suite import links
 from annotoolbox.suite.settings import CSettings
@@ -257,3 +257,45 @@ def test_an_old_games_save_picked_by_hand_opens_as_the_shown_game(window, monkey
     window.m_game_box.setCurrentIndex(window.m_game_box.findData("anno1701"))
     window.browse()
     assert window.m_save.game == "anno1701" and "Meine Welt" in window.m_summary_view.toPlainText()
+
+
+def test_the_ships_tab_lists_the_ships_and_deletes_the_chosen_one_after_asking(window, monkeypatch, tmp_path):
+    path = ships_save(tmp_path)
+    window.open_path(path, "anno117")
+    panel = window.m_ships_panel
+    assert panel.m_table.rowCount() == 0  # read when the tab is shown
+    panel.read_ships()
+    assert panel.m_table.rowCount() == 3 and "3 ship(s) found" in panel.m_note.text()
+    assert not panel.m_delete_button.isEnabled()  # no ship chosen yet
+    asked = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: asked.append(box.text()) or QMessageBox.StandardButton.Cancel)
+    panel.m_table.selectRow(1)  # the ship waiting at a harbor: refused, said, nothing written
+    panel.delete_chosen()
+    assert "cannot be deleted" in asked[-1] and not path.with_name("s (edited).a8s").exists()
+    panel.m_table.selectRow(0)
+    panel.delete_chosen()  # asked, and cancelled
+    assert asked[-1].startswith("Delete") and not path.with_name("s (edited).a8s").exists()
+    monkeypatch.setattr(panel, "confirm", lambda _ship, planned: not planned.refused)
+    panel.m_table.selectRow(0)
+    panel.delete_chosen()
+    assert path.with_name("s (edited).a8s").exists() and "written" in window.statusBar().currentMessage()
+
+
+def test_a_delete_confirmed_while_another_job_runs_writes_nothing_and_says_so(window, monkeypatch, tmp_path):
+    path = ships_save(tmp_path)
+    window.open_path(path, "anno117")
+    panel = window.m_ships_panel
+    panel.read_ships()
+    panel.m_table.selectRow(0)
+    monkeypatch.setattr(panel, "confirm", lambda _ship, _planned: True)
+    window.m_busy = True  # a write or a read that started while the delete was planned
+    panel._planned(window.m_save, panel.chosen(), shipdelete117.plan(window.m_save, panel.chosen()))
+    assert not path.with_name("s (edited).a8s").exists() and window.m_busy
+    assert "wait for it to finish" in window.statusBar().currentMessage()
+
+
+def test_the_ships_tab_says_that_other_games_have_none(window):
+    window.m_game_box.setCurrentIndex(window.m_game_box.findData("anno2070"))
+    window._picked(first_save(window))
+    window.m_ships_panel.read_ships()
+    assert window.m_ships_panel.m_table.rowCount() == 0 and "Anno 117" in window.m_ships_panel.m_note.text()

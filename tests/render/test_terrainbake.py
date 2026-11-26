@@ -162,6 +162,29 @@ def test_paint_strokes_go_into_the_maps_and_an_undo_gives_the_files_back():
     assert np.array_equal(g.alphas, base[0]) and np.array_equal(g.ids, base[1])
 
 
+def test_an_undone_stroke_puts_its_own_box_back_without_reading_the_file():
+    """An undo read the island's maps from the file and painted every stroke again over the whole island (50 to 496 ms
+    on the window's thread, performance.md 6, item 7): the words under the undone stroke come back, only its box."""
+    from annotoolbox.editor.desktop.desktopgamebake import CPaintedMaps
+
+    g = _ground(16.0)
+    base = g.alphas.copy(), g.ids.copy()
+    reads = []
+    g.reread = lambda: reads.append(1) or (base[1], base[0])
+    maps = CPaintedMaps(g, {3: 0, 5: 1})
+    first = {"material": 5, "radius": 2.0, "strength": 1.0, "points": [[4.0, 4.0]]}
+    second = {"material": 3, "radius": 2.0, "strength": 1.0, "points": [[5.0, 5.0], [12.0, 12.0]]}
+    maps.update([first], None)
+    after_first = g.alphas.copy(), g.ids.copy()
+    maps.update([first, second], None)
+    reads.clear()
+    boxes = maps.update([first], None)  # the second undone
+    assert not reads and boxes == [maps._box([second])]
+    assert np.array_equal(g.alphas, after_first[0]) and np.array_equal(g.ids, after_first[1])
+    maps.update([], None)
+    assert not reads and np.array_equal(g.alphas, base[0]) and np.array_equal(g.ids, base[1])
+
+
 def test_the_maps_let_go_on_the_device_come_back_from_the_file_at_the_first_stroke():
     from annotoolbox.editor.desktop.desktopgamebake import CPaintedMaps
 

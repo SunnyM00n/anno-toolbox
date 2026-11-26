@@ -41,6 +41,22 @@ def test_a_culled_draw_names_its_records_box_draw_and_where_its_words_start():
     assert frame.m_cull_outputs == 7 * gameinstances.CULL_CASCADES
 
 
+def test_a_levels_draws_placed_at_once_gather_what_placing_each_mesh_gathered():
+    places = SPlaces.of(np.repeat(np.identity(4, np.float32)[None], 4, axis=0))
+    local = np.array([0, 2, 3])
+    boxes = [(np.array([-1.0, 0.0, -2.0]), np.array([1.0, 3.0, 2.0])), (np.zeros(3), np.ones(3))]
+    culled = tuple((f"mesh {k}", joints, np.concatenate(box).astype(np.float32), 6 * (k + 1))
+                   for k, (joints, box) in enumerate(zip((0, 3), boxes, strict=True)))  # fmt: skip
+    each = gameinstances.CFrameInstances(None)
+    one_by_one = [each.place_culled(places, local, joints, mesh, box, count)
+                  for (mesh, joints, _corners, count), box in zip(culled, boxes, strict=True)]  # fmt: skip
+    level = gameinstances.CFrameInstances(None)
+    slots, arguments = level.place_culled_level(places, local, culled)
+    assert (slots, arguments) == ([slot for slot, _ in one_by_one], [arg for _, arg in one_by_one])
+    assert level.place_culled_level(places, local, culled) == (slots, arguments)  # once a frame
+    assert level.gathered() == each.gathered() and level.m_cull_outputs == each.m_cull_outputs
+
+
 def test_a_meshs_box_is_kept_once_its_bytes_are_gone_and_an_unknown_box_culls_on_the_cpu():
     mesh = _mesh([[0, 0, 0], [2, 1, -1], [1, 4, 3]])
     draws = nativedraws.CLevelDraws([("shadow", mesh)], [0])
@@ -51,7 +67,7 @@ def test_a_meshs_box_is_kept_once_its_bytes_are_gone_and_an_unknown_box_culls_on
     drawn = SimpleNamespace(places=SPlaces.of(np.identity(4, np.float32)[None]), local=None)
     group = nativedraws.CCulledGroup.of("part", draws, drawn, frame)
     assert group is not None and group.m_args == [0] and len(group) == 1
-    assert [corner.tolist() for corner in draws.culled()[0][2]] == [[0, 0, -1], [2, 4, 3]]
+    assert draws.culled()[0][2].tolist() == [0, 0, -1, 2, 4, 3]
     other.m_pairs[0][1].m_data = b""  # gone before its box was known
     assert nativedraws.CCulledGroup.of("part", other, drawn, frame) is None
 

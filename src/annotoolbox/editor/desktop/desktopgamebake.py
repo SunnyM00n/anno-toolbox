@@ -83,6 +83,7 @@ class CPaintedMaps:
         self._m_kept = None  # the island file's maps, when they cannot be read again
         self.m_committed: tuple | None = None  # the maps with the committed strokes (made at the first stroke)
         self.m_strokes: list = []  # the committed strokes painted into ``committed``
+        self.m_before: list = []  # per committed stroke its box and the words there before it (``_commit``)
         self.m_shown: tuple | None = None  # the box (alpha texels) the stroke in progress was painted into
 
     def base(self) -> tuple:
@@ -120,6 +121,24 @@ class CPaintedMaps:
         for stroke in strokes:
             paint_map(maps[0], maps[1], [stroke], per, self.m_order)
 
+    def _commit(self, strokes: list) -> list[tuple[int, int, int, int]]:
+        """``strokes`` painted into the committed maps one by one, the words of each one's box kept from before it:
+        an undo puts them back, where it read the island's maps again and painted every stroke anew (50 to 496 ms on
+        the window's thread, performance.md 6, item 7). Returns the boxes."""
+        block, boxes = self.m_ground.block, []
+        for stroke in strokes:
+            box = min_x, min_z, max_x, max_z = self._box([stroke])
+            self.m_before.append(
+                (
+                    box,
+                    self.m_committed[0][min_z // block : max_z // block, min_x // block : max_x // block].copy(),
+                    self.m_committed[1][min_z:max_z, min_x:max_x].copy(),
+                )
+            )
+            self._paint(self.m_committed, [stroke])
+            boxes.append(box)
+        return boxes
+
     def update(self, committed: list, current: dict | None) -> list[tuple[int, int, int, int]]:
         """The maps for the committed strokes and the one in progress; returns the boxes (alpha texels) whose words
         may have changed."""
@@ -135,15 +154,19 @@ class CPaintedMaps:
             self.m_ground.ids, self.m_ground.alphas = self.m_committed[0].copy(), self.m_committed[1].copy()
         texels, block = self.m_ground.alphas.shape[0], self.m_ground.block
         old = self.m_strokes
-        if len(committed) >= len(old) and all(
-            old_stroke is committed_stroke for old_stroke, committed_stroke in zip(old, committed, strict=False)
-        ):
-            new = committed[len(old) :]
-            self._paint(self.m_committed, new)
-            changed += [self._box([stroke]) for stroke in new]
-        else:  # undone or replaced: all again from the file's maps
-            self.m_committed = self.base()
-            self._paint(self.m_committed, committed)
+        kept = all(old_stroke is stroke for old_stroke, stroke in zip(old, committed, strict=False))
+        if kept and len(committed) >= len(old):
+            changed += self._commit(committed[len(old) :])
+        elif kept:  # the last strokes undone: the words under each put back, the newest first
+            for box, ids, alphas in reversed(self.m_before[len(committed) :]):
+                min_x, min_z, max_x, max_z = box
+                self.m_committed[0][min_z // block : max_z // block, min_x // block : max_x // block] = ids
+                self.m_committed[1][min_z:max_z, min_x:max_x] = alphas
+                changed.append(box)
+            del self.m_before[len(committed) :]
+        else:  # replaced: all again from the file's maps
+            self.m_committed, self.m_before = self.base(), []
+            self._commit(committed)
             changed.append((0, 0, texels, texels))
         self.m_strokes = committed
         if self.m_shown is not None:

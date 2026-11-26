@@ -26,11 +26,15 @@ class CLook:
         self.m_draws: list = []
         self.m_maps: list = []  # the look's texture arrays (``gamedecals.decal_draws``)
 
-    def release(self) -> None:
+    def release_draws(self) -> None:
+        """The draws only: the texture arrays stay for the look's next draws (they depend on its material alone)."""
         for draw in self.m_draws:
             draw.release()
-        gamedecals.release_maps(self.m_maps)
         self.m_draws = []
+
+    def release(self) -> None:
+        self.release_draws()
+        gamedecals.release_maps(self.m_maps)
 
 
 class CGameDecals:
@@ -51,9 +55,11 @@ class CGameDecals:
         source = getattr(self.m_island, "m_source", None)
         if self.m_error or source is None or renderer.m_library is None or renderer.m_editor is None:
             return []
+        # the placement ghost is left out: this look does not draw its model, and a key that watched it made every
+        # decal again at each cursor move (performance.md 6, item 3)
         shown = [
             batch
-            for batch in renderer._all_batches()
+            for batch in renderer.m_batches.values()
             if batch.m_count and batch.m_parts and renderer._layer_on(batch, options) and batch.m_mats is not None
         ]
         placed = [(batch.m_mats, batch.m_key[1]) for batch in shown if batch.m_key[0] != "markers"] + _decal_objects(
@@ -88,11 +94,19 @@ class CGameDecals:
         return [] if self.m_waiting else out
 
     def _regroup(self, found: dict) -> None:
-        for look in self.m_looks.values():
-            look.release()
-        self.m_looks = {}
+        """The looks of ``found`` (``gamedecals.decal_looks``): a look whose decals stayed keeps its draws, one whose
+        decals changed keeps its texture arrays and makes its draws again, one that went is released."""
+        old, self.m_looks = self.m_looks, {}
         for k, shapes in found.items():
-            self.m_looks[k] = CLook((JOB, k), dict(k), shapes)
+            look = old.pop(k, None)
+            if look is None:
+                look = CLook((JOB, k), dict(k), shapes)
+            elif not _same_shapes(look.m_shapes, shapes):
+                look.release_draws()
+                look.m_shapes = shapes
+            self.m_looks[k] = look
+        for look in old.values():
+            look.release()
 
     def _draws(self, got: tuple, look: CLook, textures) -> list:
         stages, material = got
@@ -122,6 +136,14 @@ class CGameDecals:
         for look in self.m_looks.values():
             look.release()
         self.m_looks, self.m_programs, self._m_key = {}, {}, None
+
+
+def _same_shapes(old: dict, new: dict) -> bool:
+    """Whether two looks' decals ({shape: [world matrices]}) are the same: the same shapes at the same places."""
+    return old.keys() == new.keys() and all(
+        len(old[shape]) == len(new[shape]) and np.array_equal(np.asarray(old[shape]), np.asarray(new[shape]))
+        for shape in new
+    )
 
 
 def _decal_objects(batches: list) -> list[tuple]:

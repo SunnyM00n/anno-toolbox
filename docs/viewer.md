@@ -417,9 +417,10 @@ Note: the failure was seen on 2026-11-12 with 1800's shadow caster.
 
 ### Rendering quality
 
-**View > Rendering > Rendering quality** (117 and 1800 only; `viewer/renderingmenu`) offers the presets of
-`render/quality.py` ([`rendering/quality.md`](rendering/quality.md)). They are kept per game in `Settings.quality` as
-the island editor keeps them (default Medium; Custom only as the settings file sets it).
+**View > Rendering > Rendering quality** (117 and 1800 only; `viewer/renderingmenu`) offers the entries of
+`suite/qualitydialog.py`: the player's own settings of the game, the game's presets of `render/quality.py` and the
+Custom window ([`rendering/quality.md`](rendering/quality.md)). They are kept per game in `Settings.quality` as the
+island editor keeps them. Without a kept one and without 117's settings the view draws at Medium.
 
 The preset goes into the view's state (`SViewState.quality`) and from there to the game's pass.
 

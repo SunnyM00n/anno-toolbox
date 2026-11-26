@@ -334,8 +334,8 @@ class CNativeShading(nativecompute.CTold):
 
     def settling(self) -> bool:
         """Whether the clouds and fog, accumulated over frames, still fill in after the camera moved (the view draws
-        on until they are whole)."""
-        return self.m_atmosphere_part.settling()
+        on until they are whole), or the sky's chain still runs over frames (``skynative.CNativeSky.is_running``)."""
+        return self.m_atmosphere_part.settling() or self.m_sky.is_running
 
     def end_frame(self) -> None:
         self.m_common.m_bridge.end_frame()

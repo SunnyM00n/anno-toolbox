@@ -171,6 +171,110 @@ def section(s, title: str):
     return next(x for x in s.m_sections if tr(x.title) == title)
 
 
+SHIP_A, SHIP_B, SHIP_C, LAND_UNIT = (1 << 32) | 24, (1 << 32) | 25, (1 << 32) | 30, (1 << 32) | 31  # ObjectIDs, area 1
+META_A, META_B, META_C = 26, 27, 28
+ITEM_A, ROUTE = 0x0400000000000010, 67
+NAME_A = -6916873005774511353  # a VehicleTextGuid as an i64
+
+
+def u64(v: int) -> bytes:
+    return struct.pack("<Q", v)
+
+
+def _slot(index: int, *value) -> filedb.STag:
+    return T("#1", T("Stack", A("index", u64(index)), T("value", *value)))
+
+
+def _ship(
+    ident: int, meta: int, *extra, owner: int | None = None, iterator: int = 1, hit_points: int = 0
+) -> filedb.STag:
+    """A ship object: its asset, ID, position, owner (none: the human), name, health, meta id, empty quest."""
+    head = [A("guid", u32(37222)), A("ID", u64(ident)), A("Position", struct.pack("<3f", 687.8, 0.0, 641.7))]
+    if owner is not None:
+        head.append(A("OwnerProfile", u32(owner)))
+    health = [A("CurrentHitPoints", u32(hit_points))] if hit_points else []
+    return T("#1", *head, T("QuestObject", T("QuestIDs"), T("Creator")),
+             T("Nameable", A("VehicleTextGuid", struct.pack("<q", NAME_A)), A("VehicleTextIterator", u32(iterator))),
+             T("MetaPersistent", A("MetaID", u64(meta))),
+             T("Health", *health, T("ParentObject", A("ObjectID", u64(ident)))), *extra)  # fmt: skip
+
+
+def _ships() -> list[filedb.STag]:
+    """A: the human's, two modules, goods, an empty unit slot, an item, on route 67. B: a rival's, damaged. C: in a
+    group with a land unit."""
+    modules = T("ShipModuleOwner", T("InstalledShipModules",
+                T("#1", A("ShipModuleGuid", u32(31647)), T("EffectId", A("value", u64(781 | 1 << 63)))),
+                T("#1", A("ShipModuleGuid", u32(31648)), T("EffectId"))))  # fmt: skip
+    cargo = T("ItemContainer", T("SlotContainer", T("SlotList",
+              _slot(1, A("ProductGUID", u32(2084)), A("ProductCount", u32(16))), _slot(3, A("UnitMetaObjectRef", u64(0))),
+              _slot(2, T("Stack", T("#1", A("ID", u64(ITEM_A)), A("GUID", u32(92876))))))))  # fmt: skip
+    route = T("PropertyTradeRouteVehicle", A("TradeRouteID", u32(ROUTE)),
+              T("TradeDescription", A("TargetShipID", u64(SHIP_A))))  # fmt: skip
+    return [
+        _ship(SHIP_A, META_A, modules, cargo, route),
+        _ship(SHIP_B, META_B, T("ShipModuleOwner", T("InstalledShipModules")), owner=31100, iterator=2, hit_points=566),
+        _ship(SHIP_C, META_C, T("ShipModuleOwner", T("InstalledShipModules"))),
+    ]
+
+
+def _unit(ident: int, behaviour: int) -> filedb.STag:
+    return T("#1", A("ID", u64(ident)), A("Behaviors", u64(behaviour)), A("TargetObjectID", u64(0)))
+
+
+def _behaviour(ident: int, *members: int) -> filedb.STag:
+    return T("#1", A("m_ID", u64(ident)), T("ActiveMemberIDs", *[A("#32768", u64(m)) for m in members]),
+             T("PendingMemberIDs"))  # fmt: skip
+
+
+def ship_session(*extra: filedb.STag) -> bytes:
+    """A session document with three ships in its sea area (``_ships``), their units and behaviours, an island area
+    whose harbour remembers A as its last attacker, A's item, B waiting at a harbour, and ``extra`` nodes."""
+    units = T("UnitSystem",
+              T("Units", _unit(SHIP_A, 500), _unit(SHIP_B, 501), _unit(SHIP_C, 502), _unit(LAND_UNIT, 502)),
+              T("GroupBehaviorHandler", T("Behaviors", _behaviour(500, SHIP_A), _behaviour(501, SHIP_B),
+                                          _behaviour(502, SHIP_C, LAND_UNIT))),
+              T("AttackLocationHandler", T("UnitData", A("#32768", u64(SHIP_A)), T("#1"))))  # fmt: skip
+    items = T("ItemSessionManager", T("ItemMap", A("#32768", u64(ITEM_A)),
+              T("#1", A("ItemID", u64(ITEM_A)), A("GUID", u32(92876)), T("QuestID"), A("EffectID", u64(0)))))  # fmt: skip
+    pier = T("LoadingPierManager", T("Harbors", T("#1", T("ShipReference", A("ObjectID", u64(SHIP_B))))))
+    harbour = T("#1", A("guid", u32(3402)), A("ID", u64((0x2181 << 32) | 2)),
+                T("Health", A("LastAttackerID", u64(SHIP_A))))  # fmt: skip
+    areas = T("AreaManagers",
+              T("AreaManager_1", T("AreaObjectManager", T("GameObject", T("objects", *_ships())))),
+              T("AreaManager_8577", T("AreaObjectManager", T("GameObject", T("objects", harbour)))))  # fmt: skip
+    manager = T("GameSessionManager", T("SessionUnitManager", units), pier, items, *extra, areas)
+    return filedb.write(T("", A("SessionFileVersion", u32(80)), manager))
+
+
+def ship_data(session: bytes, *extra: filedb.STag) -> bytes:
+    """A ``data.a7s`` with the human, the ships' meta objects, A's module effect, route 67 (A and B), a message about
+    A, one session holding ``session``, and ``extra`` nodes."""
+
+    def meta(ident: int, owner: int) -> filedb.STag:
+        return T("#1", A("guid", u32(100471)), A("ID", u64(ident)), A("ParticipantGUID", u32(owner)),
+                 T("MetaGameObjectReference"))  # fmt: skip
+
+    effect = T(
+        "#1", T("#1", A("Guid", u32(31647)), A("Id", u64(781 | 1 << 63)), T("Source", A("ObjectID", u64(SHIP_A))))
+    )
+    route = T("#1", A("ID", u32(ROUTE)), A("Name", "Jul - Sep".encode("utf-16-le")), A("Ships", u64(META_A) + u64(META_B)),
+              T("LostShips"), A("Owner", u32(41)))  # fmt: skip
+    desc = T("SessionDesc", A("SessionGUID", u32(3245)))
+    manager = T("MetaGameManager",
+        T("MetaGameObjectManager", T("MetaObjectMap", human(), meta(META_A, 41), meta(META_B, 31100), meta(META_C, 41))),
+        T("MetaEffectManager", T("LocalEffects", A("#32768", u64(SHIP_A)), effect)),
+        T("SessionTradeRouteManager", T("RouteMap", A("#32768", u32(ROUTE)), route)),
+        T("NotificationSystem", T("ArchiveArray", T("Archive", T("#1", A("ObjectID", u64(SHIP_A)))))), *extra,
+        T("GameSessions", A("#32768", u32(3245)), T("#1", desc, T("SessionData", A("BinaryData", session)))),
+    )  # fmt: skip
+    return filedb.write(T("", manager))
+
+
+def ships_save(tmp_path: Path, session: bytes | None = None, data: bytes | None = None) -> Path:
+    """A synthetic 117 save with the three ships (``ship_session``, ``ship_data``) at ``tmp_path/P/s.a8s``."""
+    return save_with(tmp_path, data or ship_data(session or ship_session()), "s.a8s")
+
+
 def damaged_117(path: Path) -> Path:
     """A 117 save whose ``data.a7s`` unpacks to bytes that are no document (its other parts whole)."""
     whole = savegame117.read(fake_save117(path.with_name("whole.a8s")))

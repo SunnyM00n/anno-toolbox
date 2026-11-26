@@ -36,6 +36,17 @@ def test_the_coarse_heights_reach_the_upload_turned_over_in_x():
     assert width1 == width and np.allclose(np.frombuffer(coarse, "<i2"), np.frombuffer(data, "<i2"), atol=3)
 
 
+def test_a_large_islands_heights_are_resampled_as_interp_does_each_row():
+    """The rows and columns went through ``np.interp`` one by one (half a second on the window's thread at a
+    continental island's open, performance.md 6, item 2): two array steps give the same bytes."""
+    heights = np.random.default_rng(6).normal(0, 20, (61, 61)).cumsum(0) / 10
+    at = np.arange(91) * 0.5 / 0.75
+    rows = np.array([np.interp(at, np.arange(61), row) for row in heights])
+    want = np.array([np.interp(at, np.arange(61), column) for column in rows.T]).T
+    got = terrainpages._resampled(terrainpages._resampled(heights, at, 1), at, 0)
+    assert np.array_equal(got, want)
+
+
 def test_patches_and_skirts_follow_the_domain_shaders_corners():
     q = terraindraw.patch_indices(3, 2).reshape(-1, 4)
     assert q.tolist() == [[0, 3, 4, 1], [1, 4, 5, 2]]  # (x0, z0), (x0, z1), (x1, z1), (x1, z0)

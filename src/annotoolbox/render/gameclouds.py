@@ -179,11 +179,15 @@ def read_maps(files, ambient_text: str) -> SCloudMaps:
 def constants(camera: gs.SCamera, ambient: dict, seconds: float = 0.0, wind: SWind = CALM) -> dict:
     """The clouds' constants by name for a view from ``camera`` ``seconds`` into it: the engine's layer, the
     ambient's light, the cache centred under the camera, the weather and the noise moved by ``wind``."""
+    return {**still_constants(ambient), "cFrustumPos": [camera.eye[0], camera.eye[2]], **scroll(seconds, wind)}
+
+
+def still_constants(ambient: dict) -> dict:
+    """The clouds' constants that neither the camera nor the time move: the ambient's light and the engine's layer."""
     values = {key: value for key, value in ambient.items() if key.startswith("c")}
     return {**values, "cWeathermapScale": WEATHERMAP_SCALE, "cCloudLayerHeight": LAYER_HEIGHT,
             "cCloudDomeRadius": DOME_RADIUS, "cCloudCurlIntensity": CURL_INTENSITY, "cCloudBlendFactor": 0.0,
-            "cNumRegionalWeatherMaps": 0, "cFrustumPos": [camera.eye[0], camera.eye[2]], **scroll(seconds, wind),
-            "cSSCUpdateFactor": 1.0}  # fmt: skip
+            "cNumRegionalWeatherMaps": 0, "cSSCUpdateFactor": 1.0}  # fmt: skip
 
 
 def _upload(batch, texture, levels: list[np.ndarray]) -> None:
@@ -218,6 +222,7 @@ class CClouds(CComputeChain):
         self.m_is_cache_kept = False  # the native sky keeps the self-shadow cache between frames (``skynative``)
         self._m_white = None
         self._m_ambient_key = gs.value_key(tuple(sorted(maps.ambient.items())))
+        self._m_scroll: tuple = (None, {})  # ((the time, the wind), ``scroll``'s values for them)
         self._m_cache_made: tuple | None = None  # the key of what the self-shadow cache holds (``update``)
         self._m_shadow_made: tuple | None = None  # the key of what the cascades' transmittance holds (``shadow``)
 
@@ -268,9 +273,19 @@ class CClouds(CComputeChain):
     def fill(self, buffer: gs.CConstants, camera: gs.SCamera | None) -> None:
         """The clouds' constants and ``GCF_CLOUDS`` into a constant buffer by name (``camera`` None: the sky cube's,
         which looks from the ground at the world's origin)."""
+        # the still part packed once per layout and copied; the time's scroll worked out once a frame: a frame fills
+        # some 30 buffers (performance.md section 4, "What is left")
+        gs.replay(buffer, "clouds", (self._m_ambient_key,), self._fill_still)
+        eye = camera.eye if camera is not None else (0.0, 0.0, 0.0)
+        buffer.set("cFrustumPos", [eye[0], eye[2]])
+        if self._m_scroll[0] != (float(self.m_seconds), self.m_wind):
+            self._m_scroll = ((float(self.m_seconds), self.m_wind), scroll(self.m_seconds, self.m_wind))
+        for key, value in self._m_scroll[1].items():
+            buffer.set(key, value)
+
+    def _fill_still(self, buffer: gs.CConstants) -> None:
         buffer.set("cGlobalFlags", GCF_CLOUDS)
-        camera = camera or gs.SCamera(np.zeros(3), np.identity(4), np.identity(4), 1.0, 1.0, (1, 1))
-        for key, value in constants(camera, self.m_ambient, self.m_seconds, self.m_wind).items():
+        for key, value in still_constants(self.m_ambient).items():
             buffer.set(key, value)
 
     def moment(self) -> tuple:

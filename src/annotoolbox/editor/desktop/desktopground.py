@@ -47,11 +47,12 @@ class CGroundDraw:
         return image.size, image.tobytes()
 
     def _ground_info(self):
+        """In the background: the ground's layers, their weights and the materials (read from the archive: 1.1 s on
+        a continental island inside a frame, performance.md 6, item 2)."""
         ground_meta = self.m_editor.ground()
         side, layer_count = ground_meta["width"], len(ground_meta["materials"])
-        return ground_meta, np.frombuffer(self.m_editor.ground_weights(), np.uint8).reshape(
-            layer_count, side, side
-        ).copy()
+        weights = np.frombuffer(self.m_editor.ground_weights(), np.uint8).reshape(layer_count, side, side).copy()
+        return ground_meta, weights, self._materials(ground_meta)
 
     def _layer_pixels(self, material: dict, size_px: int):
         """One ground material as the texture arrays take it: diffuse with its blend mask as alpha, normal."""
@@ -133,8 +134,8 @@ class CGroundDraw:
         session = self.m_session
         ground_meta = self.m_loader.get("ground", self._ground_info) if self.m_editor is not None else None
         if isinstance(ground_meta, tuple) and session.m_weights is None:
-            meta, weights = ground_meta
-            session.attach_ground([layer["id"] for layer in meta["materials"]], weights, self._materials(meta))
+            meta, weights, materials = ground_meta
+            session.attach_ground([layer["id"] for layer in meta["materials"]], weights, materials)
             change.weights = (0, 0, weights.shape[1] - 1, weights.shape[1] - 1)
         if session.m_weights is None:
             return

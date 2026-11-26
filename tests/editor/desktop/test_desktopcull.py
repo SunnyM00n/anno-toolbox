@@ -227,6 +227,15 @@ def test_culling_changes_what_is_drawn_but_not_the_picture():
     assert shots[True][1]["terrain"] <= shots[True][1]["terrain_of"]
 
 
+def test_the_codes_of_many_batches_are_their_parts_one_after_the_other():
+    """``of_many`` gathers the batches' parts at once, in the order asked, as ``of`` slices each."""
+    table = cull.CCellTable([(cull.CInstanceCells(_row(count, 1.0)), 1.0, 1) for count in (3, 1, 4)])
+    codes = np.arange(int(table.m_starts[-1]))
+    for batches in ([2, 0], [1], [0, 1, 2], [2, 2]):
+        assert table.of_many(codes, batches).tolist() == np.concatenate([table.of(codes, k) for k in batches]).tolist()
+    assert len(table.of_many(codes, [])) == 0
+
+
 def test_a_table_of_no_batches_answers_with_no_cells():
     """With nothing to draw the table held float arrays, and ``seen | always`` raised on its first use."""
     table = cull.CCellTable([])
@@ -241,3 +250,39 @@ def test_a_closed_loader_answers_none_instead_of_raising_in_the_last_frame():
     loader = CLoader(1)
     loader.close()
     assert loader.get("ground", lambda: 1) is None and loader.pending() == 0
+
+
+def test_the_dots_of_a_batch_that_stayed_are_kept_when_another_changes():
+    """Every model that came made every batch's dots again: 7.7 s of a continental island's open (performance.md 6,
+    item 2). A batch whose matrices stayed keeps its dots, and the hidden ones are left out."""
+    from types import SimpleNamespace
+
+    from annotoolbox.editor.desktop.desktopbatches import dot_positions
+
+    first, second = SimpleNamespace(m_mats=_row(2, 1.0)), SimpleNamespace(m_mats=_row(3, 2.0))
+    second.m_mats[1, :3, :3] = 0  # hidden: scale 0
+    kept: dict = {}
+    dots = dot_positions([("a", first), ("b", second)], kept)
+    assert len(dots) == 4 and np.allclose(dots[:, 1], first.m_mats[0, 1, 3] + 0.3)
+    stayed = kept["a"][1]
+    second.m_mats = _row(1, 5.0)
+    again = dot_positions([("a", first), ("b", second)], kept)
+    assert kept["a"][1] is stayed and len(again) == 3
+    assert dot_positions([("b", second)], kept).shape == (1, 3) and list(kept) == ["b"]
+
+
+def test_the_view_rests_after_a_slow_frame_unless_there_was_input_lately():
+    """An island that loads drew frames of a few hundred ms back to back, and the window answered in a tenth of the
+    open (performance.md 6, item 2): after a slow frame the view waits as long as it took, unless there was input."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.editor.desktop import desktopview
+
+    view = SimpleNamespace(_m_paint_s=0.3, _m_paint_end=10.0, _m_input_at=0.0)
+    rests = desktopview.CIslandControls._resting
+    assert rests(view, 10.2) and not rests(view, 10.4)  # as long as the frame took
+    view._m_input_at = 9.9
+    assert not rests(view, 10.2)  # input lately: drawn at once
+    view._m_paint_s, view._m_input_at = 0.05, 0.0
+    assert not rests(view, 10.01)  # a fast frame: no rest

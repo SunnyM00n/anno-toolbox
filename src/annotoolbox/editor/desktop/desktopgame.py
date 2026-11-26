@@ -281,6 +281,8 @@ class CGameIsland(CGameEnd, CGameShadow, CIslandBake):
             return 1  # the objects' or decals' materials still compiling, or parts within reach to be made ahead
         if self.m_sea_waiting or self.m_inland_waiting or (self._m_coast_edited and self.m_renderer.m_game_sea):
             return 1  # the sea's or the rivers' shaders, the island's water maps or an edited coast
+        if self.m_native_shading is not None and self.m_native_shading.m_sky.is_running:
+            return 1  # the sky's chain, run over frames
         return 1 if (self.m_pages is not None and self.m_pages.busy()) or self._m_unbaked else 0
 
     def draw(self, view_frame, options, target, size_px: tuple[int, int], camera) -> bool:

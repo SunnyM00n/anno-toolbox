@@ -221,6 +221,7 @@ REQUESTS: dict[str, tuple[SArg, ...]] = {
     "ping": (),
     "bye": (),
 }  # fmt: skip
+LONG_REQUESTS: set[str] = set()  # requests a module answers only after a wait in the game (a capture): the reload time
 MAX_VALUES = 8  # the typed values of a debug command
 MAX_PATHS = 256  # paths in one request; a longer list goes in parts (``linkclient``)
 MAX_PATH_LEN = 199

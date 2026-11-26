@@ -199,8 +199,8 @@ def write_beside(save: SSaveFile, changes: dict[str, str | int], settings: objec
     if unknown:
         raise CEditError(f"{save.path.name}: no such value to change: {', '.join(unknown)}")
     own = {k: value for k, value in changes.items() if k in own_keys}
-    dest = _reserve(save.path)
-    try:
+
+    def build():
         if save.game == "anno117":
             parsed = _apply117(save, own)
         else:
@@ -211,7 +211,17 @@ def write_beside(save: SSaveFile, changes: dict[str, str | int], settings: objec
             mine = {k: value for k, value in changes.items() if k in keys}
             if mine:
                 parsed = spec.apply(save, parsed, mine, settings)
-        (savegame117 if save.game == "anno117" else savegame2070).write(parsed, dest)
+        return parsed
+
+    return write_new(save, build)
+
+
+def write_new(save: SSaveFile, build: Callable[[], object]) -> Path:
+    """Reserve the next free name beside the save, write what ``build`` makes there (a ``savegame117.SSave`` or a
+    2070 save) whole, and remove the reserved file when anything fails; returns the new file's path."""
+    dest = _reserve(save.path)
+    try:
+        (savegame117 if save.game == "anno117" else savegame2070).write(build(), dest)
     except BaseException:
         dest.unlink(missing_ok=True)
         raise

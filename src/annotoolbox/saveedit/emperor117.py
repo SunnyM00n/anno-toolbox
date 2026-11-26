@@ -144,17 +144,9 @@ class SRules:
         return (values[0], values[-1]) if values else (0, -1)
 
 
-def padded(value: int) -> int:
-    """A value's size in the document: attributes are padded to 8 bytes."""
-    return (value + 7) // 8 * 8
-
-
 def close_of(tag: filedb.CSpan) -> int:
     """Where the tag's closing node starts."""
-    if not tag.m_children:
-        return tag.m_header + 8
-    last = tag.m_children[-1]
-    return close_of(last) + 8 if last.m_is_tag else last.m_start + padded(last.m_size_bytes)
+    return filedb.end_of(tag) - 8
 
 
 def _section(node: filedb.CSpan) -> str:

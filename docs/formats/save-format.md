@@ -168,6 +168,112 @@ areas' capacities). An edit of a stock is therefore not offered.
 
 Note: decoded on 2026-11-14.
 
+## Ships
+
+A ship is a game object in its session's own document (`SessionData/BinaryData`, "Container"), and a meta object in
+`data.a7s` that stays the same while the ship sails from one session to another.
+`saveedit/ships117.py` reads them, and `saveedit/shipdelete117.py` removes one ship
+([`../save-editor.md`](../save-editor.md), "Ships").
+The layout was read from the author's saves (four autosaves of one game, 117 build of November 2026, 242 ships in
+three sessions).
+
+### The ship's object
+
+Every session keeps its objects per area in `GameSessionManager/AreaManagers/AreaManager_<area id>`.
+The ships sit in the session's first area manager, the sea area.
+Its id is the smallest of the session (1, 3 and 4 in the sample); the island areas are that id plus multiples of 64.
+The objects are the `#1` entries of `AreaObjectManager/GameObject/objects`.
+A ship is an object with a `ShipModuleOwner` tag.
+All 242 such objects were `NavalUnit` assets, and the other objects with a `Unit` tag in the sea area were land units
+(`LandUnit`).
+
+| Field | Holds |
+|---|---|
+| `guid` | u32: the ship's asset (template `NavalUnit`: "Trireme", "Egyptian RiverShip Dahabiya Civil", ...) |
+| `ID` | the **ObjectID**: u32 object index (the area's `GameObjectIDCounter` counts them), then u32 area id |
+| `OwnerProfile` | u32: the owner participant's GUID; it is absent for the human (participant 41). The meta object's `ParticipantGUID` agreed for all 242 ships |
+| `Position`, `Direction` | three f32 (x, height 0, z) and one f32 (radians) |
+| `Nameable/VehicleTextGuid` | an i64 text id of the game's ship names ("Lavinia") |
+| `Nameable/VehicleTextIterator` | u32, 1 for the first ship of that name and 2 for the second ("Eloper" twice: 1 and 2) |
+| `ShipModuleOwner/InstalledShipModules/#1` | per installed module its `ShipModuleGuid` (u32) and `EffectId/value` (u64, the module's effect in `data.a7s`; absent for a module without one) |
+| `ItemContainer/SlotContainer/SlotList/#1` | one per cargo slot: `Stack/index` (u64) says what `Stack/value` holds |
+| `ItemContainer/SocketContainer/SocketItems/#1` | the item sockets: `ItemReference/ID` (u64, 0 for an empty socket) and `GUID` |
+| `Health/CurrentHitPoints` | u32, present only on a damaged ship (7 of 242); `Mesh/Damage` (u8) is present on the same ships |
+| `Health/ParentObject/ObjectID` | the ship's own ObjectID |
+| `MetaPersistent/MetaID` | u64: the ship's **MetaID**, the `ID` of its meta object |
+| `PropertyTradeRouteVehicle/TradeRouteID` | u32: the trade route the ship serves, absent when it serves none; `TradeDescription/TargetShipID` is its own ObjectID |
+| `QuestObject` | `QuestIDs` and `Creator`, empty unless a quest made or uses the ship |
+
+A cargo slot's `Stack/index` is 1 for goods (`ProductGUID` u32, `ProductCount` u32), 2 for items (`Stack/#1` with
+the item's `ID` and `GUID`), and 3 for a unit (`UnitMetaObjectRef`, a MetaID, 0 for an empty slot).
+Of 1,120 slots, 958 were index 3 with ref 0 (empty), 161 held goods and one held an item.
+`Mesh/Damage` agrees with 255 times the share of hit points lost for the two ships checked against an assumed
+maximum (inferred, not used).
+
+The ship's meta object is the `MetaGameManager/MetaGameObjectManager/MetaObjectMap/#1` entry whose `ID` is the
+MetaID: `guid` 100471 (`MetaGameObjectReference`), `ParticipantGUID` the owner and an empty
+`MetaGameObjectReference` tag.
+An item a ship holds is an entry of the session's `ItemSessionManager/ItemMap` (a map: the key is the item's ID, the
+value holds `ItemID`, `GUID`, `QuestID`, `EffectID`, `BoostCondition`).
+
+A trade route is a `MetaGameManager/SessionTradeRouteManager/RouteMap/#1` entry: `ID`, `Name` (UTF-16), `Owner`,
+`Stations`, `LostShips` and `Ships`.
+`Ships` is an array of u64 MetaIDs (8 bytes per ship, an empty route holds 0 bytes).
+Every ship with a `TradeRouteID` was in that route's `Ships`, and no other ship was.
+`LostShips` lists sunk ships by their MetaID, with their name (UTF-16), asset, cargo slot count, last session and
+position.
+
+### What refers to a ship
+
+The references were found by searching every session's document and `data.a7s` for the bytes of each ship's ObjectID
+(242 ships), and by a survey of the fields whose values are MetaIDs.
+A MetaID is a small number, so its bytes also match counters and times; only fields whose values were all live
+MetaIDs count.
+No reference carries flag bits in the ObjectID's top bytes (a search for the first six bytes found none).
+No ship's ObjectID is in another session's document.
+
+| Place | Refers by | Held for |
+|---|---|---|
+| the session's `SessionUnitManager/UnitSystem/Units/#1` with that `ID` | ObjectID | every ship (the unit: position, movement, `Behaviors`, the id of its group behaviour) |
+| `UnitSystem/GroupBehaviorHandler/Behaviors/#1`: `ActiveMemberIDs` | ObjectID | every ship; the behaviour's `m_ID` is the unit's `Behaviors`. 189 ships sail alone, 53 in groups of two to four |
+| `UnitSystem/AttackLocationHandler/UnitData` (map key) | ObjectID | ships that fought |
+| other units' `TargetObjectID`, `Actor/Elements/#1/Target`, `Command/EscortObjectID`, projectiles, `BattleTracker` | ObjectID | ships in a fight or escorted |
+| `AIUnitManager/SquadsByID/.../SquadUnits`, `UnitsToSquadIDs`, `EscortIDs` | ObjectID | AI ships (192 of 242) |
+| `LoadingPierManager/Harbors/.../ShipReference`, a harbor's `LoadingPier/CurrentTradePartnerArray` | ObjectID | ships at a harbor |
+| other objects' `Health/LastAttackerID` | ObjectID | ships that attacked them |
+| AI objects: `ConstructionAI/...`, `Pirate/Warships`, `Trader/Units` | ObjectID or MetaID | the AI's ships |
+| `data.a7s` `MetaEffectManager/LocalEffects` (map: key the ObjectID, value the effects with `Source/ObjectID`) | ObjectID | ships with module effects; each effect's `Id` is the module's `EffectId` |
+| `data.a7s` `NotificationSystem/ArchiveArray/Archive/#1/ObjectID` | ObjectID | messages about the ship |
+| `data.a7s` `QuestManager/ComponentInventoryArray/...` (`ObjectID`, `MetaObjectID`, `StorylineLinkedObjects`) | both | quest ships |
+| `data.a7s` `MetaObjectMap/#1/ID`, `SessionTradeRouteManager/RouteMap/#1/Ships` | MetaID | every ship; ships on a route |
+| `data.a7s` `MetaUnitManager/QueuedTransfers/#1/TargetGameObject` (and `GroupID`, the group behaviour) | MetaID | ships travelling to another session |
+| `data.a7s` `MetaConstructionAI/ShipHandler`, `TradeRouteHandler/TradeShips` | MetaID | AI ships |
+
+### What the game does when a ship leaves a session
+
+The evidence is four autosaves taken 5 to 20 minutes apart, in which 47 rival ships were destroyed and every other
+ship that disappeared sailed to another session.
+
+- **A ship that sails to another session** keeps its MetaID and its meta object.
+  - It leaves its session's document entirely: the object, its unit and its group behaviour are gone, and its
+    `LocalEffects` entry moves to its new ObjectID with the same effect ids.
+  - While it travels, it exists only as its meta object and a `QueuedTransfers` entry.
+  - It arrives under a new ObjectID.
+- **A destroyed ship** loses all of these:
+  - the object, its unit, its group behaviour (a ship alone in it) and its AI squad entries;
+  - its `LocalEffects` entry, its meta object, its MetaID in the route's `Ships`, any `QueuedTransfers` entry, its
+    `Pirate/Warships` entry and its `BattleTracker` entries.
+- **The game leaves dangling references.**
+  - The newest save holds 631 `AttackLocationHandler/UnitData` keys and 16 unit targets (`Actor/Elements`) of objects
+    that no longer exist.
+  - It also holds 4 `TradeDescription/TargetShipID`, a message's `ObjectID` and a `StorylineLinkedObjects` entry of
+    objects that no longer exist.
+  - No `Health/LastAttackerID`, unit, behaviour, squad, effect, route or harbor entry points at a missing object.
+
+No save of the sample shows a ship that was sold or one that the human lost.
+
+Note: read on 2026-11-26 from four autosaves of one game (5.2 MB each, 117 build of November 2026).
+
 ## Editing a save without loading it
 
 1. Inflate the four parts, change the attributes in all three places, deflate **with the 12-byte tail** and repack

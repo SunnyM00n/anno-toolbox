@@ -220,7 +220,7 @@ def test_1800s_look_hands_the_shown_objects_baked_decals_to_its_bake_and_the_vie
     loader = SimpleNamespace(get=lambda job, make: make(), forget=mock.Mock())
     look = object.__new__(desktopgame1800.CGameIsland1800)
     look.m_renderer = SimpleNamespace(m_library=library, m_editor=SimpleNamespace(m_files="files"), m_loader=loader,
-                             m_session=SimpleNamespace(m_size_tiles=64.0), _all_batches=lambda: [batch],
+                             m_session=SimpleNamespace(m_size_tiles=64.0), m_batches={batch.m_key: batch},
                              _layer_on=lambda b, opts: True, baked_decal=None)  # fmt: skip
     look.m_bake = SimpleNamespace(m_extra={"decal": 1}, set_decals=mock.Mock(return_value=[(1.0, 2.0, 3.0, 4.0)]))
     look.m_terrain, look._m_decal_key, look.GAME = SimpleNamespace(m_cache=mock.Mock()), None, "anno1800"

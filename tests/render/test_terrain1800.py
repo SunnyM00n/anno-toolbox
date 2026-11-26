@@ -84,25 +84,6 @@ def test_1800s_page_makes_117s_page_once():
     assert made.call_count == 1  # it was made twice: a continental island's page took 0.6 s at every stroke
 
 
-@pytest.mark.parametrize(("make", "cells"), [(terraindraw.vertex_normals, False),
-                                             (terrain1800.normal_page_xzy, True)])  # fmt: skip
-def test_an_edit_remakes_the_normals_and_the_page_only_where_it_reached(make, cells):
-    rng = np.random.default_rng(3)
-    h = rng.random((41, 41))
-    part = terrain1800.CRegional(make, cells)
-    part.get(h, 0.5)
-    for box in ((3.0, 4.0, 6.5, 9.0), (0.0, 0.0, 1.0, 2.0), (17.0, 18.0, 20.0, 20.0)):  # tiles, inner and edges
-        rows = terrain1800.sample_span(box[1], box[3], 0.5, 41)
-        cols = terrain1800.sample_span(box[0], box[2], 0.5, 41)
-        h = h.copy()
-        h[rows[0] : rows[1], cols[0] : cols[1]] += rng.random((rows[1] - rows[0], cols[1] - cols[0]))
-        part.spoil((*rows, *cols))
-        assert np.array_equal(part.get(h, 0.5), make(h, 0.5)), box
-    part.spoil(None)  # another grid: whole
-    h = rng.random((21, 21))
-    assert np.array_equal(part.get(h, 0.5), make(h, 0.5)) and part.m_region is None
-
-
 def test_2205s_session_page_turns_the_normals_x_over():
     from annotoolbox.models import bc1encode, ddsdecode
 
@@ -502,7 +483,7 @@ def test_1800s_patches_run_u_along_z_so_the_tessellators_triangles_face_up():
     t = object.__new__(terrain1800.CTerrain1800)
     t.m_size_tiles, t.m_step_tiles, t.m_width_samples = 16.0, 1.0, 17
     t.m_heights = np.zeros((17, 17))
-    t._m_vertex_normals = terrain1800.CRegional(terraindraw.vertex_normals, cells=False)
+    t._m_vertex_normals = terraindraw.CRegional(terraindraw.vertex_normals, cells=False)
     mesh = t._mesh(SNode(2, 4.0, 8.0), ("detailed", (0, 0, 0), 0))
     xyz = np.frombuffer(mesh.m_data, np.uint8).reshape(-1, terraindraw.STRIDE)[:, 0:8].copy().view("<u2")
     xz = xyz[:, [0, 2]].astype(float) * terraindraw.UNIT

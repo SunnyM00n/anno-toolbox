@@ -1,11 +1,14 @@
-"""The rendering quality of 117 and 1800 (``render.quality``): the presets with the games' own values of their
-quality levels, Custom kept and read back, the older games at their best, what a quality changes in the level of
-detail (draw distance), what makes a game frame anew, maps uploaded from a coarser level; with an installed game
-(``ANNO117_DIR``, ``ANNO1800_DIR``) its engine settings read."""
+"""The rendering quality of 117 and 1800 (``render.quality``): the game's presets and area levels with the games' own
+values of their quality levels, Custom kept and read back, a released settings file's names, the player's engine.ini
+followed, the older games at their best, what a quality changes in the level of detail (draw distance), what makes a
+game frame anew, maps uploaded from a coarser level; with an installed game (``ANNO117_DIR``, ``ANNO1800_DIR``) its
+engine settings read."""
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,47 +25,112 @@ LEVELS = "".join(
 )
 
 
-def test_a_preset_takes_the_games_values_of_its_level():
-    levels = quality.game_levels(LEVELS)
-    assert len(levels) == 5 and levels[2] == {"ViewDistance": 502.0, "MinimumObjectSizeInPixels": 18.0, "LODBias": 0.75}
-    low, ultra = quality.preset("anno117", "low", levels), quality.preset("anno117", "ultra", levels)
-    assert (low.level, low.lod_bias, low.min_pixels) == (0, 0.25, 20.0) and (ultra.lod_bias, ultra.min_pixels) == (
-        1.25,
-        16.0,
-    )
-    assert low.render_scale < 1 and not low.tessellation and ultra.view_distance == quality.INFINITE
-    vanilla = quality.preset("anno117", "medium")  # no file: vanilla 117's level 1
-    assert (vanilla.lod_bias, vanilla.min_pixels) == (0.5, 15.0)
-    assert quality.preset("anno1800", "medium", levels).lod_bias == 0.5  # 1800's file has no LODBias: ours stays 1
-    assert quality.preset("anno1800", "high").lod_bias == 1.0
+def test_a_preset_sets_the_games_areas_and_takes_the_values_of_their_levels():
+    records = quality.game_levels(LEVELS)
+    assert len(records) == 5 and records[2] == {
+        "ViewDistance": 502.0,
+        "MinimumObjectSizeInPixels": 18.0,
+        "LODBias": 0.75,
+    }
+    low, ultra = quality.preset("anno117", "Low", records), quality.preset("anno117", "UltraHigh", records)
+    assert low.levels == (0,) * len(quality.AREAS) and ultra.levels == tuple(quality.AREAS.values())
+    assert (low.level, low.lod_bias, low.min_pixels) == (0, 0.25, 20.0)
+    assert (ultra.level, ultra.lod_bias, ultra.min_pixels) == (4, 1.25, 16.0)
+    assert not low.tessellation and not low.ssao and ultra.view_distance == quality.INFINITE
+    assert low.render_scale == ultra.render_scale == 1.0  # the game's presets keep the resolution
+    high = quality.preset("anno117", "High")  # Terrain and Texture top at 2: High has them at the top already
+    assert (high.area("Shadow"), high.area("Terrain"), high.area("Texture"), high.max_texture) == (2, 2, 2, 0)
+    vanilla = quality.preset("anno117", "Medium")  # no file: vanilla 117's level 1
+    assert (vanilla.lod_bias, vanilla.min_pixels, vanilla.ssr) == (0.5, 15.0, False)
+    assert quality.preset("anno1800", "Medium", records).lod_bias == 0.5  # 1800's file has no LODBias: ours stays 1
+    assert quality.preset("anno1800", "High").lod_bias == 1.0
 
 
 def test_the_older_games_draw_at_their_best_and_an_unset_game_at_medium():
-    assert quality.resolve("anno2070", "low").preset == "ultra"
-    assert quality.resolve("anno117", None).preset == "medium" == quality.DEFAULT
-    assert quality.resolve("anno117", "nonsense").preset == "ultra"  # not a preset: the best (an old setting)
+    assert quality.resolve("anno2070", "Low").preset == "UltraHigh"
+    got = quality.resolve("anno117", None)  # the test's player has no engine.ini (conftest)
+    assert got.preset == "Medium" == quality.DEFAULT and not got.is_player_setting
+    assert quality.resolve("anno117", "nonsense").preset == quality.DEFAULT
+
+
+def test_a_released_settings_files_presets_map_to_the_games_names_once():
+    """Toolbox 0.3 kept ``low`` .. ``ultra`` and a Custom record with its ``base``: they read as the game's."""
+    assert quality.resolve("anno117", "ultra").preset == "UltraHigh" and quality.map_released("medium") == "Medium"
+    old = {"preset": "custom", "base": "high", "render_scale": 0.6, "shadow_size": 1024, "particles": 7}
+    got = quality.resolve("anno117", old)
+    high = quality.preset("anno117", "High")
+    assert got.preset == quality.CUSTOM and got.levels == high.levels and got.render_scale == 0.6
+    assert got.shadow_size == high.shadow_size and got.particles == high.particles  # now from the levels
 
 
 def test_a_custom_quality_is_kept_and_read_back():
-    custom = quality.preset("anno117", "low").with_values(shadow_size=1024, particles=100)
-    stored = quality.store(custom, base="low")
-    assert stored["preset"] == quality.CUSTOM and stored["base"] == "low"
+    levels = {**quality.preset_levels("Low"), "Shadow": 4, "Texture": 2}
+    custom = replace(quality.derive("anno117", quality.CUSTOM, levels), render_scale=0.75)
+    stored = quality.store(custom)
+    assert stored["preset"] == quality.CUSTOM and stored["levels"]["Shadow"] == 4
     back = quality.resolve("anno117", stored)
-    assert back == custom and quality.store(quality.preset("anno117", "high")) == "high"
+    assert back == custom and (back.shadow_cascades, back.max_texture, back.render_scale) == (4, 0, 0.75)
+    assert quality.store(quality.preset("anno117", "High")) == "High"
 
 
-def test_a_hand_edited_custom_quality_keeps_the_presets_value_for_what_it_cannot_read():
-    stored = {"preset": quality.CUSTOM, "base": "high", "render_scale": "fast", "shadow_size": None, "particles": 7}
+def test_a_hand_edited_custom_quality_keeps_the_defaults_for_what_it_cannot_read():
+    stored = {"preset": quality.CUSTOM, "levels": {"Shadow": "x", "Object": 9, "Water": True}, "render_scale": "fast"}
     got = quality.resolve("anno117", stored)  # raised ValueError and TypeError: the view did not open
-    high = quality.preset("anno117", "high")
-    assert got.preset == quality.CUSTOM and got.render_scale == high.render_scale and got.particles == 7
-    assert got.shadow_size == high.shadow_size
+    medium = quality.preset("anno117", "Medium")
+    assert got.area("Shadow") == medium.area("Shadow") and got.area("Object") == 4 and got.render_scale == 1.0
+    assert got.area("Water") == medium.area("Water")
+    assert quality.resolve("anno117", {"preset": quality.CUSTOM, "levels": None}).levels == medium.levels
     odd = "<QualityLevel0><LODBias>-</LODBias><ViewDistance>1.2.3</ViewDistance><MinimumObjectSizeInPixels>9</MinimumObjectSizeInPixels></QualityLevel0>"
     assert quality.game_levels(odd) == [{"MinimumObjectSizeInPixels": 9.0}]
 
 
+PLAYER_INI = {
+    "RenderEngine": {
+        "QualitySetting": "UltraHigh",
+        "Custom": {"Water": 3, "Lighting": 3, "Shadow": 4, "Terrain": 2, "Texture": 2, "AA": 3, "Object": 4,
+                   "ViewDistance": 4, "Raytracing": 3, "FeedbackQualityLevel": 4},
+    }
+}  # fmt: skip
+
+
+def test_without_a_setting_the_view_follows_the_players_engine_ini(tmp_path, monkeypatch):
+    got = quality.resolve("anno117", None, player_text=json.dumps(PLAYER_INI))
+    assert got.is_player_setting and got.preset == "UltraHigh" and got.levels == tuple(quality.AREAS.values())
+    assert quality.store(got) is None  # following the game keeps nothing in the settings
+    custom = {"RenderEngine": {"QualitySetting": "Custom", "Custom": {"Shadow": 1, "Object": 7}}}
+    got = quality.resolve("anno117", None, player_text=json.dumps(custom))
+    assert got.preset == quality.CUSTOM and (got.area("Shadow"), got.area("Object")) == (1, 4)
+    assert quality.resolve("anno117", "Low", player_text=json.dumps(PLAYER_INI)).preset == "Low"  # a setting wins
+    ini = tmp_path / "engine.ini"
+    ini.write_text(json.dumps(PLAYER_INI), encoding="utf-8", newline="\n")
+    monkeypatch.setenv(quality.PLAYER_FILE_ENV, str(ini))
+    assert (
+        quality.resolve("anno117", None).is_player_setting and not quality.resolve("anno1800", None).is_player_setting
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "{", "[]", '{"RenderEngine": []}', '{"RenderEngine": {"QualitySetting": "Fast"}}', '{"RenderEngine": {}}'],
+)
+def test_a_players_engine_ini_that_holds_no_setting_gives_none(text):
+    assert quality.player_choice(text) is None
+    assert quality.player_choice('{"RenderEngine": {"QualitySetting": "High"}}') == "High"  # no Custom block
+
+
+def test_levels_that_are_no_finite_number_and_a_preset_that_is_no_name_keep_the_defaults():
+    """JSON reads ``Infinity`` and ``NaN``: ``int`` raised OverflowError and ValueError on them, and a list as the
+    preset's name raised TypeError, so a hand-edited engine.ini or settings file stopped the view."""
+    text = '{"RenderEngine": {"QualitySetting": "Custom", "Custom": {"Shadow": Infinity, "Water": NaN, "Object": 1}}}'
+    got = quality.resolve("anno117", None, player_text=text)
+    medium = quality.preset("anno117", "Medium")
+    assert got.is_player_setting and got.area("Shadow") == medium.area("Shadow") and got.area("Object") == 1
+    assert got.area("Water") == medium.area("Water")
+    assert quality.resolve("anno117", {"preset": ["High"], "levels": {}}).preset == quality.CUSTOM
+
+
 def test_a_quality_sets_the_level_of_detail_and_cuts_past_its_draw_distance():
-    q = quality.preset("anno117", "low")
+    q = quality.preset("anno117", "Low")
     rules = quality.lod_rules(q)
     assert (rules.bias, rules.min_pixels, rules.far) == (q.lod_bias, q.min_pixels, q.view_distance)
     assert quality.lod_rules(None) == cull.SLodRules()
@@ -79,9 +147,9 @@ def test_a_quality_sets_the_level_of_detail_and_cuts_past_its_draw_distance():
 
 
 def test_a_frame_is_made_again_only_for_what_it_was_built_with():
-    medium = quality.preset("anno117", "medium")
-    assert not quality.remakes(medium, medium.with_values(lod_bias=2.0, render_scale=0.5))
-    assert quality.remakes(medium, medium.with_values(shadow_size=1024)) and quality.remakes(None, medium)
+    medium = quality.preset("anno117", "Medium")
+    assert not quality.remakes(medium, replace(medium, lod_bias=2.0, render_scale=0.5))
+    assert quality.remakes(medium, replace(medium, shadow_size=1024)) and quality.remakes(None, medium)
     assert not quality.remakes(None, None)
 
 
@@ -112,7 +180,7 @@ def test_the_island_views_maps_are_halved_to_the_quality():
     size, out = shrink(raw.tobytes(), (8, 4), 4, 4)
     assert size == (4, 2) and np.frombuffer(out, np.uint8).reshape(2, 4, 4)[0, 0, 0] == round(raw[:2, :2, 0].mean())
     assert shrink(b"x", (8, 4), 4, 0) == ((8, 4), b"x")
-    assert shadow_side(None) == 2048 and shadow_side(quality.preset("anno117", "low")) == 1024
+    assert shadow_side(None) == 2048 and shadow_side(quality.preset("anno117", "Low")) == 1024
 
 
 @pytest.mark.parametrize(

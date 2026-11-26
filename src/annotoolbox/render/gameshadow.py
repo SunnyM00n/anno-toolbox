@@ -149,6 +149,11 @@ def fill(constants: gs.CConstants, cascades: SCascades | None) -> None:
     if cascades is None:
         constants.set("cUsedShadowPartitions", 0)
         return
+    # packed once per layout while the cascades' values stand (``fill_key``): a frame fills some 40 buffers
+    gs.replay(constants, "shadow", fill_key(cascades), lambda buffer: _fill_cascades(buffer, cascades))
+
+
+def _fill_cascades(constants: gs.CConstants, cascades: SCascades) -> None:
     constants.set("cUsedShadowPartitions", cascades.used)
     constants.set("cLastFrameBlend", 0.0)
     constants.set("cShadowMapSize", [cascades.size, cascades.size])

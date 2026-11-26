@@ -377,6 +377,12 @@ def test_the_shadow_map_stays_while_only_the_camera_moves_and_is_drawn_again_whe
     camera.frame(*renderer.m_box)
     renderer.render(fbo, (96, 64), camera, state)
     first = renderer._m_shadow_taken
+    for _ in range(200):  # a map still arriving in the background makes the shadow anew once; wait until it stands
+        renderer.render(fbo, (96, 64), camera, state)
+        if renderer._m_shadow_taken is first:
+            break
+        first = renderer._m_shadow_taken
+        time.sleep(0.01)
     assert first is not None
     camera.m_yaw_rad += 0.4
     renderer.render(fbo, (96, 64), camera, state)

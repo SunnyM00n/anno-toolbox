@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -346,17 +347,18 @@ def test_the_rendering_quality_menu_keeps_the_preset_per_game_and_hands_it_to_th
     menu = renderingmenu.CRenderingMenu(window, QMenu())
     menu._m_backends = {"gl", "d3d11"}
     menu.apply()
-    assert changes[-1]["quality"].preset == quality.DEFAULT == "medium"
+    assert changes[-1]["quality"].preset == quality.DEFAULT == "Medium"
     menu.rebuild()
     sub = next(a.menu() for a in menu.m_menu.actions() if a.menu() is not None and a.text() == "Rendering quality")
     low = next(a for a in sub.actions() if a.text() == "Low")
     low.trigger()
     q = changes[-1]["quality"]
-    assert window.m_settings.quality == {"anno1800": "low"} and q.preset == "low"
+    assert window.m_settings.quality == {"anno1800": "Low"} and q.preset == "Low"
     off = nl.with_quality({"shadows": True}, q)
     assert off["clouds"] is False and off["atmosphere"] is False and off["eye"] is False and off["shadows"]
     assert nl.with_quality({"post": False}, None) == {"post": False}  # no quality: the view's switches alone
-    assert forwardpass.drawn_size((1000, 500), q) == (600, 300) and forwardpass.shadow_quality(q) == (2048, 2)
+    scaled = replace(q, render_scale=0.6)  # a Custom render scale: the game's presets keep the resolution
+    assert forwardpass.drawn_size((1000, 500), scaled) == (600, 300) and forwardpass.shadow_quality(q) == (2048, 2)
     assert forwardpass.drawn_size((1000, 500), None) == (1000, 500) and forwardpass.shadow_quality(None) == (None, 4)
     window.m_tree = SimpleNamespace(m_game="anno2070", m_folder=None)
     menu.apply()

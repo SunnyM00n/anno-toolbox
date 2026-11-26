@@ -467,17 +467,26 @@ class CConstants:
 _replayed: dict[tuple, tuple] = {}  # (a layout's id, a writer's name) -> (its reflection, token, bytes' places, bytes)
 
 
+_PLAIN = (int, float, str, bool, bytes, type(None))
+
+
 def _same(first: tuple, second: tuple) -> bool:
-    plain = (int, float, str, bool, type(None))
+    """Whether two tokens are alike: plain values and bytes by value, tuples item by item (a content key such as
+    ``camera_key``'s or ``value_key``'s), anything else by identity."""
     return len(first) == len(second) and all(
-        left is right or (type(left) is type(right) and isinstance(left, plain) and left == right)
+        left is right
+        or (
+            type(left) is type(right)
+            and (isinstance(left, _PLAIN) and left == right or isinstance(left, tuple) and _same(left, right))
+        )
         for left, right in zip(first, second, strict=True)
     )
 
 
 def replay(constants: CConstants, name: str, token: tuple, write) -> None:
     """``write(c)`` worked out once per layout while ``token`` stays the same (its items compared by identity, plain
-    values by value) and its bytes copied into every buffer of that layout: what many draws of a frame share."""
+    values, bytes and tuples by value) and its bytes copied into every buffer of that layout: what many draws of a
+    frame share, and what the frames share while it stands."""
     key = (id(constants.m_reflection), name)
     kept = _replayed.get(key)
     if kept is None or kept[0] is not constants.m_reflection or not _same(kept[1], token):

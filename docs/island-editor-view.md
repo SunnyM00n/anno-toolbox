@@ -250,6 +250,10 @@ The view draws on demand:
 - when something new has loaded;
 - 15 frames a second only while flowing water or a flipbook is on screen.
 
+After a frame that took more than 0.1 s with no input in the last 0.5 s, the view waits as long as that frame took
+before it draws again (`desktopview.CIslandControls._resting`). An island that loads then leaves the window free
+between its frames (performance.md 6, item 2).
+
 Measured on n_l03 at rest: about 14 frames a second instead of the display's 60 or more.
 
 Big islands are read coarser. The continental island (768 tiles, 3,504 objects, 44,878 props, 26,957 forest tiles) at
@@ -311,6 +315,7 @@ frames and Cloud shadow cache work the other way round: on, they save work by th
 | Still frame | `still_frame` | the game look's lit scene is kept while the camera, the light and the island stand still, and only the water, the sky and the post chain are drawn over it (the depth, the shadow casters and the shading are not made again) | Anno 117's game look |
 | Idle rate | `idle_rate` | the redraws of moving water and clouds drop from 15 to 5 a second once there was no input for 3 seconds; the first input brings the full rate back | every look and game |
 | Models in background | `background_pipelines` | on: a model's pipelines are made on background threads, and the model is drawn once they are in (a frame never waits for them); off, they are made in the frame that first draws the model | Anno 117's game look on Direct3D 12 |
+| View in its own window | `own_window` (settings only, no view option; off by default) | on: the view draws into a native window of its own with its own swap chain, and the next frame is recorded while the graphics card draws the last; off, the view is a `QRhiWidget` whose every frame waits for the graphics card (performance.md section 6.7). Takes effect when the island editor opens next | every look on Direct3D 12 |
 
 The held clock is `SViewOptions.is_clock_held` (also true for Freeze particles' still picture).
 The view has no time of day: the sun stands at one place (the editor look's fixed sun or the game's own light), so there
@@ -456,13 +461,16 @@ one another.
 - **Go to** (the Home tab): `x z [distance] [turn]` points the camera at a place in tiles, from a turn in degrees. This
   shows the same spot in a 2070 and a 117 island one after the other (how the falls were compared).
 
-**Rendering quality** (Rendering > Rendering quality): for an island of 117 or 1800 the view draws at the preset that
-the settings keep for that game: Low, Medium (the default), High or Ultra (Custom: set in the settings file). The
+**Rendering quality** (Rendering > Rendering quality): for an island of 117 or 1800 the view draws as 117's graphics
+options set it. The first entry, "As set in the game", follows the player's own Anno 117 settings (its `engine.ini`,
+read only). Then come the game's presets Low, Medium, High, Very high and Ultra high. Custom… opens a window with the
+game's preset list and a level per area (water, lighting, shadow, terrain, texture, anti-aliasing, object, view
+distance, raytracing and crowds), and the render scale of ours. Without 117's settings the view draws at Medium. The
 older games' islands are drawn at their best, and the menu is greyed.
 
-A preset sets the level of detail's bias and the smallest object drawn from the game's own quality level. It also sets
-our render scale, shadow map size, draw distance, largest map side, tessellation and particle budget. It applies in
-both looks and the game's shaders. A change of the shadow map, the maps' size or the tessellation makes the game's
+The areas' levels set the level of detail's bias and the smallest object drawn from the game's own quality level. They
+also set the shadow map and cascades, the draw distance, the largest map side, the tessellation, the bake, the
+effects and the particle budget. It applies in both looks and the game's shaders. A change of the shadow map, the maps' size or the tessellation makes the game's
 shaders' frame anew (Medium to High on `roman_island_medium_03`: 11 s; rendering/island-117-view.md "Speed", part 14).
 The values, sources and measurements are in [`rendering/quality.md`](rendering/quality.md).
 

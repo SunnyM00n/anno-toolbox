@@ -665,6 +665,7 @@ src/annotoolbox/render/renderstates.py
 src/annotoolbox/render/rhidevice.py
 src/annotoolbox/render/rhipass.py
 src/annotoolbox/render/rhiview.py
+src/annotoolbox/render/rhiwindow.py
 src/annotoolbox/render/sea2205.py
 src/annotoolbox/render/shaderbake.py
 src/annotoolbox/render/shaderclean.py
@@ -706,6 +707,9 @@ src/annotoolbox/saveedit/nodes.py
 src/annotoolbox/saveedit/records.py
 src/annotoolbox/saveedit/savetree.py
 src/annotoolbox/saveedit/savewindow.py
+src/annotoolbox/saveedit/shipdelete117.py
+src/annotoolbox/saveedit/ships117.py
+src/annotoolbox/saveedit/shipspanel.py
 src/annotoolbox/saveedit/summary.py
 src/annotoolbox/saveedit/summary117.py
 src/annotoolbox/saveedit/summary2070.py
@@ -812,6 +816,7 @@ src/annotoolbox/suite/projectdeps.py
 src/annotoolbox/suite/projectimport.py
 src/annotoolbox/suite/projectpanel.py
 src/annotoolbox/suite/qtlang.py
+src/annotoolbox/suite/qualitydialog.py
 src/annotoolbox/suite/reimport.py
 src/annotoolbox/suite/settings.py
 src/annotoolbox/suite/settingsdialog.py
@@ -976,9 +981,11 @@ tests/editor/desktop/test_desktopforms.py
 tests/editor/desktop/test_desktopframe.py
 tests/editor/desktop/test_desktopgamebake.py
 tests/editor/desktop/test_desktopgameclusters.py
+tests/editor/desktop/test_desktopgamedecals.py
 tests/editor/desktop/test_desktopgameground.py
 tests/editor/desktop/test_desktopgameobjects.py
 tests/editor/desktop/test_desktopgameshadow.py
+tests/editor/desktop/test_desktopgamestill.py
 tests/editor/desktop/test_desktopgizmo.py
 tests/editor/desktop/test_desktopgrids.py
 tests/editor/desktop/test_desktopgroup.py
@@ -1196,6 +1203,7 @@ tests/render/test_inland1800.py
 tests/render/test_instancestore.py
 tests/render/test_loader.py
 tests/render/test_mipchain.py
+tests/render/test_modellibrary.py
 tests/render/test_nativegpu.py
 tests/render/test_nativelayout.py
 tests/render/test_nativelook.py
@@ -1217,6 +1225,7 @@ tests/render/test_quality.py
 tests/render/test_rawbuffers.py
 tests/render/test_rhi.py
 tests/render/test_rhirecord.py
+tests/render/test_rhiwindow.py
 tests/render/test_sea2205.py
 tests/render/test_shaderclean.py
 tests/render/test_shadingnative.py
@@ -1237,6 +1246,7 @@ tests/saveedit/test_saveedit.py
 tests/saveedit/test_saveedit_installed.py
 tests/saveedit/test_saveedit_names.py
 tests/saveedit/test_saveedit_window.py
+tests/saveedit/test_ships117.py
 tests/sound/soundfakes.py
 tests/soundedit/soundeditfakes.py
 tests/soundedit/test_oldsoundwindows.py
@@ -1282,6 +1292,7 @@ tests/suite/test_moddeps.py
 tests/suite/test_project.py
 tests/suite/test_projectguids.py
 tests/suite/test_projectimport.py
+tests/suite/test_qualitydialog.py
 tests/suite/test_settings.py
 tests/suite/test_settingsdialog.py
 tests/suite/test_shaderbar.py

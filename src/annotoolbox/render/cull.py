@@ -184,6 +184,16 @@ class CCellTable:
         """Batch ``k``'s part of ``codes``."""
         return codes[self.m_starts[k] : self.m_starts[k + 1]]
 
+    def of_many(self, codes: np.ndarray, batches: list[int]) -> np.ndarray:
+        """The parts of ``codes`` of the batches ``batches`` (their numbers), one after the other: one gather for all,
+        not a slice per batch."""
+        numbers = np.asarray(batches, np.int64)
+        if not len(numbers):
+            return codes[:0]
+        starts, lengths = self.m_starts[numbers], self.m_starts[numbers + 1] - self.m_starts[numbers]
+        firsts = np.repeat(starts - np.r_[0, np.cumsum(lengths)[:-1]], lengths)
+        return codes[firsts + np.arange(int(lengths.sum()))]
+
 
 @dataclass(frozen=True)
 class SLodRules:

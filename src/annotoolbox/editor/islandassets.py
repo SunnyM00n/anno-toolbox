@@ -7,6 +7,7 @@ the cache (``docs/island-editor.md``).
 
 from __future__ import annotations
 
+import io
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -73,6 +74,22 @@ class CIslandAssets:
                     self.texture_failure(psd, error)
                     raise
         return out.read_bytes()
+
+    def swatch_rgb(self, psd: str, side_px: int) -> bytes:
+        """A texture's colours without its alpha as a ``side_px`` square of RGB bytes (the Material Gallery's
+        pictures), made once: decoded at every open it held the interpreter for a minute (performance.md 6, item 5)."""
+        from PIL import Image
+
+        out = self._cached(f"{psd}|swatch{side_px}", ".rgb")
+        with self._lock(out):
+            if out.is_file():
+                raw = out.read_bytes()
+                if len(raw) == side_px * side_px * 3:
+                    return raw
+            image = Image.open(io.BytesIO(self.texture_png(psd, is_opaque=True))).convert("RGB")
+            raw = image.resize((side_px, side_px)).tobytes()
+            write_atomic(out, raw)
+        return raw
 
     def texture_failure(self, name: str, error: Exception) -> None:
         """Keep why a texture did not load (``file_problems``)."""

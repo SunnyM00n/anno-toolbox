@@ -91,6 +91,30 @@ def test_a_qrhi_texture_is_wrapped_once_whichever_python_object_hands_it(monkeyp
     assert len(wraps) == 5
 
 
+def test_a_wrap_lapses_only_over_frames_that_used_the_bridge():
+    """A kept frame skips the passes: frames that asked for no wrap leave the wraps (and the sets made with them)
+    alone, so a standing view makes no sets again; four frames that used the bridge without a wrap let it go."""
+
+    class FakeWrap:
+        released = False
+
+        def release(self) -> None:
+            self.released = True
+
+    bridge = object.__new__(terrainnative.CBridge)
+    kept, other = FakeWrap(), FakeWrap()
+    bridge.m_held = {("texture", 1, "RGBA8_UNORM", ""): [kept, 0], ("texture", 2, "RGBA8_UNORM", ""): [other, 0]}
+    bridge.m_frame, bridge.m_is_used = 0, False
+    for _ in range(3 * terrainnative.KEEP_FRAMES):  # a standing view: no pass asked for a wrap
+        assert bridge.end_frame() == []
+    assert not kept.released and bridge.m_frame == 0
+    gone = []
+    for _ in range(terrainnative.KEEP_FRAMES + 1):  # the passes run again and ask for the other one only
+        bridge.m_held[("texture", 2, "RGBA8_UNORM", "")][1], bridge.m_is_used = bridge.m_frame, True
+        gone += bridge.end_frame()
+    assert gone == [kept] and kept.released and not other.released
+
+
 def test_a_recording_that_raises_still_moves_qrhis_resources_back(monkeypatch):
     """``CBridge.send``: the module's list first, then the draws between the moves there and back; a draw that raises
     leaves no resource in another state than QRhi tracks (the rest of QRhi's frame is recorded from those)."""

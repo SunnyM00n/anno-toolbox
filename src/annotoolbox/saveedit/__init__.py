@@ -12,8 +12,9 @@ Qt-free parts, each one job:
   holds, per game
 - ``names``: the names of the GUIDs, options and text ids a summary shows, from the installed game
 - ``edits``: the editable values and the write beside the original
+- ``ships117``, ``shipdelete117``: a 117 save's ships, and the delete of one with every reference to it
 - ``needed``: the mods a save needs against the installed ones
 - ``nodes``: a save as a tree made a level at a time, a value's readings
 
-Qt parts: ``savewindow`` (the app), ``savetree`` (the Tree tab's model).
+Qt parts: ``savewindow`` (the app), ``savetree`` (the Tree tab's model), ``shipspanel`` (the Ships tab).
 """

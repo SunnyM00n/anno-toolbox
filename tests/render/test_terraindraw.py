@@ -38,6 +38,59 @@ def test_the_budget_and_the_view_bound_the_nodes():
     assert left and all(n.x < 128 for n in left)
 
 
+def _walked(size, eye, budget: int) -> set:
+    """The nodes the quadtree's walk one node at a time picked (``select`` before its array operations)."""
+    import heapq
+
+    def need(node) -> float:
+        return node.tiles / max(node.distance(eye), 1e-6)
+
+    top = terrainnodes.root(size)
+    heap, done, count, serial = [(-need(top), 0, top)], [], 1, 1
+    while heap:
+        wanted, _serial, node = heapq.heappop(heap)
+        kids = node.children(size) if node.level > terrainnodes.MIN_LEVEL and -wanted > 1.0 / terrainnodes.SPLIT else []
+        if not kids or count + len(kids) - 1 > budget:
+            done.append(node)
+            continue
+        count += len(kids) - 1
+        for kid in kids:
+            heapq.heappush(heap, (-need(kid), serial, kid))
+            serial += 1
+    return sorted(done, key=lambda node: node.distance(eye))
+
+
+def test_the_nodes_picked_in_array_operations_are_those_of_the_walk_one_node_at_a_time():
+    """Within the budget and past it (the nearest split first), eyes near, far, high and off the island, in the
+    walk's order (equal distances too: the bake follows it), worked out in the eye's precision (the view's float32)."""
+    rng = np.random.default_rng(7)
+    for size in (96.0, 256.0, 960.0):
+        eyes = [(size / 3, 25.0, size / 3), (size / 2, size, size / 2), (-size, 5.0, 2 * size)]
+        eyes += [tuple(rng.uniform(-size, 2 * size, 3)) for _ in range(40)]
+        eyes += [tuple(np.float32(v) for v in np.round(rng.uniform(-size, 2 * size, 3) / 16) * 16) for _ in range(40)]
+        for eye in eyes:
+            for budget in (128, 40, 7):
+                got = terrainnodes.select(size, eye, budget)
+                assert got == _walked(size, eye, budget) and len(got) <= max(budget, 1)
+
+
+def test_the_nodes_boxes_are_the_height_range_of_the_blocks_they_cover():
+    """``CNodeBoxes.bounds`` of many nodes at once: the lowest and highest block under each, with the box's play."""
+    rng = np.random.default_rng(3)
+    low = rng.uniform(-5, 5, (13, 11))  # an odd count of blocks: the pyramid fills out its edge
+    high = low + rng.uniform(0, 4, low.shape)
+    boxes = terrainnodes.CNodeBoxes(low, high, 44.0)
+    nodes = []
+    for level in range(terrainnodes.MIN_LEVEL, 7):
+        side = 2**level
+        nodes += [(level, x, z) for x in range(0, 44, side) for z in range(0, 52, side)]
+    got = boxes.bounds(np.array(nodes, float))
+    for (level, x, z), (bottom, top) in zip(nodes, got.tolist(), strict=True):
+        rows, columns = slice(z // 4, (z + 2**level) // 4), slice(x // 4, (x + 2**level) // 4)
+        assert bottom == pytest.approx(low[rows, columns].min() - boxes.BELOW)
+        assert top == pytest.approx(high[rows, columns].max() + boxes.ABOVE)
+
+
 def test_a_node_spans_its_samples_with_the_far_edge():
     n = SNode(3, 8.0, 0.0)  # 8 tiles from x 8
     assert n.samples(0.5, 33) == (16, 0, 17, 17)
@@ -359,6 +412,88 @@ def test_a_tessellated_nodes_patches_take_their_corners_with_u_along_z():
     assert np.array_equal(model.m_mesh.m_indices.reshape(-1, 4), plain.reshape(-1, 4)[:, terraindraw.PATCH_CORNERS])
 
 
+def test_a_height_edit_remakes_117s_normals_and_page_only_where_it_reached():
+    """Each frame of a stroke made the whole island's normal page and vertex normals again and uploaded the whole page
+    (24 to 58 ms a frame, performance.md 6, item 4): the part the edit reached is made, the same as a whole remake."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+
+    from annotoolbox.render import terraindraw
+
+    rng = np.random.default_rng(5)
+    terrain = terraindraw.CTerrain(None, SimpleNamespace(), 16.0, 0.5, 33)
+    heights = rng.random((33, 33))
+    terrain.set_heights(heights)
+    terrain.normals()
+    terrain.page_region()
+    heights = heights.copy()
+    heights[8:13, 4:9] += 1.0  # tiles x 2 to 4, z 4 to 6
+    terrain.set_heights(heights, (2.0, 4.0, 4.0, 6.0))
+    assert np.array_equal(terrain.normals(), terraindraw.vertex_normals(heights, 0.5))
+    texels, (x, y) = terrain.page_region()
+    whole = terraindraw.normal_page(heights, 0.5)
+    assert texels.shape[0] < whole.shape[0] and texels.shape[1] < whole.shape[1]
+    assert np.array_equal(texels, whole[y : y + texels.shape[0], x : x + texels.shape[1]])
+    assert np.array_equal(terrain._m_page.m_value, whole)
+
+
+@pytest.mark.parametrize(("make_name", "cells"), [("vertex_normals", False), ("normal_page", True)])
+def test_an_edit_remakes_the_normals_and_the_page_only_where_it_reached(make_name, cells):
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import terraindraw
+
+    make = getattr(terraindraw, make_name)
+    rng = np.random.default_rng(3)
+    h = rng.random((41, 41))
+    part = terraindraw.CRegional(make, cells)
+    part.get(h, 0.5)
+    for box in ((3.0, 4.0, 6.5, 9.0), (0.0, 0.0, 1.0, 2.0), (17.0, 18.0, 20.0, 20.0)):  # tiles, inner and edges
+        rows = terraindraw.sample_span(box[1], box[3], 0.5, 41)
+        cols = terraindraw.sample_span(box[0], box[2], 0.5, 41)
+        h = h.copy()
+        h[rows[0] : rows[1], cols[0] : cols[1]] += rng.random((rows[1] - rows[0], cols[1] - cols[0]))
+        part.spoil((*rows, *cols))
+        assert np.array_equal(part.get(h, 0.5), make(h, 0.5)), box
+    part.spoil(None)  # another grid: whole
+    h = rng.random((21, 21))
+    assert np.array_equal(part.get(h, 0.5), make(h, 0.5)) and part.m_region is None
+
+
+def test_two_edits_before_a_get_remake_one_box_over_both():
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import terraindraw
+
+    rng = np.random.default_rng(8)
+    h = rng.random((33, 33))
+    part = terraindraw.CRegional(terraindraw.normal_page, cells=True)
+    part.get(h, 0.5)
+    h = h.copy()
+    h[4:7, 4:7] += 1.0
+    h[20:23, 10:12] += 1.0
+    part.spoil((4, 7, 4, 7))
+    part.spoil((20, 23, 10, 12))
+    assert np.array_equal(part.get(h, 0.5), terraindraw.normal_page(h, 0.5))
+    assert part.m_region == ((3, 23), (3, 12))  # the cells that read a changed sample, one region over both
+
+
+@pytest.mark.parametrize("cells", [False, True])
+def test_an_edit_box_past_the_heights_changes_nothing(cells):
+    """A box that reaches no height sample (past the island's edge, or empty) left a remake of nothing pending: the
+    vertex normals' gradient of no samples raised, and so did the page's copy of a slice of negative size."""
+    pytest.importorskip("PySide6")
+    from annotoolbox.render import terraindraw
+
+    make = terraindraw.normal_page if cells else terraindraw.vertex_normals
+    h = np.random.default_rng(4).random((33, 33))
+    part = terraindraw.CRegional(make, cells)
+    part.get(h, 0.5)
+    for box in ((17.0, 17.0, 16.0, 16.0), (-3.0, -3.0, -1.0, -1.0), (2.0, 20.0, 4.0, 18.0)):
+        rows = terraindraw.sample_span(box[1], box[3], 0.5, 33)
+        cols = terraindraw.sample_span(box[0], box[2], 0.5, 33)
+        part.spoil((*rows, *cols))
+        assert np.array_equal(part.get(h, 0.5), make(h, 0.5)), box
+
+
 def test_a_height_edit_marks_the_blocks_it_touches():
     pytest.importorskip("PySide6")
     from annotoolbox.editor.desktop import desktopgame
@@ -385,9 +520,12 @@ def test_the_look_is_busy_while_parts_within_reach_are_still_to_be_made_ahead():
     game.m_sea_waiting = game.m_inland_waiting = game._m_coast_edited = False
     game.m_objects = SimpleNamespace(m_waiting=0, m_ahead_left=3)
     game.m_decals = SimpleNamespace(m_waiting=0)
+    game.m_native_shading = SimpleNamespace(m_sky=SimpleNamespace(is_running=False))
     assert game.busy() == 1
     game.m_objects.m_ahead_left = 0
     assert game.busy() == 0
+    game.m_native_shading.m_sky.is_running = True  # the sky's chain, run over frames (performance.md 6, item 2)
+    assert game.busy() == 1
 
 
 def test_the_look_stays_busy_for_the_frame_that_bakes_the_last_nodes():

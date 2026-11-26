@@ -102,17 +102,19 @@ def test_the_rendering_quality_is_kept_per_game_and_set_on_the_view(tmp_path):
 
     path = _settings(tmp_path)
     window = _window(path)
-    assert set(window.m_quality_actions) == {"low", "medium", "high", "ultra", "custom"}
+    assert set(window.m_quality_actions) == {"player", "Low", "Medium", "High", "VeryHigh", "UltraHigh", "Custom"}
     view = SimpleNamespace(m_opts=SViewOptions(), update=lambda: None)
     doc = SimpleNamespace(m_session=SimpleNamespace(m_island={"game": "anno117"}), m_info={"kind": "anno117"},
                           m_shell=window, m_view=view)  # fmt: skip
     doc.game_key = lambda: CIslandDoc.game_key(doc)
     doc.apply_quality = lambda: CIslandDoc.apply_quality(doc)
     doc.apply_quality()
-    assert view.m_opts.quality.preset == "medium"
+    assert view.m_opts.quality.preset == "Medium"
     window.m_doc, window.sync = doc, lambda: None  # the rest of the window's state is not this test's
-    window.set_quality("low")
-    assert CSettings.load(path).quality == {"anno117": "low"} and view.m_opts.quality.preset == "low"
+    window.set_quality("Low")
+    assert CSettings.load(path).quality == {"anno117": "Low"} and view.m_opts.quality.preset == "Low"
+    window.set_quality("player")  # the game's own settings again: nothing kept
+    assert CSettings.load(path).quality == {} and not view.m_opts.quality.is_player_setting  # no engine.ini here
     doc.m_session.m_island["game"] = "anno2070"
     doc.apply_quality()
     assert view.m_opts.quality is None
